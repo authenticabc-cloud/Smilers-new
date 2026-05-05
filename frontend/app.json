@@ -1,22 +1,45 @@
 {
   "expo": {
-    "name": "frontend",
-    "slug": "frontend",
+    "name": "Smilers",
+    "slug": "smilers",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "frontend",
-    "userInterfaceStyle": "automatic",
+    "scheme": "smilers",
+    "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.smilers.mobile",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Take photos to send in chats and status",
+        "NSPhotoLibraryUsageDescription": "Share photos from your gallery in chats",
+        "NSMicrophoneUsageDescription": "Record voice notes and make voice calls",
+        "NSLocationWhenInUseUsageDescription": "Share your location in chats",
+        "NSFaceIDUsageDescription": "Unlock Smilers securely with Face ID",
+        "NSContactsUsageDescription": "Find friends who use Smilers"
+      }
     },
     "android": {
+      "package": "com.smilers.mobile",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#000"
+        "backgroundColor": "#E4B53B"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "READ_CONTACTS",
+        "USE_BIOMETRIC",
+        "USE_FINGERPRINT",
+        "VIBRATE",
+        "RECEIVE_BOOT_COMPLETED"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -31,12 +54,27 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#000"
+          "backgroundColor": "#F5EFE0"
         }
-      ]
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#E4B53B"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Share photos from your gallery in chats",
+          "cameraPermission": "Take photos to send in chats and status"
+        }
+      ],
+      "expo-secure-store"
     ],
     "experiments": {
-      "typedRoutes": true
+      "typedRoutes": false
     }
   }
 }

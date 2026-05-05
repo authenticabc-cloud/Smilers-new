@@ -1,30 +1,107 @@
-import { Text, View, StyleSheet, Image } from "react-native";
+import React, { useEffect } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
+import { useAuth } from '../src/providers/AuthProvider';
+import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/theme';
 
-const EXPO_PUBLIC_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+export default function SignInScreen() {
+  const router = useRouter();
+  const { isAuthenticated, signIn } = useAuth();
 
-export default function Index() {
-  console.log(EXPO_PUBLIC_BACKEND_URL, "EXPO_PUBLIC_BACKEND_URL");
+  useEffect(() => {
+    if (isAuthenticated) {
+      router.replace('/(tabs)/chats');
+    }
+  }, [isAuthenticated, router]);
 
   return (
-    <View style={styles.container}>
-      <Image
-        source={require("../assets/images/app-image.png")}
-        style={styles.image}
-      />
-    </View>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="sign-in-screen">
+      <View style={styles.content}>
+        <View style={styles.logoWrap}>
+          <View style={styles.logoCircle}>
+            <Ionicons name="happy" size={72} color={Colors.primary} />
+          </View>
+          <Text style={styles.brand}>Smilers</Text>
+          <Text style={styles.tagline}>Say good morning with a smile</Text>
+        </View>
+
+        <View style={styles.bottomSection}>
+          <TouchableOpacity
+            style={styles.signInBtn}
+            onPress={signIn}
+            activeOpacity={0.85}
+            testID="sign-in-btn"
+          >
+            <Text style={styles.signInText}>Sign In</Text>
+          </TouchableOpacity>
+          <Text style={styles.terms}>
+            By continuing, you agree to our Terms of Service and Privacy Policy
+          </Text>
+        </View>
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0c0c0c",
-    alignItems: "center",
-    justifyContent: "center",
+    backgroundColor: Colors.background,
   },
-  image: {
-    width: "100%",
-    height: "100%",
-    resizeMode: "contain",
+  content: {
+    flex: 1,
+    paddingHorizontal: Spacing.lg,
+    justifyContent: 'space-between',
+    paddingVertical: Spacing.xl,
+  },
+  logoWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logoCircle: {
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    backgroundColor: Colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Spacing.lg,
+    ...Shadow.md,
+  },
+  brand: {
+    fontSize: 48,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+    marginBottom: Spacing.sm,
+  },
+  tagline: {
+    fontSize: FontSize.base,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+  },
+  bottomSection: {
+    paddingBottom: Spacing.base,
+  },
+  signInBtn: {
+    backgroundColor: Colors.primary,
+    paddingVertical: 16,
+    borderRadius: Radius.pill,
+    alignItems: 'center',
+    marginBottom: Spacing.base,
+    ...Shadow.md,
+  },
+  signInText: {
+    color: Colors.white,
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+  },
+  terms: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    paddingHorizontal: Spacing.base,
   },
 });
