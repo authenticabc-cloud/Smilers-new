@@ -1,0 +1,184 @@
+{
+  "project_name": "Smilers Mobile App",
+  "platform": "React Native Expo",
+  "theme": "light",
+  "archetype": "1 (Organic & Earthy)",
+  "colors": {
+    "primary": "#E4B53B",
+    "primary_light": "#FEF3C7",
+    "header_bg": "#3A2608",
+    "background": "#F5EFE0",
+    "surface": "#FFFFFF",
+    "text_primary": "#1F2937",
+    "text_secondary": "#6B7280",
+    "danger": "#EF4444",
+    "danger_text": "#FFFFFF",
+    "ai_badge": "#A855F7",
+    "chat_once": "#F97316",
+    "border": "#E5E7EB",
+    "icon_bg": "#FEF3C7",
+    "icon_color": "#E4B53B"
+  },
+  "typography": {
+    "fontFamily": "System",
+    "sizes": {
+      "xs": 12,
+      "sm": 14,
+      "base": 16,
+      "lg": 18,
+      "xl": 20,
+      "2xl": 24,
+      "3xl": 30
+    },
+    "weights": {
+      "regular": "400",
+      "medium": "500",
+      "semibold": "600",
+      "bold": "700"
+    },
+    "section_label": {
+      "fontSize": 12,
+      "fontWeight": "700",
+      "textTransform": "uppercase",
+      "color": "#E4B53B",
+      "letterSpacing": 1,
+      "marginBottom": 8
+    }
+  },
+  "spacing": {
+    "1": 4,
+    "2": 8,
+    "3": 12,
+    "4": 16,
+    "6": 24,
+    "8": 32,
+    "12": 48,
+    "16": 64
+  },
+  "components": {
+    "header": {
+      "backgroundColor": "#3A2608",
+      "textColor": "#FFFFFF",
+      "iconColor": "#FFFFFF",
+      "height": 60,
+      "paddingHorizontal": 16
+    },
+    "bottom_tabs": {
+      "backgroundColor": "#FFFFFF",
+      "activeColor": "#E4B53B",
+      "inactiveColor": "#9CA3AF",
+      "height": 65,
+      "borderTopWidth": 1,
+      "borderTopColor": "#E5E7EB"
+    },
+    "fab_main": {
+      "backgroundColor": "#E4B53B",
+      "iconColor": "#FFFFFF",
+      "size": 56,
+      "borderRadius": 28,
+      "position": "absolute",
+      "bottom": 16,
+      "right": 16,
+      "shadowColor": "#000",
+      "shadowOffset": { "width": 0, "height": 4 },
+      "shadowOpacity": 0.3,
+      "shadowRadius": 4,
+      "elevation": 5
+    },
+    "fab_secondary": {
+      "backgroundColor": "#FFFFFF",
+      "iconColor": "#3A2608",
+      "size": 40,
+      "borderRadius": 20,
+      "marginBottom": 12,
+      "shadowColor": "#000",
+      "shadowOffset": { "width": 0, "height": 2 },
+      "shadowOpacity": 0.15,
+      "shadowRadius": 3,
+      "elevation": 3
+    },
+    "sos_button": {
+      "backgroundColor": "#EF4444",
+      "textColor": "#FFFFFF",
+      "borderRadius": 20,
+      "paddingVertical": 10,
+      "paddingHorizontal": 16,
+      "position": "absolute",
+      "bottom": 16,
+      "left": 16,
+      "flexDirection": "row",
+      "alignItems": "center",
+      "shadowColor": "#000",
+      "shadowOffset": { "width": 0, "height": 4 },
+      "shadowOpacity": 0.3,
+      "shadowRadius": 4,
+      "elevation": 5
+    },
+    "avatar": {
+      "backgroundColor": "#FEF3C7",
+      "textColor": "#E4B53B"
+    },
+    "list_item": {
+      "paddingVertical": 12,
+      "paddingHorizontal": 16,
+      "backgroundColor": "#FFFFFF",
+      "flexDirection": "row",
+      "alignItems": "center"
+    },
+    "icon_container": {
+      "backgroundColor": "#FEF3C7",
+      "width": 40,
+      "height": 40,
+      "borderRadius": 20,
+      "justifyContent": "center",
+      "alignItems": "center",
+      "marginRight": 12
+    }
+  },
+  "icons": {
+    "library": "@expo/vector-icons",
+    "families": ["Ionicons", "Feather"],
+    "style": "Thin-stroke line icons"
+  },
+  "screens": {
+    "chat_list": {
+      "layout": "Header -> Scrollable List -> Pinned items (AI Chat, Chat Once) at top -> Chats -> Floating Action Stack (Right) -> SOS Button (Left) -> Bottom Tabs",
+      "ai_chat": "Icon in Purple gradient circle (#A855F7), sparkle icon, 'AI' badge on the right",
+      "chat_once": "Icon in Orange gradient circle (#F97316), globe icon, '24h' badge on the right",
+      "fab_stack": "Vertical stack on right: building icon (secondary), broadcast/wifi (secondary), people (secondary), pencil (main gold FAB)"
+    },
+    "settings": {
+      "layout": "Header ('Settings') -> Scrollable List of options",
+      "items": ["Privacy", "App Lock", "Face ID", "Notifications", "Earnings", "Blocked Users", "Scheduled Messages", "Quick Replies", "Chat Appearance"],
+      "item_style": "Icon in soft-yellow circular container, black text, right chevron icon"
+    },
+    "profile": {
+      "layout": "Header ('Profile') -> ScrollView -> Centered Large Avatar (80x80) with camera overlay -> Details Sections -> Links",
+      "avatar_section": "80x80 soft yellow avatar, center aligned. Overlay small camera icon bottom-right of avatar.",
+      "sections": [
+        {"label": "YOUR NAME", "content": "Text input or display"},
+        {"label": "ABOUT", "content": "Text input or display"},
+        {"label": "MESSAGE LANGUAGE", "content": "Selector"},
+        {"label": "EMAIL", "content": "Text input or display"}
+      ],
+      "other_items": ["Starred Messages", "Settings & Privacy"]
+    },
+    "sign_in": {
+      "layout": "Centered Logo/Smile branding -> Tagline 'Say good morning with a smile' -> Hercules OIDC Auth Button ('Sign In')",
+      "button": "Primary color (#E4B53B), large rounded rectangular, white text"
+    }
+  },
+  "testing": {
+    "requirements": "All interactive and key informational elements MUST include a data-testid attribute (kebab-case, role-based). e.g., data-testid='chat-list-item', data-testid='sos-button'."
+  },
+  "instructions_to_main_agent": [
+    "Build standard React Native JS components, NO typescript (.js/.jsx files).",
+    "Use expo-router for file-based routing.",
+    "Implement the UI using StyleSheet with the exact colors provided.",
+    "Do NOT use emojis for icons, use @expo/vector-icons.",
+    "Use the layout guidelines to place elements exactly as specified in the screenshots.",
+    "Maintain the light theme with Cream/Beige background (#F5EFE0) as default.",
+    "Ensure section labels match exactly: uppercase, gold/yellow, bold.",
+    "Stack the right-side FABs vertically above the main FAB, leaving enough padding for the SOS button on the left."
+  ]
+}
