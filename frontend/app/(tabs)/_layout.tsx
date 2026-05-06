@@ -4,12 +4,19 @@ import { Ionicons, Feather } from '@expo/vector-icons';
 import { useMutation } from 'convex/react';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { api } from '../../src/convexApi';
+import { usePushNotifications } from '../../src/push/usePushNotifications';
+import { useIncomingCallListener } from '../../src/push/useIncomingCallListener';
 import { Colors, FontSize, FontWeight } from '../../src/theme';
 
 export default function TabsLayout() {
   const router = useRouter();
   const { isLoading, isAuthenticated } = useAuth();
   const updateCurrentUser = useMutation(api.users.updateCurrentUser);
+
+  // Wire up native push notifications (registers token + handles taps/actions)
+  usePushNotifications();
+  // Wire up real-time foreground incoming-call detector
+  useIncomingCallListener();
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {

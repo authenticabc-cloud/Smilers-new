@@ -18,6 +18,7 @@ export default function RootLayout() {
               <Stack.Screen name="index" />
               <Stack.Screen name="(tabs)" />
               <Stack.Screen name="chat/[conversationId]" />
+              <Stack.Screen name="call/[conversationId]" options={{ presentation: 'modal' }} />
               <Stack.Screen name="settings" />
             </Stack>
           </ConvexClientProvider>
