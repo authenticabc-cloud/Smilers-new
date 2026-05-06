@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { Tabs, useRouter } from 'expo-router';
 import { Ionicons, Feather } from '@expo/vector-icons';
-import { useMutation } from 'convex/react';
+import { useMutation, useQuery } from 'convex/react';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { api } from '../../src/convexApi';
 import { usePushNotifications } from '../../src/push/usePushNotifications';
@@ -12,6 +12,7 @@ export default function TabsLayout() {
   const router = useRouter();
   const { isLoading, isAuthenticated } = useAuth();
   const updateCurrentUser = useMutation(api.users.updateCurrentUser);
+  const me = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip');
 
   // Wire up native push notifications (registers token + handles taps/actions)
   usePushNotifications();
@@ -23,6 +24,14 @@ export default function TabsLayout() {
       router.replace('/');
     }
   }, [isLoading, isAuthenticated, router]);
+
+  // Phone verification gate — hard block until verified
+  useEffect(() => {
+    if (!isAuthenticated || !me) return;
+    if (!me.phone || !me.phoneVerified) {
+      router.replace('/phone-verify');
+    }
+  }, [isAuthenticated, me, router]);
 
   // Sync user with Convex backend on login (creates or updates user record)
   useEffect(() => {

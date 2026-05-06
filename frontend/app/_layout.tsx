@@ -17,6 +17,7 @@ export default function RootLayout() {
             <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: Colors.background } }}>
               <Stack.Screen name="index" />
               <Stack.Screen name="(tabs)" />
+              <Stack.Screen name="phone-verify" />
               <Stack.Screen name="chat/[conversationId]" />
               <Stack.Screen name="call/[conversationId]" options={{ presentation: 'modal' }} />
               <Stack.Screen name="settings" />

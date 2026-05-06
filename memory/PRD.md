@@ -11,6 +11,33 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - **Push**: Expo Push Notifications (works for both iOS APNs and Android FCM)
 - **Permissions**: Camera, Photo Library, Microphone, Location, Contacts, Face ID
 
+## Phase 2 Implementation (Push Notifications + Phone Verification)
+
+### Push Notifications (Mobile-side complete; backend wiring needed via Hercules)
+- Permission request, Expo push token registration on login
+- Android channels: `calls` (MAX importance, custom Smilers ringtone) + `messages` (HIGH)
+- iOS notification category with **Answer** / **Decline** action buttons
+- Tap-to-deep-link: message push → `/chat/<id>`, call push → `/call/<id>`
+- Decline button calls `api.calls.declineCall` directly without opening the app
+- Real-time foreground call listener via Convex reactive query
+
+### Phone Verification Gate (Mobile-side complete; backend wiring needed via Hercules)
+- Hard-block on `/phone-verify` if `me.phone` missing OR `me.phoneVerified !== true`
+- Country code picker with flag emojis (`react-native-country-codes-picker`)
+- E.164 validation via `libphonenumber-js`
+- Twilio Verify integration (sendOtp + verifyOtp actions on backend)
+- 30-second resend cooldown
+- "Use a different number" + "Sign out" escape hatches
+- Duplicate phone detection (rejects if already verified by another user)
+- Both new and existing users without verified phone are forced through this gate
+
+### Backend specs (give to Hercules agent)
+- `/app/CONVEX_BACKEND_INSTRUCTIONS.md` — Push notifications schema/mutations/Expo Push Service POSTing
+- `/app/CONVEX_BACKEND_INSTRUCTIONS_PHONE.md` — Phone verification with Twilio Verify, schema additions, defense-in-depth checks
+
+### Hercules dashboard config (user-side)
+- Restrict OIDC login methods to Google + Apple ID only (disable Email OTP, LinkedIn, Microsoft, Phone OTP)
+
 ## Phase 1 Implementation (Complete)
 - ✅ Sign-in screen with Hercules OIDC (PKCE flow, secure token storage on native, localStorage fallback on web)
 - ✅ Convex client with custom auth integration (passes ID token via `ConvexProviderWithAuth`)
