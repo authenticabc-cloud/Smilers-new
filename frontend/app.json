@@ -2,7 +2,7 @@
   "expo": {
     "name": "Smilers",
     "slug": "smilers",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "smilers",
@@ -10,7 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.smilers.mobile",
+      "bundleIdentifier": "com.smilers.app",
       "infoPlist": {
         "NSCameraUsageDescription": "Take photos to send in chats and status",
         "NSPhotoLibraryUsageDescription": "Share photos from your gallery in chats",
@@ -21,7 +21,8 @@
       }
     },
     "android": {
-      "package": "com.smilers.mobile",
+      "package": "com.smilers.app",
+      "versionCode": 100,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#E4B53B"
