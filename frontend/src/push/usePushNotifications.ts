@@ -68,7 +68,7 @@ export function usePushNotifications() {
   const router = useRouter();
   const { isAuthenticated } = useAuth();
   const convex = useConvex();
-  const registerDevice = useMutation(api.pushNotifications.registerMobileDevice);
+  const registerDevice = useMutation(api.mobilePush.registerMobileDevice);
   const declineCall = useMutation(api.calls.declineCall);
   const lastResponse = useRef<string | null>(null);
 

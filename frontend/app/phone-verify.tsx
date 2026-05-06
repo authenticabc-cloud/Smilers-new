@@ -28,8 +28,8 @@ export default function PhoneVerifyScreen() {
   const { signOut, userInfo } = useAuth();
   const me = useQuery(api.users.getCurrentUser);
 
-  const sendOtp = useAction(api.phoneAuth.sendOtp);
-  const verifyOtp = useAction(api.phoneAuth.verifyOtp);
+  const sendOtp = useAction(api.phoneAuthAction.sendOtp);
+  const verifyOtp = useAction(api.phoneAuthAction.verifyOtp);
 
   const [step, setStep] = useState<'phone' | 'otp'>('phone');
   const [pickerVisible, setPickerVisible] = useState(false);
