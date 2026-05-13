@@ -39,6 +39,11 @@ export default function SignInScreen() {
           <Text style={styles.terms}>
             By continuing, you agree to our Terms of Service and Privacy Policy
           </Text>
+          <View style={styles.versionBadge} testID="sign-in-version-badge">
+            <Text style={styles.versionText} testID="sign-in-version-text">
+              v2.0.12 · auth-callback fix
+            </Text>
+          </View>
         </View>
       </View>
     </SafeAreaView>
@@ -103,5 +108,19 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     textAlign: 'center',
     paddingHorizontal: Spacing.base,
+  },
+  versionBadge: {
+    backgroundColor: '#16a34a',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 999,
+    alignSelf: 'center',
+    marginTop: 12,
+  },
+  versionText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
 });

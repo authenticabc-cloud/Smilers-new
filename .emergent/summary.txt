@@ -1,0 +1,151 @@
+<analysis>**original_problem_statement**: Convert existing web app (Smilers) to a native mobile app. Use a Convex backend, Hercules Auth (OIDC), WebRTC for calls, E2EE encryption, and an engagement/earnings system. Phase 1 goal is to match the web app's design exactly, connect to Convex, set up OIDC auth, and implement core messaging screens, push notifications, and a phone verification gate via Twilio. Output an Android App Bundle (.aab) as an update to an existing Play Store app (). PRODUCT REQUIREMENTS: Build React Native Expo app, exact match to web design, connect Convex/Hercules, implement Push Notifications & Twilio Phone Verification.
+
+**User's preferred language**: English (INSTRUCT NEXT AGENT TO RESPOND IN ENGLISH ONLY)
+
+**what currently exists?**: A scaffolded React Native Expo application (SDK 54). UI styling follows the Gold/Brown theme. Context providers for Hercules Auth (OIDC) and Convex are set up. Core tabs (Chats, Contacts, Groups, Status, Profile) and Chat detail screens exist. Client-side Expo Push Notifications and deep linking are implemented. A Phone Verification gate () is in place. App config () is correctly set to  with .
+
+**Last working item**: 
+    - Last item agent was working: Investigating why the user is unable to edit the Android package name in the Emergent Publish UI despite following the Fork + Replace Deployment instructions. The agent called , verified  was correct, and informed the user that this is a platform-level UI lock requiring a manual email to . The agent then asked the user what to work on next while waiting.
+    - Status: USER VERIFICATION PENDING
+    - Agent Testing Done: N/A
+    - Which testing method agent to use? NA
+    - User Testing Done: N
+
+**All Pending/In progress Issue list**: 
+  - Issue 1: Android Build (AAB) package name locked in Publish UI (P0)
+     - Attempted fixes: Forked session and replaced deployment as per previous support instructions, but the Emergent Publish UI still locks the field.  is confirmed to correctly have .
+     - Next debug checklist: Check if the user has emailed support@emergent.sh to get the field manually unlocked. This cannot be fixed via code.
+     - Why fix this issue and what will be achieved with the fix? User needs to upload the build as an update to the exact existing Google Play Console package ().
+     - Status: BLOCKED
+     - Is recurring issue? Y (Recurred from the immediate previous fork)
+     - Should Test frontend/backend/both after fix? NA
+     - Blocked on other issue: Blocked on Emergent platform support.
+  - Issue 2: OIDC Redirect URI pending Hercules whitelist (P1)
+     - Attempted fixes: The user has contacted Hercules support to whitelist .
+     - Next debug checklist: Ask user if Hercules support has whitelisted .
+     - Why fix this issue and what will be achieved with the fix? Required for users to actually log in via Google/Apple on the native app.
+     - Status: BLOCKED
+     - Is recurring issue? N
+     - Should Test frontend/backend/both after fix? Frontend (E2E login flow)
+     - Blocked on other issue: Waiting on 3rd party support (Hercules).
+  - Issue 3: Mandatory testing agent run missing (P2)
+     - Attempted fixes: Offered to the user in the latest message.
+     - Next debug checklist: Run  to perform a full E2E test of the frontend routing and basic UI components.
+     - Why fix this issue and what will be achieved with the fix? Validates Phase 1 UI/Routing functionality.
+     - Status: NOT STARTED
+     - Is recurring issue? N
+     - Should Test frontend/backend/both after fix? Frontend
+     - Blocked on other issue: NA
+
+**In progress Task List**: 
+  - (No coding tasks currently in progress; waiting for user direction on Phase 2).
+
+**Upcoming and Future Tasks**
+  Phase 2 Features (from PRD):
+    - P1: E2EE Implementation (AES-GCM + PBKDF2 exact specs provided in initial prompt).
+    - P1: WebRTC Voice/Video Calls implementation in mobile UI.
+    - P1: Full CallKit ringing screen (Level 2 voice/video native UI via ).
+    - P2: Conferences with breakout rooms.
+    - P2: Money transfers / Gold Wallet / Earnings engagement system UI.
+    - P2: Screen sharing.
+    - P2: AI Chat integration.
+    - P3: Admin dashboard, Trustees/Emergency Alerts, Communities, Scheduled messages, Backup, Face ID, Broadcasts, Polls, Templates.
+
+**Completed work in this session**
+- Verified  package configuration.
+- Diagnosed platform-level lock using  and provided actionable steps to the user.
+
+- Recently completed (Previous sessions):
+  - Scaffolded React Native Expo app (DONE)
+  -  and  setup (DONE)
+  - Root Layout and Tab navigation (DONE)
+  - Client-side Expo Push Notifications hook () (DONE)
+  - Phone Verification UI and Gate logic () (DONE)
+  -  updated for Play Store target () (DONE)
+
+**Earlier issues found/mentioned but not fixed**
+   - Issue 1: Mandatory frontend testing agent run was skipped in Phase 1 completion.
+   - Debug checklist: Await user approval, then run .
+   - Why to solve this issue and what will be achieved with this? Ensures no routing regressions exist.
+   - Should Test frontend/backend/both after fix: Frontend
+   - Is recurring issue? N
+
+**Known issue recurrence from previous fork**
+  - Issue recurrence in previous fork: Package name locked in Publish UI.
+  - Recurrence count: 1
+  - Status: BLOCKED (Requires user to email Emergent support).
+
+**Code Architecture**
+
+
+**Key Technical Concepts**
+Frontend: React Native, Expo Router (SDK 54), NativeWind/StyleSheet.
+Backend Logic: Convex real-time document database with WebSockets.
+Authentication: Hercules Auth (OIDC) with Twilio Verify (Phone OTP).
+Push Notifications: Expo Push Service (mapping to FCM/APNs).
+
+**key DB schema**
+  - : , , , , , 
+  - : , , , 
+  - : , , , , , 
+  - : , , , , , , 
+
+**changes in tech stack**
+  - N/A
+
+**All files of reference**
+  - : Verified correct. DO NOT MODIFY.  is critical.
+
+**Areas that need refactoring**: 
+  - N/A currently.
+
+**key api endpoints**
+  - Convex endpoints (Backend): , , , .
+
+**Critical Info for New Agent**
+- **DO NOT change  Android package name** from  or . The lock is in the Emergent Platform Publish UI, not the code.
+- User is currently blocked from publishing the AAB to the Play Store and has been instructed to email .
+- You are waiting on the user's reply to Message 10 to decide what code tasks to tackle next (Phase 2 Features vs Testing).
+
+**documents and test reports created in this job**
+  - 
+  - 
+  - 
+  - 
+  - 
+
+**Last 10 User Messages and any pending HUMAN messages** 
+ - User requested the agent use  to confirm the plan. (Completed)
+ - User stated that the app package name is still uneditable in the build UI even after forking and replacing deployment. (Completed)
+ - Agent diagnosed the issue using  and relayed that the user must email  to get it unlocked manually. Agent presented options for the next coding tasks (E2EE, WebRTC, Testing agent). 
+ - **PENDING HUMAN MESSAGE**: User's response indicating which Phase 2 feature to build or if they want to run the testing agent while waiting for support.
+
+**Project Health Check:**
+- Frontend: Intact and compiling.
+- Build/Deployment: Broken (Emergent platform Publish UI limitation on package name).
+- Auth: Mocked/Pending due to Hercules  whitelist.
+
+**3rd Party Integrations**
+  - Hercules Auth (OIDC) — requires User-provided Hercules config
+  - Convex Backend — requires User-provided Convex URL 
+  - Twilio Verify — uses Convex backend
+  - Expo Push Service — uses Expo Managed credentials
+
+**Testing status**
+  - Testing agent used after significant changes: NO
+  - Troubleshoot agent used after agent stuck in loop: NO
+  - Test files created: NONE
+  - Known regressions: NONE
+
+**Credentials to test flow:**
+  - OIDC config in frontend . OIDC redirect requires Hercules whitelist. See .
+
+**What agent forgot to execute**
+  - Nothing forgotten in this session; agent appropriately halted development to await user directions.
+
+**Debugging checklist for current issue**
+    Issue: Waiting on User direction for next tasks
+    Checklist:
+    1. Read the user's latest message answering the prompt from Message 10.
+    2. If the user selects a Phase 2 feature (e.g., E2EE or WebRTC), formulate a plan, use  to confirm, and begin implementation.
+    3. If the user selects the testing agent, trigger  to validate the Phase 1 UI.</analysis>

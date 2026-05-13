@@ -40,6 +40,7 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 
 ## Phase 1 Implementation (Complete)
 - ✅ Sign-in screen with Hercules OIDC (PKCE flow, secure token storage on native, localStorage fallback on web)
+- ✅ OIDC callback fix v2.0.12: expo-router `+not-found.tsx` now catches `smilers://auth-callback?code=...` deep links, restores PKCE state, exchanges tokens, and routes to chats with on-screen debug logs on failure
 - ✅ Convex client with custom auth integration (passes ID token via `ConvexProviderWithAuth`)
 - ✅ Bottom tab navigation (5 tabs: Chats, Contacts, Groups, Status, Profile) — matches web app's bottom nav
 - ✅ Chat list with pinned **Smilers AI** (purple) and **Chat Once** (orange) rows + FAB stack (4 floating buttons) + persistent SOS button
@@ -85,11 +86,12 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - **Gold tier wallet activation** at high engagement creates retention loop tied to real-world payouts
 
 ## Out of Scope (current iteration)
-- The auth flow uses Expo's redirect proxy because the user couldn't locate the OIDC client config to whitelist `smilers://auth-callback`. Once the Hercules OIDC client is configured to accept the custom scheme, mobile sign-in will work end-to-end on physical devices. For now testing should use Expo Go with the proxy.
+- Final real-device login validation still depends on Hercules allowing the native redirect URI `smilers://auth-callback` for the mobile client.
 
 ## Files
 - `/app/frontend/app/_layout.tsx` — Root with AuthProvider + ConvexProvider
-- `/app/frontend/app/index.tsx` — Sign-in screen
+- `/app/frontend/app/index.tsx` — Sign-in screen + v2.0.12 build badge
+- `/app/frontend/app/+not-found.tsx` — OIDC deep-link catch-all + token exchange fallback
 - `/app/frontend/app/(tabs)/_layout.tsx` — Tab bar
 - `/app/frontend/app/(tabs)/{chats,contacts,groups,status,profile}.tsx`
 - `/app/frontend/app/chat/[conversationId].tsx` — Chat detail

@@ -59,10 +59,18 @@ interface AuthContextValue {
   isLoading: boolean;
   isAuthenticated: boolean;
   idToken: string | null;
+  lastError: string | null;
   userInfo: { email?: string; name?: string; picture?: string; sub?: string } | null;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
   getFreshIdToken: () => Promise<string | null>;
+  acceptTokens: (tokens: {
+    idToken: string;
+    accessToken?: string;
+    refreshToken?: string;
+    expiresIn?: number;
+  }) => Promise<void>;
+  setAuthError: (msg: string | null) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -85,20 +93,25 @@ function parseJwt(token: string): any {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(false);
   const [idToken, setIdToken] = useState<string | null>(null);
+  const [lastError, setLastError] = useState<string | null>(null);
   const [userInfo, setUserInfo] = useState<AuthContextValue['userInfo']>(null);
 
   const discovery = AuthSession.useAutoDiscovery(OIDC_AUTHORITY);
 
-  const redirectUri = AuthSession.makeRedirectUri({
-    scheme: 'smilers',
-    path: 'auth-callback',
-  });
+  const directRedirectUri =
+    Platform.OS === 'web'
+      ? AuthSession.makeRedirectUri({ scheme: 'smilers', path: 'auth-callback' })
+      : AuthSession.makeRedirectUri({
+          scheme: 'smilers',
+          path: 'auth-callback',
+          native: 'smilers://auth-callback',
+        });
 
   const [request, response, promptAsync] = AuthSession.useAuthRequest(
     {
       clientId: OIDC_CLIENT_ID,
       scopes: ['openid', 'profile', 'email', 'offline_access'],
-      redirectUri,
+      redirectUri: directRedirectUri,
       responseType: AuthSession.ResponseType.Code,
       usePKCE: true,
     },
@@ -141,48 +154,92 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             {
               clientId: OIDC_CLIENT_ID,
               code: response.params.code,
-              redirectUri,
+              redirectUri: directRedirectUri,
               extraParams: request.codeVerifier
                 ? { code_verifier: request.codeVerifier }
                 : undefined,
             },
             discovery
           );
-          await storeTokens(tokenResult);
+          const anyResult = tokenResult as AuthSession.TokenResponse & {
+            idToken?: string;
+            id_token?: string;
+          };
+          const idTokenValue = anyResult.idToken || anyResult.id_token;
+          if (!idTokenValue) {
+            throw new Error('Token endpoint returned no id_token.');
+          }
+          await acceptTokens({
+            idToken: idTokenValue,
+            accessToken: tokenResult.accessToken,
+            refreshToken: tokenResult.refreshToken,
+            expiresIn: tokenResult.expiresIn || 3600,
+          });
+          setLastError(null);
         } catch (e) {
           console.error('Token exchange failed:', e);
+          setLastError(e instanceof Error ? e.message : 'Token exchange failed');
         } finally {
           setIsLoading(false);
         }
       })();
     } else if (response?.type === 'error') {
       console.error('Auth error:', response.params);
+      setLastError(response.params.error_description || response.params.error || 'Authentication failed');
       setIsLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [response, discovery]);
 
-  const storeTokens = async (tokenResult: AuthSession.TokenResponse) => {
-    const anyResult = tokenResult as any;
-    const idTokenValue: string = anyResult.idToken || anyResult.id_token || '';
-    const refreshTokenValue: string | undefined = tokenResult.refreshToken;
-    const expiresIn: number = tokenResult.expiresIn || 3600;
+  const acceptTokens = useCallback(
+    async (tokens: {
+      idToken: string;
+      accessToken?: string;
+      refreshToken?: string;
+      expiresIn?: number;
+    }) => {
+      const expiresIn = tokens.expiresIn ?? 3600;
+      const expiryTime = Date.now() + expiresIn * 1000;
 
-    const expiryTime = Date.now() + expiresIn * 1000;
+      await storage.setItem(STORAGE_KEYS.ID_TOKEN, tokens.idToken);
+      if (tokens.accessToken) {
+        await storage.setItem(STORAGE_KEYS.ACCESS_TOKEN, tokens.accessToken);
+      }
+      if (tokens.refreshToken) {
+        await storage.setItem(STORAGE_KEYS.REFRESH_TOKEN, tokens.refreshToken);
+      }
+      await storage.setItem(STORAGE_KEYS.TOKEN_EXPIRY, expiryTime.toString());
 
-    if (idTokenValue) {
-      await storage.setItem(STORAGE_KEYS.ID_TOKEN, idTokenValue);
-      setIdToken(idTokenValue);
-      setUserInfo(parseJwt(idTokenValue));
-    }
-    if (tokenResult.accessToken) {
-      await storage.setItem(STORAGE_KEYS.ACCESS_TOKEN, tokenResult.accessToken);
-    }
-    if (refreshTokenValue) {
-      await storage.setItem(STORAGE_KEYS.REFRESH_TOKEN, refreshTokenValue);
-    }
-    await storage.setItem(STORAGE_KEYS.TOKEN_EXPIRY, expiryTime.toString());
-  };
+      setIdToken(tokens.idToken);
+      setUserInfo(parseJwt(tokens.idToken));
+      setLastError(null);
+    },
+    []
+  );
+
+  const setAuthError = useCallback((msg: string | null) => setLastError(msg), []);
+
+  const storeTokens = useCallback(
+    async (tokenResult: AuthSession.TokenResponse) => {
+      const anyResult = tokenResult as AuthSession.TokenResponse & {
+        idToken?: string;
+        id_token?: string;
+      };
+      const idTokenValue = anyResult.idToken || anyResult.id_token;
+
+      if (!idTokenValue) {
+        throw new Error('Token endpoint returned no id_token.');
+      }
+
+      await acceptTokens({
+        idToken: idTokenValue,
+        accessToken: tokenResult.accessToken,
+        refreshToken: tokenResult.refreshToken,
+        expiresIn: tokenResult.expiresIn || 3600,
+      });
+    },
+    [acceptTokens]
+  );
 
   const refreshTokens = useCallback(
     async (refreshToken: string): Promise<string | null> => {
@@ -210,9 +267,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       storage.removeItem(STORAGE_KEYS.ACCESS_TOKEN),
       storage.removeItem(STORAGE_KEYS.REFRESH_TOKEN),
       storage.removeItem(STORAGE_KEYS.TOKEN_EXPIRY),
+      storage.removeItem('smilers_pkce_verifier'),
+      storage.removeItem('smilers_pkce_state'),
     ]);
     setIdToken(null);
     setUserInfo(null);
+    setLastError(null);
   };
 
   const signIn = useCallback(async () => {
@@ -220,8 +280,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.warn('Auth request not ready yet');
       return;
     }
+    try {
+      if (request.codeVerifier) {
+        await storage.setItem('smilers_pkce_verifier', request.codeVerifier);
+      }
+      if (request.state) {
+        await storage.setItem('smilers_pkce_state', request.state);
+      }
+    } catch (e) {
+      console.warn('Failed to stash PKCE state:', e);
+    }
+    setLastError(null);
     await promptAsync();
-  }, [request, promptAsync]);
+  }, [promptAsync, request]);
 
   const signOut = useCallback(async () => {
     await clearTokens();
@@ -244,10 +315,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         isAuthenticated: !!idToken,
         idToken,
+        lastError,
         userInfo,
         signIn,
         signOut,
         getFreshIdToken,
+        acceptTokens,
+        setAuthError,
       }}
     >
       {children}
