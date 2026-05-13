@@ -57,6 +57,7 @@ const storage = {
 
 interface AuthContextValue {
   isLoading: boolean;
+  isSignInReady: boolean;
   isAuthenticated: boolean;
   idToken: string | null;
   lastError: string | null;
@@ -276,8 +277,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signIn = useCallback(async () => {
-    if (!request) {
+    if (!request || !discovery) {
       console.warn('Auth request not ready yet');
+      setLastError('Sign-in is still preparing. Please wait a moment and try again.');
       return;
     }
     try {
@@ -291,8 +293,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.warn('Failed to stash PKCE state:', e);
     }
     setLastError(null);
-    await promptAsync();
-  }, [promptAsync, request]);
+    setIsLoading(true);
+    try {
+      const result = await promptAsync();
+      if (result.type === 'dismiss' || result.type === 'cancel') {
+        setIsLoading(false);
+      }
+    } catch (errorValue) {
+      setIsLoading(false);
+      setLastError(errorValue instanceof Error ? errorValue.message : 'Sign-in failed to start.');
+    }
+  }, [discovery, promptAsync, request]);
 
   const signOut = useCallback(async () => {
     await clearTokens();
@@ -313,6 +324,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider
       value={{
         isLoading,
+        isSignInReady: !!request && !!discovery,
         isAuthenticated: !!idToken,
         idToken,
         lastError,

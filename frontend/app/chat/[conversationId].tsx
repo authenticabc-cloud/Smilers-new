@@ -21,6 +21,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import Header from '../../src/components/Header';
 import { api } from '../../src/convexApi';
+import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 
@@ -34,24 +35,29 @@ export default function ChatScreen() {
   const [sending, setSending] = useState(false);
   const [replyTo, setReplyTo] = useState<any | null>(null);
   const [selectedMsg, setSelectedMsg] = useState<any | null>(null);
-  const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [showForwardPicker, setShowForwardPicker] = useState(false);
   const listRef = useRef<FlatList<any>>(null);
 
-  const conversation = useQuery(
+  const { data: conversation, loading: conversationLoading } = useSafeConvexQuery<any | null>(
     api.conversations.getConversation,
-    conversationId ? { conversationId } : 'skip'
+    conversationId ? { conversationId } : {},
+    null,
+    !!conversationId
   );
-  const messagesPage = useQuery(
+  const { data: messagesPage, loading: messagesLoading, refetch: refetchMessages } = useSafeConvexQuery<any>(
     api.messages.list,
     conversationId
       ? { conversationId, paginationOpts: { numItems: 50, cursor: null } }
-      : 'skip'
+      : {},
+    { page: [] },
+    !!conversationId
   );
-  const me = useQuery(api.users.getCurrentUser);
-  const conversationsForForward = useQuery(
+  const { data: me } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null);
+  const { data: conversationsForForward } = useSafeConvexQuery<any[]>(
     api.conversations.listConversations,
-    showForwardPicker ? {} : 'skip'
+    {},
+    [],
+    showForwardPicker
   );
 
   const sendMessage = useMutation(api.messages.send);
@@ -79,9 +85,11 @@ export default function ChatScreen() {
     }
   }, [conversationId, messages.length, markRead]);
 
+  const isConversationAvailable = !!conversation;
+
   const handleSend = async () => {
     const value = text.trim();
-    if (!value || !conversationId || sending) return;
+    if (!value || !conversationId || !isConversationAvailable || sending) return;
 
     setSending(true);
     const replyToMessageId = replyTo?._id;
@@ -95,6 +103,7 @@ export default function ChatScreen() {
         text: value,
         ...(replyToMessageId ? { replyToMessageId } : {}),
       });
+      await refetchMessages();
     } catch (e: any) {
       console.warn('send failed:', e?.message);
     } finally {
@@ -118,7 +127,6 @@ export default function ChatScreen() {
 
   const closeActionSheet = () => {
     setSelectedMsg(null);
-    setShowReactionPicker(false);
   };
 
   const onPickReaction = useCallback(
@@ -128,6 +136,7 @@ export default function ChatScreen() {
       closeActionSheet();
       try {
         await toggleReaction({ messageId: msg._id, emoji });
+        await refetchMessages();
       } catch (e: any) {
         console.warn('react failed:', e?.message);
       }
@@ -179,6 +188,7 @@ export default function ChatScreen() {
     closeActionSheet();
     try {
       await toggleStar({ messageId: msg._id });
+        await refetchMessages();
     } catch (e: any) {
       console.warn('star failed:', e?.message);
     }
@@ -196,6 +206,7 @@ export default function ChatScreen() {
         onPress: async () => {
           try {
             await deleteMessage({ messageId: msg._id });
+            await refetchMessages();
           } catch (e: any) {
             Alert.alert('Failed to delete', e?.message || 'Unknown error');
           }
@@ -208,11 +219,12 @@ export default function ChatScreen() {
     async (msgId: string, emoji: string) => {
       try {
         await toggleReaction({ messageId: msgId, emoji });
+        await refetchMessages();
       } catch (e: any) {
         console.warn('react failed:', e?.message);
       }
     },
-    [toggleReaction]
+    [refetchMessages, toggleReaction]
   );
 
   const title = conversation?.name || conversation?.otherUserName || 'Chat';
@@ -243,9 +255,17 @@ export default function ChatScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={0}
       >
-        {messagesPage === undefined ? (
+        {messagesLoading || conversationLoading ? (
           <View style={styles.loadingWrap}>
             <ActivityIndicator size="large" color={Colors.primary} />
+          </View>
+        ) : !isConversationAvailable ? (
+          <View style={styles.unavailableWrap} testID="chat-unavailable-state">
+            <MaterialCommunityIcons name="message-alert-outline" size={52} color={Colors.primary} />
+            <Text style={styles.unavailableTitle}>Conversation unavailable</Text>
+            <Text style={styles.unavailableText}>
+              This chat couldn’t be opened right now. Please return to your chat list and try again.
+            </Text>
           </View>
         ) : (
           <FlatList
@@ -272,7 +292,7 @@ export default function ChatScreen() {
           />
         )}
 
-        {replyTo ? (
+        {replyTo && isConversationAvailable ? (
           <View style={styles.replyPill} testID="reply-preview-pill">
             <View style={styles.replyAccent} />
             <View style={styles.flexOne}>
@@ -298,17 +318,18 @@ export default function ChatScreen() {
             placeholderTextColor={Colors.textMuted}
             style={styles.input}
             multiline
+            editable={isConversationAvailable && !sending}
             testID="message-input"
           />
           <TouchableOpacity style={styles.iconBtn} testID="camera-btn">
             <Feather name="camera" size={22} color={Colors.textSecondary} />
           </TouchableOpacity>
           {text.trim().length === 0 ? (
-            <TouchableOpacity style={styles.sendBtn} testID="mic-btn">
+            <TouchableOpacity style={styles.sendBtn} disabled={!isConversationAvailable} testID="mic-btn">
               <Feather name="mic" size={20} color={Colors.white} />
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity style={styles.sendBtn} onPress={handleSend} testID="send-btn">
+            <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={!isConversationAvailable} testID="send-btn">
               <Feather name="send" size={20} color={Colors.white} />
             </TouchableOpacity>
           )}
@@ -624,6 +645,24 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: FontSize.sm,
     color: Colors.textSecondary,
+  },
+  unavailableWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.xl,
+    gap: Spacing.base,
+  },
+  unavailableTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+  },
+  unavailableText: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
   },
   replyPill: {
     flexDirection: 'row',

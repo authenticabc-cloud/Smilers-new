@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { ActivityIndicator, View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -8,7 +8,7 @@ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/th
 
 export default function SignInScreen() {
   const router = useRouter();
-  const { isAuthenticated, signIn } = useAuth();
+  const { isAuthenticated, isLoading, isSignInReady, signIn } = useAuth();
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -29,12 +29,17 @@ export default function SignInScreen() {
 
         <View style={styles.bottomSection}>
           <TouchableOpacity
-            style={styles.signInBtn}
+            style={[styles.signInBtn, (!isSignInReady || isLoading) && styles.signInBtnDisabled]}
             onPress={signIn}
             activeOpacity={0.85}
+            disabled={!isSignInReady || isLoading}
             testID="sign-in-btn"
           >
-            <Text style={styles.signInText}>Sign In</Text>
+            {isLoading && !isAuthenticated ? (
+              <ActivityIndicator color={Colors.white} />
+            ) : (
+              <Text style={styles.signInText}>{isSignInReady ? 'Sign In' : 'Preparing sign in…'}</Text>
+            )}
           </TouchableOpacity>
           <Text style={styles.terms}>
             By continuing, you agree to our Terms of Service and Privacy Policy
@@ -102,6 +107,9 @@ const styles = StyleSheet.create({
     color: Colors.white,
     fontSize: FontSize.lg,
     fontWeight: FontWeight.bold,
+  },
+  signInBtnDisabled: {
+    opacity: 0.7,
   },
   terms: {
     fontSize: FontSize.xs,

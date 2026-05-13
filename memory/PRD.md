@@ -45,6 +45,8 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - ✅ Added polished placeholder routes for Privacy, App Lock, Face ID, Chat Appearance, Quick Replies, Scheduled Messages, and Chat Once
 - ✅ Added safe Convex query fallback layer so optional backend functions degrade to empty states instead of crashing the UI when unavailable
 - ✅ Tabs layout now uses web-safe auth redirects, and Expo push-notification calls are guarded on web so `/chats` no longer red-screens in preview
+- ✅ Phase 2A.1 chat actions added: long-press action sheet, quick reactions, reply preview, quoted replies, copy, forward, star/unstar, delete placeholder, and haptic feedback
+- ✅ Chat route is now hardened for invalid/unauthorized conversation IDs with a safe fallback state instead of a Convex error screen
 - ✅ Convex client with custom auth integration (passes ID token via `ConvexProviderWithAuth`)
 - ✅ Bottom tab navigation (5 tabs: Chats, Contacts, Groups, Status, Profile) — matches web app's bottom nav
 - ✅ Chat list with pinned **Smilers AI** (purple) and **Chat Once** (orange) rows + FAB stack (4 floating buttons) + persistent SOS button
@@ -100,6 +102,7 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - `/app/frontend/app/{privacy,app-lock,face-id,chat-appearance,templates,scheduled,chat-once}.tsx` — Phase 1 polished placeholders
 - `/app/frontend/src/components/ComingSoon.tsx` — Shared placeholder screen component
 - `/app/frontend/src/hooks/useSafeConvexQuery.ts` — Safe query helper for optional Convex endpoints
+- `/app/frontend/app/chat/[conversationId].tsx` — Phase 2A.1 message actions and safe fallback handling
 - `/app/frontend/app/(tabs)/_layout.tsx` — Tab bar
 - `/app/frontend/app/(tabs)/{chats,contacts,groups,status,profile}.tsx`
 - `/app/frontend/app/chat/[conversationId].tsx` — Chat detail

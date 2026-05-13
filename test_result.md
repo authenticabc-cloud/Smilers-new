@@ -165,6 +165,12 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Installed expo-clipboard@~8.0.8 and replaced chat screen with reply, reactions, copy, forward, star, delete, quoted reply rendering, deleted placeholders, and haptic long-press actions. Preview boot still works and TS baseline remains clean except existing third-party JSX typing issue in react-native-country-codes-picker."
+##       - working: false
+##         agent: "testing"
+##         comment: "Auth automation could not reach a live chat; direct /chat/test-conversation route crashed on Convex server error."
+##       - working: true
+##         agent: "main"
+##         comment: "Added sign-in readiness gating plus safe chat fallback for invalid/unauthorized conversation IDs. Self-verified root preview still boots and /chat/test-conversation now shows fallback UI instead of crashing. Authenticated long-press actions still need a real signed-in conversation test."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"
