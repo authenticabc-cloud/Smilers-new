@@ -41,6 +41,9 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 ## Phase 1 Implementation (Complete)
 - ✅ Sign-in screen with Hercules OIDC (PKCE flow, secure token storage on native, localStorage fallback on web)
 - ✅ OIDC callback fix v2.0.12: expo-router `+not-found.tsx` now catches `smilers://auth-callback?code=...` deep links, restores PKCE state, exchanges tokens, and routes to chats with on-screen debug logs on failure
+- ✅ Settings navigation now fully wired with real Phase 1 utility screens: Emergency, AI Assistant, Blocked Users, Notifications, Earnings & Rewards
+- ✅ Added polished placeholder routes for Privacy, App Lock, Face ID, Chat Appearance, Quick Replies, Scheduled Messages, and Chat Once
+- ✅ Added safe Convex query fallback layer so optional backend functions degrade to empty states instead of crashing the UI when unavailable
 - ✅ Convex client with custom auth integration (passes ID token via `ConvexProviderWithAuth`)
 - ✅ Bottom tab navigation (5 tabs: Chats, Contacts, Groups, Status, Profile) — matches web app's bottom nav
 - ✅ Chat list with pinned **Smilers AI** (purple) and **Chat Once** (orange) rows + FAB stack (4 floating buttons) + persistent SOS button
@@ -92,6 +95,10 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - `/app/frontend/app/_layout.tsx` — Root with AuthProvider + ConvexProvider
 - `/app/frontend/app/index.tsx` — Sign-in screen + v2.0.12 build badge
 - `/app/frontend/app/+not-found.tsx` — OIDC deep-link catch-all + token exchange fallback
+- `/app/frontend/app/{emergency,ai-chat,blocked,notifications,earnings}.tsx` — Fully wired Phase 1 utility screens
+- `/app/frontend/app/{privacy,app-lock,face-id,chat-appearance,templates,scheduled,chat-once}.tsx` — Phase 1 polished placeholders
+- `/app/frontend/src/components/ComingSoon.tsx` — Shared placeholder screen component
+- `/app/frontend/src/hooks/useSafeConvexQuery.ts` — Safe query helper for optional Convex endpoints
 - `/app/frontend/app/(tabs)/_layout.tsx` — Tab bar
 - `/app/frontend/app/(tabs)/{chats,contacts,groups,status,profile}.tsx`
 - `/app/frontend/app/chat/[conversationId].tsx` — Chat detail

@@ -1,0 +1,184 @@
+import React, { useCallback, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { useAction } from 'convex/react';
+import { api } from '../src/convexApi';
+import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
+
+export default function AiChatScreen() {
+  const router = useRouter();
+  const { data: messages, refetch: refetchMessages } = useSafeConvexQuery<any[]>(
+    api.ai.chat.getMessages,
+    {},
+    []
+  );
+  const generate = useAction(api.ai.chat.generateResponse);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const listRef = useRef<FlatList<any>>(null);
+
+  const onSend = useCallback(async () => {
+    const text = input.trim();
+    if (!text || busy) return;
+
+    setInput('');
+    setBusy(true);
+    try {
+      await generate({ prompt: text });
+      await refetchMessages();
+    } catch (errorValue: any) {
+      console.warn('AI chat error', errorValue);
+    } finally {
+      setBusy(false);
+      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
+    }
+  }, [busy, generate, input, refetchMessages]);
+
+  return (
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="ai-chat-screen">
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} hitSlop={12} testID="ai-chat-back-button">
+          <Ionicons name="chevron-back" size={26} color={Colors.textPrimary} />
+        </TouchableOpacity>
+        <View style={styles.headerCenter}>
+          <Text style={styles.headerTitle} testID="ai-chat-header-title">
+            AI Assistant
+          </Text>
+          <Text style={styles.headerSub} testID="ai-chat-header-subtitle">
+            Powered by Hercules
+          </Text>
+        </View>
+        <View style={styles.headerSpacer} />
+      </View>
+      <KeyboardAvoidingView
+        style={styles.flexOne}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={80}
+      >
+        <FlatList
+          ref={listRef}
+          data={messages}
+          keyExtractor={(item: any) => item._id}
+          contentContainerStyle={styles.listContent}
+          testID="ai-chat-message-list"
+          renderItem={({ item, index }: any) => (
+            <View
+              style={[styles.bubble, item.role === 'user' ? styles.userBubble : styles.aiBubble]}
+              testID={`ai-chat-message-${index}`}
+            >
+              <Text
+                style={item.role === 'user' ? styles.userText : styles.aiText}
+                testID={`ai-chat-message-text-${index}`}
+              >
+                {item.content}
+              </Text>
+            </View>
+          )}
+          ListEmptyComponent={
+            <View style={styles.empty} testID="ai-chat-empty-state">
+              <Ionicons name="sparkles" size={48} color={Colors.primary} />
+              <Text style={styles.emptyTitle}>Ask me anything</Text>
+              <Text style={styles.emptySub}>
+                I can help draft messages, translate, summarise, or answer questions.
+              </Text>
+            </View>
+          }
+        />
+        <View style={styles.composer} testID="ai-chat-composer">
+          <TextInput
+            value={input}
+            onChangeText={setInput}
+            placeholder="Message AI…"
+            placeholderTextColor={Colors.textMuted}
+            style={styles.input}
+            multiline
+            editable={!busy}
+            testID="ai-chat-input"
+          />
+          <TouchableOpacity
+            style={[styles.sendBtn, (!input.trim() || busy) && styles.sendBtnDisabled]}
+            onPress={onSend}
+            disabled={!input.trim() || busy}
+            testID="ai-chat-send-button"
+          >
+            {busy ? <ActivityIndicator color={Colors.white} /> : <Ionicons name="send" size={20} color={Colors.white} />}
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: Colors.background },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.base,
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#00000022',
+  },
+  headerCenter: { flex: 1, alignItems: 'center' },
+  headerSpacer: { width: 26 },
+  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  headerSub: { fontSize: FontSize.xs, color: Colors.textSecondary },
+  bubble: { maxWidth: '85%', paddingHorizontal: 14, paddingVertical: 10, borderRadius: Radius.lg },
+  userBubble: { alignSelf: 'flex-end', backgroundColor: Colors.primary },
+  aiBubble: { alignSelf: 'flex-start', backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#00000011' },
+  userText: { color: Colors.white, fontSize: FontSize.base },
+  aiText: { color: Colors.textPrimary, fontSize: FontSize.base },
+  empty: { alignItems: 'center', padding: Spacing.xl, gap: 8 },
+  emptyTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+    marginTop: 12,
+  },
+  emptySub: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center' },
+  composer: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 8,
+    padding: Spacing.base,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#00000022',
+    backgroundColor: Colors.background,
+  },
+  input: {
+    flex: 1,
+    maxHeight: 120,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: Radius.lg,
+    fontSize: FontSize.base,
+    color: Colors.textPrimary,
+    borderWidth: 1,
+    borderColor: '#00000011',
+  },
+  sendBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sendBtnDisabled: { opacity: 0.6 },
+  listContent: { padding: Spacing.base, gap: 10 },
+  flexOne: { flex: 1 },
+});

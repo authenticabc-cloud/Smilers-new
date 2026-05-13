@@ -101,3 +101,54 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+## user_problem_statement: Convert existing Smilers web experience into an Expo native app with Convex, Hercules OIDC, phone verification, and fully functional Phase 1 navigation/screens.
+## backend: []
+## frontend:
+##   - task: "OIDC callback deep-link handling"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/+not-found.tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "main"
+##         comment: "Added catch-all callback handling, PKCE state restore, and verified sign-in badge in preview."
+##   - task: "Phase 1 utility screens and settings navigation"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/settings.tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: true
+##         agent: "main"
+##         comment: "Added emergency, AI chat, blocked users, notifications, earnings, and seven coming-soon screens. Verified settings navigation plus key direct routes in preview."
+##   - task: "Safe Convex fallback for optional Phase 1 endpoints"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/src/hooks/useSafeConvexQuery.ts"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: true
+##         agent: "main"
+##         comment: "Replaced direct reactive queries on optional endpoints with safe manual queries so missing Convex functions no longer crash the UI."
+## metadata:
+##   created_by: "main_agent"
+##   version: "1.0"
+##   test_sequence: 1
+##   run_ui: true
+## test_plan:
+##   current_focus:
+##     - "Phase 1 utility screens and settings navigation"
+##     - "Safe Convex fallback for optional Phase 1 endpoints"
+##   stuck_tasks: []
+##   test_all: false
+##   test_priority: "high_first"
+## agent_communication:
+##   - agent: "main"
+##     message: "Please test settings navigation plus /notifications, /earnings, /blocked, /emergency, /ai-chat, and one stub route like /chat-once. Missing Convex functions should now degrade gracefully instead of showing an error overlay."

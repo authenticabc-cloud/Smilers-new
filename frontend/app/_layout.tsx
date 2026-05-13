@@ -18,9 +18,23 @@ export default function RootLayout() {
               <Stack.Screen name="index" />
               <Stack.Screen name="(tabs)" />
               <Stack.Screen name="phone-verify" />
+              <Stack.Screen name="auth-callback" />
+              <Stack.Screen name="auth-webview" options={{ presentation: 'modal' }} />
               <Stack.Screen name="chat/[conversationId]" />
               <Stack.Screen name="call/[conversationId]" options={{ presentation: 'modal' }} />
               <Stack.Screen name="settings" />
+              <Stack.Screen name="emergency" />
+              <Stack.Screen name="ai-chat" />
+              <Stack.Screen name="blocked" />
+              <Stack.Screen name="notifications" />
+              <Stack.Screen name="earnings" />
+              <Stack.Screen name="privacy" />
+              <Stack.Screen name="app-lock" />
+              <Stack.Screen name="face-id" />
+              <Stack.Screen name="chat-appearance" />
+              <Stack.Screen name="templates" />
+              <Stack.Screen name="scheduled" />
+              <Stack.Screen name="chat-once" />
             </Stack>
           </ConvexClientProvider>
         </AuthProvider>

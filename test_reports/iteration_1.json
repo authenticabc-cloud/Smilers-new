@@ -1,0 +1,72 @@
+{
+  "summary": "Frontend-only mobile web testing completed for Phase 1 routes. Settings row routing mostly works, but a critical red-screen crash exists on /chats due to web-incompatible notifications API usage.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "ComingSoon icon on App Lock screen",
+        "issue": "Invalid Ionicons name \"lock-outline\" logs warning and icon does not render correctly.",
+        "testID": "coming-soon-icon-circle",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Chats route load (/chats)",
+        "issue": "React Native red error overlay appears: ExpoNotifications.getLastNotificationResponse is not available on web (from usePushNotifications hook). This blocks testing AI Assistant and Emergency via chats-tab buttons.",
+        "affected_testIDs": [
+          "chats-screen",
+          "chat-ai",
+          "chat-once",
+          "sos-button"
+        ]
+      },
+      {
+        "flow": "Notifications switch update",
+        "issue": "Switch renders and remains stable, but updateProfile mutation returns Convex server error in current unauthenticated/public test context.",
+        "affected_testIDs": [
+          "notifications-switch-messages"
+        ]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": [
+      {
+        "component": "Tabs push notification integration on web",
+        "issue": "Web runtime calls Notifications.getLastNotificationResponseAsync() unguarded; unsupported API triggers red screen."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/test_reports/frontend_load_failure.jpeg",
+    "/app/test_reports/phase1_routes_verification.jpeg",
+    "/app/test_reports/settings_rows_matrix.jpeg",
+    "/app/test_reports/final_20260513_205212.jpeg"
+  ],
+  "action_items": [
+    "Guard push-notification APIs for Platform.OS === 'web' in usePushNotifications, especially getLastNotificationResponseAsync and response listener setup.",
+    "Retest /chats tab after web guard fix, then re-verify chat-ai, chat-once, and sos-button tap navigation.",
+    "Fix App Lock placeholder icon name (use a valid Ionicons or MaterialCommunityIcons name).",
+    "Verify notification switch mutations under authenticated session if backend requires auth context."
+  ],
+  "critical_code_review_comments": [
+    "Critical: app/(tabs)/_layout.tsx always mounts usePushNotifications(), but src/push/usePushNotifications.ts calls web-unsupported Expo Notifications API without web guard.",
+    "Fallback query wrapper works as intended on Earnings/Blocked/Emergency/AI routes: missing/errored optional Convex endpoints degrade to UI state instead of Convex overlay.",
+    "Some runtime warnings remain (deprecated shadow* props, pointerEvents prop warning) and should be cleaned up to reduce noise during QA."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_1.json"
+  ],
+  "success_rate": {
+    "backend": "N/A (frontend-only scope)",
+    "frontend": "80%"
+  },
+  "seed_data_creation": "None",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Test credentials file exists at /app/memory/test_credentials.md. /app/auth_testing.md and /app/auth-testing.md are missing. Settings route is directly testable; tabs route currently crashes on web due push hook.",
+  "rca_of_issue": "Repro: open https://smilers-mobile-1.preview.emergentagent.com/chats. Result: red overlay 'ExpoNotifications.getLastNotificationResponse is not available on web' at src/push/usePushNotifications.ts line ~175. Root cause: tabs layout mounts push hook on web and hook unconditionally calls native notification response API. Mitigation: add web guard around unsupported notifications APIs and register listeners only on supported platforms."
+}
