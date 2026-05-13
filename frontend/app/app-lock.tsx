@@ -6,7 +6,7 @@ export default function AppLockScreen() {
     <ComingSoon
       title="App Lock"
       description="Protect Smilers with a PIN code or your device's biometric unlock. Arriving in a future update."
-      icon="lock-outline"
+      icon="lock-closed-outline"
     />
   );
 }

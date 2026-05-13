@@ -121,34 +121,53 @@
 ##     file: "/app/frontend/app/settings.tsx"
 ##     stuck_count: 0
 ##     priority: "high"
-##     needs_retesting: true
+##     needs_retesting: false
 ##     status_history:
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Added emergency, AI chat, blocked users, notifications, earnings, and seven coming-soon screens. Verified settings navigation plus key direct routes in preview."
+##       - working: true
+##         agent: "main"
+##         comment: "After test-agent feedback, verified /settings navigation, /app-lock, /blocked, /notifications, /earnings, /emergency, /ai-chat, and /chat-once again in preview."
 ##   - task: "Safe Convex fallback for optional Phase 1 endpoints"
 ##     implemented: true
 ##     working: true
 ##     file: "/app/frontend/src/hooks/useSafeConvexQuery.ts"
 ##     stuck_count: 0
 ##     priority: "high"
-##     needs_retesting: true
+##     needs_retesting: false
 ##     status_history:
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Replaced direct reactive queries on optional endpoints with safe manual queries so missing Convex functions no longer crash the UI."
+##   - task: "Web-safe tabs and push notification hooks"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/src/push/usePushNotifications.ts"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: false
+##         agent: "testing"
+##         comment: "Chats route crashed on web because usePushNotifications called web-unsupported Expo Notifications APIs and tabs layout redirected too early."
+##       - working: true
+##         agent: "main"
+##         comment: "Added web guards to push APIs, switched tab auth gating to render-time Redirects, fixed App Lock icon, and self-verified /chats now redirects safely to sign-in with no red overlay."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"
-##   test_sequence: 1
+##   test_sequence: 2
 ##   run_ui: true
 ## test_plan:
 ##   current_focus:
 ##     - "Phase 1 utility screens and settings navigation"
-##     - "Safe Convex fallback for optional Phase 1 endpoints"
+##     - "Web-safe tabs and push notification hooks"
 ##   stuck_tasks: []
 ##   test_all: false
 ##   test_priority: "high_first"
 ## agent_communication:
 ##   - agent: "main"
 ##     message: "Please test settings navigation plus /notifications, /earnings, /blocked, /emergency, /ai-chat, and one stub route like /chat-once. Missing Convex functions should now degrade gracefully instead of showing an error overlay."
+##   - agent: "main"
+##     message: "Testing-agent findings were addressed locally: push-notification web guards added, tab auth gate rewritten with Redirect, App Lock icon fixed, and notifications helper added for signed-out preview."

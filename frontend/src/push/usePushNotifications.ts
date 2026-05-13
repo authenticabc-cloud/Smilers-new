@@ -9,18 +9,24 @@ import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
 
 // Foreground display behavior — show banner + sound for incoming pushes
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
-});
+if (Platform.OS !== 'web') {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+    }),
+  });
+}
 
 const CALL_CATEGORY = 'incoming-call';
 
 async function setupCategoriesAndChannels() {
+  if (Platform.OS === 'web') {
+    return;
+  }
+
   // Buttons on the lock-screen / heads-up call notification
   await Notifications.setNotificationCategoryAsync(CALL_CATEGORY, [
     {
@@ -74,7 +80,7 @@ export function usePushNotifications() {
 
   // 1) On login: request permission, register token with backend
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (Platform.OS === 'web' || !isAuthenticated) return;
     let cancelled = false;
 
     (async () => {
@@ -90,7 +96,7 @@ export function usePushNotifications() {
         let finalStatus = existing;
         if (existing !== 'granted') {
           const { status: requested } = await Notifications.requestPermissionsAsync({
-            ios: { allowAlert: true, allowBadge: true, allowSound: true, allowAnnouncements: true },
+            ios: { allowAlert: true, allowBadge: true, allowSound: true },
           });
           finalStatus = requested;
         }
@@ -169,6 +175,10 @@ export function usePushNotifications() {
   );
 
   useEffect(() => {
+    if (Platform.OS === 'web') {
+      return;
+    }
+
     const sub = Notifications.addNotificationResponseReceivedListener(handleResponse);
 
     // Also handle the case where the app was launched by tapping a notification

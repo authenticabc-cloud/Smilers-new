@@ -22,9 +22,13 @@ export default function NotificationsScreen() {
   const { data: me, refetch } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null);
   const updateProfile = useMutation(api.users.updateProfile);
   const notifications = (me?.notifications || {}) as Record<string, boolean | undefined>;
+  const canEdit = !!me;
 
   const toggle = useCallback(
     async (key: string, value: boolean) => {
+      if (!me) {
+        return;
+      }
       try {
         await updateProfile({ notifications: { ...notifications, [key]: value } });
         await refetch();
@@ -32,7 +36,7 @@ export default function NotificationsScreen() {
         console.warn('Failed to update notification', errorValue);
       }
     },
-    [notifications, refetch, updateProfile]
+    [me, notifications, refetch, updateProfile]
   );
 
   return (
@@ -50,6 +54,11 @@ export default function NotificationsScreen() {
         <Text style={styles.note} testID="notifications-note">
           Choose which notifications you want to receive on this device.
         </Text>
+        {!canEdit ? (
+          <Text style={styles.helper} testID="notifications-auth-helper">
+            Sign in to change notification preferences.
+          </Text>
+        ) : null}
         {ITEMS.map((item) => (
           <View key={item.key} style={styles.row} testID={`notifications-row-${item.key}`}>
             <View style={styles.flexOne}>
@@ -64,6 +73,7 @@ export default function NotificationsScreen() {
               value={notifications[item.key] !== false}
               onValueChange={(value) => toggle(item.key, value)}
               trackColor={{ true: Colors.primary, false: '#cccccc' }}
+              disabled={!canEdit}
               testID={`notifications-switch-${item.key}`}
             />
           </View>
@@ -87,6 +97,7 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   headerSpacer: { width: 26 },
   note: { fontSize: FontSize.sm, color: Colors.textSecondary, marginBottom: Spacing.base, lineHeight: 18 },
+  helper: { fontSize: FontSize.sm, color: Colors.textMuted, marginBottom: Spacing.base },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

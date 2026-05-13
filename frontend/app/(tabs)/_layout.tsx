@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Tabs, useRouter } from 'expo-router';
+import { Redirect, Tabs, useRootNavigationState } from 'expo-router';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
 import { useAuth } from '../../src/providers/AuthProvider';
@@ -9,7 +9,7 @@ import { useIncomingCallListener } from '../../src/push/useIncomingCallListener'
 import { Colors, FontSize, FontWeight } from '../../src/theme';
 
 export default function TabsLayout() {
-  const router = useRouter();
+  const rootNavigationState = useRootNavigationState();
   const { isLoading, isAuthenticated } = useAuth();
   const updateCurrentUser = useMutation(api.users.updateCurrentUser);
   const me = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip');
@@ -19,26 +19,24 @@ export default function TabsLayout() {
   // Wire up real-time foreground incoming-call detector
   useIncomingCallListener();
 
-  useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      router.replace('/');
-    }
-  }, [isLoading, isAuthenticated, router]);
-
-  // Phone verification gate — hard block until verified
-  useEffect(() => {
-    if (!isAuthenticated || !me) return;
-    if (!me.phone || !me.phoneVerified) {
-      router.replace('/phone-verify');
-    }
-  }, [isAuthenticated, me, router]);
-
   // Sync user with Convex backend on login (creates or updates user record)
   useEffect(() => {
     if (isAuthenticated) {
       updateCurrentUser({}).catch((e: any) => console.warn('updateCurrentUser failed:', e?.message));
     }
   }, [isAuthenticated, updateCurrentUser]);
+
+  if (!rootNavigationState?.key || isLoading) {
+    return null;
+  }
+
+  if (!isAuthenticated) {
+    return <Redirect href="/" />;
+  }
+
+  if (me && (!me.phone || !me.phoneVerified)) {
+    return <Redirect href="/phone-verify" />;
+  }
 
   return (
     <Tabs
@@ -65,7 +63,7 @@ export default function TabsLayout() {
         options={{
           title: 'Chats',
           tabBarIcon: ({ color, size }) => <Feather name="message-square" size={size} color={color} />,
-          tabBarTestID: 'tab-chats',
+          tabBarButtonTestID: 'tab-chats',
         }}
       />
       <Tabs.Screen
@@ -73,7 +71,7 @@ export default function TabsLayout() {
         options={{
           title: 'Contacts',
           tabBarIcon: ({ color, size }) => <Ionicons name="person-circle-outline" size={size} color={color} />,
-          tabBarTestID: 'tab-contacts',
+          tabBarButtonTestID: 'tab-contacts',
         }}
       />
       <Tabs.Screen
@@ -81,7 +79,7 @@ export default function TabsLayout() {
         options={{
           title: 'Groups',
           tabBarIcon: ({ color, size }) => <Ionicons name="people-outline" size={size} color={color} />,
-          tabBarTestID: 'tab-groups',
+          tabBarButtonTestID: 'tab-groups',
         }}
       />
       <Tabs.Screen
@@ -89,7 +87,7 @@ export default function TabsLayout() {
         options={{
           title: 'Status',
           tabBarIcon: ({ color, size }) => <Feather name="disc" size={size} color={color} />,
-          tabBarTestID: 'tab-status',
+          tabBarButtonTestID: 'tab-status',
         }}
       />
       <Tabs.Screen
@@ -97,7 +95,7 @@ export default function TabsLayout() {
         options={{
           title: 'Profile',
           tabBarIcon: ({ color, size }) => <Feather name="user" size={size} color={color} />,
-          tabBarTestID: 'tab-profile',
+          tabBarButtonTestID: 'tab-profile',
         }}
       />
     </Tabs>
