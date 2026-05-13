@@ -1,0 +1,72 @@
+{
+  "summary": "Frontend-only testing for Phase 2A.1: app boots on web preview, but authenticated chat flow was not reachable in automation, and direct chat route with invalid conversationId throws a Convex runtime error in ChatScreen.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Sign in button flow",
+        "issue": "Tapping Sign In did not navigate to auth provider/auth-webview in 3 automation attempts; first attempt logged 'Auth request not ready yet'.",
+        "testID": "sign-in-btn",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Direct route open /chat/:conversationId",
+        "issue": "Navigating to /chat/test-conversation triggers Convex query server error (conversations:getConversation) and ChatScreen crashes into error boundary instead of graceful fallback.",
+        "affected_testIDs": [
+          "chat-screen"
+        ]
+      },
+      {
+        "flow": "Authenticated chat actions (long-press -> Reply/Copy/etc.)",
+        "issue": "Could not validate because auth flow was not reachable in automation session.",
+        "affected_testIDs": [
+          "message-action-sheet",
+          "action-reply",
+          "action-copy",
+          "reply-preview-pill"
+        ]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": [
+      {
+        "component": "Web runtime warnings",
+        "issue": "expo-notifications web warning persists ('listening to push token changes not fully supported on web') plus shadow* deprecation warnings; non-blocking but noisy during QA."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration2_boot.jpeg",
+    "/app/test_reports/iteration2_final.jpeg",
+    "/app/test_reports/iteration2_auth_check.jpeg",
+    "/app/test_reports/iteration2_auth_retry.jpeg",
+    "/root/.emergent/automation_output/20260513_223606/console_20260513_223606.log"
+  ],
+  "action_items": [
+    "Fix Sign In readiness/trigger path on web: ensure promptAsync is only callable when request/discovery are ready, and expose a visible loading/disabled state for sign-in-btn.",
+    "Harden app/chat/[conversationId].tsx query handling (invalid/missing/unauthorized conversationId) to avoid red-screen style runtime crash and show safe fallback UI.",
+    "After auth is reachable, retest Phase 2A.1 end-to-end: long-press message sheet actions, reaction chips, reply preview pill, quoted reply render, forward modal, copy, delete placeholder, haptics behavior on supported platforms."
+  ],
+  "critical_code_review_comments": [
+    "app/chat/[conversationId].tsx calls api.conversations.getConversation directly from route param; invalid IDs currently bubble a Convex server error to UI without guard.",
+    "Long-press action features are wired with testIDs (message-action-sheet, action-*) and look testable once authenticated flow is reachable.",
+    "expo-clipboard dependency pin request is satisfied: package.json has expo-clipboard '~8.0.8'."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_2.json"
+  ],
+  "success_rate": {
+    "backend": "N/A (frontend-only scope)",
+    "frontend": "60%"
+  },
+  "seed_data_creation": "None",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Credentials file exists and references Google OIDC account only (no app password). Auth is currently not automatable in this run due non-progressing sign-in flow. Per loop-prevention rule, stopped after 3 sign-in selector attempts.",
+  "rca_of_issue": "Repro 1: Open /chat/test-conversation directly -> console shows '[CONVEX Q(conversations:getConversation)] Server Error' and ChatScreen does not render stable fallback. Repro 2: Tap sign-in-btn from root -> first attempt logs 'Auth request not ready yet'; later attempts still remain on root with no auth navigation/popup. Mitigation: add explicit request-ready gating/disabled UI for sign-in, and add defensive error handling for chat query failures in chat route."
+}
