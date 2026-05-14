@@ -39,6 +39,7 @@ export default function RootLayout() {
               <Stack.Screen name="chat-once" />
               <Stack.Screen name="status-compose" options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }} />
               <Stack.Screen name="status-view/[userId]" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
+              <Stack.Screen name="contact-qr" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
             </Stack>
           </ConvexClientProvider>
         </AuthProvider>

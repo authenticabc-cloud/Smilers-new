@@ -1,0 +1,65 @@
+{
+  "summary": "Frontend-only Phase 2C regression testing completed for sign-in, contacts route stability, and new contact-qr flow. Sign-in screen is stable, sign-in button opens external auth popup, /contacts safely redirects unauthenticated users to sign-in, and /contact-qr renders with tab switching (My QR <-> Scan QR) without frontend crash.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "contact-qr show mode (unauthenticated)",
+        "issue": "When unauthenticated, /contact-qr?mode=show renders the screen but stays in loading state (spinner) with no fallback message or auth redirect; my-qr-card never appears.",
+        "testID": "contact-qr-screen",
+        "priority": "HIGH"
+      },
+      {
+        "component": "Contacts action chips/buttons",
+        "issue": "Some tap targets appear below the recommended 44x44 mobile minimum (e.g., add/reject icon buttons), increasing miss-tap risk.",
+        "testID": "add-* / reject-*",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "contact-qr route with unauthenticated session",
+        "issue": "Route is reachable and stable, but authenticated user data dependency is unresolved in show mode for signed-out state, resulting in non-terminal loading UX.",
+        "affected_testIDs": [
+          "contact-qr-screen",
+          "my-qr-card"
+        ]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/automation_iter8/iter8_root_state.jpeg",
+    "/app/test_reports/automation_iter8/iter8_contacts_route.jpeg",
+    "/app/test_reports/automation_iter8/iter8_contact_qr_tabs.jpeg",
+    "/app/test_reports/automation_iter8/iter8_final_root.jpeg",
+    "/app/test_reports/automation_iter8_auth/iter8_signin_click_state.jpeg",
+    "/root/.emergent/automation_output/20260514_152057/console_20260514_152057.log",
+    "/root/.emergent/automation_output/20260514_152138/console_20260514_152138.log"
+  ],
+  "action_items": [
+    "Add explicit unauth behavior on /contact-qr (redirect to sign-in or show clear signed-out fallback) instead of indefinite loader in My QR mode.",
+    "Increase small icon-only touch targets in contacts actions to >=44x44 for mobile ergonomics.",
+    "Track repeated Expo warnings seen during run (expo-av deprecation, shadow* deprecation, pointerEvents deprecation) and plan cleanup before SDK upgrades."
+  ],
+  "critical_code_review_comments": [
+    "contact-qr.tsx currently depends on me?._id to build QR payload but does not handle signed-out state in show mode, causing spinner-only UI.",
+    "contacts.tsx includes compact icon action controls that likely undercut 44x44 touch-target guidance on mobile."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_8.json"
+  ],
+  "success_rate": {
+    "backend": "N/A (frontend-only scope)",
+    "frontend": "90%"
+  },
+  "seed_data_creation": "None",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Credentials file is present and was read before auth checks. Deterministic full OIDC completion remains third-party-dependent, but sign-in click opens auth popup in this run. Core requested checks passed except unauthenticated My QR fallback behavior.",
+  "rca_of_issue": "Repro (unauth My QR): open /contact-qr?mode=show in signed-out session -> contact-qr-screen renders and tabs switch works -> My QR stays loader because payload requires current user data (me?._id) and no signed-out fallback/redirect path exists."
+}
