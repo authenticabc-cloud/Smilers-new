@@ -16,12 +16,16 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useQuery, useMutation } from 'convex/react';
+import { useConvex, useMutation } from 'convex/react';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
+import * as ImagePicker from 'expo-image-picker';
 import Header from '../../src/components/Header';
+import AttachmentSheet from '../../src/components/AttachmentSheet';
+import MediaBubble from '../../src/components/MediaBubble';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
+import { uploadFile } from '../../src/lib/uploadFile';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 
@@ -29,13 +33,17 @@ const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
 export default function ChatScreen() {
   const router = useRouter();
+  const convex = useConvex();
   const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
   useAuth();
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [replyTo, setReplyTo] = useState<any | null>(null);
   const [selectedMsg, setSelectedMsg] = useState<any | null>(null);
+  const [showAttachSheet, setShowAttachSheet] = useState(false);
   const [showForwardPicker, setShowForwardPicker] = useState(false);
+  const [fallbackReady, setFallbackReady] = useState(false);
   const listRef = useRef<FlatList<any>>(null);
 
   const { data: conversation, loading: conversationLoading } = useSafeConvexQuery<any | null>(
@@ -85,6 +93,12 @@ export default function ChatScreen() {
     }
   }, [conversationId, messages.length, markRead]);
 
+  useEffect(() => {
+    setFallbackReady(false);
+    const timer = setTimeout(() => setFallbackReady(true), 2500);
+    return () => clearTimeout(timer);
+  }, [conversationId]);
+
   const isConversationAvailable = !!conversation;
 
   const handleSend = async () => {
@@ -117,6 +131,71 @@ export default function ChatScreen() {
       setTyping({ conversationId }).catch(() => {});
     }
   };
+
+  const sendImageFromUri = useCallback(
+    async (uri: string, mimeType?: string) => {
+      if (!conversationId || !isConversationAvailable) return;
+
+      setUploading(true);
+      const caption = text.trim();
+      const replyToMessageId = replyTo?._id;
+
+      try {
+        const storageId = await uploadFile(convex, uri, mimeType || 'image/jpeg');
+        await sendMessage({
+          conversationId,
+          type: 'image',
+          text: caption,
+          storageId,
+          ...(replyToMessageId ? { replyToMessageId } : {}),
+        });
+        setText('');
+        setReplyTo(null);
+        await refetchMessages();
+      } catch (errorValue: any) {
+        Alert.alert('Upload failed', errorValue?.message || 'Unable to send image right now.');
+      } finally {
+        setUploading(false);
+      }
+    },
+    [conversationId, convex, isConversationAvailable, refetchMessages, replyTo, sendMessage, text]
+  );
+
+  const pickPhoto = useCallback(async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Permission needed', 'Allow photo access to share images.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.85,
+      allowsEditing: false,
+    });
+
+    if (result.canceled || !result.assets?.[0]?.uri) return;
+    const asset = result.assets[0];
+    await sendImageFromUri(asset.uri, asset.mimeType || 'image/jpeg');
+  }, [sendImageFromUri]);
+
+  const takePhoto = useCallback(async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Permission needed', 'Allow camera access to take photos.');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.85,
+      allowsEditing: false,
+    });
+
+    if (result.canceled || !result.assets?.[0]?.uri) return;
+    const asset = result.assets[0];
+    await sendImageFromUri(asset.uri, asset.mimeType || 'image/jpeg');
+  }, [sendImageFromUri]);
 
   const onLongPressMessage = useCallback(async (msg: any) => {
     try {
@@ -169,11 +248,21 @@ export default function ChatScreen() {
       closeActionSheet();
       if (!msg || !targetConversationId) return;
       try {
-        await sendMessage({
-          conversationId: targetConversationId,
-          type: 'text',
-          text: msg.text || '',
-        });
+        await sendMessage(
+          msg.type === 'image' && msg.storageId
+            ? {
+                conversationId: targetConversationId,
+                type: 'image',
+                text: msg.text || '',
+                storageId: msg.storageId,
+              }
+            : {
+                conversationId: targetConversationId,
+                type: msg.type || 'text',
+                text: msg.text || '',
+                ...(msg.storageId ? { storageId: msg.storageId } : {}),
+              }
+        );
         Alert.alert('Forwarded');
       } catch (e: any) {
         Alert.alert('Failed to forward', e?.message || 'Unknown error');
@@ -255,7 +344,7 @@ export default function ChatScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={0}
       >
-        {messagesLoading || conversationLoading ? (
+        {(messagesLoading || conversationLoading) && !fallbackReady ? (
           <View style={styles.loadingWrap}>
             <ActivityIndicator size="large" color={Colors.primary} />
           </View>
@@ -274,7 +363,7 @@ export default function ChatScreen() {
             keyExtractor={(item: any) => item._id}
             contentContainerStyle={styles.listContent}
             renderItem={({ item }) => (
-              <MessageBubble
+              <MediaBubble
                 msg={item}
                 isMine={item.senderId === me?._id}
                 myUserId={me?._id}
@@ -307,8 +396,20 @@ export default function ChatScreen() {
           </View>
         ) : null}
 
+        {uploading ? (
+          <View style={styles.uploadBar} testID="uploading-bar">
+            <ActivityIndicator size="small" color={Colors.primary} />
+            <Text style={styles.uploadText}>Uploading…</Text>
+          </View>
+        ) : null}
+
         <View style={styles.inputBar}>
-          <TouchableOpacity style={styles.iconBtn} testID="attach-btn">
+          <TouchableOpacity
+            style={styles.iconBtn}
+            onPress={() => setShowAttachSheet(true)}
+            disabled={!isConversationAvailable || uploading}
+            testID="attach-btn"
+          >
             <Feather name="paperclip" size={22} color={Colors.textSecondary} />
           </TouchableOpacity>
           <TextInput
@@ -318,23 +419,30 @@ export default function ChatScreen() {
             placeholderTextColor={Colors.textMuted}
             style={styles.input}
             multiline
-            editable={isConversationAvailable && !sending}
+            editable={isConversationAvailable && !sending && !uploading}
             testID="message-input"
           />
-          <TouchableOpacity style={styles.iconBtn} testID="camera-btn">
+          <TouchableOpacity
+            style={styles.iconBtn}
+            onPress={takePhoto}
+            disabled={!isConversationAvailable || uploading}
+            testID="camera-btn"
+          >
             <Feather name="camera" size={22} color={Colors.textSecondary} />
           </TouchableOpacity>
           {text.trim().length === 0 ? (
-            <TouchableOpacity style={styles.sendBtn} disabled={!isConversationAvailable} testID="mic-btn">
+            <TouchableOpacity style={styles.sendBtn} disabled={!isConversationAvailable || uploading} testID="mic-btn">
               <Feather name="mic" size={20} color={Colors.white} />
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={!isConversationAvailable} testID="send-btn">
+            <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={!isConversationAvailable || uploading} testID="send-btn">
               <Feather name="send" size={20} color={Colors.white} />
             </TouchableOpacity>
           )}
         </View>
       </KeyboardAvoidingView>
+
+      <AttachmentSheet visible={showAttachSheet} onClose={() => setShowAttachSheet(false)} onPickPhoto={pickPhoto} onTakePhoto={takePhoto} />
 
       <Modal visible={!!selectedMsg} transparent animationType="fade" onRequestClose={closeActionSheet}>
         <Pressable style={styles.sheetBackdrop} onPress={closeActionSheet}>
@@ -677,6 +785,17 @@ const styles = StyleSheet.create({
   replyAccent: { width: 3, height: 32, borderRadius: 2, backgroundColor: Colors.primary },
   replyLabel: { fontSize: 11, fontWeight: FontWeight.bold, color: Colors.primary },
   replyText: { fontSize: 13, color: Colors.textSecondary, marginTop: 2 },
+  uploadBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: Spacing.base,
+    paddingVertical: 10,
+    backgroundColor: Colors.primaryLight,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  uploadText: { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium },
   inputBar: {
     flexDirection: 'row',
     alignItems: 'flex-end',

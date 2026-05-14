@@ -171,6 +171,17 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Added sign-in readiness gating plus safe chat fallback for invalid/unauthorized conversation IDs. Self-verified root preview still boots and /chat/test-conversation now shows fallback UI instead of crashing. Authenticated long-press actions still need a real signed-in conversation test."
+##   - task: "Phase 2A.2a image attachments"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/chat/[conversationId].tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: true
+##         agent: "main"
+##         comment: "Installed Expo SDK-aligned media packages, added uploadFile helper, AttachmentSheet, MediaBubble, composer upload bar, image send/camera hooks, image forwarding with storageId preservation, and full-screen image viewer. Self-verified root preview still boots and invalid chat route degrades to fallback instead of hanging."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"
@@ -181,6 +192,7 @@
 ##     - "Phase 1 utility screens and settings navigation"
 ##     - "Web-safe tabs and push notification hooks"
 ##     - "Phase 2A.1 chat actions"
+##     - "Phase 2A.2a image attachments"
 ##   stuck_tasks: []
 ##   test_all: false
 ##   test_priority: "high_first"
@@ -191,3 +203,5 @@
 ##     message: "Testing-agent findings were addressed locally: push-notification web guards added, tab auth gate rewritten with Redirect, App Lock icon fixed, and notifications helper added for signed-out preview."
 ##   - agent: "main"
 ##     message: "Please test the new chat action implementation in app/chat/[conversationId].tsx as far as current credentials allow. If full auth/chat interaction is blocked, still validate that the app boots cleanly and report any route/runtime regressions introduced by the new screen code."
+##   - agent: "main"
+##     message: "Please test the Phase 2A.2a media additions as far as current credentials/platform allow. Full gallery/camera/image-upload validation likely requires a real authenticated mobile conversation; still validate app boot, route stability, and any new regressions in chat fallback behavior."
