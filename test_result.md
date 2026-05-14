@@ -199,6 +199,12 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Added Ads tab wiring, Browse/My Ads screen, Create Ad form, Admin Ads Review screen, country selector modal, debounced search helper, and standard 195-country list. Self-verified /ads/create and /ads/review in preview."
+##       - working: false
+##         agent: "testing"
+##         comment: "Ads create route stayed stable, but unauthenticated submit still hit Convex server error instead of showing an explicit sign-in guard."
+##       - working: true
+##         agent: "main"
+##         comment: "Added explicit sign-in guard and disabled submit on /ads/create for signed-out sessions. Authenticated Ads tab browsing and real submit/list flows still need a signed-in test run."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"

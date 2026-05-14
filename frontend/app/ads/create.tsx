@@ -16,6 +16,7 @@ import { useConvex, useMutation } from 'convex/react';
 import * as ImagePicker from 'expo-image-picker';
 import Header from '../../src/components/Header';
 import CountrySelectorModal from '../../src/components/CountrySelectorModal';
+import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { api } from '../../src/convexApi';
 import { uploadFile } from '../../src/lib/uploadFile';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
@@ -24,6 +25,7 @@ export default function CreateAdScreen() {
   const router = useRouter();
   const convex = useConvex();
   const createAd = useMutation(api.ads.create);
+  const { data: me } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null);
   const [submitting, setSubmitting] = useState(false);
   const [showCountryModal, setShowCountryModal] = useState(false);
   const [businessName, setBusinessName] = useState('');
@@ -84,6 +86,11 @@ export default function CreateAdScreen() {
       return;
     }
 
+    if (!me) {
+      Alert.alert('Sign in required', 'Please sign in before posting an ad.');
+      return;
+    }
+
     setSubmitting(true);
     try {
       let imageStorageId: string | undefined;
@@ -108,6 +115,11 @@ export default function CreateAdScreen() {
           <Text style={styles.bannerText}>
             Your ad will be reviewed by our team before it goes live. This may take up to 24 hours. Businesses are charged 0.06 per click.
           </Text>
+          {!me ? (
+            <Text style={styles.authNotice} testID="create-ad-auth-notice">
+              Sign in is required before submitting an ad.
+            </Text>
+          ) : null}
         </View>
 
         <Field label="Business Name*" value={businessName} onChangeText={setBusinessName} testID="ad-business-name" />
@@ -134,8 +146,8 @@ export default function CreateAdScreen() {
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity style={[styles.submitBtn, submitting && styles.submitBtnDisabled]} onPress={onSubmit} disabled={submitting} testID="ad-submit-button">
-          <Text style={styles.submitText}>{submitting ? 'Submitting…' : 'Submit Ad'}</Text>
+        <TouchableOpacity style={[styles.submitBtn, (!me || submitting) && styles.submitBtnDisabled]} onPress={onSubmit} disabled={!me || submitting} testID="ad-submit-button">
+          <Text style={styles.submitText}>{!me ? 'Sign in to submit' : submitting ? 'Submitting…' : 'Submit Ad'}</Text>
         </TouchableOpacity>
       </ScrollView>
 
@@ -172,6 +184,7 @@ const styles = StyleSheet.create({
   content: { padding: Spacing.base, paddingBottom: Spacing.xxl },
   banner: { backgroundColor: Colors.primaryLight, borderRadius: Radius.lg, padding: Spacing.base },
   bannerText: { fontSize: FontSize.sm, color: Colors.textPrimary, lineHeight: 20 },
+  authNotice: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 8, fontWeight: FontWeight.medium },
   section: { marginTop: Spacing.lg },
   label: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textPrimary, marginBottom: 8 },
   input: {
