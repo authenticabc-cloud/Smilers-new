@@ -19,11 +19,13 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useConvex, useMutation } from 'convex/react';
 import { Audio } from 'expo-av';
 import * as Clipboard from 'expo-clipboard';
+import * as DocumentPicker from 'expo-document-picker';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import Header from '../../src/components/Header';
 import AttachmentSheet from '../../src/components/AttachmentSheet';
 import MediaBubble from '../../src/components/MediaBubble';
+import PollComposer from '../../src/components/PollComposer';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { uploadFile } from '../../src/lib/uploadFile';
@@ -45,6 +47,7 @@ export default function ChatScreen() {
   const [replyTo, setReplyTo] = useState<any | null>(null);
   const [selectedMsg, setSelectedMsg] = useState<any | null>(null);
   const [showAttachSheet, setShowAttachSheet] = useState(false);
+  const [showPollComposer, setShowPollComposer] = useState(false);
   const [showForwardPicker, setShowForwardPicker] = useState(false);
   const [fallbackReady, setFallbackReady] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -221,6 +224,64 @@ export default function ChatScreen() {
     await sendImageFromUri(asset.uri, asset.mimeType || 'image/jpeg');
   }, [sendImageFromUri]);
 
+  const onPickDocument = useCallback(async () => {
+    if (!conversationId || !isConversationAvailable) return;
+
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (result.canceled) return;
+
+      const file = result.assets?.[0];
+      if (!file) return;
+
+      setUploading(true);
+      const mime = file.mimeType || 'application/octet-stream';
+      const replyToMessageId = replyTo?._id;
+      const storageId = await uploadFile(convex, file.uri, mime);
+      await sendMessage({
+        conversationId,
+        type: 'file',
+        storageId,
+        mimeType: mime,
+        fileName: file.name,
+        fileSize: file.size,
+        ...(replyToMessageId ? { replyToMessageId } : {}),
+      });
+      setReplyTo(null);
+      await refetchMessages();
+    } catch (errorValue: any) {
+      Alert.alert('Failed to send file', errorValue?.message || 'Unknown error');
+    } finally {
+      setUploading(false);
+    }
+  }, [conversationId, convex, isConversationAvailable, refetchMessages, replyTo, sendMessage]);
+
+  const onSubmitPoll = useCallback(
+    async (poll: { question: string; options: { id: string; text: string }[] }) => {
+      if (!conversationId || !isConversationAvailable) return;
+
+      setShowPollComposer(false);
+      const replyToMessageId = replyTo?._id;
+      try {
+        await sendMessage({
+          conversationId,
+          type: 'poll',
+          poll: { question: poll.question, options: poll.options },
+          ...(replyToMessageId ? { replyToMessageId } : {}),
+        });
+        setReplyTo(null);
+        await refetchMessages();
+      } catch (errorValue: any) {
+        Alert.alert('Failed to send poll', errorValue?.message || 'Unknown error');
+      }
+    },
+    [conversationId, isConversationAvailable, refetchMessages, replyTo, sendMessage]
+  );
+
   const startRecording = useCallback(async () => {
     if (isRecording) return;
     try {
@@ -374,8 +435,11 @@ export default function ChatScreen() {
                 conversationId: targetConversationId,
                 type: msg.type || 'text',
                 text: msg.text || '',
+                ...(msg.poll ? { poll: msg.poll } : {}),
                 ...(msg.storageId ? { storageId: msg.storageId } : {}),
                 ...(msg.mimeType ? { mimeType: msg.mimeType } : {}),
+                ...(msg.fileName ? { fileName: msg.fileName } : {}),
+                ...(msg.fileSize ? { fileSize: msg.fileSize } : {}),
                 ...(msg.audioDuration ? { audioDuration: msg.audioDuration } : {}),
               }
         );
@@ -578,7 +642,20 @@ export default function ChatScreen() {
         </View>
       </KeyboardAvoidingView>
 
-      <AttachmentSheet visible={showAttachSheet} onClose={() => setShowAttachSheet(false)} onPickPhoto={pickPhoto} onTakePhoto={takePhoto} />
+      <AttachmentSheet
+        visible={showAttachSheet}
+        onClose={() => setShowAttachSheet(false)}
+        onPickPhoto={pickPhoto}
+        onTakePhoto={takePhoto}
+        onPickDocument={onPickDocument}
+        onCreatePoll={() => setShowPollComposer(true)}
+      />
+
+      <PollComposer
+        visible={showPollComposer}
+        onClose={() => setShowPollComposer(false)}
+        onSubmit={onSubmitPoll}
+      />
 
       <Modal visible={!!selectedMsg} transparent animationType="fade" onRequestClose={closeActionSheet}>
         <Pressable style={styles.sheetBackdrop} onPress={closeActionSheet}>

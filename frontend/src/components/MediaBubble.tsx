@@ -12,6 +12,8 @@ import {
 } from 'react-native';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
+import * as Linking from 'expo-linking';
+import { useMutation, useQuery } from 'convex/react';
 import { api } from '../convexApi';
 import { useSafeConvexQuery } from '../hooks/useSafeConvexQuery';
 import { Colors, FontSize, FontWeight, Radius, Shadow } from '../theme';
@@ -133,10 +135,10 @@ function BubbleBody({ msg, timeStr }: { msg: any; timeStr: string }) {
     case 'audio':
       return <VoiceMessage msg={msg} />;
     case 'poll':
-      return <PlaceholderBody type="Poll" icon="bar-chart-2" iconLib="feather" subtitle={msg.poll?.question} />;
+      return <PollMessage msg={msg} />;
     case 'file':
     case 'document':
-      return <PlaceholderBody type={msg.fileName || 'File'} icon="file" iconLib="feather" subtitle={formatBytes(msg.fileSize)} />;
+      return <FileMessage msg={msg} />;
     case 'text':
     default:
       return <Text style={styles.bubbleText}>{msg.text || ''}</Text>;
@@ -301,6 +303,107 @@ function VoiceMessage({ msg }: { msg: any }) {
   );
 }
 
+function PollMessage({ msg }: { msg: any }) {
+  const poll = msg.poll || { question: '', options: [] };
+  const myUser = useQuery(api.users.getCurrentUser, {});
+  const votePoll = useMutation(api.messages.votePoll);
+  const myId = myUser?._id;
+
+  const totalVotes = useMemo(() => {
+    return (poll.options || []).reduce((sum: number, option: any) => {
+      return sum + (Array.isArray(option.votes) ? option.votes.length : option.voteCount || 0);
+    }, 0);
+  }, [poll.options]);
+
+  const onVote = async (optionId: string) => {
+    try {
+      await votePoll({ messageId: msg._id, optionId });
+    } catch {}
+  };
+
+  return (
+    <View style={styles.pollBody} testID={`poll-message-${msg._id}`}>
+      <View style={styles.pollHeaderRow}>
+        <Feather name="bar-chart-2" size={14} color={Colors.primary} />
+        <Text style={styles.pollLabel}>POLL</Text>
+      </View>
+      <Text style={styles.pollQuestion}>{poll.question || '—'}</Text>
+      {(poll.options || []).map((option: any) => {
+        const voteList: any[] = Array.isArray(option.votes) ? option.votes : [];
+        const count = voteList.length || option.voteCount || 0;
+        const mine = myId
+          ? voteList.some((vote: any) => (typeof vote === 'string' ? vote : vote?.userId) === myId)
+          : false;
+        const pct = totalVotes > 0 ? count / totalVotes : 0;
+        const optionId = option.id || option._id;
+
+        return (
+          <TouchableOpacity
+            key={optionId}
+            style={styles.pollOption}
+            onPress={() => onVote(optionId)}
+            activeOpacity={0.85}
+            testID={`poll-vote-${optionId}`}
+          >
+            <View
+              style={[
+                styles.pollFill,
+                { width: `${pct * 100}%`, backgroundColor: mine ? Colors.primary : Colors.primaryLight },
+              ]}
+            />
+            <View style={styles.pollOptionRow}>
+              <View style={[styles.pollRadio, mine ? styles.pollRadioOn : null]}>
+                {mine ? <Feather name="check" size={12} color={Colors.white} /> : null}
+              </View>
+              <Text style={[styles.pollOptionText, mine ? styles.pollOptionTextMine : null]} numberOfLines={2}>
+                {option.text}
+              </Text>
+              <Text style={styles.pollOptionCount}>{count}</Text>
+            </View>
+          </TouchableOpacity>
+        );
+      })}
+      <Text style={styles.pollTotal}>{totalVotes} {totalVotes === 1 ? 'vote' : 'votes'}</Text>
+    </View>
+  );
+}
+
+function FileMessage({ msg }: { msg: any }) {
+  const url = useQuery(
+    api.files.getUrl,
+    msg.fileUrl ? 'skip' : msg.storageId ? { storageId: msg.storageId } : 'skip'
+  ) as string | null | undefined;
+  const src = msg.fileUrl || url;
+
+  const onOpen = async () => {
+    if (!src) return;
+    try {
+      await Linking.openURL(src);
+    } catch {}
+  };
+
+  return (
+    <TouchableOpacity
+      style={styles.fileBody}
+      onPress={onOpen}
+      disabled={!src}
+      activeOpacity={0.7}
+      testID={`file-open-${msg._id}`}
+    >
+      <View style={[styles.fileIcon, !src ? { opacity: 0.5 } : null]}>
+        <Feather name="file-text" size={22} color={Colors.white} />
+      </View>
+      <View style={styles.flexOne}>
+        <Text style={styles.fileName} numberOfLines={2}>{msg.fileName || 'Document'}</Text>
+        <Text style={styles.fileMeta}>
+          {[formatBytes(msg.fileSize), msg.mimeType?.split('/')?.pop()?.toUpperCase()].filter(Boolean).join(' · ') || 'File'}
+        </Text>
+      </View>
+      <Feather name={src ? 'download' : 'loader'} size={20} color={Colors.primary} />
+    </TouchableOpacity>
+  );
+}
+
 function PlaceholderBody({
   type,
   icon,
@@ -373,6 +476,23 @@ const styles = StyleSheet.create({
   voiceBar: { flex: 1, height: 4, borderRadius: 2, backgroundColor: 'rgba(0,0,0,0.12)', overflow: 'hidden' },
   voiceProgress: { height: '100%', backgroundColor: Colors.primary },
   voiceDuration: { fontSize: 11, color: Colors.textSecondary, fontVariant: ['tabular-nums'], minWidth: 32 },
+  pollBody: { paddingVertical: 2, minWidth: 220, gap: 6 },
+  pollHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  pollLabel: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.primary, letterSpacing: 1 },
+  pollQuestion: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary, marginBottom: 4 },
+  pollOption: { borderRadius: 10, overflow: 'hidden', backgroundColor: 'rgba(0,0,0,0.04)', marginVertical: 2, position: 'relative' },
+  pollFill: { position: 'absolute', left: 0, top: 0, bottom: 0, opacity: 0.45 },
+  pollOptionRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 8 },
+  pollRadio: { width: 18, height: 18, borderRadius: 9, borderWidth: 2, borderColor: Colors.textMuted, alignItems: 'center', justifyContent: 'center' },
+  pollRadioOn: { borderColor: Colors.primary, backgroundColor: Colors.primary },
+  pollOptionText: { flex: 1, fontSize: FontSize.sm, color: Colors.textPrimary },
+  pollOptionTextMine: { fontWeight: FontWeight.semibold },
+  pollOptionCount: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.semibold, minWidth: 20, textAlign: 'right' },
+  pollTotal: { fontSize: 11, color: Colors.textMuted, marginTop: 2 },
+  fileBody: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 6, minWidth: 200 },
+  fileIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#8B5CF6', alignItems: 'center', justifyContent: 'center' },
+  fileName: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  fileMeta: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
   viewerWrap: { flex: 1, backgroundColor: '#000' },
   viewerBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   viewerImage: { width: '100%', height: '100%' },
