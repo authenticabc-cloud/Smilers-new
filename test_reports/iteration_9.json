@@ -1,0 +1,71 @@
+{
+  "summary": "Frontend-only regression pass executed for sign-in and ads routes. Redesigned sign-in loaded, sign-in tap opened external OIDC popup, /ads resolved safely to sign-in when unauthenticated, and /ads/review rendered unauthorized state without crash.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Ads tab direct route under signed-out session",
+        "issue": "Cannot validate My Ads credit card/redeem controls in automation because /ads consistently redirects to sign-in for unauthenticated users.",
+        "testID": "ad-credits-card",
+        "priority": "MEDIUM"
+      },
+      {
+        "component": "Admin Ad Codes sub-tab",
+        "issue": "Ad Codes panel controls were not reachable in this run because admin-authenticated state is required and third-party OIDC completion is non-deterministic in browser automation.",
+        "testID": "ads-admin-codes-tab",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Sign-in -> authenticated Ads/Admin paths",
+        "issue": "Sign-in click launches external Hercules auth popup, but deterministic completion to in-app authenticated/admin state could not be guaranteed in this run.",
+        "affected_testIDs": [
+          "sign-in-btn",
+          "ads-my-tab",
+          "ads-admin-codes-tab"
+        ]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Ads / Ads Review",
+        "issues": [
+          "Some segmented controls use minHeight 42 (below recommended 44 touch target), which may reduce tap ergonomics on mobile."
+        ]
+      }
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/automation_iter9/iter9_root_signin.jpeg",
+    "/app/test_reports/automation_iter9/iter9_signin_tap_state.jpeg",
+    "/app/test_reports/automation_iter9/iter9_ads_route.jpeg",
+    "/app/test_reports/automation_iter9/iter9_review_route.jpeg",
+    "/root/.emergent/automation_output/20260514_185719/console_20260514_185719.log"
+  ],
+  "action_items": [
+    "Run one manual/admin-authenticated pass to validate Ad Codes sub-tab controls (generate/revoke/copy) end-to-end.",
+    "Run one authenticated non-admin pass to validate My Ads credit card and redeem input flow.",
+    "Consider raising segmented button touch targets from 42 to >=44 for mobile accessibility consistency."
+  ],
+  "critical_code_review_comments": [
+    "ads.tsx and ads/review.tsx include required testID coverage for key new controls, improving automation reliability.",
+    "SegmentButton styles in both screens use minHeight: 42, slightly under 44px mobile touch-target guideline."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_9.json"
+  ],
+  "success_rate": {
+    "backend": "N/A (frontend-only scope)",
+    "frontend": "75%"
+  },
+  "seed_data_creation": "None",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Credentials doc exists and was read. In this run, unauth route behavior was stable: root sign-in loaded, /ads redirected to sign-in, /ads/review showed unauthorized state. Authenticated/admin-only Ad Codes and My Ads credit UI remain to be validated in a deterministic signed-in session.",
+  "rca_of_issue": "Coverage blocker RCA: Hercules external OIDC popup reliably opens from sign-in-btn, but scripted deterministic completion to authenticated/admin app state is third-party-dependent in web automation. Because Ads credit and Ad Codes panels are auth-gated, those specific UI paths could not be fully exercised in this run."
+}

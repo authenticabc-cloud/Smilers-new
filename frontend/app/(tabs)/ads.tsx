@@ -19,6 +19,7 @@ import CountrySelectorModal from '../../src/components/CountrySelectorModal';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useDebouncedValue } from '../../src/hooks/useDebouncedValue';
 import { api } from '../../src/convexApi';
+import { estimateClicks, formatCreditCode } from '../../src/lib/adCreditCodes';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../src/theme';
 
 type ViewMode = 'browse' | 'mine';
@@ -29,6 +30,8 @@ export default function AdsScreen() {
   const [search, setSearch] = useState('');
   const [filterCountries, setFilterCountries] = useState<string[]>([]);
   const [showCountryModal, setShowCountryModal] = useState(false);
+  const [redeemCodeInput, setRedeemCodeInput] = useState('');
+  const [redeeming, setRedeeming] = useState(false);
   const debouncedSearch = useDebouncedValue(search.trim(), 350);
 
   const { data: me } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null);
@@ -44,7 +47,13 @@ export default function AdsScreen() {
     debouncedSearch.length > 0
   );
   const { data: myAds, loading: myAdsLoading } = useSafeConvexQuery<any[]>(api.ads.listMyAds, {}, []);
+  const { data: myCredits } = useSafeConvexQuery<any>(
+    api.adCreditCodes.getMyAdCredits,
+    {},
+    { hasLifetime: false, totalRemainingEur: 0, codes: [] }
+  );
   const recordClick = useMutation(api.ads.recordClick);
+  const redeemCode = useMutation(api.adCreditCodes.redeemCode);
 
   const browseAds = useMemo(() => {
     const base = debouncedSearch.length > 0 ? searchResults : approvedPage?.page || [];
@@ -72,6 +81,33 @@ export default function AdsScreen() {
   const loading = viewMode === 'browse' ? approvedLoading || searchLoading : myAdsLoading;
   const listData = viewMode === 'browse' ? browseAds : myAds;
   const isAdmin = me?.role === 'admin';
+
+  const onRedeemCode = async () => {
+    const code = formatCreditCode(redeemCodeInput);
+    if (!code || code.length < 11) {
+      Alert.alert('Enter a valid code', 'Please enter a code in the format XXX-XXX-XXX.');
+      return;
+    }
+
+    setRedeeming(true);
+    try {
+      const result: any = await redeemCode({ code });
+      setRedeemCodeInput('');
+      if (result?.type === 'lifetime') {
+        Alert.alert('Code redeemed', 'Lifetime license activated successfully.');
+      } else {
+        Alert.alert('Code redeemed', `€${Number(result?.amountEur || 0).toFixed(2)} ad credits added.`);
+      }
+    } catch (errorValue: any) {
+      Alert.alert('Could not redeem code', errorValue?.message || 'Unknown error');
+    } finally {
+      setRedeeming(false);
+    }
+  };
+
+  const onChangeRedeemCode = (value: string) => {
+    setRedeemCodeInput(formatCreditCode(value));
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="ads-screen">
@@ -128,6 +164,17 @@ export default function AdsScreen() {
         keyExtractor={(item: any) => item._id}
         contentContainerStyle={styles.listContent}
         testID="ads-list"
+        ListHeaderComponent={
+          viewMode === 'mine' ? (
+            <MyCreditsCard
+              credits={myCredits}
+              redeemCodeInput={redeemCodeInput}
+              onChangeRedeemCode={onChangeRedeemCode}
+              onRedeemCode={onRedeemCode}
+              redeeming={redeeming}
+            />
+          ) : null
+        }
         renderItem={({ item, index }) =>
           viewMode === 'browse' ? (
             <BrowseAdCard ad={item} index={index} onPress={() => onVisitAd(item)} />
@@ -160,6 +207,80 @@ export default function AdsScreen() {
         onClose={() => setShowCountryModal(false)}
       />
     </SafeAreaView>
+  );
+}
+
+function MyCreditsCard({
+  credits,
+  redeemCodeInput,
+  onChangeRedeemCode,
+  onRedeemCode,
+  redeeming,
+}: {
+  credits: any;
+  redeemCodeInput: string;
+  onChangeRedeemCode: (value: string) => void;
+  onRedeemCode: () => void;
+  redeeming: boolean;
+}) {
+  const hasLifetime = !!credits?.hasLifetime;
+  const totalRemaining = Number(credits?.totalRemainingEur || 0);
+  const codeCount = Array.isArray(credits?.codes) ? credits.codes.length : 0;
+  const clickEstimate = estimateClicks(totalRemaining);
+
+  return (
+    <View style={styles.creditsWrap} testID="ad-credits-card">
+      <View style={[styles.creditsCard, hasLifetime ? styles.creditsCardLifetime : null]}>
+        <View style={styles.creditsCardRow}>
+          <View style={[styles.creditsIconWrap, hasLifetime ? styles.creditsIconLifetime : null]}>
+            <MaterialCommunityIcons
+              name={hasLifetime ? 'infinity' : 'wallet-outline'}
+              size={22}
+              color={hasLifetime ? '#92400e' : Colors.primary}
+            />
+          </View>
+          <View style={styles.flexOne}>
+            <Text style={styles.creditsTitle} testID="ad-credits-title">
+              {hasLifetime ? 'Lifetime License' : totalRemaining > 0 ? 'Ad Credits Available' : 'No Active Credits'}
+            </Text>
+            <Text style={styles.creditsSub} testID="ad-credits-subtitle">
+              {hasLifetime
+                ? 'Your ads can receive unlimited clicks.'
+                : totalRemaining > 0
+                  ? `€${totalRemaining.toFixed(2)} remaining · about ${clickEstimate} clicks`
+                  : 'Redeem a code to cover future ad clicks.'}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.redeemWrap}>
+          <Text style={styles.redeemLabel}>Redeem Code</Text>
+          <TextInput
+            value={redeemCodeInput}
+            onChangeText={onChangeRedeemCode}
+            placeholder="XXX-XXX-XXX"
+            placeholderTextColor={Colors.textMuted}
+            style={styles.redeemInput}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            maxLength={11}
+            testID="ad-redeem-code-input"
+          />
+          <TouchableOpacity
+            style={[styles.redeemBtn, (!redeemCodeInput || redeeming) && styles.redeemBtnDisabled]}
+            onPress={onRedeemCode}
+            disabled={!redeemCodeInput || redeeming}
+            testID="ad-redeem-code-button"
+          >
+            <Text style={styles.redeemBtnText}>{redeeming ? 'Redeeming…' : 'Redeem Code'}</Text>
+          </TouchableOpacity>
+        </View>
+
+        <Text style={styles.creditsFootnote} testID="ad-credits-footnote">
+          {codeCount > 0 ? `${codeCount} redeemed code${codeCount === 1 ? '' : 's'} on this account` : 'No redeemed codes yet'}
+        </Text>
+      </View>
+    </View>
   );
 }
 
@@ -276,6 +397,53 @@ const styles = StyleSheet.create({
   filterText: { color: Colors.primary, fontSize: FontSize.sm, fontWeight: FontWeight.bold },
   helperText: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: Spacing.sm, marginHorizontal: Spacing.base },
   listContent: { padding: Spacing.base, paddingBottom: 120, gap: Spacing.base },
+  creditsWrap: { marginBottom: Spacing.base },
+  creditsCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.borderLight,
+    padding: Spacing.base,
+    ...Shadow.sm,
+  },
+  creditsCardLifetime: { backgroundColor: '#fef3c7', borderColor: '#fcd34d' },
+  creditsCardRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
+  creditsIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  creditsIconLifetime: { backgroundColor: '#fde68a' },
+  flexOne: { flex: 1 },
+  creditsTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  creditsSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 4, lineHeight: 20 },
+  redeemWrap: { marginTop: Spacing.base },
+  redeemLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textPrimary, marginBottom: 8 },
+  redeemInput: {
+    backgroundColor: Colors.background,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: Spacing.base,
+    paddingVertical: 12,
+    fontSize: FontSize.base,
+    color: Colors.textPrimary,
+    letterSpacing: 2,
+  },
+  redeemBtn: {
+    minHeight: 44,
+    marginTop: Spacing.sm,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  redeemBtnDisabled: { opacity: 0.6 },
+  redeemBtnText: { fontSize: FontSize.sm, color: Colors.white, fontWeight: FontWeight.bold },
+  creditsFootnote: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: Spacing.sm },
   card: {
     backgroundColor: Colors.surface,
     borderRadius: Radius.lg,
