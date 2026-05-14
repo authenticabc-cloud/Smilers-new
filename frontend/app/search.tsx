@@ -107,8 +107,8 @@ export default function SearchScreen() {
             <UserResultRow
               item={item}
               index={index}
-              onPress={() => router.push(`/user/${item._id}` as any)}
-              onMessage={() => openDirect(item._id)}
+              onPress={() => router.push(`/user/${item?._id || item?.userId}` as any)}
+              onMessage={() => openDirect(item?._id || item?.userId)}
             />
           )
         }
