@@ -335,7 +335,7 @@ const styles = StyleSheet.create({
   segmentWrap: { flexDirection: 'row', gap: Spacing.sm, paddingHorizontal: Spacing.base, marginTop: Spacing.md },
   segmentButton: {
     flex: 1,
-    minHeight: 42,
+    minHeight: 44,
     borderRadius: Radius.pill,
     borderWidth: 1,
     borderColor: Colors.border,
