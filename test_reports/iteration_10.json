@@ -1,0 +1,74 @@
+{
+  "summary": "Frontend-only mobile regression completed for new Search, Starred, and User Profile routes plus sign-in baseline. Root sign-in, /search, /starred, and direct /user/[userId] all rendered without crash in signed-out context.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Search people row actions",
+        "issue": "People result row keyExtractor supports item.userId, but onPress/onMessage use only item._id. If API returns userId (without _id), taps can navigate to /user/undefined or fail direct-chat action.",
+        "testID": "search-user-result-* / search-user-message-*",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "(tabs)/chats search button and (tabs)/profile starred button runtime validation",
+        "issue": "Tabs are auth-gated and redirected to sign-in in signed-out automation, so in-session tapping of search-btn/starred-btn was not reachable in this run. Route target validity was verified by direct route checks and code review.",
+        "affected_testIDs": [
+          "search-btn",
+          "starred-btn",
+          "sign-in-screen"
+        ]
+      },
+      {
+        "flow": "Direct /user/[userId] load in signed-out fallback context",
+        "issue": "UI renders fallback safely, but console shows Convex users:getUserById server error for invalid/signed-out query path during data fetch.",
+        "affected_testIDs": [
+          "user-profile-screen",
+          "user-profile-name"
+        ]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Search",
+        "issues": [
+          "No obvious spacing/contrast regressions observed in mobile viewport; segmented controls and message icon button meet >=44px touch target in current styles."
+        ]
+      }
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/automation_iter10/iter10_root_signin.jpeg",
+    "/app/test_reports/automation_iter10/iter10_search_route.jpeg",
+    "/app/test_reports/automation_iter10/iter10_starred_route.jpeg",
+    "/app/test_reports/automation_iter10/iter10_user_profile_route.jpeg",
+    "/app/test_reports/automation_iter10/iter10_tabs_auth_gate.jpeg",
+    "/root/.emergent/automation_output/20260514_205252/console_20260514_205252.log"
+  ],
+  "action_items": [
+    "Update search people row handlers to use item._id || item.userId for profile and message actions.",
+    "Run one authenticated manual/automation pass to click search-btn from Chats and starred-btn from Profile end-to-end.",
+    "Optionally harden /user/[userId] fallback query path to avoid noisy Convex server warnings for invalid or unauth states."
+  ],
+  "critical_code_review_comments": [
+    "Stack registration includes search, starred, and user/[userId], so routes are no longer dead from navigation configuration perspective.",
+    "In search.tsx, userResults actions depend only on _id while query/key handling allows userId, creating a probable ID-field mismatch bug."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_10.json"
+  ],
+  "success_rate": {
+    "backend": "N/A (frontend-only scope)",
+    "frontend": "85%"
+  },
+  "seed_data_creation": "None",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Credentials and auth docs were reviewed before testing. New routes are stable when opened directly while signed out. Auth-gated tabs still redirect to sign-in, so button-level runtime verification inside tabs needs authenticated session.",
+  "rca_of_issue": "Primary RCA: Search People flow has an identifier inconsistency. Repro path: if api.users.searchUsers returns objects with userId but no _id, tapping search-user-result-* or search-user-message-* uses undefined ID in router.push/getOrCreateDirect. Mitigation: normalize user identifier once (const targetUserId = item._id || item.userId) and reuse in all actions."
+}

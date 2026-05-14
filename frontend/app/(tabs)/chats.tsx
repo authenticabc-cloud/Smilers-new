@@ -38,7 +38,7 @@ export default function ChatsScreen() {
         variant="light"
         right={
           <>
-            <TouchableOpacity testID="search-btn">
+            <TouchableOpacity onPress={() => router.push('/search' as any)} testID="search-btn">
               <Ionicons name="search-outline" size={22} color={Colors.textPrimary} />
             </TouchableOpacity>
             <TouchableOpacity onPress={() => router.push('/settings')} testID="menu-btn">

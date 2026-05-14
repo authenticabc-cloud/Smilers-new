@@ -51,7 +51,7 @@ export default function ProfileScreen() {
         </Section>
 
         <View style={styles.buttonsBlock}>
-          <TouchableOpacity style={styles.linkBtn} testID="starred-btn">
+          <TouchableOpacity style={styles.linkBtn} onPress={() => router.push('/starred' as any)} testID="starred-btn">
             <Ionicons name="star-outline" size={20} color={Colors.primary} />
             <Text style={styles.linkText}>Starred Messages</Text>
           </TouchableOpacity>
