@@ -188,6 +188,17 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Added hard validation for malformed conversation IDs so invalid routes skip Convex queries entirely, re-verified fallback UI, and confirmed sign-in button now opens the Hercules auth popup in web automation. End-to-end media send still needs a real authenticated chat conversation on device/browser."
+##   - task: "Ads module MVP"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/(tabs)/ads.tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: true
+##         agent: "main"
+##         comment: "Added Ads tab wiring, Browse/My Ads screen, Create Ad form, Admin Ads Review screen, country selector modal, debounced search helper, and standard 195-country list. Self-verified /ads/create and /ads/review in preview."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"
@@ -199,6 +210,7 @@
 ##     - "Web-safe tabs and push notification hooks"
 ##     - "Phase 2A.1 chat actions"
 ##     - "Phase 2A.2a image attachments"
+##     - "Ads module MVP"
 ##   stuck_tasks: []
 ##   test_all: false
 ##   test_priority: "high_first"
@@ -211,3 +223,5 @@
 ##     message: "Please test the new chat action implementation in app/chat/[conversationId].tsx as far as current credentials allow. If full auth/chat interaction is blocked, still validate that the app boots cleanly and report any route/runtime regressions introduced by the new screen code."
 ##   - agent: "main"
 ##     message: "Please test the Phase 2A.2a media additions as far as current credentials/platform allow. Full gallery/camera/image-upload validation likely requires a real authenticated mobile conversation; still validate app boot, route stability, and any new regressions in chat fallback behavior."
+##   - agent: "main"
+##     message: "Please validate the ads module as far as current auth allows: create/review routes, no preview regressions, and any obvious route/runtime issues from the new Ads tab wiring."

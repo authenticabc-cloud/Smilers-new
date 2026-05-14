@@ -8,9 +8,10 @@ import { api } from '../convexApi';
 export async function uploadFile(
   convex: ConvexReactClient,
   uri: string,
-  mime: string
+  mime: string,
+  uploadUrlMutation: any = api.files.generateUploadUrl
 ): Promise<string> {
-  const uploadUrl: string = await convex.mutation(api.files.generateUploadUrl, {});
+  const uploadUrl: string = await convex.mutation(uploadUrlMutation, {});
   const response = await fetch(uri);
   const blob = await response.blob();
   const result = await fetch(uploadUrl, {

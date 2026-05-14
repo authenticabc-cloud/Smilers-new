@@ -48,6 +48,7 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - ✅ Phase 2A.1 chat actions added: long-press action sheet, quick reactions, reply preview, quoted replies, copy, forward, star/unstar, delete placeholder, and haptic feedback
 - ✅ Chat route is now hardened for invalid/unauthorized conversation IDs with a safe fallback state instead of a Convex error screen
 - ✅ Phase 2A.2a media groundwork added: attachment sheet, image upload helper, gallery/camera send flow, image bubble rendering, upload progress bar, and full-screen image viewer
+- ✅ Ads module MVP added: Ads tab wiring, Browse/My Ads view, Create Ad form, Admin Review screen, country selector modal, and standard 195-country list filtering
 - ✅ Convex client with custom auth integration (passes ID token via `ConvexProviderWithAuth`)
 - ✅ Bottom tab navigation (5 tabs: Chats, Contacts, Groups, Status, Profile) — matches web app's bottom nav
 - ✅ Chat list with pinned **Smilers AI** (purple) and **Chat Once** (orange) rows + FAB stack (4 floating buttons) + persistent SOS button
@@ -106,6 +107,9 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - `/app/frontend/app/chat/[conversationId].tsx` — Phase 2A.1 message actions and safe fallback handling
 - `/app/frontend/src/lib/uploadFile.ts` — Convex file upload helper
 - `/app/frontend/src/components/{AttachmentSheet,MediaBubble}.tsx` — Attachment picker and media-aware message bubble renderer
+- `/app/frontend/app/(tabs)/ads.tsx` — Ads Browse/My Ads home
+- `/app/frontend/app/ads/{create,review}.tsx` — Ad creation and admin review flows
+- `/app/frontend/src/{constants/countries.ts,components/CountrySelectorModal.tsx,hooks/useDebouncedValue.ts}` — Ads filtering/support utilities
 - `/app/frontend/app/(tabs)/_layout.tsx` — Tab bar
 - `/app/frontend/app/(tabs)/{chats,contacts,groups,status,profile}.tsx`
 - `/app/frontend/app/chat/[conversationId].tsx` — Chat detail

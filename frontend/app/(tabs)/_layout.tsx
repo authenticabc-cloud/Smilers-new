@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { Redirect, Tabs, useRootNavigationState } from 'expo-router';
-import { Ionicons, Feather } from '@expo/vector-icons';
+import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { api } from '../../src/convexApi';
@@ -72,6 +72,14 @@ export default function TabsLayout() {
           title: 'Contacts',
           tabBarIcon: ({ color, size }) => <Ionicons name="person-circle-outline" size={size} color={color} />,
           tabBarButtonTestID: 'tab-contacts',
+        }}
+      />
+      <Tabs.Screen
+        name="ads"
+        options={{
+          title: 'Ads',
+          tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="bullhorn-outline" size={size} color={color} />,
+          tabBarButtonTestID: 'tab-ads',
         }}
       />
       <Tabs.Screen

@@ -1,0 +1,64 @@
+{
+  "summary": "Frontend-only Ads regression testing completed. App boots cleanly, /ads/create and /ads/review routes load without red-screen/runtime crashes, and review shows clean unauthorized state when not admin. Auth-gated Ads tab browsing could not be reached in automation.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Ads tab (auth-gated under tabs)",
+        "issue": "Unauthenticated automation session is redirected to sign-in, so Ads tab browse/my-ads experience and bottom-tab rendering with authenticated state could not be validated end-to-end.",
+        "testID": "tab-ads",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Direct /ads/create submit while unauthenticated",
+        "issue": "Submitting Create Ad triggered console error '[CONVEX M(ads:create)] Server Error'. Route remains stable, but mutation path is not cleanly handled for unauthenticated web automation state.",
+        "affected_testIDs": [
+          "create-ad-screen",
+          "ad-submit-button"
+        ]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": [
+      {
+        "component": "Web preview runtime logs",
+        "issue": "Non-blocking warnings persist: expo-notifications web listener support warning, shadow* deprecation warning, pointerEvents deprecation warning."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration4_boot.png",
+    "/app/test_reports/iteration4_create_route.png",
+    "/app/test_reports/iteration4_review_route.png",
+    "/app/test_reports/iteration4_create_interaction.png",
+    "/root/.emergent/automation_output/20260514_082211/console_20260514_082211.log",
+    "/root/.emergent/automation_output/20260514_082252/console_20260514_082252.log"
+  ],
+  "action_items": [
+    "Verify authenticated Ads tab flow manually/with controllable auth harness: tab visibility, segmented Browse Ads/My Ads behavior, and navigation regressions in bottom tabs.",
+    "Handle unauthenticated create submission path explicitly (e.g., auth gate or user-facing unauthorized state) to avoid raw Convex server error logging.",
+    "Retest /ads and tab-ads after auth automation is available to confirm no tab regression from Ads module wiring."
+  ],
+  "critical_code_review_comments": [
+    "app/ads/create.tsx and app/ads/review.tsx are directly routable while ads tab is auth-gated in app/(tabs)/_layout.tsx, creating inconsistent auth behavior across Ads entry points.",
+    "CountrySelectorModal testIDs include raw country names (e.g., country-option-United States), which can be brittle for automation due to spaces/special characters.",
+    "Create form helper Field uses props:any, reducing type safety for required input props in a critical submission route."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_4.json"
+  ],
+  "success_rate": {
+    "backend": "N/A (frontend-only scope)",
+    "frontend": "80%"
+  },
+  "seed_data_creation": "None",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Credentials file exists at /app/memory/test_credentials.md and contains OIDC/Google-based account guidance. /app/auth_testing.md and /app/auth-testing.md are missing. This run validated route stability for /ads/create and /ads/review only in unauthenticated web automation.",
+  "rca_of_issue": "Repro: Open /ads/create as unauthenticated user, fill required fields, tap ad-submit-button. Observed console error: [CONVEX M(ads:create)] Server Error; UI stays on create-ad-screen. Likely cause: direct create route allows access without upfront auth guard, and backend mutation rejects unauthenticated request. Mitigation: add consistent auth guard or explicit unauthorized handling before mutation call."
+}
