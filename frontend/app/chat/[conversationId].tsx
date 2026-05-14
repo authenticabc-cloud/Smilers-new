@@ -31,6 +31,8 @@ import { useAuth } from '../../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+const EMPTY_MESSAGES_PAGE = { page: [] as any[] };
+const EMPTY_FORWARD_CONVERSATIONS: any[] = [];
 
 export default function ChatScreen() {
   const router = useRouter();
@@ -67,14 +69,14 @@ export default function ChatScreen() {
     conversationId
       ? { conversationId, paginationOpts: { numItems: 50, cursor: null } }
       : {},
-    { page: [] },
+    EMPTY_MESSAGES_PAGE,
     canQueryConversation
   );
   const { data: me } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null);
   const { data: conversationsForForward } = useSafeConvexQuery<any[]>(
     api.conversations.listConversations,
     {},
-    [],
+    EMPTY_FORWARD_CONVERSATIONS,
     showForwardPicker
   );
 

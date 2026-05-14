@@ -23,10 +23,6 @@ export function useSafeConvexQuery<T>(
   }, [convex]);
 
   useEffect(() => {
-    fallbackRef.current = fallback;
-  }, [fallback]);
-
-  useEffect(() => {
     queryRefRef.current = queryRef;
   }, [queryRef]);
 
