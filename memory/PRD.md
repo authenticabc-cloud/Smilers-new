@@ -49,10 +49,12 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - ✅ Chat route is now hardened for invalid/unauthorized conversation IDs with a safe fallback state instead of a Convex error screen
 - ✅ Phase 2A.2a media groundwork added: attachment sheet, image upload helper, gallery/camera send flow, image bubble rendering, upload progress bar, and full-screen image viewer
 - ✅ Phase 2A.2b voice notes patched in: record/send flow in chat composer plus playback UI in media bubbles
+- ✅ Phase 2A.2c chat parity added on the frontend: poll composer modal, poll message bubble voting UI, document picking/upload flow, and file message bubble open/download handling
 - ✅ Ads module MVP added: Ads tab wiring, Browse/My Ads view, Create Ad form, Admin Review screen, country selector modal, and standard 195-country list filtering
 - ✅ Fixed React 19 TypeScript incompatibility from `react-native-country-codes-picker` so the preview/build loads cleanly again
 - ✅ Fixed invalid chat-route update loop by stabilizing query fallback handling and chat fallbacks; `/chat/test-conversation` now renders the unavailable state without `Maximum update depth exceeded`
 - ✅ Added `/app/auth_testing.md` and `/app/auth-testing.md` to document current manual auth verification expectations for future testing runs
+- ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_POLLS_FILES.md` because the Convex backend source is not present in this repo; it documents the required schema, `messages.send`, and `votePoll` backend changes
 - ✅ Convex client with custom auth integration (passes ID token via `ConvexProviderWithAuth`)
 - ✅ Bottom tab navigation (5 tabs: Chats, Contacts, Groups, Status, Profile) — matches web app's bottom nav
 - ✅ Chat list with pinned **Smilers AI** (purple) and **Chat Once** (orange) rows + FAB stack (4 floating buttons) + persistent SOS button
@@ -82,6 +84,7 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - Money transfers, Gold wallet, Earnings/levels system
 - AI chat via `api.ai.chat`
 - Communities, Broadcasts, Polls, Templates
+- Status / Stories (text/photo/video composer + viewer)
 - Scheduled messages, Backup, Face ID app lock, Trustees/Emergency
 - Voice notes (record + playback + Whisper transcription)
 - Image/file sharing via Convex File Storage
@@ -100,6 +103,7 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 ## Out of Scope (current iteration)
 - Final real-device login validation still depends on Hercules allowing the native redirect URI `smilers://auth-callback` for the mobile client.
 - Full end-to-end authenticated voice-note verification is still pending because browser automation cannot deterministically complete the third-party Google/Hercules sign-in flow with the current test setup.
+- Full end-to-end authenticated poll/document verification is still pending for the same auth-gated reason, and the live poll voting flow also depends on the user applying the backend changes from `/app/CONVEX_BACKEND_INSTRUCTIONS_POLLS_FILES.md`.
 
 ## Files
 - `/app/frontend/app/_layout.tsx` — Root with AuthProvider + ConvexProvider
@@ -113,6 +117,7 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - `/app/auth_testing.md` and `/app/auth-testing.md` — Auth testing notes for manual/automation handoff
 - `/app/frontend/src/lib/uploadFile.ts` — Convex file upload helper
 - `/app/frontend/src/components/{AttachmentSheet,MediaBubble}.tsx` — Attachment picker and media-aware message bubble renderer
+- `/app/frontend/src/components/PollComposer.tsx` — Poll creation bottom sheet
 - `/app/frontend/app/(tabs)/ads.tsx` — Ads Browse/My Ads home
 - `/app/frontend/app/ads/{create,review}.tsx` — Ad creation and admin review flows
 - `/app/frontend/src/{constants/countries.ts,components/CountrySelectorModal.tsx,hooks/useDebouncedValue.ts}` — Ads filtering/support utilities
@@ -125,3 +130,4 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - `/app/frontend/src/components/{Header,Avatar,FabStack,SosButton}.tsx`
 - `/app/frontend/src/theme.ts` — Design tokens
 - `/app/frontend/src/convexApi.ts` — Untyped api references via `anyApi`
+- `/app/CONVEX_BACKEND_INSTRUCTIONS_POLLS_FILES.md` — Required backend support for poll voting and file messages
