@@ -16,6 +16,7 @@ import Avatar from '../src/components/Avatar';
 import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+import { useAuth } from '../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
 type TransferTab = 'send' | 'request' | 'pending';
@@ -26,6 +27,7 @@ function formatEur(value: number | undefined | null) {
 
 export default function SendMoneyScreen() {
   const router = useRouter();
+  const { isAuthenticated } = useAuth();
   const [tab, setTab] = useState<TransferTab>('send');
   const [search, setSearch] = useState('');
   const [selectedUserId, setSelectedUserId] = useState('');
@@ -33,9 +35,9 @@ export default function SendMoneyScreen() {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const { data: contacts } = useSafeConvexQuery<any[]>(api.contacts.getContacts, {}, []);
-  const { data: transferHistory, refetch: refetchHistory } = useSafeConvexQuery<any[]>(api.transfers.getTransferHistory, {}, []);
-  const { data: pendingRequests, refetch: refetchPending } = useSafeConvexQuery<any[]>(api.transfers.getPendingRequests, {}, []);
+  const { data: contacts } = useSafeConvexQuery<any[]>(api.contacts.getContacts, {}, [], isAuthenticated);
+  const { data: transferHistory, refetch: refetchHistory } = useSafeConvexQuery<any[]>(api.transfers.getTransferHistory, {}, [], isAuthenticated);
+  const { data: pendingRequests, refetch: refetchPending } = useSafeConvexQuery<any[]>(api.transfers.getPendingRequests, {}, [], isAuthenticated);
   const sendMoney = useMutation(api.transfers.sendMoney);
   const requestMoney = useMutation(api.transfers.requestMoney);
   const respondToRequest = useMutation(api.transfers.respondToRequest);

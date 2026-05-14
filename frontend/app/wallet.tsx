@@ -17,6 +17,7 @@ import { useMutation } from 'convex/react';
 import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+import { useAuth } from '../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/theme';
 
 function formatEur(value: number | undefined | null) {
@@ -26,6 +27,7 @@ function formatEur(value: number | undefined | null) {
 
 export default function WalletScreen() {
   const router = useRouter();
+  const { isAuthenticated } = useAuth();
   const [showAddMethod, setShowAddMethod] = useState(false);
   const [showWithdraw, setShowWithdraw] = useState(false);
   const [label, setLabel] = useState('');
@@ -37,9 +39,9 @@ export default function WalletScreen() {
   const [savingMethod, setSavingMethod] = useState(false);
   const [requestingWithdrawal, setRequestingWithdrawal] = useState(false);
 
-  const { data: earningsProfile } = useSafeConvexQuery<any | null>(api.earnings.getMyProfile, {}, null);
-  const { data: methods, refetch: refetchMethods } = useSafeConvexQuery<any[]>(api.wallet.getMyWithdrawalMethods, {}, []);
-  const { data: withdrawals, refetch: refetchWithdrawals } = useSafeConvexQuery<any[]>(api.wallet.getMyWithdrawals, {}, []);
+  const { data: earningsProfile } = useSafeConvexQuery<any | null>(api.earnings.getMyProfile, {}, null, isAuthenticated);
+  const { data: methods, refetch: refetchMethods } = useSafeConvexQuery<any[]>(api.wallet.getMyWithdrawalMethods, {}, [], isAuthenticated);
+  const { data: withdrawals, refetch: refetchWithdrawals } = useSafeConvexQuery<any[]>(api.wallet.getMyWithdrawals, {}, [], isAuthenticated);
   const addWithdrawalMethod = useMutation(api.wallet.addWithdrawalMethod);
   const removeWithdrawalMethod = useMutation(api.wallet.removeWithdrawalMethod);
   const setDefaultMethod = useMutation(api.wallet.setDefaultMethod);
@@ -313,7 +315,7 @@ const styles = StyleSheet.create({
   defaultChip: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.pill, backgroundColor: Colors.primaryLight, alignSelf: 'flex-start' },
   defaultChipText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold, color: Colors.primary },
   methodActions: { flexDirection: 'row', gap: Spacing.sm },
-  methodBtn: { minHeight: 40, paddingHorizontal: Spacing.base, borderRadius: Radius.pill, backgroundColor: Colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
+  methodBtn: { minHeight: 44, paddingHorizontal: Spacing.base, borderRadius: Radius.pill, backgroundColor: Colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
   methodBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.primary },
   methodBtnDanger: { backgroundColor: '#fee2e2' },
   methodBtnDangerText: { color: Colors.danger },

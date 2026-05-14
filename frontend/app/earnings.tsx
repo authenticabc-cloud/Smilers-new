@@ -5,6 +5,7 @@ import { useRouter } from 'expo-router';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+import { useAuth } from '../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
 const LEVEL_INFO: Record<string, { color: string; perks: string }> = {
@@ -16,13 +17,15 @@ const LEVEL_INFO: Record<string, { color: string; perks: string }> = {
 
 export default function EarningsScreen() {
   const router = useRouter();
-  const { data: profile } = useSafeConvexQuery<any | null>(api.earnings.getMyProfile, {}, null);
-  const { data: transactions } = useSafeConvexQuery<any[]>(api.earnings.getMyTransactions, { limit: 20 }, []);
-  const { data: referrals } = useSafeConvexQuery<any[]>(api.earnings.getMyReferrals, {}, []);
+  const { isAuthenticated } = useAuth();
+  const { data: profile } = useSafeConvexQuery<any | null>(api.earnings.getMyProfile, {}, null, isAuthenticated);
+  const { data: transactions } = useSafeConvexQuery<any[]>(api.earnings.getMyTransactions, { limit: 20 }, [], isAuthenticated);
+  const { data: referrals } = useSafeConvexQuery<any[]>(api.earnings.getMyReferrals, {}, [], isAuthenticated);
   const { data: referralCode } = useSafeConvexQuery<string | null>(
     api.earnings.getOrCreateReferralCode,
     {},
-    null
+    null,
+    isAuthenticated
   );
 
   const level = profile?.level || 'A';

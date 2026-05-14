@@ -55,6 +55,7 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - ✅ Phase 2C contacts polish added on the frontend: rewritten Contacts tab, reject/cancel flows, sent/respond/contact pills, add-by-phone modal, and QR show/scan route
 - ✅ Ads module addendum added on the frontend: My Ads credit balance/redeem card plus Admin > Ads > Ad Codes tab with generate/copy/revoke controls
 - ✅ Search + Starred slice added on the frontend: global search screen, starred messages screen, chats/profile button wiring, and a basic user profile route for search results
+- ✅ Wallet / Send Money slice added on the frontend: `Gold Wallet` screen, withdrawal methods/request UI, `Send Money` screen with send/request/pending tabs, and Earnings entry points into both routes
 - ✅ Ads module MVP added: Ads tab wiring, Browse/My Ads view, Create Ad form, Admin Review screen, country selector modal, and standard 195-country list filtering
 - ✅ Fixed React 19 TypeScript incompatibility from `react-native-country-codes-picker` so the preview/build loads cleanly again
 - ✅ Fixed invalid chat-route update loop by stabilizing query fallback handling and chat fallbacks; `/chat/test-conversation` now renders the unavailable state without `Maximum update depth exceeded`
@@ -98,6 +99,7 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - Contacts QR + add-by-phone flow
 - Ads credit codes / redeem flow
 - Global search + starred messages
+- Wallet / send-money flow
 - Scheduled messages, Backup, Face ID app lock, Trustees/Emergency
 - Voice notes (record + playback + Whisper transcription)
 - Image/file sharing via Convex File Storage
@@ -121,6 +123,7 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - Full end-to-end authenticated contacts-polish verification is still pending for the same auth-gated reason, and outgoing requests/reject/cancel/add-by-phone depend on the backend changes from `/app/CONVEX_BACKEND_INSTRUCTIONS_CONTACTS_POLISH.md`.
 - Full end-to-end authenticated ad-credit verification is still pending for the same auth-gated reason, and code generation/redeem/billing depend on the backend changes from `/app/CONVEX_BACKEND_INSTRUCTIONS_AD_CREDIT_CODES.md`.
 - Full end-to-end authenticated search/starred verification is still pending because browser automation cannot complete the Hercules sign-in flow here, so in-app button navigation from Chats/Profile still needs one signed-in device pass.
+- Full end-to-end authenticated wallet/send-money verification is still pending because browser automation cannot complete the Hercules sign-in flow here, and the exact mutation arg shapes for some `wallet.ts` / `transfers.ts` actions still need validation against the live backend.
 
 ## Files
 - `/app/frontend/app/_layout.tsx` — Root with AuthProvider + ConvexProvider
@@ -145,6 +148,8 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - `/app/frontend/app/search.tsx` — Global search screen for chats and people
 - `/app/frontend/app/starred.tsx` — Starred messages screen
 - `/app/frontend/app/user/[userId].tsx` — Basic user profile route for search results
+- `/app/frontend/app/wallet.tsx` — Gold Wallet screen with payout methods and withdrawal requests
+- `/app/frontend/app/send-money.tsx` — Send/request money screen with pending requests and history
 - `/app/frontend/src/lib/adCreditCodes.ts` — Ad credit code formatting/estimate helpers
 - `/app/frontend/src/{constants/countries.ts,components/CountrySelectorModal.tsx,hooks/useDebouncedValue.ts}` — Ads filtering/support utilities
 - `/app/frontend/app/(tabs)/_layout.tsx` — Tab bar
