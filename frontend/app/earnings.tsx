@@ -2,7 +2,7 @@ import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
@@ -55,6 +55,23 @@ export default function EarningsScreen() {
               {points.toLocaleString()} pts
             </Text>
           </View>
+        </View>
+
+        <View style={styles.quickActions} testID="earnings-quick-actions">
+          <TouchableOpacity style={styles.quickActionCard} onPress={() => router.push('/wallet' as any)} testID="earnings-wallet-button">
+            <View style={styles.quickActionIcon}>
+              <MaterialCommunityIcons name="wallet-outline" size={22} color={Colors.primary} />
+            </View>
+            <Text style={styles.quickActionTitle}>Gold Wallet</Text>
+            <Text style={styles.quickActionSub}>Manage withdrawals and payout methods</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.quickActionCard} onPress={() => router.push('/send-money' as any)} testID="earnings-send-money-button">
+            <View style={styles.quickActionIcon}>
+              <Feather name="send" size={20} color={Colors.primary} />
+            </View>
+            <Text style={styles.quickActionTitle}>Send Money</Text>
+            <Text style={styles.quickActionSub}>Transfer funds or request money from contacts</Text>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.section} testID="earnings-referral-section">
@@ -144,6 +161,25 @@ const styles = StyleSheet.create({
     borderRadius: Radius.pill,
   },
   points: { color: Colors.white, fontWeight: FontWeight.bold, fontSize: FontSize.base },
+  quickActions: { paddingHorizontal: Spacing.base, gap: Spacing.md },
+  quickActionCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.base,
+    borderWidth: 1,
+    borderColor: '#00000011',
+  },
+  quickActionIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Spacing.sm,
+  },
+  quickActionTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  quickActionSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 4, lineHeight: 20 },
   section: { paddingHorizontal: Spacing.base, marginTop: Spacing.lg },
   sectionTitle: {
     fontSize: FontSize.sm,

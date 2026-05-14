@@ -1,0 +1,69 @@
+{
+  "summary": "Frontend-only regression pass completed for root sign-in and new Wallet/Send Money slice. Root sign-in loaded, /wallet and /send-money rendered cleanly, /earnings rendered, and both new entry points from Earnings navigated successfully.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Earnings screen data hydration",
+        "issue": "Console repeatedly logs Convex server errors for earnings:getMyTransactions and earnings:getOrCreateReferralCode while /earnings still renders fallback UI.",
+        "affected_testIDs": [
+          "earnings-screen",
+          "earnings-activity-section",
+          "earnings-referral-section"
+        ]
+      },
+      {
+        "flow": "Root sign-in completion in browser automation",
+        "issue": "sign-in-btn tap triggers external OIDC flow but deterministic completion to authenticated in-app state remains third-party dependent.",
+        "affected_testIDs": [
+          "sign-in-btn",
+          "sign-in-screen"
+        ]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Wallet",
+        "issues": [
+          "wallet method action chips use minHeight 40 (below 44px mobile touch target guidance)."
+        ]
+      }
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/automation_iter11/iter11_root_signin.jpeg",
+    "/app/test_reports/automation_iter11/iter11_signin_tap.jpeg",
+    "/app/test_reports/automation_iter11/iter11_wallet_route.jpeg",
+    "/app/test_reports/automation_iter11/iter11_send_money_route.jpeg",
+    "/app/test_reports/automation_iter11/iter11_earnings_route.jpeg",
+    "/app/test_reports/automation_iter11/iter11_wallet_from_earnings.jpeg",
+    "/app/test_reports/automation_iter11/iter11_send_from_earnings.jpeg",
+    "/root/.emergent/automation_output/20260514_220547/console_20260514_220547.log"
+  ],
+  "action_items": [
+    "Investigate Convex earnings query failures (getMyTransactions/getOrCreateReferralCode) so Earnings loads without server warnings.",
+    "Run one manual authenticated pass to fully validate OIDC sign-in completion and post-login route behavior.",
+    "Increase Wallet method action touch target height from 40 to >=44 for mobile ergonomics."
+  ],
+  "critical_code_review_comments": [
+    "Route registration is correct in _layout.tsx for wallet and send-money; no dead-route issue found.",
+    "send-money.tsx uses multi-shape mutation retries with 'as any'; this is resilient short-term but can hide API contract drift and should be normalized once backend argument schema is finalized."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_11.json"
+  ],
+  "success_rate": {
+    "backend": "N/A (frontend-only scope)",
+    "frontend": "88%"
+  },
+  "seed_data_creation": "None",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Credentials/auth docs were reviewed before testing. In signed-out automation, root sign-in baseline is stable; direct /wallet, /send-money, and /earnings routes render and Earnings buttons navigate correctly. Main remaining blocker is repeated Convex earnings query server errors.",
+  "rca_of_issue": "RCA (integration): Earnings route is UI-stable because useSafeConvexQuery returns fallbacks, but backend query failures still surface in console. Repro: open /earnings in web preview; observe repeated warnings for earnings:getMyTransactions and earnings:getOrCreateReferralCode. Mitigation: align these Convex functions with unauth/default behavior or guard calls until auth/session prerequisites are met."
+}
