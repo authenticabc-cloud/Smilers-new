@@ -1,14 +1,14 @@
 import React, { useEffect } from 'react';
-import { ActivityIndicator, View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/theme';
 
 export default function SignInScreen() {
   const router = useRouter();
-  const { isAuthenticated, isLoading, isSignInReady, signIn } = useAuth();
+  const { isAuthenticated, isLoading, signIn, lastError, authMode } = useAuth();
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -16,39 +16,54 @@ export default function SignInScreen() {
     }
   }, [isAuthenticated, router]);
 
+  const handleSignIn = async () => {
+    if (authMode === 'webview') {
+      router.push('/auth-webview');
+      return;
+    }
+    await signIn();
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="sign-in-screen">
       <View style={styles.content}>
+        <View style={styles.spacer} />
+
         <View style={styles.logoWrap}>
-          <View style={styles.logoCircle}>
-            <Ionicons name="happy" size={72} color={Colors.primary} />
+          <View style={styles.logoTile}>
+            <Ionicons name="chatbubble-outline" size={70} color={Colors.white} />
           </View>
           <Text style={styles.brand}>Smilers</Text>
           <Text style={styles.tagline}>Say good morning with a smile</Text>
         </View>
 
         <View style={styles.bottomSection}>
+          {lastError ? (
+            <View style={styles.errorBox} testID="sign-in-error-box">
+              <Ionicons name="alert-circle" size={18} color="#FCA5A5" />
+              <Text style={styles.errorText}>{lastError}</Text>
+            </View>
+          ) : null}
+
           <TouchableOpacity
-            style={[styles.signInBtn, (!isSignInReady || isLoading) && styles.signInBtnDisabled]}
-            onPress={signIn}
-            activeOpacity={0.85}
-            disabled={!isSignInReady || isLoading}
+            style={[styles.signInBtn, isLoading && styles.signInBtnDisabled]}
+            onPress={handleSignIn}
+            activeOpacity={0.9}
+            disabled={isLoading}
             testID="sign-in-btn"
           >
-            {isLoading && !isAuthenticated ? (
-              <ActivityIndicator color={Colors.white} />
+            {isLoading ? (
+              <ActivityIndicator color="#3A2608" />
             ) : (
-              <Text style={styles.signInText}>{isSignInReady ? 'Sign In' : 'Preparing sign in…'}</Text>
+              <>
+                <Feather name="log-in" size={22} color="#3A2608" />
+                <Text style={styles.signInText}>Sign In</Text>
+              </>
             )}
           </TouchableOpacity>
           <Text style={styles.terms}>
             By continuing, you agree to our Terms of Service and Privacy Policy
           </Text>
-          <View style={styles.versionBadge} testID="sign-in-version-badge">
-            <Text style={styles.versionText} testID="sign-in-version-text">
-              v2.0.12 · auth-callback fix
-            </Text>
-          </View>
         </View>
       </View>
     </SafeAreaView>
@@ -56,79 +71,63 @@ export default function SignInScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
+  container: { flex: 1, backgroundColor: '#3A2608' },
   content: {
     flex: 1,
     paddingHorizontal: Spacing.lg,
-    justifyContent: 'space-between',
-    paddingVertical: Spacing.xl,
+    paddingTop: Spacing.xl,
+    paddingBottom: Spacing.xxl,
   },
-  logoWrap: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  logoCircle: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-    backgroundColor: Colors.primaryLight,
+  spacer: { flex: 1 },
+  logoWrap: { alignItems: 'center', justifyContent: 'center', marginBottom: Spacing.xxl },
+  logoTile: {
+    width: 132,
+    height: 132,
+    borderRadius: 32,
+    backgroundColor: Colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: Spacing.lg,
-    ...Shadow.md,
+    ...Shadow.lg,
   },
-  brand: {
-    fontSize: 48,
-    fontWeight: FontWeight.bold,
-    color: Colors.textPrimary,
-    marginBottom: Spacing.sm,
-  },
+  brand: { fontSize: 44, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: -0.5, marginBottom: Spacing.xs },
   tagline: {
     fontSize: FontSize.base,
-    color: Colors.textSecondary,
+    color: 'rgba(255,255,255,0.55)',
     textAlign: 'center',
+    fontStyle: 'italic',
   },
-  bottomSection: {
-    paddingBottom: Spacing.base,
-  },
-  signInBtn: {
-    backgroundColor: Colors.primary,
-    paddingVertical: 16,
-    borderRadius: Radius.pill,
+  bottomSection: { paddingBottom: Spacing.base },
+  errorBox: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(220, 38, 38, 0.15)',
+    borderRadius: Radius.md,
+    padding: 12,
+    marginBottom: Spacing.base,
+    borderWidth: 1,
+    borderColor: 'rgba(252, 165, 165, 0.3)',
+  },
+  errorText: { color: '#FCA5A5', fontSize: FontSize.sm, flex: 1 },
+  signInBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: Colors.primary,
+    paddingVertical: 18,
+    borderRadius: Radius.pill,
     marginBottom: Spacing.base,
     ...Shadow.md,
   },
-  signInText: {
-    color: Colors.white,
-    fontSize: FontSize.lg,
-    fontWeight: FontWeight.bold,
-  },
-  signInBtnDisabled: {
-    opacity: 0.7,
-  },
+  signInBtnDisabled: { opacity: 0.7 },
+  signInText: { color: '#3A2608', fontSize: FontSize.lg, fontWeight: FontWeight.bold, letterSpacing: 0.3 },
   terms: {
-    fontSize: FontSize.xs,
-    color: Colors.textMuted,
+    fontSize: FontSize.sm,
+    color: 'rgba(255,255,255,0.45)',
     textAlign: 'center',
     paddingHorizontal: Spacing.base,
-  },
-  versionBadge: {
-    backgroundColor: '#16a34a',
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 999,
-    alignSelf: 'center',
-    marginTop: 12,
-  },
-  versionText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.3,
+    lineHeight: 20,
   },
 });

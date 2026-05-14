@@ -1,21 +1,72 @@
-import React from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, Pressable, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Feather, Ionicons } from '@expo/vector-icons';
-import { useQuery } from 'convex/react';
+import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
+import { useQuery, useMutation, useConvex } from 'convex/react';
+import * as ImagePicker from 'expo-image-picker';
 import Header from '../../src/components/Header';
 import Avatar from '../../src/components/Avatar';
 import { api } from '../../src/convexApi';
+import { uploadFile } from '../../src/lib/uploadFile';
 import { Colors, FontSize, FontWeight, Spacing, Shadow } from '../../src/theme';
 
 export default function StatusScreen() {
+  const router = useRouter();
+  const convex = useConvex();
   const statusGroups = useQuery(api.statuses.listStatusGroups);
   const myStatuses = useQuery(api.statuses.getMyStatuses);
+  const createStatus = useMutation(api.statuses.create);
+
+  const [showSheet, setShowSheet] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   const others: any[] = Array.isArray(statusGroups) ? statusGroups : [];
   const mine: any[] = Array.isArray(myStatuses) ? myStatuses : [];
-
   const data = [...others];
+
+  const openSheet = () => setShowSheet(true);
+  const closeSheet = () => setShowSheet(false);
+
+  const pickAndUpload = useCallback(
+    async (kind: 'image' | 'video') => {
+      closeSheet();
+      try {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert('Permission required', 'Please allow media library access.');
+          return;
+        }
+
+        const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: kind === 'image' ? ImagePicker.MediaTypeOptions.Images : ImagePicker.MediaTypeOptions.Videos,
+          quality: 0.85,
+          allowsEditing: false,
+          videoMaxDuration: 60,
+        });
+
+        if (result.canceled || !result.assets?.[0]) return;
+
+        const asset = result.assets[0];
+        setUploading(true);
+        const mime = asset.mimeType || (kind === 'image' ? 'image/jpeg' : 'video/mp4');
+        const storageId = await uploadFile(convex, asset.uri, mime);
+        await createStatus({
+          type: kind,
+          storageId,
+          mimeType: mime,
+          width: asset.width,
+          height: asset.height,
+          duration: kind === 'video' ? Math.round((asset.duration || 0) / 1000) : undefined,
+        });
+      } catch (errorValue: any) {
+        Alert.alert('Failed to post status', errorValue?.message || 'Unknown error');
+      } finally {
+        setUploading(false);
+      }
+    },
+    [convex, createStatus]
+  );
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="status-screen">
@@ -27,12 +78,21 @@ export default function StatusScreen() {
         contentContainerStyle={{ paddingBottom: 100 }}
         ListHeaderComponent={
           <>
-            <TouchableOpacity style={styles.myRow} activeOpacity={0.7} testID="my-status-row">
+            <TouchableOpacity
+              style={styles.myRow}
+              activeOpacity={0.7}
+              onPress={() => {
+                if (mine.length > 0) router.push('/status-view/me');
+                else openSheet();
+              }}
+              onLongPress={openSheet}
+              testID="my-status-row"
+            >
               <View style={styles.myAvatarWrap}>
                 <Avatar name="Me" size={52} />
-                <View style={styles.plusBadge}>
+                <TouchableOpacity style={styles.plusBadge} onPress={openSheet} testID="my-status-add">
                   <Feather name="plus" size={14} color={Colors.white} />
-                </View>
+                </TouchableOpacity>
               </View>
               <View style={styles.rowMid}>
                 <Text style={styles.rowName}>My Status</Text>
@@ -40,12 +100,18 @@ export default function StatusScreen() {
                   {mine.length > 0 ? `${mine.length} active update${mine.length === 1 ? '' : 's'}` : 'Tap to add status update'}
                 </Text>
               </View>
+              {uploading ? <ActivityIndicator color={Colors.primary} /> : null}
             </TouchableOpacity>
             {others.length > 0 && <Text style={styles.section}>RECENT UPDATES</Text>}
           </>
         }
         renderItem={({ item }) => (
-          <TouchableOpacity style={styles.row} activeOpacity={0.7}>
+          <TouchableOpacity
+            style={styles.row}
+            activeOpacity={0.7}
+            onPress={() => router.push(`/status-view/${item.userId}` as any)}
+            testID={`status-row-${item.userId}`}
+          >
             <View style={[styles.statusRing]}>
               <Avatar name={item.name} size={50} />
             </View>
@@ -65,7 +131,76 @@ export default function StatusScreen() {
           ) : null
         }
       />
+
+      <TouchableOpacity style={styles.fab} onPress={openSheet} testID="status-fab" activeOpacity={0.85}>
+        <Feather name="edit-2" size={20} color={Colors.white} />
+      </TouchableOpacity>
+
+      <Modal visible={showSheet} transparent animationType="fade" onRequestClose={closeSheet}>
+        <Pressable style={styles.backdrop} onPress={closeSheet}>
+          <Pressable style={styles.sheet} onPress={() => {}} testID="status-sheet">
+            <View style={styles.grabber} />
+            <Text style={styles.sheetTitle}>Share status</Text>
+            <View style={styles.tileRow}>
+              <Tile
+                color="#7C3AED"
+                icon="type"
+                lib="feather"
+                label="Text"
+                onPress={() => {
+                  closeSheet();
+                  router.push('/status-compose');
+                }}
+                testID="status-text-tile"
+              />
+              <Tile
+                color="#3B82F6"
+                icon="image"
+                lib="feather"
+                label="Photo"
+                onPress={() => pickAndUpload('image')}
+                testID="status-photo-tile"
+              />
+              <Tile
+                color="#EF4444"
+                icon="video-outline"
+                lib="mc"
+                label="Video"
+                onPress={() => pickAndUpload('video')}
+                testID="status-video-tile"
+              />
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
+  );
+}
+
+function Tile({
+  color,
+  icon,
+  lib,
+  label,
+  onPress,
+  testID,
+}: {
+  color: string;
+  icon: string;
+  lib: 'feather' | 'mc';
+  label: string;
+  onPress: () => void;
+  testID?: string;
+}) {
+  const Icon: any = lib === 'mc' ? MaterialCommunityIcons : Feather;
+
+  return (
+    <TouchableOpacity style={styles.tile} onPress={onPress} testID={testID} activeOpacity={0.8}>
+      <View style={[styles.tileIcon, { backgroundColor: color }]}>
+        <Icon name={icon as any} size={26} color={Colors.white} />
+      </View>
+      <Text style={styles.tileLabel}>{label}</Text>
+    </TouchableOpacity>
   );
 }
 
@@ -91,6 +226,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
+    padding: 0,
     borderColor: Colors.background,
   },
   section: {
@@ -141,4 +277,45 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     textAlign: 'center',
   },
+  fab: {
+    position: 'absolute',
+    right: 20,
+    bottom: 24,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Shadow.lg,
+  },
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  sheet: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: Spacing.sm,
+    paddingHorizontal: Spacing.base,
+    paddingBottom: Spacing.xl,
+    ...Shadow.lg,
+  },
+  grabber: {
+    width: 40,
+    height: 4,
+    backgroundColor: Colors.border,
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginVertical: Spacing.sm,
+  },
+  sheetTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+    marginBottom: Spacing.lg,
+    textAlign: 'center',
+  },
+  tileRow: { flexDirection: 'row', justifyContent: 'space-around', gap: Spacing.base },
+  tile: { alignItems: 'center', gap: 8, flex: 1 },
+  tileIcon: { width: 60, height: 60, borderRadius: 30, alignItems: 'center', justifyContent: 'center' },
+  tileLabel: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
 });

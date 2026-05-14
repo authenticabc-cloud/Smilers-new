@@ -59,6 +59,7 @@ interface AuthContextValue {
   isLoading: boolean;
   isSignInReady: boolean;
   isAuthenticated: boolean;
+  authMode: 'direct' | 'webview';
   idToken: string | null;
   lastError: string | null;
   userInfo: { email?: string; name?: string; picture?: string; sub?: string } | null;
@@ -75,6 +76,7 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+const AUTH_MODE = process.env.EXPO_PUBLIC_AUTH_MODE === 'webview' ? 'webview' : 'direct';
 
 function parseJwt(token: string): any {
   try {
@@ -326,6 +328,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         isSignInReady: !!request && !!discovery,
         isAuthenticated: !!idToken,
+        authMode: AUTH_MODE,
         idToken,
         lastError,
         userInfo,
