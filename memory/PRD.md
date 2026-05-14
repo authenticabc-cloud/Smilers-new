@@ -50,11 +50,15 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - ✅ Phase 2A.2a media groundwork added: attachment sheet, image upload helper, gallery/camera send flow, image bubble rendering, upload progress bar, and full-screen image viewer
 - ✅ Phase 2A.2b voice notes patched in: record/send flow in chat composer plus playback UI in media bubbles
 - ✅ Phase 2A.2c chat parity added on the frontend: poll composer modal, poll message bubble voting UI, document picking/upload flow, and file message bubble open/download handling
+- ✅ Phase 2B.1 frontend prerequisites added: redesigned sign-in screen, status composer route, and media status creation sheet on the Status tab
+- ✅ Phase 2B.2 story viewer added on the frontend: full-screen viewer route, progress bars, tap navigation, pause/resume handling, reply input, and own-story viewers sheet
 - ✅ Ads module MVP added: Ads tab wiring, Browse/My Ads view, Create Ad form, Admin Review screen, country selector modal, and standard 195-country list filtering
 - ✅ Fixed React 19 TypeScript incompatibility from `react-native-country-codes-picker` so the preview/build loads cleanly again
 - ✅ Fixed invalid chat-route update loop by stabilizing query fallback handling and chat fallbacks; `/chat/test-conversation` now renders the unavailable state without `Maximum update depth exceeded`
 - ✅ Added `/app/auth_testing.md` and `/app/auth-testing.md` to document current manual auth verification expectations for future testing runs
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_POLLS_FILES.md` because the Convex backend source is not present in this repo; it documents the required schema, `messages.send`, and `votePoll` backend changes
+- ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_STATUS_STORIES.md` because the Convex backend source is not present in this repo; it documents the required `statuses` endpoints, story views, DM reply support, and direct-conversation mutation
+- ✅ Renamed the Status tab route file to `updates.tsx` to avoid Expo web’s reserved `/status` path conflict while keeping the tab label as **Status**
 - ✅ Convex client with custom auth integration (passes ID token via `ConvexProviderWithAuth`)
 - ✅ Bottom tab navigation (5 tabs: Chats, Contacts, Groups, Status, Profile) — matches web app's bottom nav
 - ✅ Chat list with pinned **Smilers AI** (purple) and **Chat Once** (orange) rows + FAB stack (4 floating buttons) + persistent SOS button
@@ -85,6 +89,7 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - AI chat via `api.ai.chat`
 - Communities, Broadcasts, Polls, Templates
 - Status / Stories (text/photo/video composer + viewer)
+- Story reply + story viewer counts/viewers sheet
 - Scheduled messages, Backup, Face ID app lock, Trustees/Emergency
 - Voice notes (record + playback + Whisper transcription)
 - Image/file sharing via Convex File Storage
@@ -104,10 +109,11 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - Final real-device login validation still depends on Hercules allowing the native redirect URI `smilers://auth-callback` for the mobile client.
 - Full end-to-end authenticated voice-note verification is still pending because browser automation cannot deterministically complete the third-party Google/Hercules sign-in flow with the current test setup.
 - Full end-to-end authenticated poll/document verification is still pending for the same auth-gated reason, and the live poll voting flow also depends on the user applying the backend changes from `/app/CONVEX_BACKEND_INSTRUCTIONS_POLLS_FILES.md`.
+- Full end-to-end authenticated status/story verification is still pending for the same auth-gated reason, and story viewing/reply/view counts depend on the backend changes from `/app/CONVEX_BACKEND_INSTRUCTIONS_STATUS_STORIES.md`.
 
 ## Files
 - `/app/frontend/app/_layout.tsx` — Root with AuthProvider + ConvexProvider
-- `/app/frontend/app/index.tsx` — Sign-in screen + v2.0.12 build badge
+- `/app/frontend/app/index.tsx` — Redesigned sign-in screen
 - `/app/frontend/app/+not-found.tsx` — OIDC deep-link catch-all + token exchange fallback
 - `/app/frontend/app/{emergency,ai-chat,blocked,notifications,earnings}.tsx` — Fully wired Phase 1 utility screens
 - `/app/frontend/app/{privacy,app-lock,face-id,chat-appearance,templates,scheduled,chat-once}.tsx` — Phase 1 polished placeholders
@@ -118,11 +124,14 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - `/app/frontend/src/lib/uploadFile.ts` — Convex file upload helper
 - `/app/frontend/src/components/{AttachmentSheet,MediaBubble}.tsx` — Attachment picker and media-aware message bubble renderer
 - `/app/frontend/src/components/PollComposer.tsx` — Poll creation bottom sheet
+- `/app/frontend/app/status-compose.tsx` — Text status composer
+- `/app/frontend/app/status-view/[userId].tsx` — Full-screen story viewer
+- `/app/frontend/app/(tabs)/updates.tsx` — Status tab UI and media status creation sheet
 - `/app/frontend/app/(tabs)/ads.tsx` — Ads Browse/My Ads home
 - `/app/frontend/app/ads/{create,review}.tsx` — Ad creation and admin review flows
 - `/app/frontend/src/{constants/countries.ts,components/CountrySelectorModal.tsx,hooks/useDebouncedValue.ts}` — Ads filtering/support utilities
 - `/app/frontend/app/(tabs)/_layout.tsx` — Tab bar
-- `/app/frontend/app/(tabs)/{chats,contacts,groups,status,profile}.tsx`
+- `/app/frontend/app/(tabs)/{chats,contacts,groups,updates,profile}.tsx`
 - `/app/frontend/app/chat/[conversationId].tsx` — Chat detail
 - `/app/frontend/app/settings.tsx` — Settings list
 - `/app/frontend/src/providers/AuthProvider.tsx` — Hercules OIDC + token mgmt
@@ -131,3 +140,4 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - `/app/frontend/src/theme.ts` — Design tokens
 - `/app/frontend/src/convexApi.ts` — Untyped api references via `anyApi`
 - `/app/CONVEX_BACKEND_INSTRUCTIONS_POLLS_FILES.md` — Required backend support for poll voting and file messages
+- `/app/CONVEX_BACKEND_INSTRUCTIONS_STATUS_STORIES.md` — Required backend support for status/story composer, viewer, and story replies

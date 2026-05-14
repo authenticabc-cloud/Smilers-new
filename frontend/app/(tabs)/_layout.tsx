@@ -91,7 +91,7 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="status"
+        name="updates"
         options={{
           title: 'Status',
           tabBarIcon: ({ color, size }) => <Feather name="disc" size={size} color={color} />,
