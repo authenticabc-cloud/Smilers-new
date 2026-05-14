@@ -45,12 +45,15 @@ export default function ChatScreen() {
   const [showForwardPicker, setShowForwardPicker] = useState(false);
   const [fallbackReady, setFallbackReady] = useState(false);
   const listRef = useRef<FlatList<any>>(null);
+  const hasValidConversationId =
+    typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
+  const canQueryConversation = !!conversationId && hasValidConversationId;
 
   const { data: conversation, loading: conversationLoading } = useSafeConvexQuery<any | null>(
     api.conversations.getConversation,
     conversationId ? { conversationId } : {},
     null,
-    !!conversationId
+    canQueryConversation
   );
   const { data: messagesPage, loading: messagesLoading, refetch: refetchMessages } = useSafeConvexQuery<any>(
     api.messages.list,
@@ -58,7 +61,7 @@ export default function ChatScreen() {
       ? { conversationId, paginationOpts: { numItems: 50, cursor: null } }
       : {},
     { page: [] },
-    !!conversationId
+    canQueryConversation
   );
   const { data: me } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null);
   const { data: conversationsForForward } = useSafeConvexQuery<any[]>(
@@ -94,10 +97,14 @@ export default function ChatScreen() {
   }, [conversationId, messages.length, markRead]);
 
   useEffect(() => {
+    if (!canQueryConversation) {
+      setFallbackReady(true);
+      return;
+    }
     setFallbackReady(false);
     const timer = setTimeout(() => setFallbackReady(true), 2500);
     return () => clearTimeout(timer);
-  }, [conversationId]);
+  }, [canQueryConversation, conversationId]);
 
   const isConversationAvailable = !!conversation;
 

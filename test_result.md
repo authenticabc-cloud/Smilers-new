@@ -182,6 +182,12 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Installed Expo SDK-aligned media packages, added uploadFile helper, AttachmentSheet, MediaBubble, composer upload bar, image send/camera hooks, image forwarding with storageId preservation, and full-screen image viewer. Self-verified root preview still boots and invalid chat route degrades to fallback instead of hanging."
+##       - working: false
+##         agent: "testing"
+##         comment: "Invalid chat route visually fell back, but runtime still logged loop/server errors; auth popup was not reached in that automation run."
+##       - working: true
+##         agent: "main"
+##         comment: "Added hard validation for malformed conversation IDs so invalid routes skip Convex queries entirely, re-verified fallback UI, and confirmed sign-in button now opens the Hercules auth popup in web automation. End-to-end media send still needs a real authenticated chat conversation on device/browser."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"
