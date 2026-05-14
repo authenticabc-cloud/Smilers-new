@@ -88,7 +88,12 @@ export default function ContactsScreen() {
         title="Contacts"
         variant="dark"
         right={
-          <TouchableOpacity onPress={() => setShowAddSheet(true)} hitSlop={10} testID="add-contact-btn">
+          <TouchableOpacity
+            onPress={() => setShowAddSheet(true)}
+            hitSlop={10}
+            style={styles.headerAction}
+            testID="add-contact-btn"
+          >
             <Ionicons name="person-add-outline" size={22} color={Colors.white} />
           </TouchableOpacity>
         }
@@ -395,10 +400,18 @@ const styles = StyleSheet.create({
   rowMid: { flex: 1, marginLeft: Spacing.md },
   rowName: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   rowSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
-  addBtn: { padding: 8 },
+  headerAction: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  addBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   acceptBtn: { backgroundColor: Colors.primary, paddingHorizontal: 16, paddingVertical: 8, borderRadius: Radius.pill },
   acceptText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.bold },
-  rejectBtn: { padding: 8, borderRadius: Radius.pill, backgroundColor: '#FEE2E2' },
+  rejectBtn: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: Radius.pill,
+    backgroundColor: '#FEE2E2',
+  },
   cancelBtn: {
     paddingHorizontal: 14,
     paddingVertical: 8,

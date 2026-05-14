@@ -52,12 +52,14 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - ✅ Phase 2A.2c chat parity added on the frontend: poll composer modal, poll message bubble voting UI, document picking/upload flow, and file message bubble open/download handling
 - ✅ Phase 2B.1 frontend prerequisites added: redesigned sign-in screen, status composer route, and media status creation sheet on the Status tab
 - ✅ Phase 2B.2 story viewer added on the frontend: full-screen viewer route, progress bars, tap navigation, pause/resume handling, reply input, and own-story viewers sheet
+- ✅ Phase 2C contacts polish added on the frontend: rewritten Contacts tab, reject/cancel flows, sent/respond/contact pills, add-by-phone modal, and QR show/scan route
 - ✅ Ads module MVP added: Ads tab wiring, Browse/My Ads view, Create Ad form, Admin Review screen, country selector modal, and standard 195-country list filtering
 - ✅ Fixed React 19 TypeScript incompatibility from `react-native-country-codes-picker` so the preview/build loads cleanly again
 - ✅ Fixed invalid chat-route update loop by stabilizing query fallback handling and chat fallbacks; `/chat/test-conversation` now renders the unavailable state without `Maximum update depth exceeded`
 - ✅ Added `/app/auth_testing.md` and `/app/auth-testing.md` to document current manual auth verification expectations for future testing runs
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_POLLS_FILES.md` because the Convex backend source is not present in this repo; it documents the required schema, `messages.send`, and `votePoll` backend changes
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_STATUS_STORIES.md` because the Convex backend source is not present in this repo; it documents the required `statuses` endpoints, story views, DM reply support, and direct-conversation mutation
+- ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_CONTACTS_POLISH.md` because the Convex backend source is not present in this repo; it documents the required contacts queries/mutations for outgoing requests, reject/cancel, phone invites, and QR flows
 - ✅ Renamed the Status tab route file to `updates.tsx` to avoid Expo web’s reserved `/status` path conflict while keeping the tab label as **Status**
 - ✅ Convex client with custom auth integration (passes ID token via `ConvexProviderWithAuth`)
 - ✅ Bottom tab navigation (5 tabs: Chats, Contacts, Groups, Status, Profile) — matches web app's bottom nav
@@ -90,6 +92,7 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - Communities, Broadcasts, Polls, Templates
 - Status / Stories (text/photo/video composer + viewer)
 - Story reply + story viewer counts/viewers sheet
+- Contacts QR + add-by-phone flow
 - Scheduled messages, Backup, Face ID app lock, Trustees/Emergency
 - Voice notes (record + playback + Whisper transcription)
 - Image/file sharing via Convex File Storage
@@ -110,6 +113,7 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - Full end-to-end authenticated voice-note verification is still pending because browser automation cannot deterministically complete the third-party Google/Hercules sign-in flow with the current test setup.
 - Full end-to-end authenticated poll/document verification is still pending for the same auth-gated reason, and the live poll voting flow also depends on the user applying the backend changes from `/app/CONVEX_BACKEND_INSTRUCTIONS_POLLS_FILES.md`.
 - Full end-to-end authenticated status/story verification is still pending for the same auth-gated reason, and story viewing/reply/view counts depend on the backend changes from `/app/CONVEX_BACKEND_INSTRUCTIONS_STATUS_STORIES.md`.
+- Full end-to-end authenticated contacts-polish verification is still pending for the same auth-gated reason, and outgoing requests/reject/cancel/add-by-phone depend on the backend changes from `/app/CONVEX_BACKEND_INSTRUCTIONS_CONTACTS_POLISH.md`.
 
 ## Files
 - `/app/frontend/app/_layout.tsx` — Root with AuthProvider + ConvexProvider
@@ -127,6 +131,8 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - `/app/frontend/app/status-compose.tsx` — Text status composer
 - `/app/frontend/app/status-view/[userId].tsx` — Full-screen story viewer
 - `/app/frontend/app/(tabs)/updates.tsx` — Status tab UI and media status creation sheet
+- `/app/frontend/app/(tabs)/contacts.tsx` — Contacts tab with add sheet, reject/cancel flows, and relationship pills
+- `/app/frontend/app/contact-qr.tsx` — Contact QR show/scan modal route
 - `/app/frontend/app/(tabs)/ads.tsx` — Ads Browse/My Ads home
 - `/app/frontend/app/ads/{create,review}.tsx` — Ad creation and admin review flows
 - `/app/frontend/src/{constants/countries.ts,components/CountrySelectorModal.tsx,hooks/useDebouncedValue.ts}` — Ads filtering/support utilities
@@ -141,3 +147,4 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - `/app/frontend/src/convexApi.ts` — Untyped api references via `anyApi`
 - `/app/CONVEX_BACKEND_INSTRUCTIONS_POLLS_FILES.md` — Required backend support for poll voting and file messages
 - `/app/CONVEX_BACKEND_INSTRUCTIONS_STATUS_STORIES.md` — Required backend support for status/story composer, viewer, and story replies
+- `/app/CONVEX_BACKEND_INSTRUCTIONS_CONTACTS_POLISH.md` — Required backend support for outgoing requests, reject/cancel, phone invites, and QR contacts

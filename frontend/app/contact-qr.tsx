@@ -7,6 +7,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import QRCode from 'react-native-qrcode-svg';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../src/convexApi';
+import { useAuth } from '../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/theme';
 
 type Mode = 'show' | 'scan';
@@ -15,6 +16,7 @@ export default function ContactQrScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ mode?: Mode }>();
   const [mode, setMode] = useState<Mode>(params.mode === 'scan' ? 'scan' : 'show');
+  const { isAuthenticated } = useAuth();
   const me = useQuery(api.users.getCurrentUser);
   const sendRequest = useMutation(api.contacts.sendRequest);
   const [permission, requestPermission] = useCameraPermissions();
@@ -68,6 +70,28 @@ export default function ContactQrScreen() {
     },
     [scanned, sending, me, sendRequest, router]
   );
+
+  if (!isAuthenticated) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="contact-qr-signed-out">
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={12} testID="contact-qr-close">
+            <Feather name="x" size={26} color={Colors.white} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Contact card</Text>
+          <View style={styles.headerSpacer} />
+        </View>
+        <View style={styles.permWrap}>
+          <Ionicons name="person-circle-outline" size={52} color="#FFFFFF" />
+          <Text style={styles.permTitle}>Sign in required</Text>
+          <Text style={styles.permSub}>Sign in to show or scan Smilers contact QR codes.</Text>
+          <TouchableOpacity style={styles.permBtn} onPress={() => router.replace('/')} testID="contact-qr-sign-in">
+            <Text style={styles.permBtnText}>Back to sign in</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="contact-qr-screen">
