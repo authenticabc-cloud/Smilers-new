@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useConvex, useMutation } from 'convex/react';
+import { Audio } from 'expo-av';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
@@ -44,6 +45,12 @@ export default function ChatScreen() {
   const [showAttachSheet, setShowAttachSheet] = useState(false);
   const [showForwardPicker, setShowForwardPicker] = useState(false);
   const [fallbackReady, setFallbackReady] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recDuration, setRecDuration] = useState(0);
+  const recRef = useRef<Audio.Recording | null>(null);
+  const recTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recCancelledRef = useRef(false);
+  const recStartMsRef = useRef(0);
   const listRef = useRef<FlatList<any>>(null);
   const hasValidConversationId =
     typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
@@ -70,6 +77,14 @@ export default function ChatScreen() {
     [],
     showForwardPicker
   );
+
+  useEffect(() => {
+    Audio.setAudioModeAsync({
+      allowsRecordingIOS: true,
+      playsInSilentModeIOS: true,
+      shouldDuckAndroid: true,
+    }).catch(() => {});
+  }, []);
 
   const sendMessage = useMutation(api.messages.send);
   const setTyping = useMutation(api.typing.setTyping);
@@ -204,6 +219,94 @@ export default function ChatScreen() {
     await sendImageFromUri(asset.uri, asset.mimeType || 'image/jpeg');
   }, [sendImageFromUri]);
 
+  const startRecording = useCallback(async () => {
+    if (isRecording) return;
+    try {
+      const permission = await Audio.requestPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Permission required', 'Please allow microphone access to record voice notes.');
+        return;
+      }
+      try {
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      } catch {}
+      recCancelledRef.current = false;
+      setRecDuration(0);
+      recStartMsRef.current = Date.now();
+      setIsRecording(true);
+      const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      recRef.current = recording;
+      recTimer.current = setInterval(() => {
+        setRecDuration(Math.floor((Date.now() - recStartMsRef.current) / 1000));
+      }, 250);
+    } catch (errorValue: any) {
+      setIsRecording(false);
+      Alert.alert('Recording failed', errorValue?.message || 'Could not start recording');
+    }
+  }, [isRecording]);
+
+  const finishRecording = useCallback(
+    async (action: 'send' | 'cancel') => {
+      if (recTimer.current) {
+        clearInterval(recTimer.current);
+        recTimer.current = null;
+      }
+      const recording = recRef.current;
+      recRef.current = null;
+      const totalMs = Date.now() - recStartMsRef.current;
+      const totalSec = Math.max(1, Math.round(totalMs / 1000));
+      const replyToMessageId = replyTo?._id;
+      setIsRecording(false);
+      setRecDuration(0);
+      if (!recording) return;
+      try {
+        await recording.stopAndUnloadAsync();
+        const uri = recording.getURI();
+        if (action === 'cancel' || recCancelledRef.current) return;
+        if (!uri) return;
+        if (totalMs < 800) {
+          Alert.alert('Tap and hold to record', 'Voice notes need to be at least 1 second long.');
+          return;
+        }
+        if (!conversationId) return;
+        setUploading(true);
+        const mime = 'audio/m4a';
+        const storageId = await uploadFile(convex, uri, mime);
+        await sendMessage({
+          conversationId,
+          type: 'voice',
+          storageId,
+          mimeType: mime,
+          audioDuration: totalSec,
+          ...(replyToMessageId ? { replyToMessageId } : {}),
+        });
+        setReplyTo(null);
+        await refetchMessages();
+      } catch (errorValue: any) {
+        Alert.alert('Failed to send voice note', errorValue?.message || 'Unknown error');
+      } finally {
+        setUploading(false);
+      }
+    },
+    [conversationId, convex, refetchMessages, replyTo, sendMessage]
+  );
+
+  const cancelRecording = useCallback(() => {
+    recCancelledRef.current = true;
+    finishRecording('cancel');
+  }, [finishRecording]);
+
+  useEffect(() => {
+    return () => {
+      if (recTimer.current) clearInterval(recTimer.current);
+      const recording = recRef.current;
+      recRef.current = null;
+      if (recording) {
+        recording.stopAndUnloadAsync().catch(() => {});
+      }
+    };
+  }, []);
+
   const onLongPressMessage = useCallback(async (msg: any) => {
     try {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -262,12 +365,16 @@ export default function ChatScreen() {
                 type: 'image',
                 text: msg.text || '',
                 storageId: msg.storageId,
+                ...(msg.mimeType ? { mimeType: msg.mimeType } : {}),
+                ...(msg.audioDuration ? { audioDuration: msg.audioDuration } : {}),
               }
             : {
                 conversationId: targetConversationId,
                 type: msg.type || 'text',
                 text: msg.text || '',
                 ...(msg.storageId ? { storageId: msg.storageId } : {}),
+                ...(msg.mimeType ? { mimeType: msg.mimeType } : {}),
+                ...(msg.audioDuration ? { audioDuration: msg.audioDuration } : {}),
               }
         );
         Alert.alert('Forwarded');
@@ -411,40 +518,60 @@ export default function ChatScreen() {
         ) : null}
 
         <View style={styles.inputBar}>
-          <TouchableOpacity
-            style={styles.iconBtn}
-            onPress={() => setShowAttachSheet(true)}
-            disabled={!isConversationAvailable || uploading}
-            testID="attach-btn"
-          >
-            <Feather name="paperclip" size={22} color={Colors.textSecondary} />
-          </TouchableOpacity>
-          <TextInput
-            value={text}
-            onChangeText={handleTyping}
-            placeholder="Type your message…"
-            placeholderTextColor={Colors.textMuted}
-            style={styles.input}
-            multiline
-            editable={isConversationAvailable && !sending && !uploading}
-            testID="message-input"
-          />
-          <TouchableOpacity
-            style={styles.iconBtn}
-            onPress={takePhoto}
-            disabled={!isConversationAvailable || uploading}
-            testID="camera-btn"
-          >
-            <Feather name="camera" size={22} color={Colors.textSecondary} />
-          </TouchableOpacity>
-          {text.trim().length === 0 ? (
-            <TouchableOpacity style={styles.sendBtn} disabled={!isConversationAvailable || uploading} testID="mic-btn">
-              <Feather name="mic" size={20} color={Colors.white} />
-            </TouchableOpacity>
+          {isRecording ? (
+            <View style={styles.recordingRow}>
+              <TouchableOpacity style={styles.recCancelBtn} onPress={cancelRecording} testID="rec-cancel">
+                <Feather name="trash-2" size={20} color={Colors.danger} />
+              </TouchableOpacity>
+              <View style={styles.recIndicator}>
+                <View style={styles.recDot} />
+                <Text style={styles.recTimer}>
+                  {`${Math.floor(recDuration / 60)}:${(recDuration % 60).toString().padStart(2, '0')}`}
+                </Text>
+                <Text style={styles.recHint} numberOfLines={1}>Recording…</Text>
+              </View>
+              <TouchableOpacity style={styles.recSendBtn} onPress={() => finishRecording('send')} testID="rec-send">
+                <Feather name="send" size={20} color={Colors.white} />
+              </TouchableOpacity>
+            </View>
           ) : (
-            <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={!isConversationAvailable || uploading} testID="send-btn">
-              <Feather name="send" size={20} color={Colors.white} />
-            </TouchableOpacity>
+            <>
+              <TouchableOpacity
+                style={styles.iconBtn}
+                onPress={() => setShowAttachSheet(true)}
+                disabled={!isConversationAvailable || uploading}
+                testID="attach-btn"
+              >
+                <Feather name="paperclip" size={22} color={Colors.textSecondary} />
+              </TouchableOpacity>
+              <TextInput
+                value={text}
+                onChangeText={handleTyping}
+                placeholder="Type your message…"
+                placeholderTextColor={Colors.textMuted}
+                style={styles.input}
+                multiline
+                editable={isConversationAvailable && !sending && !uploading}
+                testID="message-input"
+              />
+              <TouchableOpacity
+                style={styles.iconBtn}
+                onPress={takePhoto}
+                disabled={!isConversationAvailable || uploading}
+                testID="camera-btn"
+              >
+                <Feather name="camera" size={22} color={Colors.textSecondary} />
+              </TouchableOpacity>
+              {text.trim().length === 0 ? (
+                <TouchableOpacity style={styles.sendBtn} onPress={startRecording} disabled={!isConversationAvailable || uploading} testID="mic-btn">
+                  <Feather name="mic" size={20} color={Colors.white} />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={!isConversationAvailable || uploading} testID="send-btn">
+                  <Feather name="send" size={20} color={Colors.white} />
+                </TouchableOpacity>
+              )}
+            </>
           )}
         </View>
       </KeyboardAvoidingView>
@@ -834,6 +961,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  recordingRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  recCancelBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FEE2E2' },
+  recIndicator: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: Colors.background, borderRadius: Radius.lg },
+  recDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.danger },
+  recTimer: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textPrimary, fontVariant: ['tabular-nums'] as any },
+  recHint: { flex: 1, fontSize: FontSize.sm, color: Colors.textSecondary },
+  recSendBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.primary },
   sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
   sheet: {
     backgroundColor: Colors.surface,

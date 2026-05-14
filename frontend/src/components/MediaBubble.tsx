@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
@@ -11,9 +11,20 @@ import {
   View,
 } from 'react-native';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Audio } from 'expo-av';
 import { api } from '../convexApi';
 import { useSafeConvexQuery } from '../hooks/useSafeConvexQuery';
 import { Colors, FontSize, FontWeight, Radius, Shadow } from '../theme';
+
+let CURRENT_SOUND: Audio.Sound | null = null;
+let CURRENT_STOP: (() => void) | null = null;
+
+function fmtDur(sec: number): string {
+  const seconds = Math.max(0, Math.floor(sec));
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `${minutes}:${remainder.toString().padStart(2, '0')}`;
+}
 
 interface BubbleProps {
   msg: any;
@@ -120,7 +131,7 @@ function BubbleBody({ msg, timeStr }: { msg: any; timeStr: string }) {
       return <ImageMessage msg={msg} timeStr={timeStr} />;
     case 'voice':
     case 'audio':
-      return <PlaceholderBody type="Voice note" icon="mic" iconLib="feather" />;
+      return <VoiceMessage msg={msg} />;
     case 'poll':
       return <PlaceholderBody type="Poll" icon="bar-chart-2" iconLib="feather" subtitle={msg.poll?.question} />;
     case 'file':
@@ -178,6 +189,115 @@ function ImageViewer({ visible, onClose, uri }: { visible: boolean; onClose: () 
         </TouchableOpacity>
       </View>
     </Modal>
+  );
+}
+
+function VoiceMessage({ msg }: { msg: any }) {
+  const totalSec = msg.audioDuration || 0;
+  const { data: resolvedUrl } = useSafeConvexQuery<string | null>(
+    api.files.getUrl,
+    msg.storageId ? { storageId: msg.storageId } : {},
+    null,
+    !msg.fileUrl && !!msg.storageId
+  );
+  const src = msg.fileUrl || resolvedUrl;
+
+  const soundRef = useRef<Audio.Sound | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [posSec, setPosSec] = useState(0);
+
+  useEffect(() => {
+    return () => {
+      const sound = soundRef.current;
+      if (CURRENT_SOUND === sound) {
+        CURRENT_SOUND = null;
+        CURRENT_STOP = null;
+      }
+      soundRef.current = null;
+      if (sound) {
+        sound.unloadAsync().catch(() => {});
+      }
+    };
+  }, []);
+
+  const stopOtherSounds = async () => {
+    if (CURRENT_SOUND && CURRENT_SOUND !== soundRef.current) {
+      try {
+        await CURRENT_SOUND.pauseAsync();
+      } catch {}
+      if (CURRENT_STOP) CURRENT_STOP();
+    }
+  };
+
+  const toggle = async () => {
+    if (!src) return;
+    try {
+      await stopOtherSounds();
+      let sound = soundRef.current;
+      if (!sound) {
+        const created = await Audio.Sound.createAsync(
+          { uri: src },
+          { shouldPlay: true },
+          (status: any) => {
+            if (!status?.isLoaded) return;
+            setIsPlaying(!!status.isPlaying);
+            setPosSec((status.positionMillis || 0) / 1000);
+            if (status.didJustFinish) {
+              setIsPlaying(false);
+              setPosSec(0);
+              try {
+                created.sound.setPositionAsync(0).catch(() => {});
+              } catch {}
+            }
+          }
+        );
+        sound = created.sound;
+        soundRef.current = sound;
+        CURRENT_SOUND = sound;
+        CURRENT_STOP = () => setIsPlaying(false);
+      } else {
+        const status: any = await sound.getStatusAsync();
+        if (status.isPlaying) {
+          await sound.pauseAsync();
+        } else {
+          if (status.didJustFinish || status.positionMillis >= (status.durationMillis || 0)) {
+            await sound.setPositionAsync(0);
+          }
+          await sound.playAsync();
+          CURRENT_SOUND = sound;
+          CURRENT_STOP = () => setIsPlaying(false);
+        }
+      }
+    } catch {}
+  };
+
+  const progress = totalSec > 0 ? Math.min(1, posSec / totalSec) : 0;
+  const remaining = Math.max(0, Math.ceil(totalSec - posSec));
+
+  if (!src) {
+    return (
+      <View style={styles.voiceBody} testID="voice-loading-state">
+        <View style={styles.voicePlayBtnLoading}>
+          <ActivityIndicator size="small" color={Colors.primary} />
+        </View>
+        <View style={styles.voiceBar}>
+          <View style={styles.voiceProgress} />
+        </View>
+        <Text style={styles.voiceDuration}>{fmtDur(totalSec)}</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.voiceBody} testID="voice-message-body">
+      <TouchableOpacity onPress={toggle} style={styles.voicePlayBtn} testID="voice-play">
+        <Feather name={isPlaying ? 'pause' : 'play'} size={18} color={Colors.white} />
+      </TouchableOpacity>
+      <View style={styles.voiceBar}>
+        <View style={[styles.voiceProgress, { width: `${progress * 100}%` }]} />
+      </View>
+      <Text style={styles.voiceDuration}>{fmtDur(remaining)}</Text>
+    </View>
   );
 }
 
@@ -247,6 +367,12 @@ const styles = StyleSheet.create({
   placeholderIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
   placeholderTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   placeholderSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
+  voiceBody: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4, minWidth: 180 },
+  voicePlayBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
+  voicePlayBtnLoading: { width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
+  voiceBar: { flex: 1, height: 4, borderRadius: 2, backgroundColor: 'rgba(0,0,0,0.12)', overflow: 'hidden' },
+  voiceProgress: { height: '100%', backgroundColor: Colors.primary },
+  voiceDuration: { fontSize: 11, color: Colors.textSecondary, fontVariant: ['tabular-nums'], minWidth: 32 },
   viewerWrap: { flex: 1, backgroundColor: '#000' },
   viewerBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   viewerImage: { width: '100%', height: '100%' },
