@@ -47,7 +47,25 @@ export class CallSession {
   }
 
   /** Acquire camera/mic and attach to the peer connection. */
-  async initLocalMedia(): Promise<MediaStream> {
+  async initLocalMedia(useScreen: boolean = false): Promise<MediaStream> {
+    if (useScreen) {
+      // Screen-share-only mode: capture the device screen + mic audio
+      const screenStream = await this.captureScreen();
+      // Add a mic audio track so the remote can still hear us
+      try {
+        const audioStream = (await mediaDevices.getUserMedia({ audio: true, video: false })) as unknown as MediaStream;
+        audioStream.getAudioTracks().forEach((track) => {
+          try {
+            screenStream.addTrack(track);
+          } catch {}
+        });
+      } catch {
+        // Audio track is best-effort; continue with screen-only
+      }
+      this.localStream = screenStream;
+      this.opts.onLocalStream?.(screenStream);
+      return screenStream;
+    }
     const constraints: any = {
       audio: true,
       video:
@@ -66,6 +84,128 @@ export class CallSession {
     this.localStream = stream;
     this.opts.onLocalStream?.(stream);
     return stream;
+  }
+
+  /** Internal: capture the device screen using getDisplayMedia. */
+  private async captureScreen(): Promise<MediaStream> {
+    const md: any = mediaDevices as any;
+    if (typeof md.getDisplayMedia !== 'function') {
+      throw new Error('Screen capture is not available on this device.');
+    }
+    const stream = (await md.getDisplayMedia({ video: true, audio: false })) as MediaStream;
+    return stream;
+  }
+
+  /**
+   * Replace the outgoing video track with the device screen.
+   * Returns the new screen stream so the caller can render it as the local preview.
+   */
+  async startScreenShare(): Promise<MediaStream> {
+    if (!this.pc) throw new Error('Peer connection not initialized');
+    const screenStream = await this.captureScreen();
+    const screenTrack = screenStream.getVideoTracks()[0];
+    if (!screenTrack) throw new Error('Failed to acquire screen track.');
+
+    // Find the existing video sender (if any) and replace its track
+    const senders = (this.pc as any).getSenders ? (this.pc as any).getSenders() : [];
+    const videoSender = senders.find((s: any) => s.track && s.track.kind === 'video');
+
+    if (videoSender) {
+      // Stop the old camera track so the camera light turns off
+      try {
+        videoSender.track?.stop();
+      } catch {}
+      try {
+        await videoSender.replaceTrack(screenTrack);
+      } catch (e: any) {
+        throw new Error('Failed to switch to screen sharing: ' + e?.message);
+      }
+    } else {
+      // Voice-only call → add a new sender so the remote starts receiving video
+      try {
+        (this.pc as any).addTrack(screenTrack, screenStream);
+      } catch (e: any) {
+        throw new Error('Failed to attach screen track: ' + e?.message);
+      }
+      // Renegotiate to advertise the new video track
+      try {
+        const offer = await this.pc.createOffer({} as any);
+        await this.pc.setLocalDescription(offer);
+        await this.opts.sendSignal({
+          callId: this.opts.callId,
+          toUserId: this.opts.remoteUserId,
+          type: 'offer',
+          payload: JSON.stringify(offer),
+        });
+      } catch {}
+    }
+
+    // Swap localStream's video track so previews / onLocalStream subscribers see the screen
+    if (this.localStream) {
+      try {
+        this.localStream.getVideoTracks().forEach((t) => {
+          try {
+            this.localStream?.removeTrack(t);
+          } catch {}
+        });
+        this.localStream.addTrack(screenTrack);
+      } catch {}
+    } else {
+      this.localStream = screenStream;
+    }
+    this.opts.onLocalStream?.(this.localStream as MediaStream);
+    return screenStream;
+  }
+
+  /**
+   * Stop screen sharing. If `cameraStream` is provided (video call), restore
+   * the camera track. Otherwise just stop the screen track (voice call).
+   */
+  async stopScreenShare(restoreVideo: boolean = true): Promise<void> {
+    if (!this.pc) return;
+    const senders = (this.pc as any).getSenders ? (this.pc as any).getSenders() : [];
+    const videoSender = senders.find((s: any) => s.track && s.track.kind === 'video');
+
+    if (restoreVideo) {
+      try {
+        const camStream = (await mediaDevices.getUserMedia({
+          audio: false,
+          video: { facingMode: 'user' },
+        })) as unknown as MediaStream;
+        const camTrack = camStream.getVideoTracks()[0];
+        if (camTrack && videoSender) {
+          try {
+            videoSender.track?.stop();
+          } catch {}
+          await videoSender.replaceTrack(camTrack);
+
+          if (this.localStream) {
+            this.localStream.getVideoTracks().forEach((t) => {
+              try {
+                this.localStream?.removeTrack(t);
+              } catch {}
+            });
+            this.localStream.addTrack(camTrack);
+            this.opts.onLocalStream?.(this.localStream as MediaStream);
+          }
+        }
+      } catch {
+        // Couldn't reacquire camera — just stop the current track
+        try {
+          videoSender?.track?.stop();
+        } catch {}
+      }
+    } else {
+      // Voice/screen-only mode: just stop sending video
+      try {
+        videoSender?.track?.stop();
+      } catch {}
+      if (videoSender && (videoSender as any).replaceTrack) {
+        try {
+          await (videoSender as any).replaceTrack(null);
+        } catch {}
+      }
+    }
   }
 
   /** Build the RTCPeerConnection and wire all listeners. */

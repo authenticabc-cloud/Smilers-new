@@ -37,8 +37,16 @@ export class CallSession {
     this.opts = opts;
   }
 
-  async initLocalMedia(): Promise<any> {
+  async initLocalMedia(_useScreen?: boolean): Promise<any> {
     return null;
+  }
+
+  async startScreenShare(): Promise<any> {
+    return null;
+  }
+
+  async stopScreenShare(_restoreVideo?: boolean): Promise<void> {
+    // no-op on web
   }
 
   createPeerConnection(): any {

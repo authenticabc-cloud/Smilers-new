@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   AppState,
   Platform,
   StyleSheet,
@@ -33,13 +34,21 @@ import { useRingtonePlayer } from '../../src/lib/ringtone/useRingtonePlayer';
 
 type CallType = 'voice' | 'video';
 
+function alertScreenShareIOSError() {
+  Alert.alert(
+    'Screen sharing on iOS',
+    'iOS screen sharing requires a Broadcast Upload Extension built into the app. We\'ll enable this in a future build — for now, screen sharing is available on Android.'
+  );
+}
+
 export default function CallScreen() {
   const router = useRouter();
   const { conversationId, type: typeParam } = useLocalSearchParams<{
     conversationId: string;
     type?: string;
   }>();
-  const requestedType: CallType = typeParam === 'video' ? 'video' : 'voice';
+  const requestedType: CallType = typeParam === 'video' || typeParam === 'screen' ? 'video' : 'voice';
+  const startInScreenShare = typeParam === 'screen';
 
   const me = useQuery(api.users.getCurrentUser, conversationId ? {} : 'skip');
   const conversation = useQuery(
@@ -66,6 +75,7 @@ export default function CallScreen() {
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(true);
+  const [screenSharing, setScreenSharing] = useState(startInScreenShare);
   const [statusText, setStatusText] = useState('Connecting…');
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [callDurationSec, setCallDurationSec] = useState(0);
@@ -227,17 +237,22 @@ export default function CallScreen() {
       sessionRef.current = session;
 
       try {
-        await session.initLocalMedia();
+        await session.initLocalMedia(startInScreenShare);
         session.createPeerConnection();
         if (asCaller) {
           await session.createOffer();
         }
       } catch (errorValue: any) {
         console.warn('startPeerConnection failed:', errorValue?.message);
+        if (startInScreenShare) {
+          Platform.OS === 'ios'
+            ? alertScreenShareIOSError()
+            : console.warn('Screen capture failed:', errorValue?.message);
+        }
         setPermissionDenied(true);
       }
     },
-    [activeCall, callId, callType, sendSignal]
+    [activeCall, callId, callType, sendSignal, startInScreenShare]
   );
 
   // Caller: kick off peer-connection as soon as we have a callId (status may still be ringing)
@@ -382,6 +397,28 @@ export default function CallScreen() {
   const toggleSpeaker = useCallback(() => {
     setSpeakerOn((v) => !v);
   }, []);
+
+  const toggleScreenShare = useCallback(async () => {
+    const session = sessionRef.current;
+    if (!session) return;
+    if (Platform.OS === 'ios') {
+      alertScreenShareIOSError();
+      return;
+    }
+    try {
+      if (screenSharing) {
+        await session.stopScreenShare(callType === 'video');
+        setScreenSharing(false);
+        setCameraOff(false);
+      } else {
+        await session.startScreenShare();
+        setScreenSharing(true);
+        setCameraOff(false);
+      }
+    } catch (e: any) {
+      Alert.alert('Screen sharing failed', e?.message || 'Could not start screen sharing.');
+    }
+  }, [screenSharing, callType]);
 
   const otherName = useMemo(() => {
     return conversation?.name || conversation?.otherUserName || 'Smilers';
@@ -566,6 +603,15 @@ export default function CallScreen() {
               label={speakerOn ? 'Speaker' : 'Earpiece'}
             />
           )}
+          {isActive ? (
+            <SmallControl
+              testID="share-screen-btn"
+              onPress={toggleScreenShare}
+              active={screenSharing}
+              icon={<Feather name="monitor" size={22} color={Colors.white} />}
+              label={screenSharing ? 'Stop share' : 'Share'}
+            />
+          ) : null}
         </View>
         <View style={styles.row}>
           <ControlBtn

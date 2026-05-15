@@ -57,6 +57,8 @@ export default function ChatScreen() {
   const [showPollComposer, setShowPollComposer] = useState(false);
   const [showForwardPicker, setShowForwardPicker] = useState(false);
   const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+  const [showOptionsMenu, setShowOptionsMenu] = useState(false);
+  const [muted, setMuted] = useState(false);
   const [fallbackReady, setFallbackReady] = useState(false);
   const [quickTemplates, setQuickTemplates] = useState<any[]>([]);
   const [chatAppearance, setChatAppearance] = useState(DEFAULT_CHAT_APPEARANCE);
@@ -537,6 +539,75 @@ export default function ChatScreen() {
   const title = conversation?.name || conversation?.otherUserName || 'Chat';
   const isMineSelected = selectedMsg && me && selectedMsg.senderId === me._id;
 
+  const handleMenuAction = useCallback(
+    (key: string) => {
+      switch (key) {
+        case 'export':
+          Alert.alert('Export chat', 'A copy of this chat will be prepared. This feature is rolling out — try again shortly.');
+          break;
+        case 'media':
+          // Reuse the attachment sheet to surface media & files quickly
+          setShowAttachSheet(true);
+          break;
+        case 'scheduled':
+          router.push('/scheduled' as any);
+          break;
+        case 'mute':
+          setMuted((m) => {
+            const next = !m;
+            Alert.alert(next ? 'Notifications muted' : 'Notifications unmuted', next ? 'You won\'t receive sounds or banners for this chat.' : 'You\'ll receive notifications again.');
+            return next;
+          });
+          break;
+        case 'location':
+          Alert.alert('Request live location', 'Live location sharing is being rolled out. We\'ll notify you when it\'s ready in this chat.');
+          break;
+        case 'sendMoney':
+          router.push('/send-money' as any);
+          break;
+        case 'shareScreen':
+          if (Platform.OS === 'ios') {
+            Alert.alert(
+              'Screen sharing on iOS',
+              'iOS screen sharing requires a Broadcast Upload Extension built into the app. We\'ll enable this in a future build — for now, screen sharing is available on Android.'
+            );
+            return;
+          }
+          router.push(`/call/${conversationId}?type=screen` as any);
+          break;
+        case 'block':
+          Alert.alert(
+            `Block ${title}`,
+            'They won\'t be able to send you messages or call you. You can unblock them at any time.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Block',
+                style: 'destructive',
+                onPress: () => Alert.alert('Blocked', `${title} has been blocked.`),
+              },
+            ]
+          );
+          break;
+        case 'report':
+          Alert.alert(
+            `Report ${title}`,
+            'Report this contact to Smilers? Recent messages will be shared with our safety team.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Report',
+                style: 'destructive',
+                onPress: () => Alert.alert('Reported', 'Thanks — our team will review this report.'),
+              },
+            ]
+          );
+          break;
+      }
+    },
+    [conversationId, router, title]
+  );
+
   return (
     <SafeAreaView
       style={[styles.container, { backgroundColor: getWallpaperColor(chatAppearance.wallpaper) }]}
@@ -565,6 +636,14 @@ export default function ChatScreen() {
               style={{ marginLeft: 16 }}
             >
               <Ionicons name="videocam-outline" size={22} color={Colors.white} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              testID="chat-menu-btn"
+              onPress={() => setShowOptionsMenu(true)}
+              hitSlop={10}
+              style={{ marginLeft: 16 }}
+            >
+              <Feather name="more-vertical" size={22} color={Colors.white} />
             </TouchableOpacity>
           </>
         }
@@ -860,6 +939,17 @@ export default function ChatScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      <ChatOptionsMenu
+        visible={showOptionsMenu}
+        title={title}
+        muted={muted}
+        onClose={() => setShowOptionsMenu(false)}
+        onAction={(key) => {
+          setShowOptionsMenu(false);
+          handleMenuAction(key);
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -1277,3 +1367,148 @@ const styles = StyleSheet.create({
   forwardListContent: { paddingBottom: Spacing.lg },
   flexOne: { flex: 1 },
 });
+
+type MenuItemDef = {
+  key: string;
+  label: string;
+  lib: 'feather' | 'ion' | 'mc';
+  icon: string;
+  destructive?: boolean;
+};
+
+function ChatOptionsMenu({
+  visible,
+  title,
+  muted,
+  onClose,
+  onAction,
+}: {
+  visible: boolean;
+  title: string;
+  muted: boolean;
+  onClose: () => void;
+  onAction: (key: string) => void;
+}) {
+  const items: MenuItemDef[] = [
+    { key: 'export', label: 'Export chat', lib: 'feather', icon: 'download' },
+    { key: 'media', label: 'Media & Files', lib: 'feather', icon: 'image' },
+    { key: 'scheduled', label: 'Scheduled messages', lib: 'feather', icon: 'clock' },
+    { key: 'mute', label: muted ? 'Unmute notifications' : 'Mute notifications', lib: 'feather', icon: muted ? 'bell' : 'bell-off' },
+    { key: 'location', label: 'Request live location', lib: 'feather', icon: 'navigation' },
+    { key: 'sendMoney', label: 'Send money', lib: 'feather', icon: 'dollar-sign' },
+    { key: 'shareScreen', label: 'Share screen', lib: 'feather', icon: 'monitor' },
+    { key: 'block', label: `Block ${title}`, lib: 'ion', icon: 'ban-outline', destructive: true },
+    { key: 'report', label: `Report ${title}`, lib: 'feather', icon: 'flag', destructive: true },
+  ];
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <Pressable style={menuStyles.backdrop} onPress={onClose}>
+        <Pressable style={menuStyles.sheet} onPress={(e) => e.stopPropagation()}>
+          <View style={menuStyles.dragHandle} />
+          {items.map((item, idx) => {
+            const color = item.destructive ? Colors.danger : Colors.textPrimary;
+            const isLast = idx === items.length - 1;
+            return (
+              <TouchableOpacity
+                key={item.key}
+                style={[menuStyles.row, isLast && { borderBottomWidth: 0 }]}
+                onPress={() => onAction(item.key)}
+                activeOpacity={0.6}
+                testID={`menu-${item.key}`}
+              >
+                <View style={menuStyles.iconWrap}>
+                  {item.lib === 'feather' ? (
+                    <Feather name={item.icon as any} size={22} color={color} />
+                  ) : item.lib === 'ion' ? (
+                    <Ionicons name={item.icon as any} size={22} color={color} />
+                  ) : (
+                    <MaterialCommunityIcons name={item.icon as any} size={22} color={color} />
+                  )}
+                </View>
+                <Text
+                  style={[
+                    menuStyles.label,
+                    item.destructive && menuStyles.labelDanger,
+                  ]}
+                >
+                  {item.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+          <TouchableOpacity
+            style={menuStyles.cancelRow}
+            onPress={onClose}
+            activeOpacity={0.6}
+            testID="menu-cancel"
+          >
+            <Text style={menuStyles.cancelLabel}>Cancel</Text>
+          </TouchableOpacity>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+const menuStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: '#F5EFE0',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 8,
+    paddingBottom: 24,
+  },
+  dragHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(0,0,0,0.18)',
+    alignSelf: 'center',
+    marginBottom: 8,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(0,0,0,0.08)',
+  },
+  iconWrap: {
+    width: 32,
+    alignItems: 'flex-start',
+    marginRight: 12,
+  },
+  label: {
+    fontSize: 17,
+    color: Colors.textPrimary,
+    fontWeight: '500',
+    flex: 1,
+  },
+  labelDanger: {
+    color: Colors.danger,
+    fontWeight: '700',
+  },
+  cancelRow: {
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  cancelLabel: {
+    fontSize: 17,
+    color: Colors.textSecondary,
+    fontWeight: '500',
+  },
+});
+
