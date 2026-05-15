@@ -322,13 +322,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const expiryStr = await storage.getItem(STORAGE_KEYS.TOKEN_EXPIRY);
     const expiry = expiryStr ? parseInt(expiryStr, 10) : 0;
     const refreshToken = await storage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
-    const accessToken = await storage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
     const idToken = await storage.getItem(STORAGE_KEYS.ID_TOKEN);
 
     if (Date.now() > expiry - 60000 && refreshToken) {
       return await refreshTokens(refreshToken);
     }
-    return accessToken || idToken;
+    // IMPORTANT: Convex validates the ID token (JWT) for user identity.
+    // The access token does not contain the OIDC claims Convex needs (iss/sub),
+    // so returning it here causes ctx.auth.getUserIdentity() to be null inside
+    // queries/mutations/actions. Always return the ID token.
+    return idToken;
   }, [refreshTokens]);
 
   return (

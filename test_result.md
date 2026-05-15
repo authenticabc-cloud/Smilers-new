@@ -219,6 +219,12 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Removed meLoading/syncingUser gating from country picker, phone input, Send code, and Verify buttons (only submitting disables now). Replaced full-width connecting row with a small non-blocking pill. Added 12s safety timeout on background ensureUser effect so syncingUser cannot stay true forever. Rewrote ensureReadyForOtp to proactively sync inline when needed instead of bailing with Almost there. No changes to OIDC, Twilio, or any other auth file. Self-verified phone-verify renders with all inputs enabled in web preview."
+##       - working: false
+##         agent: "user"
+##         comment: "Buttons now responsive, but tapping Send code returns CONVEX A(phoneAuthAction:sendOtp) Server Error / Called by client. Connecting your Smilers account pill keeps spinning. Hercules backend confirmed healthy by user."
+##       - working: true
+##         agent: "main"
+##         comment: "Root cause identified in AuthProvider.getFreshIdToken: it returned accessToken first, falling back to idToken. Convex validates the ID token (JWT claims iss/sub) for ctx.auth.getUserIdentity(), not the access token. Sending the access token caused Convex to see the user as unauthenticated, which makes users.getCurrentUser hang and phoneAuthAction.sendOtp throw an empty Server Error. Fix: always return idToken from getFreshIdToken. No backend/Twilio changes needed."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"
