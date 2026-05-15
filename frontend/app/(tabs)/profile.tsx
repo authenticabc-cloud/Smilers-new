@@ -1,12 +1,15 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActionSheetIOS,
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -23,6 +26,30 @@ import { useAuth } from '../../src/providers/AuthProvider';
 import { uploadFile } from '../../src/lib/uploadFile';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 
+type EditableField = 'name' | 'about';
+
+interface FieldConfig {
+  title: string;
+  placeholder: string;
+  multiline: boolean;
+  maxLength: number;
+}
+
+const FIELD_CONFIG: Record<EditableField, FieldConfig> = {
+  name: {
+    title: 'Your name',
+    placeholder: 'Enter your name',
+    multiline: false,
+    maxLength: 60,
+  },
+  about: {
+    title: 'About',
+    placeholder: 'Add a few words about yourself',
+    multiline: true,
+    maxLength: 140,
+  },
+};
+
 export default function ProfileScreen() {
   const router = useRouter();
   const { userInfo } = useAuth();
@@ -31,12 +58,54 @@ export default function ProfileScreen() {
   const updateProfile = useMutation(api.users.updateProfile);
 
   const [uploading, setUploading] = useState(false);
+  const [editingField, setEditingField] = useState<EditableField | null>(null);
+  const [editValue, setEditValue] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const name = me?.name || userInfo?.name || 'Smilers';
   const email = me?.email || userInfo?.email || '';
   const about = me?.about || 'Hey there! I am using Smilers.';
   const language = me?.preferredLanguage || 'No preference — show original';
   const avatarUri = (me as any)?.avatarUrl || (me as any)?.photoUrl || undefined;
+
+  const openEditor = useCallback(
+    (field: EditableField) => {
+      setEditingField(field);
+      if (field === 'name') setEditValue(me?.name || '');
+      else if (field === 'about') setEditValue(me?.about || '');
+    },
+    [me?.name, me?.about],
+  );
+
+  const closeEditor = useCallback(() => {
+    setEditingField(null);
+    setEditValue('');
+  }, []);
+
+  const saveField = useCallback(async () => {
+    if (!editingField) return;
+    const trimmed = editValue.trim();
+    if (editingField === 'name' && !trimmed) {
+      Alert.alert('Name required', 'Your display name cannot be empty.');
+      return;
+    }
+    setSaving(true);
+    try {
+      await updateProfile({ [editingField]: trimmed });
+      closeEditor();
+    } catch (errorValue: any) {
+      Alert.alert(
+        'Could not save',
+        errorValue?.message || 'Please check your connection and try again.',
+      );
+    } finally {
+      setSaving(false);
+    }
+  }, [closeEditor, editValue, editingField, updateProfile]);
+
+  const goToLanguagePicker = useCallback(() => {
+    router.push('/languages' as any);
+  }, [router]);
 
   const performUpload = useCallback(
     async (uri: string, mime: string) => {
@@ -168,11 +237,11 @@ export default function ProfileScreen() {
         </View>
 
         <Section label="YOUR NAME">
-          <Row value={name} testID="profile-name" />
+          <Row value={name} onEdit={() => openEditor('name')} testID="profile-name" />
         </Section>
 
         <Section label="ABOUT">
-          <Row value={about} testID="profile-about" />
+          <Row value={about} onEdit={() => openEditor('about')} testID="profile-about" />
         </Section>
 
         <Section
@@ -180,7 +249,7 @@ export default function ProfileScreen() {
           icon={<Feather name="globe" size={14} color={Colors.primary} />}
           helper="All messages you receive will be auto-translated into this language."
         >
-          <Row value={language} testID="profile-language" />
+          <Row value={language} onEdit={goToLanguagePicker} testID="profile-language" />
         </Section>
 
         <Section label="EMAIL">
@@ -210,6 +279,75 @@ export default function ProfileScreen() {
         <View style={{ height: 80 }} />
       </ScrollView>
       <SosButton onPress={() => router.push('/emergency' as any)} />
+
+      {/* Edit-field modal (Name / About) */}
+      <Modal
+        visible={editingField !== null}
+        animationType="slide"
+        transparent
+        onRequestClose={closeEditor}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.modalRoot}
+        >
+          <TouchableOpacity
+            style={styles.modalBackdrop}
+            activeOpacity={1}
+            onPress={closeEditor}
+            testID="edit-field-backdrop"
+          />
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandleWrap}>
+              <View style={styles.modalHandle} />
+            </View>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.modalTitle}>
+                {editingField ? FIELD_CONFIG[editingField].title : ''}
+              </Text>
+              <TouchableOpacity onPress={closeEditor} hitSlop={10} testID="edit-field-close">
+                <Ionicons name="close" size={24} color={Colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            {editingField ? (
+              <>
+                <TextInput
+                  value={editValue}
+                  onChangeText={setEditValue}
+                  placeholder={FIELD_CONFIG[editingField].placeholder}
+                  placeholderTextColor={Colors.textMuted}
+                  style={[
+                    styles.modalInput,
+                    FIELD_CONFIG[editingField].multiline ? styles.modalInputMulti : null,
+                  ]}
+                  multiline={FIELD_CONFIG[editingField].multiline}
+                  maxLength={FIELD_CONFIG[editingField].maxLength}
+                  autoFocus
+                  testID="edit-field-input"
+                />
+                <View style={styles.modalCounterRow}>
+                  <Text style={styles.modalCounter}>
+                    {editValue.length}/{FIELD_CONFIG[editingField].maxLength}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={[styles.modalSaveBtn, saving ? styles.modalSaveBtnDisabled : null]}
+                  onPress={saveField}
+                  disabled={saving}
+                  activeOpacity={0.85}
+                  testID="edit-field-save"
+                >
+                  {saving ? (
+                    <ActivityIndicator color={Colors.headerBg} />
+                  ) : (
+                    <Text style={styles.modalSaveText}>Save</Text>
+                  )}
+                </TouchableOpacity>
+              </>
+            ) : null}
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -237,15 +375,33 @@ function Section({
   );
 }
 
-function Row({ value, editable = true, testID }: { value: string; editable?: boolean; testID?: string }) {
-  return (
+function Row({
+  value,
+  editable = true,
+  onEdit,
+  testID,
+}: {
+  value: string;
+  editable?: boolean;
+  onEdit?: () => void;
+  testID?: string;
+}) {
+  const content = (
     <View style={styles.valueRow} testID={testID}>
       <Text style={styles.valueText} numberOfLines={2}>
         {value}
       </Text>
-      {editable && <Feather name="edit-2" size={16} color={Colors.textMuted} />}
+      {editable ? <Feather name="edit-2" size={16} color={Colors.textMuted} /> : null}
     </View>
   );
+  if (editable && onEdit) {
+    return (
+      <TouchableOpacity onPress={onEdit} activeOpacity={0.7} testID={testID ? `${testID}-edit` : undefined}>
+        {content}
+      </TouchableOpacity>
+    );
+  }
+  return content;
 }
 
 const styles = StyleSheet.create({
@@ -325,5 +481,86 @@ const styles = StyleSheet.create({
     fontSize: FontSize.base,
     fontWeight: FontWeight.semibold,
     color: Colors.textPrimary,
+  },
+
+  /* Edit-field modal */
+  modalRoot: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  modalSheet: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    paddingHorizontal: Spacing.base,
+    paddingTop: 6,
+    paddingBottom: Spacing.xl,
+    ...Shadow.lg,
+  },
+  modalHandleWrap: {
+    alignItems: 'center',
+    paddingVertical: Spacing.sm,
+  },
+  modalHandle: {
+    width: 44,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: Colors.border,
+  },
+  modalHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: Spacing.sm,
+  },
+  modalTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+  },
+  modalInput: {
+    marginTop: Spacing.md,
+    paddingHorizontal: Spacing.base,
+    paddingVertical: 14,
+    backgroundColor: Colors.background,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    fontSize: FontSize.base,
+    color: Colors.textPrimary,
+  },
+  modalInputMulti: {
+    minHeight: 100,
+    textAlignVertical: 'top',
+  },
+  modalCounterRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 6,
+  },
+  modalCounter: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
+  },
+  modalSaveBtn: {
+    marginTop: Spacing.lg,
+    backgroundColor: Colors.primary,
+    paddingVertical: 14,
+    borderRadius: Radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 50,
+  },
+  modalSaveBtnDisabled: {
+    opacity: 0.6,
+  },
+  modalSaveText: {
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.bold,
+    color: Colors.headerBg,
   },
 });
