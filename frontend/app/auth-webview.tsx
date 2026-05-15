@@ -111,7 +111,9 @@ export default function AuthWebviewScreen() {
             <TouchableOpacity style={styles.primaryButton} onPress={openExternal} testID="auth-webview-open-web-button">
               <Text style={styles.primaryButtonText}>Open Smilers Sign In</Text>
             </TouchableOpacity>
-            <Text style={styles.helperText}>{signInUrl}</Text>
+            <Text style={styles.helperText} testID="auth-webview-helper-text">
+              This opens smilers.online with secure mobile callback parameters for the native app.
+            </Text>
           </View>
         </View>
       </SafeAreaView>
@@ -211,5 +213,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.base,
   },
   primaryButtonText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.headerBg },
-  helperText: { fontSize: FontSize.xs, color: Colors.textMuted, textAlign: 'center' },
+  helperText: { fontSize: FontSize.xs, color: Colors.textMuted, textAlign: 'center', lineHeight: 18, paddingHorizontal: Spacing.sm },
 });

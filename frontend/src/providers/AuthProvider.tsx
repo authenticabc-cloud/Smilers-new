@@ -77,7 +77,13 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
-const AUTH_MODE = WEB_APP_URL ? 'webview' : process.env.EXPO_PUBLIC_AUTH_MODE === 'webview' ? 'webview' : 'direct';
+const AUTH_MODE = process.env.EXPO_PUBLIC_AUTH_MODE === 'direct'
+  ? 'direct'
+  : WEB_APP_URL
+    ? 'webview'
+    : process.env.EXPO_PUBLIC_AUTH_MODE === 'webview'
+      ? 'webview'
+      : 'direct';
 
 function parseJwt(token: string): any {
   try {
