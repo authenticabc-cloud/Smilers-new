@@ -75,7 +75,11 @@ export default function PhoneVerifyScreen() {
       router.replace('/(tabs)/chats');
       return;
     }
+    // Self-heal: server says user is verified but the local marker is missing
+    // (e.g. fresh install on a known account). Write the marker and proceed.
     if (me && me.phone && me.phoneVerified) {
+      void writeStoredString(PHONE_VERIFIED_INSTALL_KEY, 'true');
+      setHasVerifiedInstall(true);
       router.replace('/(tabs)/chats');
     }
   }, [hasVerifiedInstall, me, router]);

@@ -129,16 +129,14 @@ export default function TabsLayout() {
     return <AuthGateLoading label="Opening Smilers…" />;
   }
 
-  // If the me query timed out but the user has already passed the install verification gate,
-  // render the tabs anyway. Individual screens will refetch as the socket recovers.
-  if (!me && !meGateTimedOut) {
+  // If the me query resolved to null (or hung past the gate) but the user has the
+  // local install verification marker, NEVER bounce back to phone-verify — that
+  // would race the phone-verify "go to chats" redirect and cause a flicker/shake loop.
+  // Just render the tabs; individual screens use useSafeConvexQuery and tolerate null me.
+  if (!me && !meGateTimedOut && !hasVerifiedInstall) {
     return <Redirect href="/phone-verify" />;
   }
 
-  // IMPORTANT: hasVerifiedInstall is the authoritative local marker set only after
-  // Twilio verifyOtp succeeded. Convex's me.phoneVerified can briefly lag behind the
-  // server write, which would cause a redirect loop back to phone-verify ("shaking").
-  // If install verification is in place, trust it and let the user into the tabs.
   if (me && (!me.phone || !me.phoneVerified) && !hasVerifiedInstall) {
     return <Redirect href="/phone-verify" />;
   }
