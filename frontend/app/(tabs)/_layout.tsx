@@ -15,10 +15,11 @@ export default function TabsLayout() {
   const rootNavigationState = useRootNavigationState();
   const { isLoading, isAuthenticated } = useAuth();
   const updateCurrentUser = useMutation(api.users.updateCurrentUser);
-  const { data: me, loading: meLoading, refetch: refetchMe } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null, isAuthenticated);
+  const { data: me, loading: meLoading, refetch: refetchMe } = useSafeConvexQuery(api.users.getCurrentUser, {}, null, isAuthenticated);
   const [installVerificationChecked, setInstallVerificationChecked] = useState(false);
   const [hasVerifiedInstall, setHasVerifiedInstall] = useState(false);
   const [syncingUser, setSyncingUser] = useState(false);
+  const [bootstrapAttempted, setBootstrapAttempted] = useState(false);
 
   // Wire up native push notifications (registers token + handles taps/actions)
   usePushNotifications();
@@ -28,12 +29,14 @@ export default function TabsLayout() {
   // Sync user with Convex backend on login (creates or updates user record)
   useEffect(() => {
     if (isAuthenticated) {
-      updateCurrentUser({}).catch((e: any) => console.warn('updateCurrentUser failed:', e?.message));
+      updateCurrentUser({}).catch((e) => console.warn('updateCurrentUser failed:', e?.message));
+    } else {
+      setBootstrapAttempted(false);
     }
   }, [isAuthenticated, updateCurrentUser]);
 
   useEffect(() => {
-    if (!isAuthenticated || meLoading || me || syncingUser) {
+    if (!isAuthenticated || !hasVerifiedInstall || meLoading || me || syncingUser || bootstrapAttempted) {
       return;
     }
 
@@ -44,12 +47,13 @@ export default function TabsLayout() {
       try {
         await updateCurrentUser({});
         await refetchMe();
-      } catch (errorValue: any) {
+      } catch (errorValue) {
         if (!cancelled) {
           console.warn('tabs updateCurrentUser failed:', errorValue?.message || errorValue);
         }
       } finally {
         if (!cancelled) {
+          setBootstrapAttempted(true);
           setSyncingUser(false);
         }
       }
@@ -60,7 +64,7 @@ export default function TabsLayout() {
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, me, meLoading, refetchMe, syncingUser, updateCurrentUser]);
+  }, [bootstrapAttempted, hasVerifiedInstall, isAuthenticated, me, meLoading, refetchMe, syncingUser, updateCurrentUser]);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,6 +82,9 @@ export default function TabsLayout() {
       if (!cancelled) {
         setHasVerifiedInstall(installMarker === 'true');
         setInstallVerificationChecked(true);
+        if (installMarker !== 'true') {
+          setBootstrapAttempted(true);
+        }
       }
     };
 
@@ -89,7 +96,7 @@ export default function TabsLayout() {
     };
   }, [isAuthenticated]);
 
-  if (!rootNavigationState?.key || isLoading || meLoading || syncingUser || !installVerificationChecked) {
+  if (!rootNavigationState?.key || isLoading || !installVerificationChecked) {
     return <AuthGateLoading label="Opening Smilers…" />;
   }
 
@@ -101,8 +108,12 @@ export default function TabsLayout() {
     return <Redirect href="/phone-verify" />;
   }
 
+  if (meLoading || syncingUser) {
+    return <AuthGateLoading label="Opening Smilers…" />;
+  }
+
   if (!me) {
-    return <AuthGateLoading label="Finishing sign-in…" />;
+    return <Redirect href="/phone-verify" />;
   }
 
   if (!me.phone || !me.phoneVerified) {
@@ -181,7 +192,7 @@ export default function TabsLayout() {
   );
 }
 
-function AuthGateLoading({ label }: { label: string }) {
+function AuthGateLoading({ label }) {
   return (
     <View style={styles.loadingWrap} testID="tabs-auth-loading-screen">
       <ActivityIndicator color={Colors.primary} size="large" />
