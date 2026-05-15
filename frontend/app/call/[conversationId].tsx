@@ -1,7 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
   AppState,
   Platform,
   StyleSheet,
@@ -15,11 +13,23 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery } from 'convex/react';
 import { Camera } from 'expo-camera';
 import { Audio } from 'expo-av';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useKeepAwake } from 'expo-keep-awake';
+import Animated, {
+  Easing,
+  cancelAnimation,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withTiming,
+} from 'react-native-reanimated';
+import { StatusBar } from 'expo-status-bar';
 import { api } from '../../src/convexApi';
 import Avatar from '../../src/components/Avatar';
 import { CallSession } from '../../src/lib/webrtc/CallSession';
 import { Colors, FontSize, FontWeight, Shadow, Spacing } from '../../src/theme';
 import RTCView from '../../src/lib/webrtc/RTCViewWrapper';
+import { useRingtonePlayer } from '../../src/lib/ringtone/useRingtonePlayer';
 
 type CallType = 'voice' | 'video';
 
@@ -385,9 +395,23 @@ export default function CallScreen() {
 
   const showVideo = callType === 'video' && isActive && RTCView != null;
 
+  // Keep the screen on during any call interaction (ringing or active)
+  useKeepAwake();
+
+  // Play ringtone + vibrate when this is an incoming call that's still ringing
+  useRingtonePlayer(!!isIncoming);
+
+  // Background gradient for non-video states (incoming/outgoing/voice/active-voice)
+  const gradientColors = isIncoming
+    ? (['#1a3b5d', '#0f1d2e'] as const) // calm blue for incoming
+    : (['#3A2608', '#1a1004'] as const); // warm dark brown for outgoing/active
+
+  const callTypeLabel = callType === 'video' ? 'Smilers video call' : 'Smilers voice call';
+
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="call-screen">
-      {/* Video layer or avatar header */}
+    <View style={styles.container} testID="call-screen">
+      <StatusBar style="light" />
+      {/* Video layer or gradient + avatar */}
       {showVideo && remoteStreamURL ? (
         <View style={styles.videoLayer}>
           <RTCView
@@ -408,122 +432,160 @@ export default function CallScreen() {
             </View>
           ) : null}
           {/* Top overlay: name + duration */}
-          <View style={styles.videoTopOverlay}>
+          <SafeAreaView edges={['top']} style={styles.videoTopOverlay} pointerEvents="none">
             <Text style={styles.videoName}>{otherName}</Text>
             <Text style={styles.videoStatus}>{isActive ? durationLabel : statusText}</Text>
-          </View>
+          </SafeAreaView>
+          {/* Bottom controls overlay */}
+          <SafeAreaView edges={['bottom']} style={styles.videoControlsOverlay}>
+            {renderControls()}
+          </SafeAreaView>
         </View>
       ) : (
-        <View style={styles.topArea}>
-          <Avatar name={otherName} size={140} backgroundColor={Colors.primaryLight} />
-          <Text style={styles.name}>{otherName}</Text>
-          <Text style={styles.status}>{isActive ? durationLabel : statusText}</Text>
-          {callType === 'video' ? (
-            <Text style={styles.subStatus}>
-              {callType === 'video' ? 'Video call' : 'Voice call'}
-            </Text>
-          ) : null}
-          {isOutgoingRinging ? (
-            <ActivityIndicator color={Colors.primary} style={{ marginTop: Spacing.lg }} />
-          ) : null}
-          {permissionDenied ? (
-            <Text style={styles.errorText} testID="call-permission-error">
-              Camera or microphone permission denied. Enable them in your device settings to use calls.
-            </Text>
-          ) : null}
-        </View>
-      )}
+        <LinearGradient colors={gradientColors as any} style={StyleSheet.absoluteFill}>
+          <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+            <View style={styles.topArea}>
+              {/* Caller header label */}
+              <Text style={styles.callerKicker}>
+                {isIncoming ? 'Incoming' : isOutgoingRinging ? 'Calling on' : 'On'} {callTypeLabel}
+              </Text>
 
-      {/* Bottom controls */}
-      <View style={styles.controls}>
-        {isIncoming ? (
-          <View style={styles.row}>
+              {/* Pulsing avatar */}
+              <RingingAvatar
+                name={otherName}
+                size={150}
+                animate={isIncoming || isOutgoingRinging}
+              />
+
+              <Text style={styles.name}>{otherName}</Text>
+              <Text style={styles.status}>{isActive ? durationLabel : statusText}</Text>
+
+              {isOutgoingRinging ? (
+                <View style={styles.dotsRow}>
+                  <BouncingDot delay={0} />
+                  <BouncingDot delay={150} />
+                  <BouncingDot delay={300} />
+                </View>
+              ) : null}
+
+              {permissionDenied ? (
+                <Text style={styles.errorText} testID="call-permission-error">
+                  Camera or microphone permission denied. Enable them in your device settings to use calls.
+                </Text>
+              ) : null}
+            </View>
+
+            {/* Bottom controls */}
+            <View style={styles.controls}>{renderControls()}</View>
+          </SafeAreaView>
+        </LinearGradient>
+      )}
+    </View>
+  );
+
+  function renderControls() {
+    if (isIncoming) {
+      return (
+        <View style={styles.incomingRow}>
+          <View style={styles.incomingCol}>
             <ControlBtn
               testID="decline-call-btn"
               onPress={handleDecline}
               backgroundColor={Colors.danger}
-              icon={<Ionicons name="close" size={32} color={Colors.white} />}
-              label="Decline"
+              icon={
+                <Ionicons
+                  name="call"
+                  size={32}
+                  color={Colors.white}
+                  style={{ transform: [{ rotate: '135deg' }] }}
+                />
+              }
+              label=""
+              size="xl"
             />
+            <Text style={styles.incomingActionLabel}>Decline</Text>
+          </View>
+          <View style={styles.incomingCol}>
             <ControlBtn
               testID="answer-call-btn"
               onPress={handleAnswer}
               backgroundColor={Colors.success}
               icon={<Ionicons name="call" size={32} color={Colors.white} />}
-              label="Answer"
+              label=""
+              size="xl"
             />
+            <Text style={styles.incomingActionLabel}>Answer</Text>
           </View>
-        ) : (
-          <>
-            <View style={styles.controlsTopRow}>
+        </View>
+      );
+    }
+    return (
+      <>
+        <View style={styles.controlsTopRow}>
+          <SmallControl
+            testID="mute-btn"
+            onPress={toggleMute}
+            active={muted}
+            icon={<Feather name={muted ? 'mic-off' : 'mic'} size={22} color={Colors.white} />}
+            label={muted ? 'Unmute' : 'Mute'}
+          />
+          {callType === 'video' ? (
+            <>
               <SmallControl
-                testID="mute-btn"
-                onPress={toggleMute}
-                active={muted}
+                testID="camera-btn"
+                onPress={toggleCamera}
+                active={cameraOff}
                 icon={
-                  <Feather name={muted ? 'mic-off' : 'mic'} size={22} color={Colors.white} />
-                }
-                label={muted ? 'Unmute' : 'Mute'}
-              />
-              {callType === 'video' ? (
-                <>
-                  <SmallControl
-                    testID="camera-btn"
-                    onPress={toggleCamera}
-                    active={cameraOff}
-                    icon={
-                      <Feather
-                        name={cameraOff ? 'video-off' : 'video'}
-                        size={22}
-                        color={Colors.white}
-                      />
-                    }
-                    label={cameraOff ? 'Camera on' : 'Camera off'}
-                  />
-                  <SmallControl
-                    testID="flip-camera-btn"
-                    onPress={flipCamera}
-                    icon={<Ionicons name="camera-reverse-outline" size={22} color={Colors.white} />}
-                    label="Flip"
-                  />
-                </>
-              ) : (
-                <SmallControl
-                  testID="speaker-btn"
-                  onPress={toggleSpeaker}
-                  active={speakerOn}
-                  icon={
-                    <Ionicons
-                      name={speakerOn ? 'volume-high' : 'volume-medium-outline'}
-                      size={22}
-                      color={Colors.white}
-                    />
-                  }
-                  label={speakerOn ? 'Speaker' : 'Earpiece'}
-                />
-              )}
-            </View>
-            <View style={styles.row}>
-              <ControlBtn
-                testID="hangup-btn"
-                onPress={handleHangup}
-                backgroundColor={Colors.danger}
-                icon={
-                  <Ionicons
-                    name="call"
-                    size={32}
+                  <Feather
+                    name={cameraOff ? 'video-off' : 'video'}
+                    size={22}
                     color={Colors.white}
-                    style={{ transform: [{ rotate: '135deg' }] }}
                   />
                 }
-                label="End"
+                label={cameraOff ? 'Camera on' : 'Camera off'}
               />
-            </View>
-          </>
-        )}
-      </View>
-    </SafeAreaView>
-  );
+              <SmallControl
+                testID="flip-camera-btn"
+                onPress={flipCamera}
+                icon={<Ionicons name="camera-reverse-outline" size={22} color={Colors.white} />}
+                label="Flip"
+              />
+            </>
+          ) : (
+            <SmallControl
+              testID="speaker-btn"
+              onPress={toggleSpeaker}
+              active={speakerOn}
+              icon={
+                <Ionicons
+                  name={speakerOn ? 'volume-high' : 'volume-medium-outline'}
+                  size={22}
+                  color={Colors.white}
+                />
+              }
+              label={speakerOn ? 'Speaker' : 'Earpiece'}
+            />
+          )}
+        </View>
+        <View style={styles.row}>
+          <ControlBtn
+            testID="hangup-btn"
+            onPress={handleHangup}
+            backgroundColor={Colors.danger}
+            icon={
+              <Ionicons
+                name="call"
+                size={32}
+                color={Colors.white}
+                style={{ transform: [{ rotate: '135deg' }] }}
+              />
+            }
+            label="End"
+          />
+        </View>
+      </>
+    );
+  }
 }
 
 function ControlBtn({
@@ -532,24 +594,143 @@ function ControlBtn({
   backgroundColor,
   icon,
   label,
+  size,
 }: {
   testID: string;
   onPress: () => void;
   backgroundColor: string;
   icon: React.ReactNode;
   label: string;
+  size?: 'md' | 'xl';
 }) {
+  const sizeStyle = size === 'xl' ? styles.bigBtnXL : styles.bigBtn;
   return (
     <TouchableOpacity
-      style={[styles.bigBtn, { backgroundColor }]}
+      style={[sizeStyle, { backgroundColor }]}
       onPress={onPress}
       activeOpacity={0.85}
       testID={testID}
     >
       {icon}
-      <Text style={styles.bigBtnLabel}>{label}</Text>
+      {label ? <Text style={styles.bigBtnLabel}>{label}</Text> : null}
     </TouchableOpacity>
   );
+}
+
+/**
+ * RingingAvatar — avatar with up to three concentric pulsing rings.
+ * When `animate=true`, the rings expand and fade in a staggered loop
+ * (similar to FaceTime / WhatsApp incoming call screens).
+ */
+function RingingAvatar({
+  name,
+  size,
+  animate,
+}: {
+  name: string;
+  size: number;
+  animate: boolean;
+}) {
+  const p1 = useSharedValue(0);
+  const p2 = useSharedValue(0);
+  const p3 = useSharedValue(0);
+
+  useEffect(() => {
+    if (animate) {
+      const loop = (sv: any, delay: number) => {
+        sv.value = 0;
+        sv.value = withRepeat(
+          withTiming(1, { duration: 2200, easing: Easing.out(Easing.ease) }),
+          -1,
+          false
+        );
+      };
+      // Stagger the rings
+      loop(p1, 0);
+      setTimeout(() => loop(p2, 600), 600);
+      setTimeout(() => loop(p3, 1200), 1200);
+    } else {
+      cancelAnimation(p1);
+      cancelAnimation(p2);
+      cancelAnimation(p3);
+      p1.value = 0;
+      p2.value = 0;
+      p3.value = 0;
+    }
+    return () => {
+      cancelAnimation(p1);
+      cancelAnimation(p2);
+      cancelAnimation(p3);
+    };
+  }, [animate, p1, p2, p3]);
+
+  const ringStyle1 = useAnimatedStyle(() => ({
+    transform: [{ scale: 1 + p1.value * 0.6 }],
+    opacity: 0.45 * (1 - p1.value),
+  }));
+  const ringStyle2 = useAnimatedStyle(() => ({
+    transform: [{ scale: 1 + p2.value * 0.6 }],
+    opacity: 0.45 * (1 - p2.value),
+  }));
+  const ringStyle3 = useAnimatedStyle(() => ({
+    transform: [{ scale: 1 + p3.value * 0.6 }],
+    opacity: 0.45 * (1 - p3.value),
+  }));
+
+  const ringSize = size + 24;
+
+  return (
+    <View style={[styles.ringingWrap, { width: ringSize * 1.8, height: ringSize * 1.8 }]}>
+      {animate ? (
+        <>
+          <Animated.View
+            style={[
+              styles.ring,
+              { width: ringSize, height: ringSize, borderRadius: ringSize / 2 },
+              ringStyle1,
+            ]}
+          />
+          <Animated.View
+            style={[
+              styles.ring,
+              { width: ringSize, height: ringSize, borderRadius: ringSize / 2 },
+              ringStyle2,
+            ]}
+          />
+          <Animated.View
+            style={[
+              styles.ring,
+              { width: ringSize, height: ringSize, borderRadius: ringSize / 2 },
+              ringStyle3,
+            ]}
+          />
+        </>
+      ) : null}
+      <Avatar name={name} size={size} backgroundColor={Colors.primaryLight} />
+    </View>
+  );
+}
+
+/**
+ * Three bouncing dots while we wait for the other side to pick up.
+ */
+function BouncingDot({ delay }: { delay: number }) {
+  const sv = useSharedValue(0);
+  useEffect(() => {
+    setTimeout(() => {
+      sv.value = withRepeat(
+        withTiming(1, { duration: 600, easing: Easing.inOut(Easing.ease) }),
+        -1,
+        true
+      );
+    }, delay);
+    return () => cancelAnimation(sv);
+  }, [delay, sv]);
+  const style = useAnimatedStyle(() => ({
+    transform: [{ translateY: -4 * sv.value }],
+    opacity: 0.4 + 0.6 * sv.value,
+  }));
+  return <Animated.View style={[styles.dot, style]} />;
 }
 
 function SmallControl({
@@ -589,6 +770,54 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.xxl,
     gap: Spacing.md,
     paddingHorizontal: Spacing.lg,
+    flex: 1,
+  },
+  callerKicker: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: FontSize.sm,
+    letterSpacing: 0.5,
+    textTransform: 'none',
+    fontWeight: FontWeight.medium,
+    marginTop: Spacing.xl,
+    marginBottom: Spacing.lg,
+  },
+  ringingWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  ring: {
+    position: 'absolute',
+    borderWidth: 2,
+    borderColor: Colors.primaryLight,
+    backgroundColor: 'rgba(254,243,199,0.2)',
+  },
+  dotsRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: Spacing.lg,
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: Colors.primaryLight,
+  },
+  incomingRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.lg,
+    gap: Spacing.xxl,
+  },
+  incomingCol: {
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  incomingActionLabel: {
+    color: Colors.white,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
   },
   name: {
     fontSize: FontSize.xxxl,
@@ -634,6 +863,14 @@ const styles = StyleSheet.create({
     width: 88,
     height: 88,
     borderRadius: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Shadow.lg,
+  },
+  bigBtnXL: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
     alignItems: 'center',
     justifyContent: 'center',
     ...Shadow.lg,
@@ -689,6 +926,17 @@ const styles = StyleSheet.create({
     right: 0,
     alignItems: 'center',
     paddingHorizontal: Spacing.lg,
+  },
+  videoControlsOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: Spacing.lg,
+    paddingBottom: Spacing.xl,
+    paddingTop: Spacing.xxl,
+    gap: Spacing.lg,
+    backgroundColor: 'transparent',
   },
   videoName: {
     color: Colors.white,
