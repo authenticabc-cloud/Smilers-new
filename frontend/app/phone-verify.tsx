@@ -49,6 +49,7 @@ export default function PhoneVerifyScreen() {
   const [resendIn, setResendIn] = useState(0);
   const [hasVerifiedInstall, setHasVerifiedInstall] = useState(false);
   const [syncingUser, setSyncingUser] = useState(false);
+  const [finalizingVerification, setFinalizingVerification] = useState(false);
   const fullPhoneRef = useRef<string>('');
 
   useEffect(() => {
@@ -71,6 +72,12 @@ export default function PhoneVerifyScreen() {
       router.replace('/(tabs)/chats');
     }
   }, [hasVerifiedInstall, me, router]);
+
+  useEffect(() => {
+    if (finalizingVerification && me && me.phone && me.phoneVerified && hasVerifiedInstall) {
+      router.replace('/(tabs)/chats');
+    }
+  }, [finalizingVerification, hasVerifiedInstall, me, router]);
 
   useEffect(() => {
     if (!isAuthenticated || meLoading || me || syncingUser) {
@@ -183,13 +190,15 @@ export default function PhoneVerifyScreen() {
       await verifyOtp({ phone: fullPhoneRef.current, code });
       await writeStoredString(PHONE_VERIFIED_INSTALL_KEY, 'true');
       setHasVerifiedInstall(true);
-      // Success! Convex query will refresh and `me.phoneVerified` will be true
-      // → useEffect above redirects to home automatically
-      router.replace('/(tabs)/chats');
+      setFinalizingVerification(true);
+      setSyncingUser(true);
+      await updateCurrentUser({});
+      await refetchMe();
     } catch (e: any) {
       const msg = e?.data?.message || e?.message || 'Invalid code.';
       Alert.alert('Verification failed', msg);
     } finally {
+      setSyncingUser(false);
       setSubmitting(false);
     }
   };
@@ -229,7 +238,9 @@ export default function PhoneVerifyScreen() {
             {step === 'phone' ? 'Verify your phone number' : 'Enter the code'}
           </Text>
           <Text style={styles.subtitle}>
-            {step === 'phone'
+            {finalizingVerification
+              ? 'Finishing your setup and opening chats…'
+              : step === 'phone'
               ? 'Smilers requires phone verification to keep the community real and spam-free. Standard SMS rates may apply.'
               : `We sent a 6-digit code to ${fullPhoneRef.current}. Enter it below to verify.`}
           </Text>

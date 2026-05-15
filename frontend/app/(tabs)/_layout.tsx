@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { Redirect, Tabs, useRootNavigationState } from 'expo-router';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useMutation } from 'convex/react';
@@ -14,9 +15,10 @@ export default function TabsLayout() {
   const rootNavigationState = useRootNavigationState();
   const { isLoading, isAuthenticated } = useAuth();
   const updateCurrentUser = useMutation(api.users.updateCurrentUser);
-  const { data: me, loading: meLoading } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null, isAuthenticated);
+  const { data: me, loading: meLoading, refetch: refetchMe } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null, isAuthenticated);
   const [installVerificationChecked, setInstallVerificationChecked] = useState(false);
   const [hasVerifiedInstall, setHasVerifiedInstall] = useState(false);
+  const [syncingUser, setSyncingUser] = useState(false);
 
   // Wire up native push notifications (registers token + handles taps/actions)
   usePushNotifications();
@@ -29,6 +31,36 @@ export default function TabsLayout() {
       updateCurrentUser({}).catch((e: any) => console.warn('updateCurrentUser failed:', e?.message));
     }
   }, [isAuthenticated, updateCurrentUser]);
+
+  useEffect(() => {
+    if (!isAuthenticated || meLoading || me || syncingUser) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const bootstrapUser = async () => {
+      setSyncingUser(true);
+      try {
+        await updateCurrentUser({});
+        await refetchMe();
+      } catch (errorValue: any) {
+        if (!cancelled) {
+          console.warn('tabs updateCurrentUser failed:', errorValue?.message || errorValue);
+        }
+      } finally {
+        if (!cancelled) {
+          setSyncingUser(false);
+        }
+      }
+    };
+
+    void bootstrapUser();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, me, meLoading, refetchMe, syncingUser, updateCurrentUser]);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,15 +89,23 @@ export default function TabsLayout() {
     };
   }, [isAuthenticated]);
 
-  if (!rootNavigationState?.key || isLoading || meLoading || !installVerificationChecked) {
-    return null;
+  if (!rootNavigationState?.key || isLoading || meLoading || syncingUser || !installVerificationChecked) {
+    return <AuthGateLoading label="Opening Smilers…" />;
   }
 
   if (!isAuthenticated) {
     return <Redirect href="/" />;
   }
 
-  if (!me || !me.phone || !me.phoneVerified || !hasVerifiedInstall) {
+  if (!hasVerifiedInstall) {
+    return <Redirect href="/phone-verify" />;
+  }
+
+  if (!me) {
+    return <AuthGateLoading label="Finishing sign-in…" />;
+  }
+
+  if (!me.phone || !me.phoneVerified) {
     return <Redirect href="/phone-verify" />;
   }
 
@@ -140,3 +180,27 @@ export default function TabsLayout() {
     </Tabs>
   );
 }
+
+function AuthGateLoading({ label }: { label: string }) {
+  return (
+    <View style={styles.loadingWrap} testID="tabs-auth-loading-screen">
+      <ActivityIndicator color={Colors.primary} size="large" />
+      <Text style={styles.loadingText}>{label}</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  loadingWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    backgroundColor: Colors.background,
+  },
+  loadingText: {
+    fontSize: FontSize.base,
+    color: Colors.textSecondary,
+    fontWeight: FontWeight.medium,
+  },
+});
