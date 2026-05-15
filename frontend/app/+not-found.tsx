@@ -70,6 +70,10 @@ export default function NotFoundScreen() {
       let error = tryPickOne(localParams.error) || tryPickOne(globalParams.error);
       let errorDescription =
         tryPickOne(localParams.error_description) || tryPickOne(globalParams.error_description);
+      let idToken = tryPickOne(localParams.id_token) || tryPickOne(globalParams.id_token) || tryPickOne(localParams.idToken) || tryPickOne(globalParams.idToken);
+      let accessToken = tryPickOne(localParams.access_token) || tryPickOne(globalParams.access_token);
+      let refreshToken = tryPickOne(localParams.refresh_token) || tryPickOne(globalParams.refresh_token);
+      let expiresIn = tryPickOne(localParams.expires_in) || tryPickOne(globalParams.expires_in);
 
       if ((!code || !state) && candidates.length) {
         for (const url of candidates) {
@@ -81,7 +85,11 @@ export default function NotFoundScreen() {
             if (!state) state = params.get('state') || undefined;
             if (!error) error = params.get('error') || undefined;
             if (!errorDescription) errorDescription = params.get('error_description') || undefined;
-            if (code || error) break;
+            if (!idToken) idToken = params.get('id_token') || params.get('idToken') || undefined;
+            if (!accessToken) accessToken = params.get('access_token') || undefined;
+            if (!refreshToken) refreshToken = params.get('refresh_token') || undefined;
+            if (!expiresIn) expiresIn = params.get('expires_in') || undefined;
+            if (code || error || idToken) break;
           } catch {}
         }
       }
@@ -95,6 +103,32 @@ export default function NotFoundScreen() {
         setErrMsg(message);
         setAuthError(message);
         setPhase('error');
+        return;
+      }
+
+      if (idToken) {
+        handledRef.current = true;
+        setPhase('exchanging');
+        addLog('received bridge tokens from web sign-in');
+        try {
+          await acceptTokens({
+            idToken,
+            accessToken: accessToken || undefined,
+            refreshToken: refreshToken || undefined,
+            expiresIn: expiresIn ? Number(expiresIn) : 3600,
+          });
+          addLog('bridge token sign-in complete — routing to /chats');
+          setPhase('success');
+          setTimeout(() => {
+            router.replace('/(tabs)/chats');
+          }, 80);
+        } catch (errorValue: any) {
+          const message = errorValue?.message || 'Bridge sign-in failed';
+          addLog(`ERROR: ${message}`);
+          setErrMsg(message);
+          setAuthError(message);
+          setPhase('error');
+        }
         return;
       }
 

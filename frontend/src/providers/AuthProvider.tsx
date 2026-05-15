@@ -8,6 +8,7 @@ WebBrowser.maybeCompleteAuthSession();
 
 const OIDC_AUTHORITY = process.env.EXPO_PUBLIC_OIDC_AUTHORITY!;
 const OIDC_CLIENT_ID = process.env.EXPO_PUBLIC_OIDC_CLIENT_ID!;
+const WEB_APP_URL = process.env.EXPO_PUBLIC_WEB_APP_URL || 'https://smilers.online';
 
 const STORAGE_KEYS = {
   ID_TOKEN: 'smilers_id_token',
@@ -76,7 +77,7 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
-const AUTH_MODE = process.env.EXPO_PUBLIC_AUTH_MODE === 'webview' ? 'webview' : 'direct';
+const AUTH_MODE = WEB_APP_URL ? 'webview' : process.env.EXPO_PUBLIC_AUTH_MODE === 'webview' ? 'webview' : 'direct';
 
 function parseJwt(token: string): any {
   try {
