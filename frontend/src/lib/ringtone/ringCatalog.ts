@@ -6,12 +6,13 @@
 // Bundled MP3s live in /assets/sounds/. Add new files here as the user uploads them.
 
 export type RingId =
+  | 'smilers_never_cry'
   | 'smilers_never_cry_1'
   | 'smilers_never_cry_2'
   | 'smilers_never_cry_3'
   | 'silent';
 
-export const DEFAULT_RING_ID: RingId = 'smilers_never_cry_1';
+export const DEFAULT_RING_ID: RingId = 'smilers_never_cry';
 
 export interface RingDefinition {
   id: RingId;
@@ -22,6 +23,13 @@ export interface RingDefinition {
 
 // require() must use literal paths so Metro can bundle the asset.
 export const RING_CATALOG: RingDefinition[] = [
+  {
+    id: 'smilers_never_cry',
+    name: 'Smilers Never Cry',
+    description: 'The signature Smilers theme',
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    source: require('../../../assets/sounds/Smilers_Never_Cry.mp3'),
+  },
   {
     id: 'smilers_never_cry_1',
     name: 'Smilers Never Cry · 1',
