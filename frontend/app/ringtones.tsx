@@ -20,77 +20,14 @@ import { useAuth } from '../src/providers/AuthProvider';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { readStoredJson, writeStoredJson } from '../src/lib/settingsStorage';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
+import {
+  DEFAULT_RING_ID,
+  RING_CATALOG,
+  type RingDefinition,
+  type RingId,
+} from '../src/lib/ringtone/ringCatalog';
 
 const RINGTONE_PREFS_KEY = 'smilers_ringtone_prefs';
-
-type RingId =
-  | 'default'
-  | 'classic'
-  | 'chime'
-  | 'marimba'
-  | 'pulse'
-  | 'bell'
-  | 'pop'
-  | 'whistle'
-  | 'silent';
-
-interface Ring {
-  id: RingId;
-  name: string;
-  description: string;
-  source: number | { uri: string } | null; // null = silent
-}
-
-const BUNDLED_RINGTONE = require('../assets/sounds/ringtone.mp3');
-
-const RINGS: Ring[] = [
-  { id: 'default', name: 'Smilers default', description: 'The original Smilers tone', source: BUNDLED_RINGTONE },
-  {
-    id: 'classic',
-    name: 'Classic',
-    description: 'Warm orchestral phrase',
-    source: { uri: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3' },
-  },
-  {
-    id: 'chime',
-    name: 'Chime',
-    description: 'Bright and crisp',
-    source: { uri: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3' },
-  },
-  {
-    id: 'marimba',
-    name: 'Marimba',
-    description: 'Bouncy wooden tones',
-    source: { uri: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3' },
-  },
-  {
-    id: 'pulse',
-    name: 'Pulse',
-    description: 'Steady, modern beat',
-    source: { uri: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3' },
-  },
-  {
-    id: 'bell',
-    name: 'Bell',
-    description: 'Clear and resonant',
-    source: { uri: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3' },
-  },
-  {
-    id: 'pop',
-    name: 'Pop',
-    description: 'Upbeat and short',
-    source: { uri: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3' },
-  },
-  {
-    id: 'whistle',
-    name: 'Whistle',
-    description: 'Light, attention-getting',
-    source: { uri: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-7.mp3' },
-  },
-  { id: 'silent', name: 'Silent', description: 'No sound, vibration only', source: null },
-];
-
-const SAVED_FOR_PREFIX = '_for_';
 
 interface RingPrefs {
   ringtone: RingId;
@@ -99,8 +36,8 @@ interface RingPrefs {
 }
 
 const DEFAULT_PREFS: RingPrefs = {
-  ringtone: 'default',
-  notificationSound: 'chime',
+  ringtone: DEFAULT_RING_ID,
+  notificationSound: 'smilers_never_cry_2',
   vibrate: true,
 };
 
@@ -177,7 +114,7 @@ export default function RingtonesScreen() {
   }, []);
 
   const previewRing = useCallback(
-    async (ring: Ring) => {
+    async (ring: RingDefinition) => {
       // If user taps the same row that's already playing, stop it.
       if (playingId === ring.id) {
         await stopCurrentSound();
@@ -241,7 +178,7 @@ export default function RingtonesScreen() {
   );
 
   const onSelect = useCallback(
-    async (ring: Ring) => {
+    async (ring: RingDefinition) => {
       const next = { ...prefs, [mode]: ring.id } as RingPrefs;
       await persist(next);
     },
@@ -269,7 +206,7 @@ export default function RingtonesScreen() {
       ? 'Plays for incoming voice and video calls.'
       : 'Plays for messages, group activity, and other alerts.';
 
-  const list = useMemo(() => RINGS, []);
+  const list = useMemo(() => RING_CATALOG, []);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="ringtones-screen">
