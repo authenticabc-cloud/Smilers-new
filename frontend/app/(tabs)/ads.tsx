@@ -4,6 +4,7 @@ import {
   FlatList,
   Image,
   Linking,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -14,7 +15,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
-import Header from '../../src/components/Header';
 import CountrySelectorModal from '../../src/components/CountrySelectorModal';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useDebouncedValue } from '../../src/hooks/useDebouncedValue';
@@ -111,7 +111,7 @@ export default function AdsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="ads-screen">
-      {/* Header */}
+      {/* Header — back arrow + megaphone + "Ads" title + "+ Post Ad" pill */}
       <View style={styles.adsHeader}>
         <TouchableOpacity hitSlop={10} onPress={() => router.back()} style={styles.adsHeaderBack} testID="ads-back-btn">
           <Feather name="arrow-left" size={22} color={Colors.textPrimary} />
@@ -139,7 +139,7 @@ export default function AdsScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Tabs */}
+      {/* Tabs — Browse Ads | My Ads (with icons + underline indicator) */}
       <View style={styles.tabsRow}>
         <TouchableOpacity
           style={styles.tabBtn}
@@ -325,48 +325,98 @@ function MyCreditsCard({
   );
 }
 
-function SegmentButton({
-  label,
-  active,
-  onPress,
-  testID,
-}: {
-  label: string;
-  active: boolean;
-  onPress: () => void;
-  testID: string;
-}) {
-  return (
-    <TouchableOpacity
-      style={[styles.segmentButton, active ? styles.segmentButtonActive : null]}
-      onPress={onPress}
-      activeOpacity={0.8}
-      testID={testID}
-    >
-      <Text style={[styles.segmentText, active ? styles.segmentTextActive : null]}>{label}</Text>
-    </TouchableOpacity>
-  );
-}
-
 function BrowseAdCard({ ad, index, onPress }: { ad: any; index: number; onPress: () => void }) {
   const countries = Array.isArray(ad.targetCountries) ? ad.targetCountries : [];
+  const isWorldwide = countries.length === 0;
+
+  // Support an `images` gallery if backend returns it; fallback to single imageUrl
+  const galleryRaw: any[] = Array.isArray(ad.images) && ad.images.length > 0
+    ? ad.images
+    : ad.imageUrl
+      ? [ad.imageUrl]
+      : [];
+  const gallery: string[] = galleryRaw
+    .map((g: any) => (typeof g === 'string' ? g : g?.url || g?.uri || ''))
+    .filter(Boolean);
+  const isGallery = gallery.length > 1;
+
   return (
-    <TouchableOpacity style={styles.card} activeOpacity={0.86} onPress={onPress} testID={`browse-ad-card-${index}`}>
-      {ad.imageUrl ? <Image source={{ uri: ad.imageUrl }} style={styles.cardImage} resizeMode="cover" /> : null}
-      <View style={styles.cardBody}>
-        <Text style={styles.cardTitle} testID={`browse-ad-title-${index}`}>{ad.productName}</Text>
-        <Text style={styles.cardBusiness}>{ad.businessName}</Text>
-        <Text style={styles.cardDescription} numberOfLines={2}>{ad.description}</Text>
-        <View style={styles.metaRow}>
-          <View style={styles.metaItem}>
-            <Ionicons name="location-outline" size={14} color={Colors.textMuted} />
-            <Text style={styles.metaText}>{ad.location || 'Location not set'}</Text>
+    <TouchableOpacity
+      style={styles.card}
+      activeOpacity={0.86}
+      onPress={onPress}
+      testID={`browse-ad-card-${index}`}
+    >
+      <View style={styles.cardInner}>
+        {/* Category chip */}
+        {ad.category ? (
+          <View style={styles.categoryChipWrap}>
+            <View style={styles.categoryChip}>
+              <Text style={styles.categoryChipText}>{ad.category}</Text>
+            </View>
           </View>
-          <View style={styles.countryBadge}>
-            <Text style={styles.countryBadgeText}>{countries.length ? `${countries.length} countries` : 'Worldwide'}</Text>
+        ) : null}
+
+        {/* Gallery (horizontal scroll) or single image */}
+        {gallery.length > 0 ? (
+          isGallery ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.galleryRow}
+              testID={`browse-ad-gallery-${index}`}
+            >
+              {gallery.map((uri, idx) => (
+                <Image
+                  key={idx}
+                  source={{ uri }}
+                  style={styles.galleryImage}
+                  resizeMode="cover"
+                />
+              ))}
+            </ScrollView>
+          ) : (
+            <Image source={{ uri: gallery[0] }} style={styles.cardImageSolo} resizeMode="cover" />
+          )
+        ) : null}
+
+        {/* Title */}
+        <Text style={styles.cardTitle} testID={`browse-ad-title-${index}`}>
+          {ad.productName}
+        </Text>
+
+        {/* Business with megaphone icon */}
+        {ad.businessName ? (
+          <View style={styles.cardMetaInline}>
+            <MaterialCommunityIcons name="bullhorn-outline" size={15} color={Colors.textSecondary} />
+            <Text style={styles.cardBusiness} numberOfLines={1}>{ad.businessName}</Text>
+          </View>
+        ) : null}
+
+        {/* Description */}
+        {ad.description ? (
+          <Text style={styles.cardDescription} numberOfLines={3}>{ad.description}</Text>
+        ) : null}
+
+        {/* Location row */}
+        <View style={styles.cardLocationRow}>
+          <View style={styles.cardMetaInline}>
+            <Ionicons name="location-outline" size={15} color={Colors.textSecondary} />
+            <Text style={styles.cardLocationText} numberOfLines={1}>{ad.location || 'Location not set'}</Text>
+          </View>
+          <View style={styles.worldwidePill}>
+            <Feather name="globe" size={13} color={Colors.primary} />
+            <Text style={styles.worldwidePillText}>
+              {isWorldwide ? 'Worldwide' : `${countries.length} ${countries.length === 1 ? 'country' : 'countries'}`}
+            </Text>
           </View>
         </View>
-        <Text style={styles.visitLink}>Visit advertiser</Text>
+
+        {/* Visit advertiser link */}
+        <View style={styles.visitRow}>
+          <Feather name="external-link" size={15} color={Colors.primary} />
+          <Text style={styles.visitLink}>Visit advertiser</Text>
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -376,19 +426,33 @@ function MyAdCard({ ad, index }: { ad: any; index: number }) {
   const countries = Array.isArray(ad.targetCountries) ? ad.targetCountries : [];
   const visibleCountries = countries.slice(0, 3);
   const hiddenCount = Math.max(countries.length - visibleCountries.length, 0);
-  const statusColor = ad.status === 'approved' ? '#16a34a' : ad.status === 'rejected' ? '#dc2626' : '#d97706';
+  const statusColor =
+    ad.status === 'approved' ? '#16a34a' : ad.status === 'rejected' ? '#dc2626' : '#d97706';
+  const imageUri =
+    typeof ad.imageUrl === 'string'
+      ? ad.imageUrl
+      : Array.isArray(ad.images) && ad.images[0]
+        ? typeof ad.images[0] === 'string'
+          ? ad.images[0]
+          : ad.images[0]?.url
+        : '';
 
   return (
     <View style={styles.card} testID={`my-ad-card-${index}`}>
-      {ad.imageUrl ? <Image source={{ uri: ad.imageUrl }} style={styles.cardImage} resizeMode="cover" /> : null}
-      <View style={styles.cardBody}>
+      {imageUri ? <Image source={{ uri: imageUri }} style={styles.cardImage} resizeMode="cover" /> : null}
+      <View style={styles.cardInner}>
         <View style={styles.myCardHeader}>
           <Text style={styles.cardTitle}>{ad.productName}</Text>
           <View style={[styles.statusBadge, { backgroundColor: `${statusColor}20` }]}>
             <Text style={[styles.statusText, { color: statusColor }]}>{ad.status}</Text>
           </View>
         </View>
-        <Text style={styles.cardBusiness}>{ad.businessName}</Text>
+        {ad.businessName ? (
+          <View style={styles.cardMetaInline}>
+            <MaterialCommunityIcons name="bullhorn-outline" size={15} color={Colors.textSecondary} />
+            <Text style={styles.cardBusiness}>{ad.businessName}</Text>
+          </View>
+        ) : null}
         {ad.status === 'rejected' && ad.rejectedReason ? (
           <Text style={styles.rejectionText}>Reason: {ad.rejectedReason}</Text>
         ) : null}
@@ -397,7 +461,9 @@ function MyAdCard({ ad, index }: { ad: any; index: number }) {
           <Text style={styles.statsText}>€{Number(ad.totalCostEur || 0).toFixed(2)}</Text>
         </View>
         <Text style={styles.countryListText}>
-          {countries.length ? `${visibleCountries.join(', ')}${hiddenCount ? ` +${hiddenCount} more` : ''}` : 'Worldwide'}
+          {countries.length
+            ? `${visibleCountries.join(', ')}${hiddenCount ? ` +${hiddenCount} more` : ''}`
+            : 'Worldwide'}
         </Text>
       </View>
     </View>
@@ -406,20 +472,83 @@ function MyAdCard({ ad, index }: { ad: any; index: number }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  segmentWrap: { flexDirection: 'row', gap: Spacing.sm, paddingHorizontal: Spacing.base, marginTop: Spacing.md },
-  segmentButton: {
-    flex: 1,
-    minHeight: 44,
-    borderRadius: Radius.pill,
-    borderWidth: 1,
-    borderColor: Colors.border,
+
+  /* Header */
+  adsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: Spacing.base,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.sm,
+    backgroundColor: Colors.background,
+  },
+  adsHeaderBack: {
+    width: 36,
+    height: 36,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: Colors.surface,
   },
-  segmentButtonActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  segmentText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.textPrimary },
-  segmentTextActive: { color: Colors.white, fontWeight: FontWeight.bold },
+  adsHeaderTitle: {
+    fontSize: 22,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+    marginLeft: 2,
+  },
+  adsAdminBtn: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  postAdBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    backgroundColor: Colors.primary,
+    borderRadius: Radius.md,
+  },
+  postAdText: {
+    color: Colors.headerBg,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.bold,
+  },
+
+  /* Tabs row (with underline indicator) */
+  tabsRow: {
+    flexDirection: 'row',
+    backgroundColor: Colors.background,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderLight,
+  },
+  tabBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  tabLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  tabText: {
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textSecondary,
+  },
+  tabTextActive: { color: Colors.primary, fontWeight: FontWeight.bold },
+  tabIndicator: {
+    position: 'absolute',
+    bottom: 0,
+    height: 3,
+    width: 90,
+    borderRadius: 2,
+    backgroundColor: Colors.primary,
+  },
+
+  /* Search */
   searchWrap: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -428,16 +557,20 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     marginHorizontal: Spacing.base,
     marginTop: Spacing.md,
-    borderRadius: Radius.pill,
+    borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.border,
     backgroundColor: Colors.surface,
   },
-  searchInput: { flex: 1, fontSize: FontSize.base, color: Colors.textPrimary },
-  filterBtn: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  searchInput: { flex: 1, fontSize: FontSize.base, color: Colors.textPrimary, paddingVertical: 0 },
+  filterBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 4 },
   filterText: { color: Colors.primary, fontSize: FontSize.sm, fontWeight: FontWeight.bold },
   helperText: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: Spacing.sm, marginHorizontal: Spacing.base },
-  listContent: { padding: Spacing.base, paddingBottom: 120, gap: Spacing.base },
+
+  /* List */
+  listContent: { padding: Spacing.base, paddingBottom: 140, gap: Spacing.base },
+
+  /* Credits / Redeem */
   creditsWrap: { marginBottom: Spacing.base },
   creditsCard: {
     backgroundColor: Colors.surface,
@@ -477,14 +610,16 @@ const styles = StyleSheet.create({
   redeemBtn: {
     minHeight: 44,
     marginTop: Spacing.sm,
-    borderRadius: Radius.pill,
+    borderRadius: Radius.md,
     backgroundColor: Colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
   },
   redeemBtnDisabled: { opacity: 0.6 },
-  redeemBtnText: { fontSize: FontSize.sm, color: Colors.white, fontWeight: FontWeight.bold },
+  redeemBtnText: { fontSize: FontSize.sm, color: Colors.headerBg, fontWeight: FontWeight.bold },
   creditsFootnote: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: Spacing.sm },
+
+  /* Ad Card */
   card: {
     backgroundColor: Colors.surface,
     borderRadius: Radius.lg,
@@ -493,24 +628,75 @@ const styles = StyleSheet.create({
     borderColor: Colors.borderLight,
     ...Shadow.sm,
   },
-  cardImage: { width: '100%', height: 176, backgroundColor: Colors.borderLight },
-  cardBody: { padding: Spacing.base },
-  cardTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  cardBusiness: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 4 },
-  cardDescription: { fontSize: FontSize.sm, color: Colors.textPrimary, marginTop: 8, lineHeight: 20 },
-  metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: Spacing.base, gap: Spacing.sm },
-  metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4, flex: 1 },
-  metaText: { fontSize: FontSize.xs, color: Colors.textMuted },
-  countryBadge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: Radius.pill, backgroundColor: Colors.primaryLight },
-  countryBadgeText: { fontSize: FontSize.xs, color: Colors.primary, fontWeight: FontWeight.bold },
-  visitLink: { marginTop: Spacing.base, fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.bold },
+  cardInner: { padding: Spacing.base, gap: 10 },
+  categoryChipWrap: { flexDirection: 'row' },
+  categoryChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+  },
+  categoryChipText: {
+    fontSize: FontSize.sm,
+    color: Colors.textPrimary,
+    fontWeight: FontWeight.medium,
+  },
+  galleryRow: { gap: 8, paddingVertical: 2, paddingRight: 8 },
+  galleryImage: {
+    width: 140,
+    height: 160,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.borderLight,
+  },
+  cardImageSolo: {
+    width: '100%',
+    height: 200,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.borderLight,
+  },
+  cardImage: { width: '100%', height: 180, backgroundColor: Colors.borderLight },
+  cardTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary, marginTop: 2 },
+  cardMetaInline: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  cardBusiness: { fontSize: FontSize.sm, color: Colors.textSecondary, flexShrink: 1 },
+  cardDescription: { fontSize: FontSize.base, color: Colors.textPrimary, lineHeight: 22 },
+  cardLocationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 4,
+    gap: Spacing.sm,
+  },
+  cardLocationText: { fontSize: FontSize.sm, color: Colors.textSecondary, flexShrink: 1 },
+  worldwidePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.primaryLight,
+  },
+  worldwidePillText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.bold },
+  visitRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+  },
+  visitLink: { fontSize: FontSize.base, color: Colors.primary, fontWeight: FontWeight.bold },
+
+  /* My Ads */
   myCardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.sm },
   statusBadge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: Radius.pill },
   statusText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold, textTransform: 'uppercase' },
-  rejectionText: { fontSize: FontSize.sm, color: Colors.danger, marginTop: 8 },
-  statsRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: Spacing.base },
+  rejectionText: { fontSize: FontSize.sm, color: Colors.danger, marginTop: 4 },
+  statsRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
   statsText: { fontSize: FontSize.sm, color: Colors.textSecondary },
-  countryListText: { fontSize: FontSize.sm, color: Colors.textPrimary, marginTop: Spacing.sm },
+  countryListText: { fontSize: FontSize.sm, color: Colors.textPrimary, marginTop: 4 },
+
+  /* Empty */
   empty: { alignItems: 'center', paddingTop: Spacing.xxl * 2, paddingHorizontal: Spacing.lg, gap: Spacing.md },
   emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
   emptySub: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center' },
