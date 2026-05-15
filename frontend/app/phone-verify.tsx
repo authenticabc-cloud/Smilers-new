@@ -16,9 +16,8 @@ import { Ionicons, Feather } from '@expo/vector-icons';
 import { CountryPicker } from 'react-native-country-codes-picker';
 import { parsePhoneNumberFromString } from 'libphonenumber-js';
 import { useRouter } from 'expo-router';
-import { useAction, useMutation } from 'convex/react';
+import { useAction, useMutation, useQuery } from 'convex/react';
 import { api } from '../src/convexApi';
-import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { PHONE_VERIFIED_INSTALL_KEY, readStoredString, writeStoredString } from '../src/lib/settingsStorage';
 import { useAuth } from '../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/theme';
@@ -29,12 +28,11 @@ export default function PhoneVerifyScreen() {
   const router = useRouter();
   const { signOut, isAuthenticated } = useAuth();
   const updateCurrentUser = useMutation(api.users.updateCurrentUser);
-  const { data: me, loading: meLoading, refetch: refetchMe } = useSafeConvexQuery<any | null>(
-    api.users.getCurrentUser,
-    {},
-    null,
-    isAuthenticated
-  );
+  // Reactive subscription: any backend change (e.g. verifyOtp -> savePhoneVerified)
+  // propagates immediately so we don't need refetches or rely on stale local state.
+  const meQuery = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip');
+  const me: any = meQuery ?? null;
+  const meLoading = isAuthenticated && meQuery === undefined;
 
   const sendOtp = useAction(api.phoneAuthAction.sendOtp);
   const verifyOtp = useAction(api.phoneAuthAction.verifyOtp);
@@ -49,7 +47,6 @@ export default function PhoneVerifyScreen() {
   const [resendIn, setResendIn] = useState(0);
   const [hasVerifiedInstall, setHasVerifiedInstall] = useState(false);
   const [syncingUser, setSyncingUser] = useState(false);
-  const [finalizingVerification, setFinalizingVerification] = useState(false);
   const fullPhoneRef = useRef<string>('');
 
   useEffect(() => {
@@ -66,10 +63,9 @@ export default function PhoneVerifyScreen() {
     };
   }, []);
 
-  // If user already has a verified phone, skip this screen entirely.
-  // We trust the local install marker as authoritative — once verifyOtp succeeded
-  // and we wrote the marker, the user should never be stuck here even if Convex
-  // briefly returns a stale me record.
+  // SINGLE redirect effect: trust the local install marker, AND self-heal from server data.
+  // No `finalizingVerification` state, no duplicate effects — prevents the rapid double
+  // router.replace() calls that caused the visible "shaking" loop.
   useEffect(() => {
     if (hasVerifiedInstall) {
       router.replace('/(tabs)/chats');
@@ -83,12 +79,6 @@ export default function PhoneVerifyScreen() {
       router.replace('/(tabs)/chats');
     }
   }, [hasVerifiedInstall, me, router]);
-
-  useEffect(() => {
-    if (finalizingVerification && hasVerifiedInstall) {
-      router.replace('/(tabs)/chats');
-    }
-  }, [finalizingVerification, hasVerifiedInstall, router]);
 
   useEffect(() => {
     if (!isAuthenticated || meLoading || me || syncingUser) {
@@ -109,7 +99,7 @@ export default function PhoneVerifyScreen() {
       }, 12000);
       try {
         await updateCurrentUser({});
-        await refetchMe();
+        // No refetch needed — useQuery is reactive and will pick up the new user record.
       } catch (errorValue: any) {
         if (!cancelled) {
           console.warn('phone-verify updateCurrentUser failed:', errorValue?.message || errorValue);
@@ -128,7 +118,7 @@ export default function PhoneVerifyScreen() {
       cancelled = true;
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [isAuthenticated, me, meLoading, refetchMe, syncingUser, updateCurrentUser]);
+  }, [isAuthenticated, me, meLoading, syncingUser, updateCurrentUser]);
 
   // Resend cooldown timer
   useEffect(() => {
@@ -152,7 +142,6 @@ export default function PhoneVerifyScreen() {
     setSyncingUser(true);
     try {
       await updateCurrentUser({});
-      await refetchMe();
       return true;
     } catch (errorValue: any) {
       Alert.alert(
@@ -207,17 +196,20 @@ export default function PhoneVerifyScreen() {
     setSubmitting(true);
     try {
       await verifyOtp({ phone: fullPhoneRef.current, code });
+      // Write the local install marker — this triggers the redirect effect immediately
+      // and is the single source of truth for "this device has verified".
       await writeStoredString(PHONE_VERIFIED_INSTALL_KEY, 'true');
       setHasVerifiedInstall(true);
-      setFinalizingVerification(true);
-      setSyncingUser(true);
-      await updateCurrentUser({});
-      await refetchMe();
+      // Refresh the user record once so we have name/avatar locally; useQuery will keep it live.
+      try {
+        await updateCurrentUser({});
+      } catch (refreshErr) {
+        console.warn('phone-verify: post-verify updateCurrentUser failed (non-fatal):', refreshErr);
+      }
     } catch (e: any) {
       const msg = e?.data?.message || e?.message || 'Invalid code.';
       Alert.alert('Verification failed', msg);
     } finally {
-      setSyncingUser(false);
       setSubmitting(false);
     }
   };
@@ -257,9 +249,7 @@ export default function PhoneVerifyScreen() {
             {step === 'phone' ? 'Verify your phone number' : 'Enter the code'}
           </Text>
           <Text style={styles.subtitle}>
-            {finalizingVerification
-              ? 'Finishing your setup and opening chats…'
-              : step === 'phone'
+            {step === 'phone'
               ? 'Smilers requires phone verification to keep the community real and spam-free. Standard SMS rates may apply.'
               : `We sent a 6-digit code to ${fullPhoneRef.current}. Enter it below to verify.`}
           </Text>

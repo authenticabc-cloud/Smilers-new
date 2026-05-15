@@ -225,6 +225,12 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Root cause identified in AuthProvider.getFreshIdToken: it returned accessToken first, falling back to idToken. Convex validates the ID token (JWT claims iss/sub) for ctx.auth.getUserIdentity(), not the access token. Sending the access token caused Convex to see the user as unauthenticated, which makes users.getCurrentUser hang and phoneAuthAction.sendOtp throw an empty Server Error. Fix: always return idToken from getFreshIdToken. No backend/Twilio changes needed."
+##       - working: false
+##         agent: "user"
+##         comment: "After Twilio OTP verified successfully (token fix worked), app stuck on Opening Smilers... screen. Then later: shaking redirect loop between phone-verify and (tabs) screens."
+##       - working: true
+##         agent: "main"
+##         comment: "Root cause from troubleshoot_agent: useSafeConvexQuery is one-shot (not reactive), so when verifyOtp updates the user record, the change does not propagate; new mounts get stale data, causing redirect loops. Fix: replaced useSafeConvexQuery with reactive useQuery(api.users.getCurrentUser) in BOTH phone-verify and tabs/_layout. Consolidated phone-verify into ONE redirect effect that trusts the local hasVerifiedInstall marker as authoritative and self-heals when server reports verified but marker missing. Removed redundant finalizingVerification state, removed duplicate router.replace effects. Tabs layout still has 10s safety timeout for the initial me query, and never bounces back to phone-verify if hasVerifiedInstall is true. App boots cleanly to Sign In in preview."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"

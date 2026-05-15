@@ -2,10 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { Redirect, Tabs, useRootNavigationState } from 'expo-router';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useMutation } from 'convex/react';
+import { useMutation, useQuery } from 'convex/react';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { api } from '../../src/convexApi';
-import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { PHONE_VERIFIED_INSTALL_KEY, readStoredString } from '../../src/lib/settingsStorage';
 import { usePushNotifications } from '../../src/push/usePushNotifications';
 import { useIncomingCallListener } from '../../src/push/useIncomingCallListener';
@@ -15,7 +14,10 @@ export default function TabsLayout() {
   const rootNavigationState = useRootNavigationState();
   const { isLoading, isAuthenticated } = useAuth();
   const updateCurrentUser = useMutation(api.users.updateCurrentUser);
-  const { data: me, loading: meLoading, refetch: refetchMe } = useSafeConvexQuery(api.users.getCurrentUser, {}, null, isAuthenticated);
+  // Reactive subscription: changes from verifyOtp/savePhoneVerified propagate instantly.
+  const meQuery = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip');
+  const me: any = meQuery ?? null;
+  const meLoading = isAuthenticated && meQuery === undefined;
   const [installVerificationChecked, setInstallVerificationChecked] = useState(false);
   const [hasVerifiedInstall, setHasVerifiedInstall] = useState(false);
   const [syncingUser, setSyncingUser] = useState(false);
@@ -47,8 +49,8 @@ export default function TabsLayout() {
       setSyncingUser(true);
       try {
         await updateCurrentUser({});
-        await refetchMe();
-      } catch (errorValue) {
+        // useQuery is reactive; no need to refetch.
+      } catch (errorValue: any) {
         if (!cancelled) {
           console.warn('tabs updateCurrentUser failed:', errorValue?.message || errorValue);
         }
@@ -65,7 +67,7 @@ export default function TabsLayout() {
     return () => {
       cancelled = true;
     };
-  }, [bootstrapAttempted, hasVerifiedInstall, isAuthenticated, me, meLoading, refetchMe, syncingUser, updateCurrentUser]);
+  }, [bootstrapAttempted, hasVerifiedInstall, isAuthenticated, me, meLoading, syncingUser, updateCurrentUser]);
 
   useEffect(() => {
     let cancelled = false;
