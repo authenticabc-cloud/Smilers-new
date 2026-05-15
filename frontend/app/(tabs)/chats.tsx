@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Modal, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -27,9 +27,15 @@ function relTime(iso?: string) {
 
 export default function ChatsScreen() {
   const router = useRouter();
+  const [showMenu, setShowMenu] = useState(false);
   const conversations = useQuery(api.conversations.listConversations);
   const loading = conversations === undefined;
   const list: any[] = Array.isArray(conversations) ? conversations : [];
+
+  const handleMenuPress = (route: string) => {
+    setShowMenu(false);
+    router.push(route as any);
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="chats-screen">
@@ -41,12 +47,53 @@ export default function ChatsScreen() {
             <TouchableOpacity onPress={() => router.push('/search' as any)} testID="search-btn">
               <Ionicons name="search-outline" size={22} color={Colors.textPrimary} />
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => router.push('/settings')} testID="menu-btn">
+            <TouchableOpacity
+              onPress={() => setShowMenu(true)}
+              testID="menu-btn"
+              style={{ marginLeft: 16 }}
+            >
               <Feather name="more-vertical" size={22} color={Colors.textPrimary} />
             </TouchableOpacity>
           </>
         }
       />
+
+      <Modal
+        visible={showMenu}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowMenu(false)}
+      >
+        <Pressable style={menuStyles.backdrop} onPress={() => setShowMenu(false)}>
+          <View style={menuStyles.popover}>
+            <MenuItem
+              icon={<Feather name="bookmark" size={20} color={Colors.textPrimary} />}
+              label="Starred Messages"
+              onPress={() => handleMenuPress('/starred')}
+              testID="menu-starred"
+            />
+            <MenuItem
+              icon={<Feather name="archive" size={20} color={Colors.textPrimary} />}
+              label="Archived Chats"
+              onPress={() => handleMenuPress('/archived')}
+              testID="menu-archived"
+            />
+            <MenuItem
+              icon={<Feather name="lock" size={20} color={Colors.textPrimary} />}
+              label="Encryption"
+              onPress={() => handleMenuPress('/encryption')}
+              testID="menu-encryption"
+            />
+            <MenuItem
+              icon={<Feather name="settings" size={20} color={Colors.textPrimary} />}
+              label="Settings"
+              onPress={() => handleMenuPress('/settings')}
+              isLast
+              testID="menu-settings"
+            />
+          </View>
+        </Pressable>
+      </Modal>
 
       <FlatList
         data={list}
@@ -234,5 +281,73 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     color: Colors.textSecondary,
     textAlign: 'center',
+  },
+});
+
+
+function MenuItem({
+  icon,
+  label,
+  onPress,
+  isLast,
+  testID,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onPress: () => void;
+  isLast?: boolean;
+  testID?: string;
+}) {
+  return (
+    <TouchableOpacity
+      style={[menuStyles.row, isLast && menuStyles.rowLast]}
+      onPress={onPress}
+      activeOpacity={0.6}
+      testID={testID}
+    >
+      <View style={menuStyles.iconWrap}>{icon}</View>
+      <Text style={menuStyles.label}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+const menuStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  popover: {
+    position: 'absolute',
+    top: 56,
+    right: 12,
+    minWidth: 220,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingVertical: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 12,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(0,0,0,0.06)',
+  },
+  rowLast: {
+    borderBottomWidth: 0,
+  },
+  iconWrap: {
+    width: 30,
+    alignItems: 'flex-start',
+  },
+  label: {
+    fontSize: 16,
+    color: Colors.textPrimary,
+    fontWeight: '500',
   },
 });

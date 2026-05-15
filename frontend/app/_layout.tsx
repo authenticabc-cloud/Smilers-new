@@ -46,6 +46,8 @@ export default function RootLayout() {
               <Stack.Screen name="chat-once" />
               <Stack.Screen name="search" />
               <Stack.Screen name="starred" />
+              <Stack.Screen name="archived" />
+              <Stack.Screen name="encryption" />
               <Stack.Screen name="wallet" />
               <Stack.Screen name="send-money" />
               <Stack.Screen name="user/[userId]" />
