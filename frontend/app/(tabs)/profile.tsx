@@ -1,25 +1,148 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import React, { useCallback, useState } from 'react';
+import {
+  ActionSheetIOS,
+  ActivityIndicator,
+  Alert,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useQuery } from 'convex/react';
+import { useConvex, useMutation, useQuery } from 'convex/react';
+import * as ImagePicker from 'expo-image-picker';
 import Header from '../../src/components/Header';
 import Avatar from '../../src/components/Avatar';
 import SosButton from '../../src/components/SosButton';
 import { api } from '../../src/convexApi';
 import { useAuth } from '../../src/providers/AuthProvider';
+import { uploadFile } from '../../src/lib/uploadFile';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const { signOut, userInfo } = useAuth();
+  const { userInfo } = useAuth();
   const me = useQuery(api.users.getCurrentUser);
+  const convex = useConvex();
+  const updateProfile = useMutation(api.users.updateProfile);
+
+  const [uploading, setUploading] = useState(false);
 
   const name = me?.name || userInfo?.name || 'Smilers';
   const email = me?.email || userInfo?.email || '';
   const about = me?.about || 'Hey there! I am using Smilers.';
   const language = me?.preferredLanguage || 'No preference — show original';
+  const avatarUri = (me as any)?.avatarUrl || (me as any)?.photoUrl || undefined;
+
+  const performUpload = useCallback(
+    async (uri: string, mime: string) => {
+      setUploading(true);
+      try {
+        const storageId = await uploadFile(convex, uri, mime);
+
+        // Try several common field names — the backend should accept one of them.
+        // Convex backend is expected to resolve storageId → avatarUrl on read.
+        const candidates: Array<Record<string, any>> = [
+          { image: storageId },
+          { avatarStorageId: storageId },
+          { profileImageStorageId: storageId },
+          { photoStorageId: storageId },
+        ];
+        let lastError: any = null;
+        for (const payload of candidates) {
+          try {
+            await updateProfile(payload);
+            lastError = null;
+            break;
+          } catch (errorValue: any) {
+            lastError = errorValue;
+          }
+        }
+        if (lastError) throw lastError;
+      } catch (errorValue: any) {
+        Alert.alert(
+          'Upload failed',
+          errorValue?.message ||
+            'Could not upload your profile picture. Please check your connection and try again.',
+        );
+      } finally {
+        setUploading(false);
+      }
+    },
+    [convex, updateProfile],
+  );
+
+  const pickFromLibrary = useCallback(async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert(
+        'Photo access needed',
+        'Allow Smilers to access your photos in your device settings to change your profile picture.',
+      );
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+    if (result.canceled || !result.assets || !result.assets[0]) return;
+    const asset = result.assets[0];
+    await performUpload(asset.uri, asset.mimeType || 'image/jpeg');
+  }, [performUpload]);
+
+  const pickFromCamera = useCallback(async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert(
+        'Camera access needed',
+        'Allow Smilers to access your camera in your device settings to take a profile picture.',
+      );
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+    if (result.canceled || !result.assets || !result.assets[0]) return;
+    const asset = result.assets[0];
+    await performUpload(asset.uri, asset.mimeType || 'image/jpeg');
+  }, [performUpload]);
+
+  const onPressCameraBadge = useCallback(() => {
+    if (uploading) return;
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          title: 'Change profile picture',
+          options: ['Take photo', 'Choose from library', 'Cancel'],
+          cancelButtonIndex: 2,
+        },
+        (idx) => {
+          if (idx === 0) void pickFromCamera();
+          else if (idx === 1) void pickFromLibrary();
+        },
+      );
+    } else {
+      Alert.alert(
+        'Change profile picture',
+        undefined,
+        [
+          { text: 'Take photo', onPress: pickFromCamera },
+          { text: 'Choose from library', onPress: pickFromLibrary },
+          { text: 'Cancel', style: 'cancel' },
+        ],
+        { cancelable: true },
+      );
+    }
+  }, [pickFromCamera, pickFromLibrary, uploading]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="profile-screen">
@@ -27,9 +150,19 @@ export default function ProfileScreen() {
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.avatarSection}>
           <View style={styles.avatarWrap}>
-            <Avatar name={name} size={120} />
-            <TouchableOpacity style={styles.cameraBadge} testID="profile-camera-btn">
-              <Feather name="camera" size={16} color={Colors.white} />
+            <Avatar name={name} size={120} uri={avatarUri} />
+            <TouchableOpacity
+              style={styles.cameraBadge}
+              onPress={onPressCameraBadge}
+              activeOpacity={0.8}
+              disabled={uploading}
+              testID="profile-camera-btn"
+            >
+              {uploading ? (
+                <ActivityIndicator size="small" color={Colors.white} />
+              ) : (
+                <Feather name="camera" size={16} color={Colors.white} />
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -42,7 +175,11 @@ export default function ProfileScreen() {
           <Row value={about} testID="profile-about" />
         </Section>
 
-        <Section label="MESSAGE LANGUAGE" icon={<Feather name="globe" size={14} color={Colors.primary} />} helper="All messages you receive will be auto-translated into this language.">
+        <Section
+          label="MESSAGE LANGUAGE"
+          icon={<Feather name="globe" size={14} color={Colors.primary} />}
+          helper="All messages you receive will be auto-translated into this language."
+        >
           <Row value={language} testID="profile-language" />
         </Section>
 
@@ -51,7 +188,11 @@ export default function ProfileScreen() {
         </Section>
 
         <View style={styles.buttonsBlock}>
-          <TouchableOpacity style={styles.linkBtn} onPress={() => router.push('/starred' as any)} testID="starred-btn">
+          <TouchableOpacity
+            style={styles.linkBtn}
+            onPress={() => router.push('/starred' as any)}
+            testID="starred-btn"
+          >
             <Ionicons name="star-outline" size={20} color={Colors.primary} />
             <Text style={styles.linkText}>Starred Messages</Text>
           </TouchableOpacity>
@@ -63,15 +204,6 @@ export default function ProfileScreen() {
           >
             <Ionicons name="settings-outline" size={20} color={Colors.primary} />
             <Text style={styles.linkText}>Settings & Privacy</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.linkBtn, { marginTop: Spacing.base }]}
-            onPress={signOut}
-            testID="sign-out-btn"
-          >
-            <Feather name="log-out" size={20} color={Colors.danger} />
-            <Text style={[styles.linkText, { color: Colors.danger }]}>Sign Out</Text>
           </TouchableOpacity>
         </View>
 
