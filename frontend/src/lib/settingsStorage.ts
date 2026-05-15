@@ -7,6 +7,7 @@ export const APP_LOCK_PIN_KEY = 'smilers_app_lock_pin';
 export const SCHEDULED_MESSAGES_KEY = 'smilers_scheduled_messages';
 export const QUICK_TEMPLATES_KEY = 'smilers_quick_templates';
 export const CHAT_APPEARANCE_KEY = 'smilers_chat_appearance';
+export const PHONE_VERIFIED_INSTALL_KEY = 'smilers_phone_verified_install';
 
 export const DEFAULT_PRIVACY_SETTINGS = {
   lastSeen: 'everyone',

@@ -1,9 +1,11 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Redirect, Tabs, useRootNavigationState } from 'expo-router';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useMutation, useQuery } from 'convex/react';
+import { useMutation } from 'convex/react';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { api } from '../../src/convexApi';
+import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
+import { PHONE_VERIFIED_INSTALL_KEY, readStoredString } from '../../src/lib/settingsStorage';
 import { usePushNotifications } from '../../src/push/usePushNotifications';
 import { useIncomingCallListener } from '../../src/push/useIncomingCallListener';
 import { Colors, FontSize, FontWeight } from '../../src/theme';
@@ -12,7 +14,9 @@ export default function TabsLayout() {
   const rootNavigationState = useRootNavigationState();
   const { isLoading, isAuthenticated } = useAuth();
   const updateCurrentUser = useMutation(api.users.updateCurrentUser);
-  const me = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip');
+  const { data: me, loading: meLoading } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null, isAuthenticated);
+  const [installVerificationChecked, setInstallVerificationChecked] = useState(false);
+  const [hasVerifiedInstall, setHasVerifiedInstall] = useState(false);
 
   // Wire up native push notifications (registers token + handles taps/actions)
   usePushNotifications();
@@ -26,7 +30,34 @@ export default function TabsLayout() {
     }
   }, [isAuthenticated, updateCurrentUser]);
 
-  if (!rootNavigationState?.key || isLoading) {
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadInstallVerification = async () => {
+      if (!isAuthenticated) {
+        if (!cancelled) {
+          setHasVerifiedInstall(false);
+          setInstallVerificationChecked(true);
+        }
+        return;
+      }
+
+      const installMarker = await readStoredString(PHONE_VERIFIED_INSTALL_KEY);
+      if (!cancelled) {
+        setHasVerifiedInstall(installMarker === 'true');
+        setInstallVerificationChecked(true);
+      }
+    };
+
+    setInstallVerificationChecked(false);
+    void loadInstallVerification();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated]);
+
+  if (!rootNavigationState?.key || isLoading || meLoading || !installVerificationChecked) {
     return null;
   }
 
@@ -34,7 +65,7 @@ export default function TabsLayout() {
     return <Redirect href="/" />;
   }
 
-  if (me && (!me.phone || !me.phoneVerified)) {
+  if (me && (!me.phone || !me.phoneVerified || !hasVerifiedInstall)) {
     return <Redirect href="/phone-verify" />;
   }
 

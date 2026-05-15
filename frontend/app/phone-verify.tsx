@@ -16,8 +16,10 @@ import { Ionicons, Feather } from '@expo/vector-icons';
 import { CountryPicker } from 'react-native-country-codes-picker';
 import { parsePhoneNumberFromString } from 'libphonenumber-js';
 import { useRouter } from 'expo-router';
-import { useMutation, useQuery, useAction } from 'convex/react';
+import { useAction } from 'convex/react';
 import { api } from '../src/convexApi';
+import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+import { PHONE_VERIFIED_INSTALL_KEY, readStoredString, writeStoredString } from '../src/lib/settingsStorage';
 import { useAuth } from '../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/theme';
 
@@ -26,7 +28,7 @@ const RESEND_SECONDS = 30;
 export default function PhoneVerifyScreen() {
   const router = useRouter();
   const { signOut, userInfo } = useAuth();
-  const me = useQuery(api.users.getCurrentUser);
+  const { data: me } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null, true);
 
   const sendOtp = useAction(api.phoneAuthAction.sendOtp);
   const verifyOtp = useAction(api.phoneAuthAction.verifyOtp);
@@ -39,14 +41,29 @@ export default function PhoneVerifyScreen() {
   const [otp, setOtp] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [resendIn, setResendIn] = useState(0);
+  const [hasVerifiedInstall, setHasVerifiedInstall] = useState(false);
   const fullPhoneRef = useRef<string>('');
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadInstallMarker = async () => {
+      const installMarker = await readStoredString(PHONE_VERIFIED_INSTALL_KEY);
+      if (!cancelled) {
+        setHasVerifiedInstall(installMarker === 'true');
+      }
+    };
+    void loadInstallMarker();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // If user already has a verified phone, skip this screen entirely
   useEffect(() => {
-    if (me && me.phone && me.phoneVerified) {
+    if (me && me.phone && me.phoneVerified && hasVerifiedInstall) {
       router.replace('/(tabs)/chats');
     }
-  }, [me, router]);
+  }, [hasVerifiedInstall, me, router]);
 
   // Resend cooldown timer
   useEffect(() => {
@@ -86,6 +103,8 @@ export default function PhoneVerifyScreen() {
     setSubmitting(true);
     try {
       await verifyOtp({ phone: fullPhoneRef.current, code });
+      await writeStoredString(PHONE_VERIFIED_INSTALL_KEY, 'true');
+      setHasVerifiedInstall(true);
       // Success! Convex query will refresh and `me.phoneVerified` will be true
       // → useEffect above redirects to home automatically
       router.replace('/(tabs)/chats');
