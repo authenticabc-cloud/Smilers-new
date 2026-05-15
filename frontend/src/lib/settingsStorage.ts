@@ -5,6 +5,8 @@ export const PRIVACY_SETTINGS_KEY = 'smilers_privacy_settings';
 export const APP_LOCK_SETTINGS_KEY = 'smilers_app_lock_settings';
 export const APP_LOCK_PIN_KEY = 'smilers_app_lock_pin';
 export const SCHEDULED_MESSAGES_KEY = 'smilers_scheduled_messages';
+export const QUICK_TEMPLATES_KEY = 'smilers_quick_templates';
+export const CHAT_APPEARANCE_KEY = 'smilers_chat_appearance';
 
 export const DEFAULT_PRIVACY_SETTINGS = {
   lastSeen: 'everyone',
@@ -23,6 +25,14 @@ export const DEFAULT_APP_LOCK_SETTINGS = {
   previewContent: false,
   autoLock: 'immediately',
   lockOnBackground: true,
+};
+
+export const DEFAULT_CHAT_APPEARANCE = {
+  wallpaper: 'cream',
+  outgoingColor: 'gold',
+  incomingColor: 'white',
+  bubbleStyle: 'rounded',
+  textSize: 'base',
 };
 
 function getWebStorage() {

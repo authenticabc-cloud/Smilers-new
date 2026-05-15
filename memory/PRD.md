@@ -50,6 +50,9 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - ✅ Replaced the `App Lock` placeholder with a real settings screen for PIN setup/change/remove, auto-lock timing, preview hiding, background lock, and biometric enablement on supported native devices
 - ✅ Replaced the `Scheduled Messages` placeholder with a real management screen for creating, editing, pausing, resuming, and deleting scheduled message drafts, persisted locally on device
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_PRIVACY_SCHEDULED.md` and wired the Privacy + Scheduled screens to safe Convex endpoint names (`privacy.getSettings`, `privacy.updateSettings`, `scheduledMessages.listMine`, `create`, `update`, `remove`, `setActive`) with local fallback when those endpoints are unavailable
+- ✅ Replaced the `Quick Replies` placeholder with a real templates screen for searching, creating, editing, favoriting, copying, and deleting saved reply snippets, plus starter suggestions
+- ✅ Replaced the `Chat Appearance` placeholder with a real appearance screen for wallpaper, outgoing/incoming bubble colours, bubble style, and message size, with live preview and local persistence
+- ✅ Wired chat personalization into the live chat UI: saved wallpaper now applies to the chat screen background and Quick Replies can be opened from the chat composer
 - ✅ Tabs layout now uses web-safe auth redirects, and Expo push-notification calls are guarded on web so `/chats` no longer red-screens in preview
 - ✅ Phase 2A.1 chat actions added: long-press action sheet, quick reactions, reply preview, quoted replies, copy, forward, star/unstar, delete placeholder, and haptic feedback
 - ✅ Chat route is now hardened for invalid/unauthorized conversation IDs with a safe fallback state instead of a Convex error screen
@@ -129,7 +132,8 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - Full end-to-end authenticated contacts-polish verification is still pending for the same auth-gated reason, and outgoing requests/reject/cancel/add-by-phone depend on the backend changes from `/app/CONVEX_BACKEND_INSTRUCTIONS_CONTACTS_POLISH.md`.
 - Direct signed-in verification of the fixed Contacts tab is still pending because browser automation cannot complete the Hercules-authenticated mobile flow in this environment.
 - Privacy/App Lock/Scheduled settings currently persist per device in the mobile client; backend sync for these routes is not wired in this repo.
-- Once the user applies `/app/CONVEX_BACKEND_INSTRUCTIONS_PRIVACY_SCHEDULED.md`, the mobile frontend is already wired to attempt cloud sync first and fall back locally if the backend is still missing or errors.
+- Privacy and Scheduled frontend cloud-sync wiring is in place, but re-test showed `privacy:getSettings`, `privacy:updateSettings`, `scheduledMessages:listMine`, and `scheduledMessages:create` still return Convex `Server Error`; the app continues to fall back locally instead of crashing.
+- Quick Replies and Chat Appearance currently persist per device in the mobile client; no backend sync is wired for those routes yet.
 - Full end-to-end authenticated ad-credit verification is still pending for the same auth-gated reason, and code generation/redeem/billing depend on the backend changes from `/app/CONVEX_BACKEND_INSTRUCTIONS_AD_CREDIT_CODES.md`.
 - Full end-to-end authenticated search/starred verification is still pending because browser automation cannot complete the Hercules sign-in flow here, so in-app button navigation from Chats/Profile still needs one signed-in device pass.
 - Full end-to-end authenticated wallet/send-money verification is still pending because browser automation cannot complete the Hercules sign-in flow here, and the exact mutation arg shapes for some `wallet.ts` / `transfers.ts` actions still need validation against the live backend.
@@ -160,6 +164,7 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - `/app/frontend/app/wallet.tsx` — Gold Wallet screen with payout methods and withdrawal requests
 - `/app/frontend/app/send-money.tsx` — Send/request money screen with pending requests and history
 - `/app/frontend/src/lib/adCreditCodes.ts` — Ad credit code formatting/estimate helpers
+- `/app/frontend/src/lib/{settingsStorage,chatAppearance}.ts` — Local settings persistence and chat appearance helpers
 - `/app/frontend/src/{constants/countries.ts,components/CountrySelectorModal.tsx,hooks/useDebouncedValue.ts}` — Ads filtering/support utilities
 - `/app/frontend/app/(tabs)/_layout.tsx` — Tab bar
 - `/app/frontend/app/(tabs)/{chats,contacts,groups,updates,profile}.tsx`

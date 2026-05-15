@@ -15,6 +15,13 @@ import { Audio } from 'expo-av';
 import * as Linking from 'expo-linking';
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '../convexApi';
+import {
+  getBubbleRadius,
+  getBubbleTailRadius,
+  getIncomingBubbleColor,
+  getOutgoingBubbleColor,
+  getTextSize,
+} from '../lib/chatAppearance';
 import { useSafeConvexQuery } from '../hooks/useSafeConvexQuery';
 import { Colors, FontSize, FontWeight, Radius, Shadow } from '../theme';
 
@@ -33,6 +40,7 @@ interface BubbleProps {
   isMine: boolean;
   myUserId?: string;
   parentMsg?: any;
+  appearance?: any;
   onLongPress: () => void;
   onToggleReaction: (emoji: string) => void;
 }
@@ -42,6 +50,7 @@ export default function MediaBubble({
   isMine,
   myUserId,
   parentMsg,
+  appearance,
   onLongPress,
   onToggleReaction,
 }: BubbleProps) {
@@ -63,13 +72,26 @@ export default function MediaBubble({
     return Array.from(map.values());
   }, [msg.reactions, myUserId]);
 
+  const bubbleRadius = getBubbleRadius(appearance?.bubbleStyle);
+  const bubbleTailRadius = getBubbleTailRadius(appearance?.bubbleStyle);
+  const bubbleBackground = isMine
+    ? getOutgoingBubbleColor(appearance?.outgoingColor)
+    : getIncomingBubbleColor(appearance?.incomingColor);
+  const bubbleDynamicStyle = {
+    backgroundColor: bubbleBackground,
+    borderRadius: bubbleRadius,
+    borderBottomRightRadius: isMine ? bubbleTailRadius : bubbleRadius,
+    borderBottomLeftRadius: isMine ? bubbleRadius : bubbleTailRadius,
+  };
+  const bubbleTextStyle = { fontSize: getTextSize(appearance?.textSize) };
+
   if (msg.deletedAt) {
     return (
       <View style={[styles.bubbleRow, isMine ? styles.bubbleRowMine : styles.bubbleRowOther]}>
-        <View style={[styles.bubble, isMine ? styles.bubbleMine : styles.bubbleOther, styles.deletedBubble]}>
+        <View style={[styles.bubble, isMine ? styles.bubbleMine : styles.bubbleOther, bubbleDynamicStyle, styles.deletedBubble]}>
           <View style={styles.deletedContent}>
             <Feather name="slash" size={12} color={Colors.textMuted} />
-            <Text style={[styles.bubbleText, styles.deletedText]}>Message deleted</Text>
+            <Text style={[styles.bubbleText, bubbleTextStyle, styles.deletedText]}>Message deleted</Text>
           </View>
         </View>
       </View>
@@ -82,7 +104,7 @@ export default function MediaBubble({
         activeOpacity={0.85}
         onLongPress={onLongPress}
         delayLongPress={250}
-        style={[styles.bubble, isMine ? styles.bubbleMine : styles.bubbleOther, msg.type === 'image' ? styles.bubbleImage : null]}
+        style={[styles.bubble, isMine ? styles.bubbleMine : styles.bubbleOther, bubbleDynamicStyle, msg.type === 'image' ? styles.bubbleImage : null]}
         testID={`message-bubble-${msg._id}`}
       >
         {parentMsg ? (
@@ -99,7 +121,7 @@ export default function MediaBubble({
           </View>
         ) : null}
 
-        <BubbleBody msg={msg} timeStr={timeStr} />
+        <BubbleBody msg={msg} timeStr={timeStr} textStyle={bubbleTextStyle} />
 
         <View style={styles.bubbleMeta}>
           {msg.starred ? <Feather name="star" size={11} color={Colors.tickYellow} style={styles.starIcon} /> : null}
@@ -127,10 +149,10 @@ export default function MediaBubble({
   );
 }
 
-function BubbleBody({ msg, timeStr }: { msg: any; timeStr: string }) {
+function BubbleBody({ msg, timeStr, textStyle }: { msg: any; timeStr: string; textStyle?: any }) {
   switch (msg.type) {
     case 'image':
-      return <ImageMessage msg={msg} timeStr={timeStr} />;
+      return <ImageMessage msg={msg} timeStr={timeStr} textStyle={textStyle} />;
     case 'voice':
     case 'audio':
       return <VoiceMessage msg={msg} />;
@@ -141,11 +163,11 @@ function BubbleBody({ msg, timeStr }: { msg: any; timeStr: string }) {
       return <FileMessage msg={msg} />;
     case 'text':
     default:
-      return <Text style={styles.bubbleText}>{msg.text || ''}</Text>;
+      return <Text style={[styles.bubbleText, textStyle]}>{msg.text || ''}</Text>;
   }
 }
 
-function ImageMessage({ msg, timeStr }: { msg: any; timeStr: string }) {
+function ImageMessage({ msg, timeStr, textStyle }: { msg: any; timeStr: string; textStyle?: any }) {
   const [open, setOpen] = useState(false);
   const { data: resolvedUrl } = useSafeConvexQuery<string | null>(
     api.files.getUrl,
@@ -172,7 +194,7 @@ function ImageMessage({ msg, timeStr }: { msg: any; timeStr: string }) {
             <Text style={styles.bubbleTimeOverlay}>{timeStr}</Text>
           </View>
         </View>
-        {msg.text ? <Text style={[styles.bubbleText, styles.imageCaption]}>{msg.text}</Text> : null}
+        {msg.text ? <Text style={[styles.bubbleText, textStyle, styles.imageCaption]}>{msg.text}</Text> : null}
       </TouchableOpacity>
       <ImageViewer visible={open} onClose={() => setOpen(false)} uri={src} />
     </>

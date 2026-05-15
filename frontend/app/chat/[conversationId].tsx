@@ -28,6 +28,13 @@ import MediaBubble from '../../src/components/MediaBubble';
 import PollComposer from '../../src/components/PollComposer';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
+import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
+import {
+  CHAT_APPEARANCE_KEY,
+  DEFAULT_CHAT_APPEARANCE,
+  QUICK_TEMPLATES_KEY,
+  readStoredJson,
+} from '../../src/lib/settingsStorage';
 import { uploadFile } from '../../src/lib/uploadFile';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
@@ -49,7 +56,10 @@ export default function ChatScreen() {
   const [showAttachSheet, setShowAttachSheet] = useState(false);
   const [showPollComposer, setShowPollComposer] = useState(false);
   const [showForwardPicker, setShowForwardPicker] = useState(false);
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
   const [fallbackReady, setFallbackReady] = useState(false);
+  const [quickTemplates, setQuickTemplates] = useState<any[]>([]);
+  const [chatAppearance, setChatAppearance] = useState(DEFAULT_CHAT_APPEARANCE);
   const [isRecording, setIsRecording] = useState(false);
   const [recDuration, setRecDuration] = useState(0);
   const recRef = useRef<Audio.Recording | null>(null);
@@ -90,6 +100,34 @@ export default function ChatScreen() {
       shouldDuckAndroid: true,
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadPersonalization = async () => {
+      const [storedTemplates, storedAppearance] = await Promise.all([
+        readStoredJson(QUICK_TEMPLATES_KEY, []),
+        readStoredJson(CHAT_APPEARANCE_KEY, DEFAULT_CHAT_APPEARANCE),
+      ]);
+      if (!mounted) {
+        return;
+      }
+      setQuickTemplates(Array.isArray(storedTemplates) ? storedTemplates : []);
+      setChatAppearance(normalizeChatAppearance(storedAppearance));
+    };
+    void loadPersonalization();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!showTemplatePicker) {
+      return;
+    }
+    readStoredJson(QUICK_TEMPLATES_KEY, []).then((storedTemplates) => {
+      setQuickTemplates(Array.isArray(storedTemplates) ? storedTemplates : []);
+    });
+  }, [showTemplatePicker]);
 
   const sendMessage = useMutation(api.messages.send);
   const setTyping = useMutation(api.typing.setTyping);
@@ -500,7 +538,11 @@ export default function ChatScreen() {
   const isMineSelected = selectedMsg && me && selectedMsg.senderId === me._id;
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="chat-screen">
+    <SafeAreaView
+      style={[styles.container, { backgroundColor: getWallpaperColor(chatAppearance.wallpaper) }]}
+      edges={['top', 'bottom']}
+      testID="chat-screen"
+    >
       <Header
         title={title}
         showBack
@@ -548,6 +590,7 @@ export default function ChatScreen() {
                 isMine={item.senderId === me?._id}
                 myUserId={me?._id}
                 parentMsg={item.replyToMessageId ? msgById.get(item.replyToMessageId) : undefined}
+                appearance={chatAppearance}
                 onLongPress={() => onLongPressMessage(item)}
                 onToggleReaction={(emoji) => onToggleMyReaction(item._id, emoji)}
               />
@@ -609,6 +652,14 @@ export default function ChatScreen() {
                 testID="attach-btn"
               >
                 <Feather name="paperclip" size={22} color={Colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.iconBtn}
+                onPress={() => setShowTemplatePicker(true)}
+                disabled={!isConversationAvailable || uploading}
+                testID="templates-btn"
+              >
+                <MaterialCommunityIcons name="message-text-outline" size={22} color={Colors.textSecondary} />
               </TouchableOpacity>
               <TextInput
                 value={text}
@@ -733,6 +784,68 @@ export default function ChatScreen() {
                 <Text style={styles.forwardEmpty} testID="forward-picker-empty">
                   No other chats to forward to.
                 </Text>
+              }
+            />
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal visible={showTemplatePicker} transparent animationType="slide" onRequestClose={() => setShowTemplatePicker(false)}>
+        <Pressable style={styles.sheetBackdrop} onPress={() => setShowTemplatePicker(false)}>
+          <Pressable style={[styles.sheet, styles.forwardSheet]} onPress={() => {}} testID="template-picker-sheet">
+            <View style={styles.templatePickerHeader}>
+              <Text style={styles.forwardTitle} testID="template-picker-title">
+                Quick Replies
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowTemplatePicker(false);
+                  router.push('/templates' as any);
+                }}
+                testID="template-picker-manage-button"
+              >
+                <Text style={styles.templatePickerManage}>Manage</Text>
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={Array.isArray(quickTemplates) ? quickTemplates : []}
+              keyExtractor={(item: any) => item.id}
+              contentContainerStyle={styles.forwardListContent}
+              renderItem={({ item, index }: any) => (
+                <TouchableOpacity
+                  style={styles.templatePickerRow}
+                  onPress={() => {
+                    setText((current) => (current.trim().length ? `${current}\n${item.message}` : item.message || ''));
+                    setShowTemplatePicker(false);
+                  }}
+                  testID={`template-picker-item-${index}`}
+                >
+                  <View style={styles.templatePickerBadge}>
+                    <MaterialCommunityIcons name="message-text-outline" size={18} color={Colors.primary} />
+                  </View>
+                  <View style={styles.flexOne}>
+                    <Text style={styles.forwardName}>{item.label || 'Quick Reply'}</Text>
+                    <Text style={styles.forwardSub} numberOfLines={2}>
+                      {item.message || ''}
+                    </Text>
+                  </View>
+                  <Feather name="corner-down-left" size={18} color={Colors.primary} />
+                </TouchableOpacity>
+              )}
+              ListEmptyComponent={
+                <View style={styles.templatePickerEmptyWrap} testID="template-picker-empty">
+                  <Text style={styles.forwardEmpty}>No quick replies yet.</Text>
+                  <TouchableOpacity
+                    style={styles.templatePickerCreateBtn}
+                    onPress={() => {
+                      setShowTemplatePicker(false);
+                      router.push('/templates' as any);
+                    }}
+                    testID="template-picker-create-button"
+                  >
+                    <Text style={styles.templatePickerCreateText}>Create one</Text>
+                  </TouchableOpacity>
+                </View>
               }
             />
           </Pressable>
@@ -1103,6 +1216,50 @@ const styles = StyleSheet.create({
   forwardSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
   forwardEmpty: { textAlign: 'center', color: Colors.textMuted, paddingVertical: Spacing.lg },
   forwardSheet: { maxHeight: '70%' },
+  templatePickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  templatePickerManage: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.primary,
+  },
+  templatePickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  templatePickerBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  templatePickerEmptyWrap: {
+    alignItems: 'center',
+    paddingVertical: Spacing.lg,
+    gap: Spacing.sm,
+  },
+  templatePickerCreateBtn: {
+    minHeight: 40,
+    paddingHorizontal: 14,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  templatePickerCreateText: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.primaryDark,
+  },
   deletedBubble: { opacity: 0.55 },
   deletedContent: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   deletedText: { fontStyle: 'italic', color: Colors.textMuted },
