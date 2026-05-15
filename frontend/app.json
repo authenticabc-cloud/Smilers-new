@@ -44,7 +44,10 @@
               "pathPrefix": "/auth/mobile-callback"
             }
           ],
-          "category": ["BROWSABLE", "DEFAULT"]
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         },
         {
           "action": "VIEW",
@@ -57,7 +60,10 @@
               "scheme": "smilers"
             }
           ],
-          "category": ["BROWSABLE", "DEFAULT"]
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         }
       ],
       "permissions": [
@@ -95,7 +101,9 @@
         {
           "icon": "./assets/images/icon.png",
           "color": "#E4B53B",
-          "sounds": ["./assets/sounds/ringtone.mp3"]
+          "sounds": [
+            "./assets/sounds/ringtone.mp3"
+          ]
         }
       ],
       [
@@ -105,7 +113,8 @@
           "cameraPermission": "Take photos to send in chats and status"
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": false

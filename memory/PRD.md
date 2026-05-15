@@ -73,6 +73,8 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_STATUS_STORIES.md` because the Convex backend source is not present in this repo; it documents the required `statuses` endpoints, story views, DM reply support, and direct-conversation mutation
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_CONTACTS_POLISH.md` because the Convex backend source is not present in this repo; it documents the required contacts queries/mutations for outgoing requests, reject/cancel, phone invites, and QR flows
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_AD_CREDIT_CODES.md` because the Convex backend source is not present in this repo; it documents the required `adCreditCodes` table, code lifecycle, redeem flow, and `ads.recordClick` billing changes
+- ✅ Applied the latest user handoff spec to replace both `/privacy` and `/scheduled` with the new mobile UI variants, including installing `@react-native-community/datetimepicker` for scheduled date/time picking
+- ✅ Kept the user handoff UI but added the minimal required safety fix: both routes now use `useSafeConvexQuery` instead of raw `useQuery`, because the current Convex endpoints still return `Server Error` and raw queries caused red-screen crashes
 - ✅ Renamed the Status tab route file to `updates.tsx` to avoid Expo web’s reserved `/status` path conflict while keeping the tab label as **Status**
 - ✅ Convex client with custom auth integration (passes ID token via `ConvexProviderWithAuth`)
 - ✅ Bottom tab navigation (5 tabs: Chats, Contacts, Groups, Status, Profile) — matches web app's bottom nav
@@ -131,8 +133,8 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - Full end-to-end authenticated status/story verification is still pending for the same auth-gated reason, and story viewing/reply/view counts depend on the backend changes from `/app/CONVEX_BACKEND_INSTRUCTIONS_STATUS_STORIES.md`.
 - Full end-to-end authenticated contacts-polish verification is still pending for the same auth-gated reason, and outgoing requests/reject/cancel/add-by-phone depend on the backend changes from `/app/CONVEX_BACKEND_INSTRUCTIONS_CONTACTS_POLISH.md`.
 - Direct signed-in verification of the fixed Contacts tab is still pending because browser automation cannot complete the Hercules-authenticated mobile flow in this environment.
-- Privacy/App Lock/Scheduled settings currently persist per device in the mobile client; backend sync for these routes is not wired in this repo.
-- Privacy and Scheduled frontend cloud-sync wiring is in place, but re-test showed `privacy:getSettings`, `privacy:updateSettings`, `scheduledMessages:listMine`, and `scheduledMessages:create` still return Convex `Server Error`; the app continues to fall back locally instead of crashing.
+- The latest `/privacy` and `/scheduled` handoff screens are live and tested, but real cloud persistence is still blocked because `privacy:getSettings`, `privacy:updateSettings`, `scheduledMessages:listMine`, and `scheduledMessages:create` continue returning Convex `Server Error`.
+- Iteration 12 frontend testing confirmed both routes now load without crash and remain interactive under backend failure conditions because of the safe-query guard.
 - Quick Replies and Chat Appearance currently persist per device in the mobile client; no backend sync is wired for those routes yet.
 - Full end-to-end authenticated ad-credit verification is still pending for the same auth-gated reason, and code generation/redeem/billing depend on the backend changes from `/app/CONVEX_BACKEND_INSTRUCTIONS_AD_CREDIT_CODES.md`.
 - Full end-to-end authenticated search/starred verification is still pending because browser automation cannot complete the Hercules sign-in flow here, so in-app button navigation from Chats/Profile still needs one signed-in device pass.
