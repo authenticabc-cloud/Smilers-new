@@ -1,287 +1,201 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
+// Privacy settings — backed by `api.privacy.getSettings` / `updateSettings`.
+
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Switch,
+  Modal,
+  Pressable,
+  ActivityIndicator,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
 import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
-import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
-import {
-  DEFAULT_PRIVACY_SETTINGS,
-  PRIVACY_SETTINGS_KEY,
-  readStoredJson,
-  writeStoredJson,
-} from '../src/lib/settingsStorage';
+import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/theme';
 
-const VISIBILITY_OPTIONS = [
-  { key: 'everyone', label: 'Everyone' },
-  { key: 'contacts', label: 'My Contacts' },
-  { key: 'nobody', label: 'Nobody' },
-];
+type VisibilityKey = 'lastSeen' | 'profilePhoto' | 'about' | 'status' | 'calls';
+type GroupsKey = 'groups';
+type VisibilityValue = 'everyone' | 'contacts' | 'nobody';
+type GroupsValue = 'everyone' | 'contacts' | 'admins';
 
-const GROUP_OPTIONS = [
-  { key: 'everyone', label: 'Everyone' },
-  { key: 'contacts', label: 'My Contacts' },
-  { key: 'admins', label: 'Admins Only' },
+interface PrivacySettings {
+  lastSeen: VisibilityValue;
+  profilePhoto: VisibilityValue;
+  about: VisibilityValue;
+  status: VisibilityValue;
+  groups: GroupsValue;
+  calls: VisibilityValue;
+  readReceipts: boolean;
+  typingIndicators: boolean;
+}
+
+const DEFAULTS: PrivacySettings = {
+  lastSeen: 'everyone',
+  profilePhoto: 'everyone',
+  about: 'everyone',
+  status: 'contacts',
+  groups: 'everyone',
+  calls: 'everyone',
+  readReceipts: true,
+  typingIndicators: true,
+};
+
+const VISIBILITY_LABEL: Record<VisibilityValue, string> = { everyone: 'Everyone', contacts: 'My contacts', nobody: 'Nobody' };
+const GROUPS_LABEL: Record<GroupsValue, string> = { everyone: 'Everyone', contacts: 'My contacts', admins: 'Group admins only' };
+const VISIBILITY_OPTIONS: VisibilityValue[] = ['everyone', 'contacts', 'nobody'];
+const GROUPS_OPTIONS: GroupsValue[] = ['everyone', 'contacts', 'admins'];
+
+const SECTIONS: Array<{ key: VisibilityKey | GroupsKey; label: string; sub: string; icon: keyof typeof Feather.glyphMap; groups?: boolean }> = [
+  { key: 'lastSeen', label: 'Last seen', sub: 'Who can see when you were last online', icon: 'clock' },
+  { key: 'profilePhoto', label: 'Profile photo', sub: 'Who can see your profile picture', icon: 'user' },
+  { key: 'about', label: 'About', sub: 'Who can see your About text', icon: 'info' },
+  { key: 'status', label: 'Status', sub: 'Who can see your story updates', icon: 'eye' },
+  { key: 'groups', label: 'Groups', sub: 'Who can add you to groups', icon: 'users', groups: true },
+  { key: 'calls', label: 'Calls', sub: 'Who can call you on Smilers', icon: 'phone' },
 ];
 
 export default function PrivacyScreen() {
   const router = useRouter();
-  const { data: remoteSettings, refetch: refetchRemote } = useSafeConvexQuery(api.privacy.getSettings, {}, null);
-  const updateRemoteSettings = useMutation(api.privacy.updateSettings);
-  const [settings, setSettings] = useState(DEFAULT_PRIVACY_SETTINGS);
-  const [isReady, setIsReady] = useState(false);
-  const [savedNote, setSavedNote] = useState('Loading your privacy choices…');
+  const { data: serverSettings, loading } = useSafeConvexQuery<PrivacySettings>(api.privacy.getSettings, {}, DEFAULTS);
+  const updateSettings = useMutation(api.privacy.updateSettings);
+  const [draft, setDraft] = useState<PrivacySettings>(DEFAULTS);
+  const [saving, setSaving] = useState(false);
+  const [pickerKey, setPickerKey] = useState<VisibilityKey | GroupsKey | null>(null);
 
   useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      const stored = await readStoredJson(PRIVACY_SETTINGS_KEY, DEFAULT_PRIVACY_SETTINGS);
-      if (mounted) {
-        setSettings({ ...DEFAULT_PRIVACY_SETTINGS, ...(stored || {}) });
-        setSavedNote('Saved on this device');
-        setIsReady(true);
-      }
-    };
-    void load();
-    return () => {
-      mounted = false;
-    };
-  }, []);
+    if (serverSettings) setDraft({ ...DEFAULTS, ...serverSettings });
+  }, [serverSettings]);
 
-  useEffect(() => {
-    if (!remoteSettings || typeof remoteSettings !== 'object') {
-      return;
-    }
-
-    const merged = { ...DEFAULT_PRIVACY_SETTINGS, ...remoteSettings };
-    setSettings(merged);
-    void writeStoredJson(PRIVACY_SETTINGS_KEY, merged);
-    setSavedNote('Synced with Smilers cloud');
-    setIsReady(true);
-  }, [remoteSettings]);
-
-  const summary = useMemo(() => `${settings.lastSeen} · photo ${settings.profilePhoto} · groups ${settings.groups}`, [settings]);
-
-  const updateSetting = async (key: string, value: string | boolean) => {
-    const next = { ...settings, [key]: value };
-    setSettings(next);
-    setSavedNote('Saving…');
-    await writeStoredJson(PRIVACY_SETTINGS_KEY, next);
+  const persist = useCallback(async (next: PrivacySettings) => {
+    setDraft(next);
+    setSaving(true);
     try {
-      await updateRemoteSettings({ settings: next });
-      await refetchRemote();
-      setSavedNote('Synced with Smilers cloud');
-    } catch (errorValue) {
-      console.warn('privacy.updateSettings unavailable, using device storage', errorValue);
-      setSavedNote('Saved on this device');
+      await updateSettings({ settings: next });
+    } catch {
+      if (serverSettings) setDraft({ ...DEFAULTS, ...serverSettings });
+    } finally {
+      setSaving(false);
     }
+  }, [updateSettings, serverSettings]);
+
+  const onPickVisibility = (key: VisibilityKey | GroupsKey, value: VisibilityValue | GroupsValue) => {
+    setPickerKey(null);
+    persist({ ...draft, [key]: value } as PrivacySettings);
   };
+
+  const onToggle = (key: 'readReceipts' | 'typingIndicators', value: boolean) => {
+    persist({ ...draft, [key]: value });
+  };
+
+  const currentPickerOptions = useMemo(() => {
+    if (!pickerKey) return [];
+    return pickerKey === 'groups' ? GROUPS_OPTIONS : VISIBILITY_OPTIONS;
+  }, [pickerKey]);
+
+  const currentPickerLabels: Record<string, string> = pickerKey === 'groups' ? GROUPS_LABEL : VISIBILITY_LABEL;
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <Header title="Privacy" showBack onBack={() => router.back()} variant="dark" />
+        <View style={styles.loadingWrap}><ActivityIndicator size="large" color={Colors.primary} /></View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="privacy-screen">
-      <Header title="Privacy" showBack onBack={() => router.back()} variant="dark" subtitle="Last seen, profile photo, about" />
-      <ScrollView contentContainerStyle={styles.content} testID="privacy-scroll-view">
-        <View style={styles.heroCard} testID="privacy-summary-card">
-          <View style={styles.heroIconWrap} testID="privacy-summary-icon-wrap">
-            <Ionicons name="shield-checkmark-outline" size={24} color={Colors.primary} />
-          </View>
+      <Header title="Privacy" showBack onBack={() => router.back()} variant="dark" />
+      <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+        <View style={styles.heroBanner} testID="privacy-sync-banner">
+          <MaterialCommunityIcons name="shield-account" size={20} color={Colors.primary} />
+          <Text style={styles.heroText} testID="privacy-saved-note">{saving ? 'Saving…' : 'Synced with Smilers cloud'}</Text>
+        </View>
+
+        <Text style={styles.section}>WHO CAN SEE MY INFO</Text>
+        {SECTIONS.map((section) => {
+          const value = draft[section.key];
+          const labelMap = section.groups ? GROUPS_LABEL : VISIBILITY_LABEL;
+          return (
+            <TouchableOpacity key={section.key} style={styles.row} activeOpacity={0.7} onPress={() => setPickerKey(section.key)} testID={`privacy-${section.key}`}>
+              <View style={styles.iconWrap}><Feather name={section.icon} size={20} color={Colors.primary} /></View>
+              <View style={styles.flexOne}>
+                <Text style={styles.rowTitle}>{section.label}</Text>
+                <Text style={styles.rowSub}>{section.sub}</Text>
+              </View>
+              <Text style={styles.rowValue}>{labelMap[value as VisibilityValue & GroupsValue]}</Text>
+              <Feather name="chevron-right" size={18} color={Colors.textMuted} />
+            </TouchableOpacity>
+          );
+        })}
+
+        <Text style={styles.section}>MESSAGING</Text>
+        <View style={styles.row} testID="privacy-read-receipts-row">
+          <View style={styles.iconWrap}><Feather name="check-circle" size={20} color={Colors.primary} /></View>
           <View style={styles.flexOne}>
-            <Text style={styles.heroTitle} testID="privacy-summary-title">Privacy Controls</Text>
-            <Text style={styles.heroSub} testID="privacy-summary-subtitle">
-              Choose who can see your profile details and who can reach you.
-            </Text>
+            <Text style={styles.rowTitle}>Read receipts</Text>
+            <Text style={styles.rowSub}>Let others see when you've read their messages.</Text>
           </View>
+          <Switch value={draft.readReceipts} onValueChange={(value) => onToggle('readReceipts', value)} trackColor={{ false: Colors.border, true: Colors.primary }} thumbColor={Colors.white} testID="toggle-read-receipts" />
+        </View>
+        <View style={styles.row} testID="privacy-typing-row">
+          <View style={styles.iconWrap}><MaterialCommunityIcons name="dots-horizontal" size={22} color={Colors.primary} /></View>
+          <View style={styles.flexOne}>
+            <Text style={styles.rowTitle}>Typing indicators</Text>
+            <Text style={styles.rowSub}>Let others see when you're typing.</Text>
+          </View>
+          <Switch value={draft.typingIndicators} onValueChange={(value) => onToggle('typingIndicators', value)} trackColor={{ false: Colors.border, true: Colors.primary }} thumbColor={Colors.white} testID="toggle-typing" />
         </View>
 
-        <Text style={styles.savedNote} testID="privacy-saved-note">{isReady ? savedNote : 'Loading your privacy choices…'}</Text>
-        <Text style={styles.summaryPill} testID="privacy-summary-pill">{summary}</Text>
-
-        <OptionSection
-          title="Who can see my personal info"
-          description="Match the web privacy flow by controlling visibility for profile details."
-          items={[
-            { key: 'lastSeen', label: 'Last Seen & Online', value: settings.lastSeen, options: VISIBILITY_OPTIONS },
-            { key: 'profilePhoto', label: 'Profile Photo', value: settings.profilePhoto, options: VISIBILITY_OPTIONS },
-            { key: 'about', label: 'About', value: settings.about, options: VISIBILITY_OPTIONS },
-            { key: 'status', label: 'Status / Stories', value: settings.status, options: VISIBILITY_OPTIONS },
-          ]}
-          onSelect={updateSetting}
-        />
-
-        <OptionSection
-          title="Who can contact me"
-          description="Control who can add you to groups and who can call you directly."
-          items={[
-            { key: 'groups', label: 'Groups', value: settings.groups, options: GROUP_OPTIONS },
-            { key: 'calls', label: 'Calls', value: settings.calls, options: VISIBILITY_OPTIONS },
-          ]}
-          onSelect={updateSetting}
-        />
-
-        <View style={styles.card} testID="privacy-messaging-card">
-          <Text style={styles.sectionTitle} testID="privacy-messaging-title">Messaging Privacy</Text>
-          <Text style={styles.sectionSub} testID="privacy-messaging-subtitle">
-            Fine-tune how people see your activity when chatting with you.
-          </Text>
-
-          <ToggleRow
-            title="Read Receipts"
-            subtitle="If off, you won't send or receive read receipts."
-            value={settings.readReceipts}
-            onValueChange={(value) => updateSetting('readReceipts', value)}
-            testID="privacy-read-receipts"
-          />
-          <ToggleRow
-            title="Typing Indicators"
-            subtitle="Show when you are typing or recording a voice note."
-            value={settings.typingIndicators}
-            onValueChange={(value) => updateSetting('typingIndicators', value)}
-            testID="privacy-typing-indicators"
-          />
-        </View>
+        <Text style={styles.footnote}>Privacy settings apply across all your linked Smilers devices.</Text>
       </ScrollView>
-    </SafeAreaView>
-  );
-}
 
-function OptionSection({
-  title,
-  description,
-  items,
-  onSelect,
-}: {
-  title: string;
-  description: string;
-  items: Array<{ key: string; label: string; value: string; options: Array<{ key: string; label: string }> }>;
-  onSelect: (key: string, value: string) => void;
-}) {
-  return (
-    <View style={styles.card} testID={`privacy-section-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      <Text style={styles.sectionSub}>{description}</Text>
-      {items.map((item, itemIndex) => (
-        <View key={item.key} style={[styles.optionBlock, itemIndex === items.length - 1 ? styles.optionBlockLast : null]}>
-          <Text style={styles.rowTitle} testID={`privacy-label-${item.key}`}>{item.label}</Text>
-          <View style={styles.chipRow} testID={`privacy-options-${item.key}`}>
-            {item.options.map((option) => {
-              const selected = item.value === option.key;
+      <Modal visible={!!pickerKey} transparent animationType="fade" onRequestClose={() => setPickerKey(null)}>
+        <Pressable style={styles.backdrop} onPress={() => setPickerKey(null)}>
+          <Pressable style={styles.sheet} onPress={() => {}} testID="privacy-picker-sheet">
+            <View style={styles.grabber} />
+            <Text style={styles.sheetTitle}>{pickerKey ? SECTIONS.find((section) => section.key === pickerKey)?.label : ''}</Text>
+            {currentPickerOptions.map((option) => {
+              const selected = pickerKey ? draft[pickerKey] === option : false;
               return (
-                <TouchableOpacity
-                  key={option.key}
-                  style={[styles.chip, selected ? styles.chipActive : null]}
-                  onPress={() => onSelect(item.key, option.key)}
-                  testID={`privacy-option-${item.key}-${option.key}`}
-                >
-                  <Text style={[styles.chipText, selected ? styles.chipTextActive : null]}>{option.label}</Text>
+                <TouchableOpacity key={option} style={styles.optionRow} onPress={() => pickerKey && onPickVisibility(pickerKey, option as VisibilityValue | GroupsValue)} testID={`privacy-opt-${option}`}>
+                  <Text style={styles.optionLabel}>{currentPickerLabels[option]}</Text>
+                  {selected ? <Feather name="check" size={20} color={Colors.primary} /> : null}
                 </TouchableOpacity>
               );
             })}
-          </View>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-function ToggleRow({
-  title,
-  subtitle,
-  value,
-  onValueChange,
-  testID,
-}: {
-  title: string;
-  subtitle: string;
-  value: boolean;
-  onValueChange: (value: boolean) => void;
-  testID: string;
-}) {
-  return (
-    <View style={styles.toggleRow} testID={`${testID}-row`}>
-      <View style={styles.flexOne}>
-        <Text style={styles.rowTitle} testID={`${testID}-title`}>{title}</Text>
-        <Text style={styles.rowSub} testID={`${testID}-subtitle`}>{subtitle}</Text>
-      </View>
-      <Switch
-        value={value}
-        onValueChange={onValueChange}
-        trackColor={{ true: Colors.primary, false: '#d1d5db' }}
-        testID={`${testID}-switch`}
-      />
-    </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  content: { padding: Spacing.base, paddingBottom: 56, gap: Spacing.base },
-  heroCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    padding: Spacing.base,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  heroIconWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.primaryLight,
-  },
-  heroTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  heroSub: { marginTop: 4, fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
-  savedNote: { fontSize: FontSize.sm, color: Colors.textSecondary },
-  summaryPill: {
-    fontSize: FontSize.sm,
-    color: Colors.primaryDark,
-    backgroundColor: Colors.primaryLight,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: Radius.pill,
-    overflow: 'hidden',
-  },
-  card: {
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    padding: Spacing.base,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  sectionSub: { marginTop: 6, marginBottom: Spacing.base, fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
-  optionBlock: { paddingBottom: Spacing.base, marginBottom: Spacing.base, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.border },
-  optionBlockLast: { paddingBottom: 0, marginBottom: 0, borderBottomWidth: 0 },
+  loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  heroBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: Spacing.base, marginTop: Spacing.md, padding: 12, backgroundColor: Colors.primaryLight, borderRadius: Radius.md },
+  heroText: { color: Colors.textPrimary, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  section: { fontSize: FontSize.xs, fontWeight: FontWeight.bold, color: Colors.primary, letterSpacing: 1, paddingHorizontal: Spacing.base, paddingTop: Spacing.lg, paddingBottom: Spacing.sm },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: Spacing.base, paddingVertical: 14, backgroundColor: Colors.surface, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: Colors.borderLight },
+  iconWrap: { width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
   rowTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
-  rowSub: { marginTop: 4, fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 18 },
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
-  chip: {
-    minHeight: 44,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: Radius.pill,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.background,
-    justifyContent: 'center',
-  },
-  chipActive: { borderColor: Colors.primary, backgroundColor: Colors.primaryLight },
-  chipText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.textSecondary },
-  chipTextActive: { color: Colors.primaryDark },
-  toggleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.border,
-  },
+  rowSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
+  rowValue: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.semibold },
+  footnote: { fontSize: FontSize.xs, color: Colors.textMuted, paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, lineHeight: 16, fontStyle: 'italic' },
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  sheet: { backgroundColor: Colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingBottom: 24, ...Shadow.lg },
+  grabber: { width: 40, height: 4, backgroundColor: Colors.border, borderRadius: 2, alignSelf: 'center', marginVertical: Spacing.sm },
+  sheetTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary, paddingHorizontal: Spacing.base, paddingBottom: Spacing.sm },
+  optionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: Spacing.base },
+  optionLabel: { fontSize: FontSize.base, color: Colors.textPrimary },
   flexOne: { flex: 1 },
 });

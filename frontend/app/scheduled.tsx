@@ -1,592 +1,320 @@
-import React, { useEffect, useMemo, useState } from 'react';
+// Scheduled Messages — backed by `api.scheduledMessages.*`.
+
+import React, { useState, useCallback } from 'react';
 import {
-  Alert,
-  FlatList,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
   View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
+  Switch,
+  Modal,
+  Pressable,
+  TextInput,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
-import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
-import { SCHEDULED_MESSAGES_KEY, readStoredJson, writeStoredJson } from '../src/lib/settingsStorage';
+import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/theme';
 
-const REPEAT_OPTIONS = [
-  { key: 'once', label: 'Once' },
-  { key: 'daily', label: 'Daily' },
-  { key: 'weekly', label: 'Weekly' },
-  { key: 'monthly', label: 'Monthly' },
-];
-
-function createDraft() {
-  const next = new Date(Date.now() + 60 * 60 * 1000);
-  return {
-    id: '',
-    recipient: '',
-    message: '',
-    date: next.toISOString().slice(0, 10),
-    time: `${String(next.getHours()).padStart(2, '0')}:${String(next.getMinutes()).padStart(2, '0')}`,
-    repeat: 'once',
-    active: true,
-  };
+type Repeat = 'once' | 'daily' | 'weekly' | 'monthly';
+interface Schedule {
+  _id: string;
+  recipient: string;
+  message: string;
+  date: string;
+  time: string;
+  repeat: Repeat;
+  active: boolean;
 }
 
-function normalizeSchedule(item: any) {
-  return {
-    ...item,
-    id: item?.id || item?._id || `${Date.now()}`,
-    recipient: item?.recipient || '',
-    message: item?.message || '',
-    date: item?.date || '',
-    time: item?.time || '',
-    repeat: item?.repeat || 'once',
-    active: item?.active !== false,
-  };
-}
+const REPEAT_LABEL: Record<Repeat, string> = { once: 'Once', daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
+const REPEAT_OPTIONS: Repeat[] = ['once', 'daily', 'weekly', 'monthly'];
+
+function pad2(n: number) { return n.toString().padStart(2, '0'); }
+function todayYMD() { const d = new Date(); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
+function nowHM() { const d = new Date(); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
+function parseYMD(s: string) { const [y, m, d] = s.split('-').map(Number); const dt = new Date(); dt.setFullYear(y, (m || 1) - 1, d || 1); dt.setHours(0, 0, 0, 0); return dt; }
+function parseHM(s: string) { const [h, m] = s.split(':').map(Number); const dt = new Date(); dt.setHours(h || 0, m || 0, 0, 0); return dt; }
 
 export default function ScheduledScreen() {
   const router = useRouter();
-  const { data: remoteItems, refetch: refetchRemoteItems } = useSafeConvexQuery(api.scheduledMessages.listMine, {}, null);
-  const createRemoteSchedule = useMutation(api.scheduledMessages.create);
-  const updateRemoteSchedule = useMutation(api.scheduledMessages.update);
-  const removeRemoteSchedule = useMutation(api.scheduledMessages.remove);
-  const setRemoteScheduleActive = useMutation(api.scheduledMessages.setActive);
-  const [items, setItems] = useState<any[]>([]);
-  const [composerVisible, setComposerVisible] = useState(false);
-  const [draft, setDraft] = useState(createDraft());
-  const [editingId, setEditingId] = useState('');
-  const [statusNote, setStatusNote] = useState('Loading your saved schedules…');
+  const { data: items, loading } = useSafeConvexQuery<Schedule[]>(api.scheduledMessages.listMine, {}, []);
+  const createSchedule = useMutation(api.scheduledMessages.create);
+  const updateSchedule = useMutation(api.scheduledMessages.update);
+  const removeSchedule = useMutation(api.scheduledMessages.remove);
+  const setActiveSchedule = useMutation(api.scheduledMessages.setActive);
+  const [editing, setEditing] = useState<Schedule | null>(null);
+  const [showCompose, setShowCompose] = useState(false);
 
-  useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      const stored = await readStoredJson(SCHEDULED_MESSAGES_KEY, []);
-      if (mounted) {
-        setItems(Array.isArray(stored) ? stored : []);
-        setStatusNote('Saved schedules stay ready on this device');
-      }
-    };
-    void load();
-    return () => {
-      mounted = false;
-    };
-  }, []);
+  const onToggleActive = useCallback(async (schedule: Schedule) => {
+    try { await setActiveSchedule({ scheduleId: schedule._id as any, active: !schedule.active }); }
+    catch (errorValue: any) { Alert.alert('Failed', errorValue?.message || 'Unknown error'); }
+  }, [setActiveSchedule]);
 
-  useEffect(() => {
-    if (!Array.isArray(remoteItems)) {
-      return;
-    }
-    const nextItems = remoteItems.map(normalizeSchedule);
-    setItems(nextItems);
-    void writeStoredJson(SCHEDULED_MESSAGES_KEY, nextItems);
-    setStatusNote('Synced with Smilers cloud');
-  }, [remoteItems]);
-
-  const activeCount = useMemo(() => items.filter((item) => item.active).length, [items]);
-
-  const persist = async (nextItems: any[]) => {
-    setItems(nextItems);
-    await writeStoredJson(SCHEDULED_MESSAGES_KEY, nextItems);
-    setStatusNote('Scheduled messages updated');
-  };
-
-  const openCreate = () => {
-    setEditingId('');
-    setDraft(createDraft());
-    setComposerVisible(true);
-  };
-
-  const openEdit = (item: any) => {
-    setEditingId(item.id);
-    setDraft({ ...item });
-    setComposerVisible(true);
-  };
-
-  const saveDraft = async () => {
-    if (!draft.recipient.trim()) {
-      Alert.alert('Add a chat', 'Enter the person or group you want to message later.');
-      return;
-    }
-    if (!draft.message.trim()) {
-      Alert.alert('Add a message', 'Write the message you want Smilers to keep ready.');
-      return;
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(draft.date) || !/^\d{2}:\d{2}$/.test(draft.time)) {
-      Alert.alert('Use the right format', 'Date must be YYYY-MM-DD and time must be HH:MM.');
-      return;
-    }
-    const nextItem = {
-      ...draft,
-      id: editingId || `${Date.now()}`,
-      recipient: draft.recipient.trim(),
-      message: draft.message.trim(),
-    };
-    try {
-      if (editingId) {
-        await updateRemoteSchedule({
-          scheduleId: editingId,
-          recipient: nextItem.recipient,
-          message: nextItem.message,
-          date: nextItem.date,
-          time: nextItem.time,
-          repeat: nextItem.repeat,
-          active: nextItem.active,
-        });
-      } else {
-        await createRemoteSchedule({
-          recipient: nextItem.recipient,
-          message: nextItem.message,
-          date: nextItem.date,
-          time: nextItem.time,
-          repeat: nextItem.repeat,
-          active: nextItem.active,
-        });
-      }
-      await refetchRemoteItems();
-      setStatusNote('Synced with Smilers cloud');
-    } catch (errorValue) {
-      console.warn('scheduledMessages cloud sync unavailable, using device storage', errorValue);
-      const nextItems = editingId ? items.map((item) => (item.id === editingId ? nextItem : item)) : [nextItem, ...items];
-      await persist(nextItems);
-      setStatusNote('Saved on this device');
-    }
-    setComposerVisible(false);
-  };
-
-  const removeItem = (id: string) => {
-    Alert.alert('Delete this schedule?', 'This removes it from your scheduled list.', [
+  const onDelete = useCallback((schedule: Schedule) => {
+    Alert.alert('Delete scheduled message?', `"${schedule.message.slice(0, 60)}${schedule.message.length > 60 ? '…' : ''}"`, [
       { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await removeRemoteSchedule({ scheduleId: id });
-            await refetchRemoteItems();
-            setStatusNote('Synced with Smilers cloud');
-          } catch (errorValue) {
-            console.warn('scheduledMessages.remove unavailable, using device storage', errorValue);
-            await persist(items.filter((item) => item.id !== id));
-            setStatusNote('Saved on this device');
-          }
-        },
-      },
+      { text: 'Delete', style: 'destructive', onPress: async () => { try { await removeSchedule({ scheduleId: schedule._id as any }); } catch (errorValue: any) { Alert.alert('Failed', errorValue?.message || 'Unknown error'); } } },
     ]);
-  };
+  }, [removeSchedule]);
 
-  const toggleActive = async (id: string) => {
-    const target = items.find((item) => item.id === id);
-    if (!target) {
-      return;
-    }
+  const onSave = useCallback(async (draft: Omit<Schedule, '_id'> & { _id?: string }) => {
     try {
-      await setRemoteScheduleActive({ scheduleId: id, active: !target.active });
-      await refetchRemoteItems();
-      setStatusNote('Synced with Smilers cloud');
-    } catch (errorValue) {
-      console.warn('scheduledMessages.setActive unavailable, using device storage', errorValue);
-      const nextItems = items.map((item) => (item.id === id ? { ...item, active: !item.active } : item));
-      await persist(nextItems);
-      setStatusNote('Saved on this device');
-    }
-  };
-
-  const setQuickTime = (type: 'one-hour' | 'tomorrow' | 'tonight') => {
-    const date = new Date();
-    if (type === 'one-hour') {
-      date.setHours(date.getHours() + 1);
-    }
-    if (type === 'tomorrow') {
-      date.setDate(date.getDate() + 1);
-      date.setHours(9, 0, 0, 0);
-    }
-    if (type === 'tonight') {
-      date.setHours(20, 0, 0, 0);
-      if (date.getTime() < Date.now()) {
-        date.setDate(date.getDate() + 1);
+      if (draft._id) {
+        await updateSchedule({ scheduleId: draft._id as any, recipient: draft.recipient, message: draft.message, date: draft.date, time: draft.time, repeat: draft.repeat, active: draft.active });
+      } else {
+        await createSchedule({ recipient: draft.recipient, message: draft.message, date: draft.date, time: draft.time, repeat: draft.repeat, active: draft.active });
       }
-    }
-    setDraft({
-      ...draft,
-      date: date.toISOString().slice(0, 10),
-      time: `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`,
-    });
-  };
+      setEditing(null); setShowCompose(false);
+    } catch (errorValue: any) { Alert.alert('Failed', errorValue?.message || 'Unknown error'); }
+  }, [createSchedule, updateSchedule]);
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <Header title="Scheduled" showBack onBack={() => router.back()} variant="dark" />
+        <View style={styles.loadingWrap}><ActivityIndicator color={Colors.primary} size="large" /></View>
+      </SafeAreaView>
+    );
+  }
+
+  const list = Array.isArray(items) ? items : [];
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="scheduled-screen">
-      <Header
-        title="Scheduled Messages"
-        showBack
-        onBack={() => router.back()}
-        variant="dark"
-        subtitle="View and manage scheduled messages"
-        right={
-          <TouchableOpacity onPress={openCreate} style={styles.headerButton} testID="scheduled-add-button">
-            <Ionicons name="add" size={24} color={Colors.white} />
-          </TouchableOpacity>
-        }
-      />
-
+      <Header title="Scheduled" showBack onBack={() => router.back()} variant="dark" />
+      <View style={styles.heroBanner} testID="scheduled-sync-banner">
+        <MaterialCommunityIcons name="cloud-check" size={20} color={Colors.primary} />
+        <Text style={styles.heroText} testID="scheduled-status-note">Synced with Smilers cloud</Text>
+      </View>
       <FlatList
-        data={items}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.content}
-        testID="scheduled-list"
-        ListHeaderComponent={
-          <>
-            <View style={styles.heroCard} testID="scheduled-hero-card">
-              <View style={styles.heroIconWrap} testID="scheduled-hero-icon-wrap">
-                <MaterialCommunityIcons name="clock-check-outline" size={24} color={Colors.primary} />
-              </View>
-              <View style={styles.flexOne}>
-                <Text style={styles.heroTitle} testID="scheduled-hero-title">Keep messages ready</Text>
-                <Text style={styles.heroSub} testID="scheduled-hero-subtitle">
-                  Plan follow-ups, recurring reminders, and time-sensitive messages ahead of time.
-                </Text>
-              </View>
+        data={list}
+        keyExtractor={(schedule: Schedule) => schedule._id}
+        contentContainerStyle={{ paddingBottom: 120, paddingTop: Spacing.md }}
+        renderItem={({ item }) => (
+          <View style={styles.card} testID={`schedule-${item._id}`}>
+            <View style={styles.cardTopRow}>
+              <View style={[styles.dot, { backgroundColor: item.active ? Colors.primary : Colors.textMuted }]} />
+              <Text style={styles.cardRecipient} numberOfLines={1}>{item.recipient || 'Recipient'}</Text>
+              <View style={styles.flexOne} />
+              <Switch value={item.active} onValueChange={() => onToggleActive(item)} trackColor={{ false: Colors.border, true: Colors.primary }} thumbColor={Colors.white} testID={`toggle-${item._id}`} />
             </View>
-
-            <View style={styles.statsRow} testID="scheduled-stats-row">
-              <View style={styles.statCard} testID="scheduled-total-card">
-                <Text style={styles.statValue} testID="scheduled-total-value">{items.length}</Text>
-                <Text style={styles.statLabel} testID="scheduled-total-label">Total</Text>
-              </View>
-              <View style={styles.statCard} testID="scheduled-active-card">
-                <Text style={styles.statValue} testID="scheduled-active-value">{activeCount}</Text>
-                <Text style={styles.statLabel} testID="scheduled-active-label">Active</Text>
-              </View>
+            <Text style={styles.cardMessage} numberOfLines={2}>{item.message}</Text>
+            <View style={styles.cardMeta}>
+              <Feather name="calendar" size={14} color={Colors.textMuted} />
+              <Text style={styles.cardMetaText}>{item.date} at {item.time}</Text>
+              <Text style={styles.cardMetaDot}>·</Text>
+              <Feather name="repeat" size={14} color={Colors.textMuted} />
+              <Text style={styles.cardMetaText}>{REPEAT_LABEL[item.repeat]}</Text>
             </View>
-
-            <Text style={styles.statusNote} testID="scheduled-status-note">{statusNote}</Text>
-          </>
-        }
-        renderItem={({ item, index }) => (
-          <View style={styles.itemCard} testID={`scheduled-item-${index}`}>
-            <View style={styles.itemTopRow}>
-              <View style={styles.flexOne}>
-                <Text style={styles.itemRecipient} testID={`scheduled-recipient-${index}`}>{item.recipient}</Text>
-                <Text style={styles.itemSchedule} testID={`scheduled-time-${index}`}>
-                  {item.date} at {item.time} · {item.repeat}
-                </Text>
-              </View>
-              <View style={[styles.badge, item.active ? styles.badgeActive : styles.badgePaused]} testID={`scheduled-badge-${index}`}>
-                <Text style={[styles.badgeText, item.active ? styles.badgeTextActive : styles.badgeTextPaused]}>
-                  {item.active ? 'Active' : 'Paused'}
-                </Text>
-              </View>
-            </View>
-
-            <Text style={styles.itemMessage} numberOfLines={3} testID={`scheduled-message-${index}`}>{item.message}</Text>
-
-            <View style={styles.itemActions} testID={`scheduled-actions-${index}`}>
-              <TouchableOpacity style={styles.actionButton} onPress={() => toggleActive(item.id)} testID={`scheduled-toggle-${index}`}>
-                <Ionicons name={item.active ? 'pause-outline' : 'play-outline'} size={18} color={Colors.primary} />
-                <Text style={styles.actionButtonText}>{item.active ? 'Pause' : 'Resume'}</Text>
+            <View style={styles.cardActions}>
+              <TouchableOpacity style={styles.cardActionBtn} onPress={() => setEditing(item)} testID={`edit-${item._id}`}>
+                <Feather name="edit-2" size={14} color={Colors.primary} />
+                <Text style={styles.cardActionText}>Edit</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.actionButton} onPress={() => openEdit(item)} testID={`scheduled-edit-${index}`}>
-                <Ionicons name="create-outline" size={18} color={Colors.primary} />
-                <Text style={styles.actionButtonText}>Edit</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.deleteButton} onPress={() => removeItem(item.id)} testID={`scheduled-delete-${index}`}>
-                <Ionicons name="trash-outline" size={18} color={Colors.danger} />
-                <Text style={styles.deleteButtonText}>Delete</Text>
+              <TouchableOpacity style={[styles.cardActionBtn, { borderColor: Colors.danger }]} onPress={() => onDelete(item)} testID={`delete-${item._id}`}>
+                <Feather name="trash-2" size={14} color={Colors.danger} />
+                <Text style={[styles.cardActionText, { color: Colors.danger }]}>Delete</Text>
               </TouchableOpacity>
             </View>
           </View>
         )}
         ListEmptyComponent={
-          <View style={styles.emptyCard} testID="scheduled-empty-state">
-            <MaterialCommunityIcons name="clock-outline" size={54} color={Colors.primary} />
-            <Text style={styles.emptyTitle}>No scheduled messages yet</Text>
-            <Text style={styles.emptySub}>Tap the + button to queue a message for later, daily, weekly, or monthly delivery.</Text>
-            <TouchableOpacity style={styles.primaryButton} onPress={openCreate} testID="scheduled-empty-create-button">
-              <Text style={styles.primaryButtonText}>Create Schedule</Text>
-            </TouchableOpacity>
+          <View style={styles.empty} testID="scheduled-empty-state">
+            <View style={styles.emptyIcon}><Feather name="clock" size={28} color={Colors.primary} /></View>
+            <Text style={styles.emptyTitle}>No scheduled messages</Text>
+            <Text style={styles.emptySub}>Tap the + button to schedule your first message.</Text>
           </View>
         }
       />
-
-      <Modal visible={composerVisible} transparent animationType="slide" onRequestClose={() => setComposerVisible(false)}>
-        <View style={styles.modalBackdrop} testID="scheduled-modal-backdrop">
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalKeyboardWrap}>
-            <View style={styles.modalCard} testID="scheduled-modal">
-              <Text style={styles.modalTitle} testID="scheduled-modal-title">{editingId ? 'Edit schedule' : 'New scheduled message'}</Text>
-              <Text style={styles.modalSub} testID="scheduled-modal-subtitle">
-                Save a message for later and keep it ready from this screen.
-              </Text>
-
-              <TextInput
-                value={draft.recipient}
-                onChangeText={(value) => setDraft({ ...draft, recipient: value })}
-                placeholder="Person or group"
-                placeholderTextColor={Colors.textMuted}
-                style={styles.input}
-                testID="scheduled-recipient-input"
-              />
-              <TextInput
-                value={draft.message}
-                onChangeText={(value) => setDraft({ ...draft, message: value })}
-                placeholder="Message"
-                placeholderTextColor={Colors.textMuted}
-                multiline
-                style={[styles.input, styles.messageInput]}
-                testID="scheduled-message-input"
-              />
-
-              <View style={styles.quickRow} testID="scheduled-quick-row">
-                <QuickTimeButton label="+1 hour" onPress={() => setQuickTime('one-hour')} testID="scheduled-quick-one-hour" />
-                <QuickTimeButton label="Tonight" onPress={() => setQuickTime('tonight')} testID="scheduled-quick-tonight" />
-                <QuickTimeButton label="Tomorrow 9AM" onPress={() => setQuickTime('tomorrow')} testID="scheduled-quick-tomorrow" />
-              </View>
-
-              <View style={styles.inlineInputs} testID="scheduled-datetime-row">
-                <TextInput
-                  value={draft.date}
-                  onChangeText={(value) => setDraft({ ...draft, date: value })}
-                  placeholder="YYYY-MM-DD"
-                  placeholderTextColor={Colors.textMuted}
-                  style={[styles.input, styles.inlineInput]}
-                  testID="scheduled-date-input"
-                />
-                <TextInput
-                  value={draft.time}
-                  onChangeText={(value) => setDraft({ ...draft, time: value })}
-                  placeholder="HH:MM"
-                  placeholderTextColor={Colors.textMuted}
-                  style={[styles.input, styles.inlineInput]}
-                  testID="scheduled-time-input"
-                />
-              </View>
-
-              <Text style={styles.repeatTitle} testID="scheduled-repeat-title">Repeat</Text>
-              <View style={styles.repeatRow} testID="scheduled-repeat-row">
-                {REPEAT_OPTIONS.map((option) => {
-                  const selected = draft.repeat === option.key;
-                  return (
-                    <TouchableOpacity
-                      key={option.key}
-                      style={[styles.repeatChip, selected ? styles.repeatChipActive : null]}
-                      onPress={() => setDraft({ ...draft, repeat: option.key })}
-                      testID={`scheduled-repeat-${option.key}`}
-                    >
-                      <Text style={[styles.repeatChipText, selected ? styles.repeatChipTextActive : null]}>{option.label}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              <View style={styles.modalActions} testID="scheduled-modal-actions">
-                <TouchableOpacity style={styles.modalSecondaryButton} onPress={() => setComposerVisible(false)} testID="scheduled-cancel-button">
-                  <Text style={styles.modalSecondaryButtonText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.modalPrimaryButton} onPress={saveDraft} testID="scheduled-save-button">
-                  <Text style={styles.modalPrimaryButtonText}>{editingId ? 'Save Changes' : 'Create Schedule'}</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </KeyboardAvoidingView>
-        </View>
-      </Modal>
+      <TouchableOpacity style={styles.fab} onPress={() => setShowCompose(true)} testID="new-schedule-fab">
+        <Feather name="plus" size={24} color={Colors.white} />
+      </TouchableOpacity>
+      {(showCompose || editing) ? (
+        <ComposeModal initial={editing ?? undefined} onClose={() => { setShowCompose(false); setEditing(null); }} onSave={onSave} />
+      ) : null}
     </SafeAreaView>
   );
 }
 
-function QuickTimeButton({ label, onPress, testID }: { label: string; onPress: () => void; testID: string }) {
+function ComposeModal({ initial, onClose, onSave }: { initial?: Schedule; onClose: () => void; onSave: (schedule: Omit<Schedule, '_id'> & { _id?: string }) => void; }) {
+  const [recipient, setRecipient] = useState(initial?.recipient || '');
+  const [message, setMessage] = useState(initial?.message || '');
+  const [date, setDate] = useState(initial?.date || todayYMD());
+  const [time, setTime] = useState(initial?.time || nowHM());
+  const [repeat, setRepeat] = useState<Repeat>(initial?.repeat || 'once');
+  const [active, setActive] = useState(initial?.active ?? true);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [showRepeatPicker, setShowRepeatPicker] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const canSave = recipient.trim().length > 0 && message.trim().length > 0;
+
+  const onConfirm = async () => {
+    if (!canSave || busy) return;
+    setBusy(true);
+    await onSave({ _id: initial?._id, recipient: recipient.trim(), message: message.trim(), date, time, repeat, active });
+    setBusy(false);
+  };
+
   return (
-    <TouchableOpacity style={styles.quickButton} onPress={onPress} testID={testID}>
-      <Text style={styles.quickButtonText}>{label}</Text>
-    </TouchableOpacity>
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.backdrop} onPress={onClose}>
+        <Pressable style={[styles.sheet, { maxHeight: '90%' }]} onPress={() => {}} testID="scheduled-compose-sheet">
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+            <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.sheetContent}>
+              <View style={styles.grabber} />
+              <Text style={styles.sheetTitle}>{initial ? 'Edit scheduled message' : 'Schedule a message'}</Text>
+
+              <Text style={styles.inputLabel}>Recipient</Text>
+              <TextInput value={recipient} onChangeText={setRecipient} placeholder="Name or chat" placeholderTextColor={Colors.textMuted} style={styles.input} testID="scheduled-recipient-input" />
+
+              <Text style={styles.inputLabel}>Message</Text>
+              <TextInput value={message} onChangeText={setMessage} placeholder="Write the message" placeholderTextColor={Colors.textMuted} multiline style={[styles.input, styles.messageInput]} testID="scheduled-message-input" />
+
+              <View style={styles.twoColWrap}>
+                <View style={styles.twoColItem}>
+                  <Text style={styles.inputLabel}>Date</Text>
+                  <TouchableOpacity style={styles.pickerButton} onPress={() => setShowDatePicker(true)} testID="scheduled-date-button">
+                    <Feather name="calendar" size={16} color={Colors.primary} />
+                    <Text style={styles.pickerButtonText}>{date}</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.twoColItem}>
+                  <Text style={styles.inputLabel}>Time</Text>
+                  <TouchableOpacity style={styles.pickerButton} onPress={() => setShowTimePicker(true)} testID="scheduled-time-button">
+                    <Feather name="clock" size={16} color={Colors.primary} />
+                    <Text style={styles.pickerButtonText}>{time}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <Text style={styles.inputLabel}>Repeat</Text>
+              <TouchableOpacity style={styles.pickerButton} onPress={() => setShowRepeatPicker(true)} testID="scheduled-repeat-button">
+                <Feather name="repeat" size={16} color={Colors.primary} />
+                <Text style={styles.pickerButtonText}>{REPEAT_LABEL[repeat]}</Text>
+              </TouchableOpacity>
+
+              <View style={styles.switchRow} testID="scheduled-active-row">
+                <View>
+                  <Text style={styles.rowTitle}>Active</Text>
+                  <Text style={styles.rowSub}>Turn this off without deleting it.</Text>
+                </View>
+                <Switch value={active} onValueChange={setActive} trackColor={{ false: Colors.border, true: Colors.primary }} thumbColor={Colors.white} testID="scheduled-active-switch" />
+              </View>
+
+              <View style={styles.modalActions}>
+                <TouchableOpacity style={styles.secondaryBtn} onPress={onClose} testID="scheduled-cancel-button">
+                  <Text style={styles.secondaryBtnText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.primaryBtn, !canSave || busy ? styles.primaryBtnDisabled : null]} onPress={onConfirm} disabled={!canSave || busy} testID="scheduled-save-button">
+                  <Text style={styles.primaryBtnText}>{busy ? 'Saving…' : initial ? 'Save changes' : 'Schedule'}</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+
+          {showDatePicker ? (
+            <DateTimePicker
+              value={parseYMD(date)}
+              mode="date"
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={(_, selectedDate) => {
+                setShowDatePicker(Platform.OS === 'ios');
+                if (selectedDate) setDate(`${selectedDate.getFullYear()}-${pad2(selectedDate.getMonth() + 1)}-${pad2(selectedDate.getDate())}`);
+              }}
+            />
+          ) : null}
+
+          {showTimePicker ? (
+            <DateTimePicker
+              value={parseHM(time)}
+              mode="time"
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={(_, selectedTime) => {
+                setShowTimePicker(Platform.OS === 'ios');
+                if (selectedTime) setTime(`${pad2(selectedTime.getHours())}:${pad2(selectedTime.getMinutes())}`);
+              }}
+            />
+          ) : null}
+
+          <Modal visible={showRepeatPicker} transparent animationType="fade" onRequestClose={() => setShowRepeatPicker(false)}>
+            <Pressable style={styles.backdrop} onPress={() => setShowRepeatPicker(false)}>
+              <Pressable style={styles.innerSheet} onPress={() => {}} testID="scheduled-repeat-sheet">
+                <Text style={styles.sheetTitle}>Repeat</Text>
+                {REPEAT_OPTIONS.map((option) => {
+                  const selected = repeat === option;
+                  return (
+                    <TouchableOpacity key={option} style={styles.optionRow} onPress={() => { setRepeat(option); setShowRepeatPicker(false); }} testID={`scheduled-repeat-${option}`}>
+                      <Text style={styles.optionLabel}>{REPEAT_LABEL[option]}</Text>
+                      {selected ? <Feather name="check" size={20} color={Colors.primary} /> : null}
+                    </TouchableOpacity>
+                  );
+                })}
+              </Pressable>
+            </Pressable>
+          </Modal>
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  headerButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  content: { padding: Spacing.base, paddingBottom: 56, flexGrow: 1, gap: Spacing.base },
-  heroCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.base,
-    marginBottom: Spacing.base,
-  },
-  heroIconWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: Colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  heroTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  heroSub: { marginTop: 4, fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
-  statsRow: { flexDirection: 'row', gap: Spacing.md, marginBottom: Spacing.base },
-  statCard: {
-    flex: 1,
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.base,
-    alignItems: 'center',
-  },
-  statValue: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  statLabel: { marginTop: 4, fontSize: FontSize.sm, color: Colors.textSecondary },
-  statusNote: { fontSize: FontSize.sm, color: Colors.textSecondary, marginBottom: Spacing.base },
-  itemCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.base,
-    marginBottom: Spacing.base,
-  },
-  itemTopRow: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
-  itemRecipient: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  itemSchedule: { marginTop: 4, fontSize: FontSize.sm, color: Colors.textSecondary },
-  badge: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: Radius.pill,
-  },
-  badgeActive: { backgroundColor: '#DCFCE7' },
-  badgePaused: { backgroundColor: '#F3F4F6' },
-  badgeText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold },
-  badgeTextActive: { color: '#15803D' },
-  badgeTextPaused: { color: Colors.textSecondary },
-  itemMessage: { marginTop: Spacing.base, fontSize: FontSize.base, color: Colors.textPrimary, lineHeight: 22 },
-  itemActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: Spacing.base },
-  actionButton: {
-    minHeight: 44,
-    borderRadius: Radius.pill,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.background,
-    paddingHorizontal: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  actionButtonText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
-  deleteButton: {
-    minHeight: 44,
-    borderRadius: Radius.pill,
-    borderWidth: 1,
-    borderColor: '#FECACA',
-    backgroundColor: '#FEF2F2',
-    paddingHorizontal: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  deleteButtonText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.danger },
-  emptyCard: {
-    flex: 1,
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.xl,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    marginTop: 12,
-  },
+  loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  heroBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: Spacing.base, marginTop: Spacing.md, padding: 12, backgroundColor: Colors.primaryLight, borderRadius: Radius.md },
+  heroText: { color: Colors.textPrimary, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  card: { marginHorizontal: Spacing.base, marginBottom: Spacing.base, padding: Spacing.base, backgroundColor: Colors.surface, borderRadius: Radius.lg, ...Shadow.sm },
+  cardTopRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  dot: { width: 10, height: 10, borderRadius: 5 },
+  cardRecipient: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textPrimary, maxWidth: '65%' },
+  cardMessage: { fontSize: FontSize.base, color: Colors.textPrimary, marginTop: Spacing.md, lineHeight: 22 },
+  cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: Spacing.sm, flexWrap: 'wrap' },
+  cardMetaText: { fontSize: FontSize.sm, color: Colors.textSecondary },
+  cardMetaDot: { fontSize: FontSize.sm, color: Colors.textMuted },
+  cardActions: { flexDirection: 'row', gap: 10, marginTop: Spacing.base },
+  cardActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 10, borderRadius: Radius.pill, borderWidth: 1, borderColor: Colors.primary },
+  cardActionText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.semibold },
+  empty: { alignItems: 'center', justifyContent: 'center', paddingTop: Spacing.xxl, paddingHorizontal: Spacing.lg },
+  emptyIcon: { width: 64, height: 64, borderRadius: 32, backgroundColor: Colors.primaryLight, alignItems: 'center', justifyContent: 'center', marginBottom: Spacing.md },
   emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  emptySub: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center', lineHeight: 20 },
-  primaryButton: {
-    marginTop: Spacing.sm,
-    minHeight: 48,
-    paddingHorizontal: 20,
-    borderRadius: Radius.pill,
-    backgroundColor: Colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  primaryButtonText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.headerBg },
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
-  modalKeyboardWrap: { width: '100%' },
-  modalCard: {
-    backgroundColor: Colors.surface,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: Spacing.base,
-    gap: 12,
-  },
-  modalTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary, textAlign: 'center' },
-  modalSub: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center', lineHeight: 20 },
-  input: {
-    minHeight: 48,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.background,
-    paddingHorizontal: Spacing.base,
-    fontSize: FontSize.base,
-    color: Colors.textPrimary,
-  },
-  messageInput: { minHeight: 96, paddingTop: 14, textAlignVertical: 'top' },
-  quickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  quickButton: {
-    minHeight: 40,
-    paddingHorizontal: 12,
-    borderRadius: Radius.pill,
-    backgroundColor: Colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  quickButtonText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.primaryDark },
-  inlineInputs: { flexDirection: 'row', gap: 12 },
-  inlineInput: { flex: 1 },
-  repeatTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
-  repeatRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  repeatChip: {
-    minHeight: 44,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: Radius.pill,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.background,
-    justifyContent: 'center',
-  },
-  repeatChipActive: { borderColor: Colors.primary, backgroundColor: Colors.primaryLight },
-  repeatChipText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.textSecondary },
-  repeatChipTextActive: { color: Colors.primaryDark },
-  modalActions: { flexDirection: 'row', gap: 12 },
-  modalPrimaryButton: {
-    flex: 1,
-    minHeight: 48,
-    borderRadius: Radius.pill,
-    backgroundColor: Colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalPrimaryButtonText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.headerBg },
-  modalSecondaryButton: {
-    flex: 1,
-    minHeight: 48,
-    borderRadius: Radius.pill,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalSecondaryButtonText: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  emptySub: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center', marginTop: Spacing.sm },
+  fab: { position: 'absolute', right: Spacing.base, bottom: Spacing.lg, width: 56, height: 56, borderRadius: 28, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center', ...Shadow.md },
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  sheet: { backgroundColor: Colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingBottom: Spacing.lg, ...Shadow.lg },
+  innerSheet: { backgroundColor: Colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: Spacing.base, paddingBottom: Spacing.lg, ...Shadow.lg },
+  sheetContent: { paddingHorizontal: Spacing.base, paddingBottom: Spacing.base },
+  grabber: { width: 40, height: 4, backgroundColor: Colors.border, borderRadius: 2, alignSelf: 'center', marginVertical: Spacing.sm },
+  sheetTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary, marginBottom: Spacing.base, paddingHorizontal: Spacing.base },
+  inputLabel: { fontSize: FontSize.xs, fontWeight: FontWeight.bold, color: Colors.primary, letterSpacing: 1, marginBottom: Spacing.sm, marginTop: Spacing.sm },
+  input: { borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.md, backgroundColor: Colors.background, paddingHorizontal: Spacing.base, minHeight: 48, fontSize: FontSize.base, color: Colors.textPrimary },
+  messageInput: { minHeight: 112, paddingTop: 14, textAlignVertical: 'top' },
+  twoColWrap: { flexDirection: 'row', gap: 12 },
+  twoColItem: { flex: 1 },
+  pickerButton: { minHeight: 48, borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.md, backgroundColor: Colors.background, paddingHorizontal: Spacing.base, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  pickerButtonText: { fontSize: FontSize.base, color: Colors.textPrimary },
+  switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: Spacing.md, marginTop: Spacing.sm },
+  rowTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  rowSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
+  modalActions: { flexDirection: 'row', gap: 12, marginTop: Spacing.lg },
+  secondaryBtn: { flex: 1, minHeight: 48, borderRadius: Radius.pill, borderWidth: 1, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center' },
+  secondaryBtnText: { fontSize: FontSize.base, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
+  primaryBtn: { flex: 1, minHeight: 48, borderRadius: Radius.pill, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
+  primaryBtnDisabled: { opacity: 0.5 },
+  primaryBtnText: { fontSize: FontSize.base, color: Colors.white, fontWeight: FontWeight.bold },
+  optionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: Spacing.base },
+  optionLabel: { fontSize: FontSize.base, color: Colors.textPrimary },
   flexOne: { flex: 1 },
 });
