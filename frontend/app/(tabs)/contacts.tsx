@@ -11,15 +11,17 @@ import {
   Pressable,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useQuery, useMutation } from 'convex/react';
+import { useMutation } from 'convex/react';
 import Header from '../../src/components/Header';
 import Avatar from '../../src/components/Avatar';
 import { api } from '../../src/convexApi';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
+import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 
 export default function ContactsScreen() {
   const router = useRouter();
@@ -28,22 +30,31 @@ export default function ContactsScreen() {
   const [showAddByPhone, setShowAddByPhone] = useState(false);
   const [phoneInput, setPhoneInput] = useState('');
   const [addingPhone, setAddingPhone] = useState(false);
+  const searchTerm = search.trim();
+  const searchEnabled = searchTerm.length >= 2;
 
-  const contacts = useQuery(api.contacts.getContacts);
-  const pending = useQuery(api.contacts.getPendingRequests);
-  const outgoing = useQuery(api.contacts.getOutgoingRequests);
-  const searchResults = useQuery(api.users.searchUsers, search.trim().length >= 2 ? { query: search.trim() } : 'skip');
+  const contactsQuery = useSafeConvexQuery(api.contacts.getContacts, {}, []);
+  const pendingQuery = useSafeConvexQuery(api.contacts.getPendingRequests, {}, []);
+  const outgoingQuery = useSafeConvexQuery(api.contacts.getOutgoingRequests, {}, []);
+  const searchQuery = useSafeConvexQuery(
+    api.users.searchUsers,
+    { query: searchTerm },
+    [],
+    searchEnabled
+  );
   const getOrCreateDirect = useMutation(api.conversations.getOrCreateDirect);
   const sendRequest = useMutation(api.contacts.sendRequest);
   const sendRequestByPhone = useMutation(api.contacts.sendRequestByPhone);
   const acceptRequest = useMutation(api.contacts.acceptRequest);
   const rejectRequest = useMutation(api.contacts.rejectRequest);
   const cancelRequest = useMutation(api.contacts.cancelRequest);
+  const isInitialLoading = contactsQuery.loading && !searchEnabled;
+  const isSearchLoading = searchEnabled && searchQuery.loading;
 
-  const list: any[] = Array.isArray(contacts) ? contacts : [];
-  const pendingList: any[] = Array.isArray(pending) ? pending : [];
-  const outgoingList: any[] = Array.isArray(outgoing) ? outgoing : [];
-  const results: any[] = Array.isArray(searchResults) ? searchResults : [];
+  const list: any[] = Array.isArray(contactsQuery.data) ? contactsQuery.data : [];
+  const pendingList: any[] = Array.isArray(pendingQuery.data) ? pendingQuery.data : [];
+  const outgoingList: any[] = Array.isArray(outgoingQuery.data) ? outgoingQuery.data : [];
+  const results: any[] = Array.isArray(searchQuery.data) ? searchQuery.data : [];
 
   const contactIds = useMemo(() => new Set(list.map((contact) => contact.userId || contact._id)), [list]);
   const outgoingIds = useMemo(
@@ -113,12 +124,12 @@ export default function ContactsScreen() {
       </View>
 
       <FlatList
-        data={search.trim().length >= 2 ? results : list}
+        data={searchEnabled ? results : list}
         keyExtractor={(item: any, index: number) => item.userId || item._id || String(index)}
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
           <>
-            {pendingList.length > 0 && search.trim().length < 2 && (
+            {pendingList.length > 0 && !searchEnabled && (
               <>
                 <Text style={styles.sectionLabel}>PENDING REQUESTS</Text>
                 {pendingList.map((pendingContact: any) => (
@@ -155,7 +166,7 @@ export default function ContactsScreen() {
               </>
             )}
 
-            {outgoingList.length > 0 && search.trim().length < 2 && (
+            {outgoingList.length > 0 && !searchEnabled && (
               <>
                 <Text style={styles.sectionLabel}>SENT REQUESTS</Text>
                 {outgoingList.map((outgoingContact: any) => (
@@ -181,7 +192,7 @@ export default function ContactsScreen() {
               </>
             )}
 
-            <Text style={styles.sectionLabel}>{search.trim().length >= 2 ? 'SEARCH RESULTS' : 'CONTACTS'}</Text>
+            <Text style={styles.sectionLabel}>{searchEnabled ? 'SEARCH RESULTS' : 'CONTACTS'}</Text>
           </>
         }
         renderItem={({ item }) => {
@@ -205,7 +216,7 @@ export default function ContactsScreen() {
                 </Text>
               </View>
 
-              {search.trim().length >= 2 ? (
+              {searchEnabled ? (
                 wasSent ? (
                   <View style={styles.sentPill} testID={`sent-pill-${uid}`}>
                     <Feather name="clock" size={12} color={Colors.textSecondary} />
@@ -240,16 +251,21 @@ export default function ContactsScreen() {
           );
         }}
         ListEmptyComponent={
-          contacts !== undefined ? (
+          isInitialLoading || isSearchLoading ? (
+            <View style={styles.empty} testID="contacts-loading-state">
+              <ActivityIndicator color={Colors.primary} size="small" />
+              <Text style={styles.emptyText}>{searchEnabled ? 'Searching people…' : 'Loading contacts…'}</Text>
+            </View>
+          ) : (
             <View style={styles.empty}>
               <Feather name="users" size={32} color={Colors.textMuted} />
               <Text style={styles.emptyText}>
-                {search.trim().length >= 2
+                {searchEnabled
                   ? 'No users found'
                   : 'No contacts yet. Tap + at the top to add by phone, QR, or search.'}
               </Text>
             </View>
-          ) : null
+          )
         }
       />
 
