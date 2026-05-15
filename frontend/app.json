@@ -111,7 +111,8 @@
             "./assets/sounds/Smilers_Never_Cry.mp3",
             "./assets/sounds/Smilers_Never_Cry_1.mp3",
             "./assets/sounds/Smilers_Never_Cry_2.mp3",
-            "./assets/sounds/Smilers_Never_Cry_3.mp3"
+            "./assets/sounds/Smilers_Never_Cry_3.mp3",
+            "./assets/sounds/message_notification.mp3"
           ]
         }
       ],

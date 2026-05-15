@@ -5,7 +5,13 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AuthProvider } from '../src/providers/AuthProvider';
 import { ConvexClientProvider } from '../src/providers/ConvexClientProvider';
+import { useMessageNotificationSound } from '../src/lib/notification/useMessageNotificationSound';
 import { Colors } from '../src/theme';
+
+function GlobalNotificationSound() {
+  useMessageNotificationSound();
+  return null;
+}
 
 export default function RootLayout() {
   return (
@@ -13,6 +19,7 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <AuthProvider>
           <ConvexClientProvider>
+            <GlobalNotificationSound />
             <StatusBar style="light" backgroundColor={Colors.headerBg} />
             <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: Colors.background } }}>
               <Stack.Screen name="index" />

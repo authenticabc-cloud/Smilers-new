@@ -56,7 +56,7 @@ async function setupCategoriesAndChannels() {
     await Notifications.setNotificationChannelAsync('messages', {
       name: 'Messages',
       importance: Notifications.AndroidImportance.HIGH,
-      sound: 'default',
+      sound: 'message_notification',
       vibrationPattern: [0, 250, 250, 250],
       lightColor: '#E4B53B',
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
