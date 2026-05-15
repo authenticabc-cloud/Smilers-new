@@ -111,27 +111,68 @@ export default function AdsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="ads-screen">
-      <Header
-        title="Ads"
-        variant="light"
-        right={
-          <>
-            <MaterialCommunityIcons name="bullhorn-outline" size={22} color={Colors.textPrimary} />
-            {isAdmin ? (
-              <TouchableOpacity onPress={() => router.push('/ads/review' as any)} testID="ads-review-button">
-                <Feather name="shield" size={22} color={Colors.textPrimary} />
-              </TouchableOpacity>
-            ) : null}
-            <TouchableOpacity onPress={() => router.push('/ads/create' as any)} testID="ads-post-button">
-              <Feather name="plus-circle" size={22} color={Colors.primary} />
-            </TouchableOpacity>
-          </>
-        }
-      />
+      {/* Header */}
+      <View style={styles.adsHeader}>
+        <TouchableOpacity hitSlop={10} onPress={() => router.back()} style={styles.adsHeaderBack} testID="ads-back-btn">
+          <Feather name="arrow-left" size={22} color={Colors.textPrimary} />
+        </TouchableOpacity>
+        <MaterialCommunityIcons name="bullhorn-outline" size={22} color={Colors.primary} />
+        <Text style={styles.adsHeaderTitle}>Ads</Text>
+        <View style={{ flex: 1 }} />
+        {isAdmin ? (
+          <TouchableOpacity
+            onPress={() => router.push('/ads/review' as any)}
+            style={styles.adsAdminBtn}
+            testID="ads-review-button"
+          >
+            <Feather name="shield" size={20} color={Colors.textPrimary} />
+          </TouchableOpacity>
+        ) : null}
+        <TouchableOpacity
+          onPress={() => router.push('/ads/create' as any)}
+          style={styles.postAdBtn}
+          testID="ads-post-button"
+          activeOpacity={0.85}
+        >
+          <Feather name="plus" size={18} color={Colors.headerBg} />
+          <Text style={styles.postAdText}>Post Ad</Text>
+        </TouchableOpacity>
+      </View>
 
-      <View style={styles.segmentWrap} testID="ads-segmented-tabs">
-        <SegmentButton label="Browse Ads" active={viewMode === 'browse'} onPress={() => setViewMode('browse')} testID="ads-browse-tab" />
-        <SegmentButton label="My Ads" active={viewMode === 'mine'} onPress={() => setViewMode('mine')} testID="ads-my-tab" />
+      {/* Tabs */}
+      <View style={styles.tabsRow}>
+        <TouchableOpacity
+          style={styles.tabBtn}
+          onPress={() => setViewMode('browse')}
+          activeOpacity={0.7}
+          testID="ads-browse-tab"
+        >
+          <View style={styles.tabLabelRow}>
+            <Ionicons
+              name="eye-outline"
+              size={18}
+              color={viewMode === 'browse' ? Colors.primary : Colors.textSecondary}
+            />
+            <Text style={[styles.tabText, viewMode === 'browse' ? styles.tabTextActive : null]}>Browse Ads</Text>
+          </View>
+          {viewMode === 'browse' ? <View style={styles.tabIndicator} /> : null}
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.tabBtn}
+          onPress={() => setViewMode('mine')}
+          activeOpacity={0.7}
+          testID="ads-my-tab"
+        >
+          <View style={styles.tabLabelRow}>
+            <Ionicons
+              name="clipboard-outline"
+              size={18}
+              color={viewMode === 'mine' ? Colors.primary : Colors.textSecondary}
+            />
+            <Text style={[styles.tabText, viewMode === 'mine' ? styles.tabTextActive : null]}>My Ads</Text>
+          </View>
+          {viewMode === 'mine' ? <View style={styles.tabIndicator} /> : null}
+        </TouchableOpacity>
       </View>
 
       {viewMode === 'browse' ? (
@@ -141,14 +182,14 @@ export default function AdsScreen() {
             <TextInput
               value={search}
               onChangeText={setSearch}
-              placeholder="Search ads by product"
+              placeholder="Search products, brands, locations"
               placeholderTextColor={Colors.textMuted}
               style={styles.searchInput}
               testID="ads-search-input"
             />
             <TouchableOpacity onPress={() => setShowCountryModal(true)} style={styles.filterBtn} testID="ads-country-filter-button">
-              <Ionicons name="filter-outline" size={18} color={Colors.primary} />
-              <Text style={styles.filterText}>{filterCountries.length ? `${filterCountries.length}` : 'All'}</Text>
+              <Ionicons name="options-outline" size={20} color={Colors.textPrimary} />
+              {filterCountries.length ? <Text style={styles.filterText}>{filterCountries.length}</Text> : null}
             </TouchableOpacity>
           </View>
           {filterCountries.length ? (
