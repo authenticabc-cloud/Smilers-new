@@ -66,18 +66,25 @@ export default function PhoneVerifyScreen() {
     };
   }, []);
 
-  // If user already has a verified phone, skip this screen entirely
+  // If user already has a verified phone, skip this screen entirely.
+  // We trust the local install marker as authoritative — once verifyOtp succeeded
+  // and we wrote the marker, the user should never be stuck here even if Convex
+  // briefly returns a stale me record.
   useEffect(() => {
-    if (me && me.phone && me.phoneVerified && hasVerifiedInstall) {
+    if (hasVerifiedInstall) {
+      router.replace('/(tabs)/chats');
+      return;
+    }
+    if (me && me.phone && me.phoneVerified) {
       router.replace('/(tabs)/chats');
     }
   }, [hasVerifiedInstall, me, router]);
 
   useEffect(() => {
-    if (finalizingVerification && me && me.phone && me.phoneVerified && hasVerifiedInstall) {
+    if (finalizingVerification && hasVerifiedInstall) {
       router.replace('/(tabs)/chats');
     }
-  }, [finalizingVerification, hasVerifiedInstall, me, router]);
+  }, [finalizingVerification, hasVerifiedInstall, router]);
 
   useEffect(() => {
     if (!isAuthenticated || meLoading || me || syncingUser) {

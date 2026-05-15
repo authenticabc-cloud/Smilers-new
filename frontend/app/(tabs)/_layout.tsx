@@ -135,7 +135,11 @@ export default function TabsLayout() {
     return <Redirect href="/phone-verify" />;
   }
 
-  if (me && (!me.phone || !me.phoneVerified)) {
+  // IMPORTANT: hasVerifiedInstall is the authoritative local marker set only after
+  // Twilio verifyOtp succeeded. Convex's me.phoneVerified can briefly lag behind the
+  // server write, which would cause a redirect loop back to phone-verify ("shaking").
+  // If install verification is in place, trust it and let the user into the tabs.
+  if (me && (!me.phone || !me.phoneVerified) && !hasVerifiedInstall) {
     return <Redirect href="/phone-verify" />;
   }
 
