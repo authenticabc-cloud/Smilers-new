@@ -322,11 +322,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const expiryStr = await storage.getItem(STORAGE_KEYS.TOKEN_EXPIRY);
     const expiry = expiryStr ? parseInt(expiryStr, 10) : 0;
     const refreshToken = await storage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
+    const accessToken = await storage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
+    const idToken = await storage.getItem(STORAGE_KEYS.ID_TOKEN);
 
     if (Date.now() > expiry - 60000 && refreshToken) {
       return await refreshTokens(refreshToken);
     }
-    return await storage.getItem(STORAGE_KEYS.ID_TOKEN);
+    return accessToken || idToken;
   }, [refreshTokens]);
 
   return (

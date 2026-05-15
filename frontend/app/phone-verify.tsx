@@ -16,7 +16,7 @@ import { Ionicons, Feather } from '@expo/vector-icons';
 import { CountryPicker } from 'react-native-country-codes-picker';
 import { parsePhoneNumberFromString } from 'libphonenumber-js';
 import { useRouter } from 'expo-router';
-import { useAction } from 'convex/react';
+import { useAction, useMutation } from 'convex/react';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { PHONE_VERIFIED_INSTALL_KEY, readStoredString, writeStoredString } from '../src/lib/settingsStorage';
@@ -27,8 +27,14 @@ const RESEND_SECONDS = 30;
 
 export default function PhoneVerifyScreen() {
   const router = useRouter();
-  const { signOut, userInfo } = useAuth();
-  const { data: me } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null, true);
+  const { signOut, isAuthenticated } = useAuth();
+  const updateCurrentUser = useMutation(api.users.updateCurrentUser);
+  const { data: me, loading: meLoading, refetch: refetchMe } = useSafeConvexQuery<any | null>(
+    api.users.getCurrentUser,
+    {},
+    null,
+    isAuthenticated
+  );
 
   const sendOtp = useAction(api.phoneAuthAction.sendOtp);
   const verifyOtp = useAction(api.phoneAuthAction.verifyOtp);
@@ -42,6 +48,7 @@ export default function PhoneVerifyScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [resendIn, setResendIn] = useState(0);
   const [hasVerifiedInstall, setHasVerifiedInstall] = useState(false);
+  const [syncingUser, setSyncingUser] = useState(false);
   const fullPhoneRef = useRef<string>('');
 
   useEffect(() => {
@@ -65,6 +72,36 @@ export default function PhoneVerifyScreen() {
     }
   }, [hasVerifiedInstall, me, router]);
 
+  useEffect(() => {
+    if (!isAuthenticated || meLoading || me || syncingUser) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const ensureUser = async () => {
+      setSyncingUser(true);
+      try {
+        await updateCurrentUser({});
+        await refetchMe();
+      } catch (errorValue: any) {
+        if (!cancelled) {
+          console.warn('phone-verify updateCurrentUser failed:', errorValue?.message || errorValue);
+        }
+      } finally {
+        if (!cancelled) {
+          setSyncingUser(false);
+        }
+      }
+    };
+
+    void ensureUser();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, me, meLoading, refetchMe, syncingUser, updateCurrentUser]);
+
   // Resend cooldown timer
   useEffect(() => {
     if (resendIn <= 0) return;
@@ -72,7 +109,43 @@ export default function PhoneVerifyScreen() {
     return () => clearTimeout(t);
   }, [resendIn]);
 
+  const ensureReadyForOtp = async () => {
+    if (!isAuthenticated) {
+      Alert.alert('Still signing in', 'Please complete sign-in before requesting a verification code.');
+      return false;
+    }
+
+    if (meLoading || syncingUser) {
+      Alert.alert('Almost there', 'We are still connecting your account. Please wait a moment and try again.');
+      return false;
+    }
+
+    if (me) {
+      return true;
+    }
+
+    setSyncingUser(true);
+    try {
+      await updateCurrentUser({});
+      await refetchMe();
+      return true;
+    } catch (errorValue: any) {
+      Alert.alert(
+        'Still connecting',
+        errorValue?.message || 'We could not finish connecting your account to phone verification yet. Please try again.'
+      );
+      return false;
+    } finally {
+      setSyncingUser(false);
+    }
+  };
+
   const handleSendOtp = async () => {
+    const ready = await ensureReadyForOtp();
+    if (!ready) {
+      return;
+    }
+
     const raw = `${countryCode}${phoneLocal.replace(/\D/g, '')}`;
     const parsed = parsePhoneNumberFromString(raw);
     if (!parsed || !parsed.isValid()) {
@@ -95,6 +168,11 @@ export default function PhoneVerifyScreen() {
   };
 
   const handleVerifyOtp = async () => {
+    const ready = await ensureReadyForOtp();
+    if (!ready) {
+      return;
+    }
+
     const code = otp.trim();
     if (code.length < 4) {
       Alert.alert('Enter the code', 'Please enter the 6-digit code we sent.');
@@ -163,6 +241,7 @@ export default function PhoneVerifyScreen() {
                   style={styles.countryBtn}
                   onPress={() => setPickerVisible(true)}
                   activeOpacity={0.7}
+                  disabled={meLoading || syncingUser || submitting}
                   testID="country-picker-btn"
                 >
                   <Text style={styles.flag}>{countryFlag}</Text>
@@ -177,14 +256,22 @@ export default function PhoneVerifyScreen() {
                   placeholderTextColor={Colors.textMuted}
                   keyboardType="phone-pad"
                   autoFocus
+                  editable={!meLoading && !syncingUser && !submitting}
                   testID="phone-input"
                 />
               </View>
 
+              {meLoading || syncingUser ? (
+                <View style={styles.connectingRow} testID="phone-verify-connecting-row">
+                  <ActivityIndicator size="small" color={Colors.primary} />
+                  <Text style={styles.connectingText}>Connecting your Smilers account…</Text>
+                </View>
+              ) : null}
+
               <TouchableOpacity
-                style={[styles.primaryBtn, submitting && styles.primaryBtnDisabled]}
+                style={[styles.primaryBtn, (submitting || meLoading || syncingUser) && styles.primaryBtnDisabled]}
                 onPress={handleSendOtp}
-                disabled={submitting}
+                disabled={submitting || meLoading || syncingUser}
                 testID="send-otp-btn"
               >
                 {submitting ? (
@@ -209,9 +296,9 @@ export default function PhoneVerifyScreen() {
               />
 
               <TouchableOpacity
-                style={[styles.primaryBtn, submitting && styles.primaryBtnDisabled]}
+                style={[styles.primaryBtn, (submitting || meLoading || syncingUser) && styles.primaryBtnDisabled]}
                 onPress={handleVerifyOtp}
-                disabled={submitting}
+                disabled={submitting || meLoading || syncingUser}
                 testID="verify-otp-btn"
               >
                 {submitting ? (
@@ -365,6 +452,18 @@ const styles = StyleSheet.create({
     ...Shadow.md,
   },
   primaryBtnDisabled: { opacity: 0.6 },
+  connectingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginBottom: Spacing.lg,
+  },
+  connectingText: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    fontWeight: FontWeight.medium,
+  },
   primaryBtnText: {
     color: Colors.white,
     fontSize: FontSize.lg,
