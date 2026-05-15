@@ -78,6 +78,8 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - ✅ Reworked native sign-in to bridge through the already working web app at `https://smilers.online/`: Sign In now routes to `/auth-webview`, opens the live web sign-in flow, and supports callback handoff via either direct tokens or OIDC `code/state`
 - ✅ Added `/app/HERCULES_MOBILE_SIGNIN_BRIDGE.md` for the Hercules/web agent with the exact query params and callback contract needed to return control to the native app after successful web login
 - ✅ Added callback support in `+not-found.tsx` / `auth-callback` for `id_token`, `access_token`, `refresh_token`, and `expires_in` bridge params, while preserving the existing code-exchange path
+- ✅ Updated native phone verification gating to stay mobile-only and install-aware: after auth, the app now requires phone verification when the backend user is unverified or when the current app install lacks the local verified-install marker (matching first install / reinstall behavior)
+- ✅ Stored the verified-install marker locally after successful OTP verification so repeat sign-ins on the same install do not re-prompt unnecessarily
 - ✅ Renamed the Status tab route file to `updates.tsx` to avoid Expo web’s reserved `/status` path conflict while keeping the tab label as **Status**
 - ✅ Convex client with custom auth integration (passes ID token via `ConvexProviderWithAuth`)
 - ✅ Bottom tab navigation (5 tabs: Chats, Contacts, Groups, Status, Profile) — matches web app's bottom nav
@@ -132,6 +134,7 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 ## Out of Scope (current iteration)
 - Final real-device login validation still depends on Hercules allowing the native redirect URI `smilers://auth-callback` for the mobile client.
 - End-to-end authenticated sign-in through the live Smilers web app still needs one manual web/Hercules bridge completion test, because automation cannot perform the real callback/token return from the external live site.
+- Manual authenticated verification is still required for three live cases: first mobile sign-up, reinstall on a previously verified account, and deleted/reactivated account flow.
 - Full end-to-end authenticated voice-note verification is still pending because browser automation cannot deterministically complete the third-party Google/Hercules sign-in flow with the current test setup.
 - Full end-to-end authenticated poll/document verification is still pending for the same auth-gated reason, and the live poll voting flow also depends on the user applying the backend changes from `/app/CONVEX_BACKEND_INSTRUCTIONS_POLLS_FILES.md`.
 - Full end-to-end authenticated status/story verification is still pending for the same auth-gated reason, and story viewing/reply/view counts depend on the backend changes from `/app/CONVEX_BACKEND_INSTRUCTIONS_STATUS_STORIES.md`.

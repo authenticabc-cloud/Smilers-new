@@ -65,7 +65,7 @@ export default function TabsLayout() {
     return <Redirect href="/" />;
   }
 
-  if (me && (!me.phone || !me.phoneVerified || !hasVerifiedInstall)) {
+  if (!me || !me.phone || !me.phoneVerified || !hasVerifiedInstall) {
     return <Redirect href="/phone-verify" />;
   }
 
