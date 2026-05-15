@@ -20,6 +20,7 @@ export default function TabsLayout() {
   const [hasVerifiedInstall, setHasVerifiedInstall] = useState(false);
   const [syncingUser, setSyncingUser] = useState(false);
   const [bootstrapAttempted, setBootstrapAttempted] = useState(false);
+  const [meGateTimedOut, setMeGateTimedOut] = useState(false);
 
   // Wire up native push notifications (registers token + handles taps/actions)
   usePushNotifications();
@@ -96,6 +97,22 @@ export default function TabsLayout() {
     };
   }, [isAuthenticated]);
 
+  // Safety timeout: if Convex me query hangs after auth/phone-verify, don't lock the user on "Opening Smilers" forever.
+  useEffect(() => {
+    if (!isAuthenticated || !hasVerifiedInstall) {
+      setMeGateTimedOut(false);
+      return;
+    }
+    if (me || meGateTimedOut) {
+      return;
+    }
+    const timeoutId = setTimeout(() => {
+      console.warn('tabs layout: me query gate timed out after 10s, releasing UI');
+      setMeGateTimedOut(true);
+    }, 10000);
+    return () => clearTimeout(timeoutId);
+  }, [hasVerifiedInstall, isAuthenticated, me, meGateTimedOut]);
+
   if (!rootNavigationState?.key || isLoading || !installVerificationChecked) {
     return <AuthGateLoading label="Opening Smilers…" />;
   }
@@ -108,15 +125,17 @@ export default function TabsLayout() {
     return <Redirect href="/phone-verify" />;
   }
 
-  if (meLoading || syncingUser) {
+  if ((meLoading || syncingUser) && !meGateTimedOut) {
     return <AuthGateLoading label="Opening Smilers…" />;
   }
 
-  if (!me) {
+  // If the me query timed out but the user has already passed the install verification gate,
+  // render the tabs anyway. Individual screens will refetch as the socket recovers.
+  if (!me && !meGateTimedOut) {
     return <Redirect href="/phone-verify" />;
   }
 
-  if (!me.phone || !me.phoneVerified) {
+  if (me && (!me.phone || !me.phoneVerified)) {
     return <Redirect href="/phone-verify" />;
   }
 
