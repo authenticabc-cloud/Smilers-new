@@ -3,7 +3,10 @@ import { ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 're
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useMutation } from 'convex/react';
 import Header from '../src/components/Header';
+import { api } from '../src/convexApi';
+import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 import {
   DEFAULT_PRIVACY_SETTINGS,
@@ -26,6 +29,8 @@ const GROUP_OPTIONS = [
 
 export default function PrivacyScreen() {
   const router = useRouter();
+  const { data: remoteSettings, refetch: refetchRemote } = useSafeConvexQuery(api.privacy.getSettings, {}, null);
+  const updateRemoteSettings = useMutation(api.privacy.updateSettings);
   const [settings, setSettings] = useState(DEFAULT_PRIVACY_SETTINGS);
   const [isReady, setIsReady] = useState(false);
   const [savedNote, setSavedNote] = useState('Loading your privacy choices…');
@@ -46,6 +51,18 @@ export default function PrivacyScreen() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!remoteSettings || typeof remoteSettings !== 'object') {
+      return;
+    }
+
+    const merged = { ...DEFAULT_PRIVACY_SETTINGS, ...remoteSettings };
+    setSettings(merged);
+    void writeStoredJson(PRIVACY_SETTINGS_KEY, merged);
+    setSavedNote('Synced with Smilers cloud');
+    setIsReady(true);
+  }, [remoteSettings]);
+
   const summary = useMemo(() => `${settings.lastSeen} · photo ${settings.profilePhoto} · groups ${settings.groups}`, [settings]);
 
   const updateSetting = async (key: string, value: string | boolean) => {
@@ -53,7 +70,14 @@ export default function PrivacyScreen() {
     setSettings(next);
     setSavedNote('Saving…');
     await writeStoredJson(PRIVACY_SETTINGS_KEY, next);
-    setSavedNote('Saved on this device');
+    try {
+      await updateRemoteSettings({ settings: next });
+      await refetchRemote();
+      setSavedNote('Synced with Smilers cloud');
+    } catch (errorValue) {
+      console.warn('privacy.updateSettings unavailable, using device storage', errorValue);
+      setSavedNote('Saved on this device');
+    }
   };
 
   return (

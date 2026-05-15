@@ -14,7 +14,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useMutation } from 'convex/react';
 import Header from '../src/components/Header';
+import { api } from '../src/convexApi';
+import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 import { SCHEDULED_MESSAGES_KEY, readStoredJson, writeStoredJson } from '../src/lib/settingsStorage';
 
@@ -38,8 +41,26 @@ function createDraft() {
   };
 }
 
+function normalizeSchedule(item: any) {
+  return {
+    ...item,
+    id: item?.id || item?._id || `${Date.now()}`,
+    recipient: item?.recipient || '',
+    message: item?.message || '',
+    date: item?.date || '',
+    time: item?.time || '',
+    repeat: item?.repeat || 'once',
+    active: item?.active !== false,
+  };
+}
+
 export default function ScheduledScreen() {
   const router = useRouter();
+  const { data: remoteItems, refetch: refetchRemoteItems } = useSafeConvexQuery(api.scheduledMessages.listMine, {}, null);
+  const createRemoteSchedule = useMutation(api.scheduledMessages.create);
+  const updateRemoteSchedule = useMutation(api.scheduledMessages.update);
+  const removeRemoteSchedule = useMutation(api.scheduledMessages.remove);
+  const setRemoteScheduleActive = useMutation(api.scheduledMessages.setActive);
   const [items, setItems] = useState<any[]>([]);
   const [composerVisible, setComposerVisible] = useState(false);
   const [draft, setDraft] = useState(createDraft());
@@ -60,6 +81,16 @@ export default function ScheduledScreen() {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!Array.isArray(remoteItems)) {
+      return;
+    }
+    const nextItems = remoteItems.map(normalizeSchedule);
+    setItems(nextItems);
+    void writeStoredJson(SCHEDULED_MESSAGES_KEY, nextItems);
+    setStatusNote('Synced with Smilers cloud');
+  }, [remoteItems]);
 
   const activeCount = useMemo(() => items.filter((item) => item.active).length, [items]);
 
@@ -100,8 +131,35 @@ export default function ScheduledScreen() {
       recipient: draft.recipient.trim(),
       message: draft.message.trim(),
     };
-    const nextItems = editingId ? items.map((item) => (item.id === editingId ? nextItem : item)) : [nextItem, ...items];
-    await persist(nextItems);
+    try {
+      if (editingId) {
+        await updateRemoteSchedule({
+          scheduleId: editingId,
+          recipient: nextItem.recipient,
+          message: nextItem.message,
+          date: nextItem.date,
+          time: nextItem.time,
+          repeat: nextItem.repeat,
+          active: nextItem.active,
+        });
+      } else {
+        await createRemoteSchedule({
+          recipient: nextItem.recipient,
+          message: nextItem.message,
+          date: nextItem.date,
+          time: nextItem.time,
+          repeat: nextItem.repeat,
+          active: nextItem.active,
+        });
+      }
+      await refetchRemoteItems();
+      setStatusNote('Synced with Smilers cloud');
+    } catch (errorValue) {
+      console.warn('scheduledMessages cloud sync unavailable, using device storage', errorValue);
+      const nextItems = editingId ? items.map((item) => (item.id === editingId ? nextItem : item)) : [nextItem, ...items];
+      await persist(nextItems);
+      setStatusNote('Saved on this device');
+    }
     setComposerVisible(false);
   };
 
@@ -112,15 +170,35 @@ export default function ScheduledScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          await persist(items.filter((item) => item.id !== id));
+          try {
+            await removeRemoteSchedule({ scheduleId: id });
+            await refetchRemoteItems();
+            setStatusNote('Synced with Smilers cloud');
+          } catch (errorValue) {
+            console.warn('scheduledMessages.remove unavailable, using device storage', errorValue);
+            await persist(items.filter((item) => item.id !== id));
+            setStatusNote('Saved on this device');
+          }
         },
       },
     ]);
   };
 
   const toggleActive = async (id: string) => {
-    const nextItems = items.map((item) => (item.id === id ? { ...item, active: !item.active } : item));
-    await persist(nextItems);
+    const target = items.find((item) => item.id === id);
+    if (!target) {
+      return;
+    }
+    try {
+      await setRemoteScheduleActive({ scheduleId: id, active: !target.active });
+      await refetchRemoteItems();
+      setStatusNote('Synced with Smilers cloud');
+    } catch (errorValue) {
+      console.warn('scheduledMessages.setActive unavailable, using device storage', errorValue);
+      const nextItems = items.map((item) => (item.id === id ? { ...item, active: !item.active } : item));
+      await persist(nextItems);
+      setStatusNote('Saved on this device');
+    }
   };
 
   const setQuickTime = (type: 'one-hour' | 'tomorrow' | 'tonight') => {
