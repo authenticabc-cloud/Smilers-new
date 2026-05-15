@@ -85,9 +85,17 @@ export default function PhoneVerifyScreen() {
     }
 
     let cancelled = false;
+    let timeoutId = null;
 
     const ensureUser = async () => {
       setSyncingUser(true);
+      // Safety timeout: if Convex hangs (e.g. auth handshake stuck), don't lock the UI forever.
+      timeoutId = setTimeout(() => {
+        if (!cancelled) {
+          console.warn('phone-verify: ensureUser timed out after 12s, releasing UI');
+          setSyncingUser(false);
+        }
+      }, 12000);
       try {
         await updateCurrentUser({});
         await refetchMe();
@@ -96,6 +104,7 @@ export default function PhoneVerifyScreen() {
           console.warn('phone-verify updateCurrentUser failed:', errorValue?.message || errorValue);
         }
       } finally {
+        if (timeoutId) clearTimeout(timeoutId);
         if (!cancelled) {
           setSyncingUser(false);
         }
@@ -106,6 +115,7 @@ export default function PhoneVerifyScreen() {
 
     return () => {
       cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
     };
   }, [isAuthenticated, me, meLoading, refetchMe, syncingUser, updateCurrentUser]);
 
@@ -122,15 +132,12 @@ export default function PhoneVerifyScreen() {
       return false;
     }
 
-    if (meLoading || syncingUser) {
-      Alert.alert('Almost there', 'We are still connecting your account. Please wait a moment and try again.');
-      return false;
-    }
-
+    // If we already have the user record loaded, we're good.
     if (me) {
       return true;
     }
 
+    // No record yet: try to sync inline (don't bail just because background sync is in-flight).
     setSyncingUser(true);
     try {
       await updateCurrentUser({});
@@ -138,8 +145,9 @@ export default function PhoneVerifyScreen() {
       return true;
     } catch (errorValue: any) {
       Alert.alert(
-        'Still connecting',
-        errorValue?.message || 'We could not finish connecting your account to phone verification yet. Please try again.'
+        'Could not reach Smilers',
+        errorValue?.message ||
+          'We could not finish connecting your account. Check your connection and try again.'
       );
       return false;
     } finally {
@@ -252,7 +260,7 @@ export default function PhoneVerifyScreen() {
                   style={styles.countryBtn}
                   onPress={() => setPickerVisible(true)}
                   activeOpacity={0.7}
-                  disabled={meLoading || syncingUser || submitting}
+                  disabled={submitting}
                   testID="country-picker-btn"
                 >
                   <Text style={styles.flag}>{countryFlag}</Text>
@@ -267,22 +275,22 @@ export default function PhoneVerifyScreen() {
                   placeholderTextColor={Colors.textMuted}
                   keyboardType="phone-pad"
                   autoFocus
-                  editable={!meLoading && !syncingUser && !submitting}
+                  editable={!submitting}
                   testID="phone-input"
                 />
               </View>
 
               {meLoading || syncingUser ? (
-                <View style={styles.connectingRow} testID="phone-verify-connecting-row">
+                <View style={styles.connectingPill} testID="phone-verify-connecting-row">
                   <ActivityIndicator size="small" color={Colors.primary} />
                   <Text style={styles.connectingText}>Connecting your Smilers account…</Text>
                 </View>
               ) : null}
 
               <TouchableOpacity
-                style={[styles.primaryBtn, (submitting || meLoading || syncingUser) && styles.primaryBtnDisabled]}
+                style={[styles.primaryBtn, submitting && styles.primaryBtnDisabled]}
                 onPress={handleSendOtp}
-                disabled={submitting || meLoading || syncingUser}
+                disabled={submitting}
                 testID="send-otp-btn"
               >
                 {submitting ? (
@@ -307,9 +315,9 @@ export default function PhoneVerifyScreen() {
               />
 
               <TouchableOpacity
-                style={[styles.primaryBtn, (submitting || meLoading || syncingUser) && styles.primaryBtnDisabled]}
+                style={[styles.primaryBtn, submitting && styles.primaryBtnDisabled]}
                 onPress={handleVerifyOtp}
-                disabled={submitting || meLoading || syncingUser}
+                disabled={submitting}
                 testID="verify-otp-btn"
               >
                 {submitting ? (
@@ -469,6 +477,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     marginBottom: Spacing.lg,
+  },
+  connectingPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    marginBottom: Spacing.lg,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.primaryLight,
+    borderWidth: 1,
+    borderColor: Colors.border,
   },
   connectingText: {
     fontSize: FontSize.sm,

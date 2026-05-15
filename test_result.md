@@ -205,6 +205,20 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Added explicit sign-in guard and disabled submit on /ads/create for signed-out sessions. Authenticated Ads tab browsing and real submit/list flows still need a signed-in test run."
+##   - task: "Phone verify screen UI lockout fix"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/phone-verify.tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "After OIDC sign-in on the native build, phone-verify screen was unclickable: country picker, phone input, and Send code button all disabled forever while Convex getCurrentUser/updateCurrentUser hung. UI was permanently stuck on Connecting your Smilers account..."
+##       - working: true
+##         agent: "main"
+##         comment: "Removed meLoading/syncingUser gating from country picker, phone input, Send code, and Verify buttons (only submitting disables now). Replaced full-width connecting row with a small non-blocking pill. Added 12s safety timeout on background ensureUser effect so syncingUser cannot stay true forever. Rewrote ensureReadyForOtp to proactively sync inline when needed instead of bailing with Almost there. No changes to OIDC, Twilio, or any other auth file. Self-verified phone-verify renders with all inputs enabled in web preview."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"
