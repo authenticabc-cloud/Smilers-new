@@ -551,10 +551,19 @@ export default function ChatScreen() {
         subtitle={conversation?.type === 'group' ? `${conversation?.participants?.length || 0} members` : 'tap for info'}
         right={
           <>
-            <TouchableOpacity testID="call-btn">
+            <TouchableOpacity
+              testID="call-btn"
+              onPress={() => router.push(`/call/${conversationId}?type=voice` as any)}
+              hitSlop={10}
+            >
               <Ionicons name="call-outline" size={22} color={Colors.white} />
             </TouchableOpacity>
-            <TouchableOpacity testID="video-btn">
+            <TouchableOpacity
+              testID="video-btn"
+              onPress={() => router.push(`/call/${conversationId}?type=video` as any)}
+              hitSlop={10}
+              style={{ marginLeft: 16 }}
+            >
               <Ionicons name="videocam-outline" size={22} color={Colors.white} />
             </TouchableOpacity>
           </>

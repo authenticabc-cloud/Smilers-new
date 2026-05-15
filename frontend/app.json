@@ -77,7 +77,13 @@
         "USE_BIOMETRIC",
         "USE_FINGERPRINT",
         "VIBRATE",
-        "RECEIVE_BOOT_COMPLETED"
+        "RECEIVE_BOOT_COMPLETED",
+        "MODIFY_AUDIO_SETTINGS",
+        "WAKE_LOCK",
+        "ACCESS_NETWORK_STATE",
+        "CHANGE_NETWORK_STATE",
+        "BLUETOOTH",
+        "BLUETOOTH_CONNECT"
       ]
     },
     "web": {
@@ -120,7 +126,8 @@
           "contactsPermission": "Find your friends already on Smilers"
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "@config-plugins/react-native-webrtc"
     ],
     "experiments": {
       "typedRoutes": false
