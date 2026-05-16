@@ -1162,8 +1162,8 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   headerIconButton: {
-    width: 36,
-    height: 36,
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1361,9 +1361,9 @@ const styles = StyleSheet.create({
     borderTopColor: '#E5D8C2',
   },
   iconBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
   },

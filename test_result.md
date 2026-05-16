@@ -245,6 +245,26 @@
 ##       - working: true
 ##         agent: "testing"
 ##         comment: "Testing confirmed `/languages` loads without runtime errors and searching `Ak` returns Akan (Asante Twi), Kazakh, and Slovak. Profile row mapping was confirmed in code review, though the auth-gated profile UI was not exercised end-to-end in this run."
+##   - task: "Chat screen screenshot restyle"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/chat/[conversationId].tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: true
+##         agent: "user"
+##         comment: "User provided multiple chat screenshots and asked to apply the chat instructions while preserving the separate Chat Appearance system already built."
+##       - working: true
+##         agent: "main"
+##         comment: "Reworked the chat route with a screenshot-style brown header, encryption banner, date chips, warmer composer bar, emoji/attachment/templates/schedule actions, and enhanced link/file bubble presentation while preserving wallpaper and bubble colors from Chat Appearance."
+##       - working: true
+##         agent: "testing"
+##         comment: "Testing validated `/chat/test-conversation` route stability and confirmed the new header, encryption banner, and composer row render correctly. Live message interaction could not be fully exercised in preview because that route resolved to the conversation-unavailable state."
+##       - working: true
+##         agent: "main"
+##         comment: "Applied the final QA note by increasing chat header and composer secondary icon tap targets to at least 44x44 while preserving the screenshot direction."
 ##   - task: "Safe Convex fallback for optional Phase 1 endpoints"
 ##     implemented: true
 ##     working: true
@@ -362,6 +382,7 @@
 ##     - "Groups plus / conferences plus / call route crash fixes"
 ##     - "Trustees page screenshot redesign"
 ##     - "Message language screenshot redesign"
+##     - "Chat screen screenshot restyle"
 ##     - "Web-safe tabs and push notification hooks"
 ##     - "Phase 2A.1 chat actions"
 ##     - "Phase 2A.2a image attachments"
@@ -396,3 +417,5 @@
 ##     message: "Please validate `/trustees` against the new reference: main Trustees page should match the screenshot direction, Add Trustee should open a bottom sheet, the sheet should include a search box for name/phone, and only Smilers contacts from `api.contacts.getContacts` should appear as addable candidates." 
 ##   - agent: "main"
 ##     message: "Login and Sign Up were explicitly skipped by the user. The Message Language screen was rebuilt to mirror the latest screenshot with Akan (Asante Twi) included; testing confirmed the `Ak` search results and route stability." 
+##   - agent: "main"
+##     message: "Chat screenshots were applied to `/chat/[conversationId]` with the existing Chat Appearance system preserved. Please do one authenticated real-conversation check next to validate live message rendering on the new layout." 
