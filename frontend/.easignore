@@ -12,3 +12,8 @@ test_reports/
 .DS_Store
 Thumbs.db
 *.log
+
+# Corrupt temp filenames
+*@@*
+*.pyc
+__pycache__/

@@ -160,6 +160,20 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Applied a durable deploy-safe fix: added npm `prepare` hook for `scripts/patch-rn-webrtc.js` so the patch still runs when deployment overwrites postinstall, and added npm override forcing react-native-webrtc to use event-target-shim@5.0.1 which supports the `/index` subpath. Local Android export advanced past the previous event-target-shim bundle error; the next local stop was Hermes bytecode generation in this container, which is separate from the original EAS blocker."
+##   - task: "Android EAS tarball corruption cleanup"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/.easignore"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "A later production build progressed further but failed while uploading the project tarball with `ENOENT: no such file or directory, lstat '/workspace/source/frontend/��@@��9@8'`."
+##       - working: true
+##         agent: "main"
+##         comment: "Found a corrupt filename in `/app/frontend` with inode 133032 (`b'\\x01\\x90\\xf8@@\\xd0\\xc39@8'`), deleted it directly, re-scanned the entire frontend tree to confirm zero invalid `@@` / control-character filenames remain, and hardened `.easignore` with `*@@*`, `*.pyc`, and `__pycache__/` exclusions."
 ##   - task: "Safe Convex fallback for optional Phase 1 endpoints"
 ##     implemented: true
 ##     working: true
@@ -272,6 +286,7 @@
 ##     - "Phase 1 utility screens and settings navigation"
 ##     - "Chat appearance screenshot redesign"
 ##     - "Android EAS WebRTC bundle fix"
+##     - "Android EAS tarball corruption cleanup"
 ##     - "Web-safe tabs and push notification hooks"
 ##     - "Phase 2A.1 chat actions"
 ##     - "Phase 2A.2a image attachments"
@@ -296,3 +311,5 @@
 ##     message: "Testing-agent note for /chat-appearance was addressed locally: the back button touch target is now 46x46, and preview verification was repeated after the fix."
 ##   - agent: "main"
 ##     message: "Deployment logs showed the true Android build blocker in EAGER_BUNDLE: react-native-webrtc importing `event-target-shim/index`. I added a deploy-safe fix via npm override to event-target-shim@5.0.1 and a prepare hook so the local WebRTC patch still runs even if postinstall is overwritten during deployment."
+##   - agent: "main"
+##     message: "The next deployment log showed a different blocker during tarball upload: a corrupt filename in `/app/frontend`. I deleted the malformed file by inode and strengthened `.easignore` so similar junk names do not get archived again."
