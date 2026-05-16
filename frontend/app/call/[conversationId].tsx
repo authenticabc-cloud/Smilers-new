@@ -28,6 +28,7 @@ import { api } from '../../src/convexApi';
 import Avatar from '../../src/components/Avatar';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { CallSession } from '../../src/lib/webrtc/CallSession';
+import { useAuth } from '../../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Shadow, Spacing } from '../../src/theme';
 import RTCView from '../../src/lib/webrtc/RTCViewWrapper';
 import { useRingtonePlayer } from '../../src/lib/ringtone/useRingtonePlayer';
@@ -43,6 +44,7 @@ function alertScreenShareIOSError() {
 
 export default function CallScreen() {
   const router = useRouter();
+  const { isAuthenticated } = useAuth();
   const { conversationId: rawConversationId, type: rawTypeParam } = useLocalSearchParams<{
     conversationId?: string | string[];
     type?: string | string[];
@@ -52,24 +54,25 @@ export default function CallScreen() {
   const requestedType: CallType = typeParam === 'video' || typeParam === 'screen' ? 'video' : 'voice';
   const startInScreenShare = typeParam === 'screen';
   const hasValidConversationId = typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
+  const canRunCallQueries = isAuthenticated && hasValidConversationId;
 
   const { data: me, loading: meLoading } = useSafeConvexQuery<any | null>(
     api.users.getCurrentUser,
     {},
     null,
-    hasValidConversationId,
+    canRunCallQueries,
   );
   const { data: conversation, loading: conversationLoading } = useSafeConvexQuery<any | null>(
     api.conversations.getConversation,
     conversationId ? { conversationId } : {},
     null,
-    hasValidConversationId,
+    canRunCallQueries,
   );
   const { data: activeCall, loading: activeCallLoading } = useSafeConvexQuery<any | null>(
     (api as any).calls.getActiveCall,
     conversationId ? { conversationId } : {},
     null,
-    hasValidConversationId,
+    canRunCallQueries,
   );
 
   const initiateCall = useMutation(api.calls.initiateCall);
@@ -101,7 +104,7 @@ export default function CallScreen() {
     (api as any).signaling.poll,
     callId ? { callId } : {},
     [],
-    !!callId,
+    !!callId && isAuthenticated,
   );
 
   // Derived role: outgoing if I'm the caller, incoming otherwise
@@ -123,7 +126,7 @@ export default function CallScreen() {
     const shouldAutoInitiate =
       !activeCall &&
       !callId &&
-      hasValidConversationId &&
+      canRunCallQueries &&
       conversationId &&
       conversation &&
       me &&
@@ -145,7 +148,7 @@ export default function CallScreen() {
     return () => {
       cancelled = true;
     };
-  }, [activeCall, activeCallLoading, callId, conversation, conversationId, conversationLoading, hasValidConversationId, initiateCall, me, meLoading, requestedType]);
+  }, [activeCall, activeCallLoading, callId, canRunCallQueries, conversation, conversationId, conversationLoading, initiateCall, isAuthenticated, me, meLoading, requestedType]);
 
   // ====== Update status text based on state ======
   useEffect(() => {

@@ -205,6 +205,9 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Reworked Groups and Conferences flows: Groups `+` now opens `/groups-create`, Conferences `+` now opens `/conference-create`, Conferences tab now uses existing group conversations as conference-ready entries instead of depending on an optional missing backend endpoint, and call routing now uses safe Convex queries plus removed the unguarded `useKeepAwake()` crash source from `/call/[conversationId]`. Self-verified `/groups-create`, `/conference-create`, `/call/testconversation1?type=voice`, and `/call/testconversation1?type=video` in preview without red-screen crashes."
+##       - working: true
+##         agent: "main"
+##         comment: "After testing-agent review, also gated call-screen Convex queries behind auth so unauthenticated/invalid conversation preview routes stop producing avoidable runtime server-error noise while remaining stable."
 ##   - task: "Safe Convex fallback for optional Phase 1 endpoints"
 ##     implemented: true
 ##     working: true
