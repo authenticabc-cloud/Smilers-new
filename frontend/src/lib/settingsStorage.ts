@@ -29,11 +29,11 @@ export const DEFAULT_APP_LOCK_SETTINGS = {
 };
 
 export const DEFAULT_CHAT_APPEARANCE = {
-  wallpaper: 'cream',
-  outgoingColor: 'gold',
-  incomingColor: 'white',
+  wallpaper: 'sunrise',
+  outgoingColor: 'eucalyptus',
+  incomingColor: 'mist',
   bubbleStyle: 'rounded',
-  textSize: 'base',
+  textSize: 'lg',
 };
 
 function getWebStorage() {

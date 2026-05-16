@@ -129,6 +129,17 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "After test-agent feedback, verified /settings navigation, /app-lock, /blocked, /notifications, /earnings, /emergency, /ai-chat, and /chat-once again in preview."
+##   - task: "Chat appearance screenshot redesign"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/chat-appearance.tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: true
+##         agent: "main"
+##         comment: "Rebuilt /chat-appearance to visually match the latest user-provided reference: dark header, dual tabs, large wallpaper preview, screenshot-style wallpaper cards, and a matching Bubble Theme tab while preserving local persistence. Self-verified both tabs in preview."
 ##   - task: "Safe Convex fallback for optional Phase 1 endpoints"
 ##     implemented: true
 ##     working: true
@@ -239,6 +250,7 @@
 ## test_plan:
 ##   current_focus:
 ##     - "Phase 1 utility screens and settings navigation"
+##     - "Chat appearance screenshot redesign"
 ##     - "Web-safe tabs and push notification hooks"
 ##     - "Phase 2A.1 chat actions"
 ##     - "Phase 2A.2a image attachments"
@@ -257,3 +269,5 @@
 ##     message: "Please test the Phase 2A.2a media additions as far as current credentials/platform allow. Full gallery/camera/image-upload validation likely requires a real authenticated mobile conversation; still validate app boot, route stability, and any new regressions in chat fallback behavior."
 ##   - agent: "main"
 ##     message: "Please validate the ads module as far as current auth allows: create/review routes, no preview regressions, and any obvious route/runtime issues from the new Ads tab wiring."
+##   - agent: "main"
+##     message: "Please validate /chat-appearance against the latest redesign: route should load without runtime errors, Wallpapers and Bubble Theme tabs should switch correctly, and the main layout should stay stable in preview."
