@@ -211,6 +211,9 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "User then requested the Conferences view match a provided screenshot and reported native call taps still backgrounding the app. I redesigned the Conferences state in `/app/frontend/app/(tabs)/groups.tsx` to a dedicated screenshot-style layout with back arrow, search, invite-code row, badge pills, and SOS button; and I moved `Audio.setAudioModeAsync` out of mount-time execution in `/app/frontend/app/call/[conversationId].tsx`, only applying it after permissions pass, while setting `staysActiveInBackground: false` plus adding iOS `UIBackgroundModes: ['audio']` support in `app.json`."
+##       - working: true
+##         agent: "main"
+##         comment: "After the user confirmed the call crash is Android-only, I added an Android-specific mount delay plus lazy `require()` loading for `CallSession` and `RTCViewWrapper` inside `/app/frontend/app/call/[conversationId].tsx` so WebRTC native modules do not initialize at route-import time before the Android view hierarchy is ready."
 ##   - task: "Trustees page screenshot redesign"
 ##     implemented: true
 ##     working: true

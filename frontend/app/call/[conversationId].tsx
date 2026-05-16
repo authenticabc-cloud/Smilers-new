@@ -27,10 +27,8 @@ import { StatusBar } from 'expo-status-bar';
 import { api } from '../../src/convexApi';
 import Avatar from '../../src/components/Avatar';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
-import { CallSession } from '../../src/lib/webrtc/CallSession';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Shadow, Spacing } from '../../src/theme';
-import RTCView from '../../src/lib/webrtc/RTCViewWrapper';
 import { useRingtonePlayer } from '../../src/lib/ringtone/useRingtonePlayer';
 
 type CallType = 'voice' | 'video';
@@ -95,8 +93,11 @@ export default function CallScreen() {
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [callDurationSec, setCallDurationSec] = useState(0);
   const [audioModeReady, setAudioModeReady] = useState(false);
+  const [screenReady, setScreenReady] = useState(Platform.OS !== 'android');
+  const [RTCViewImpl, setRTCViewImpl] = useState<any>(null);
+  const [CallSessionCtor, setCallSessionCtor] = useState<any>(null);
 
-  const sessionRef = useRef<CallSession | null>(null);
+  const sessionRef = useRef<any>(null);
   const initStartedRef = useRef(false);
   const callStartedAtRef = useRef<number | null>(null);
 
@@ -114,6 +115,39 @@ export default function CallScreen() {
       console.warn('Audio.setAudioModeAsync failed:', errorValue?.message);
     }
   }, [callType, speakerOn]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      setScreenReady(true);
+      return undefined;
+    }
+    setScreenReady(false);
+    const timerId = setTimeout(() => {
+      setScreenReady(true);
+    }, 350);
+    return () => {
+      clearTimeout(timerId);
+      setScreenReady(false);
+    };
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (Platform.OS === 'web' || !screenReady) return;
+    let cancelled = false;
+    try {
+      const rtcModule = require('../../src/lib/webrtc/RTCViewWrapper');
+      const callModule = require('../../src/lib/webrtc/CallSession');
+      if (!cancelled) {
+        setRTCViewImpl(() => rtcModule.default);
+        setCallSessionCtor(() => callModule.CallSession);
+      }
+    } catch (errorValue: any) {
+      console.warn('Failed to load WebRTC modules:', errorValue?.message);
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [screenReady]);
 
   // Subscribe to incoming signaling messages for this call
   const { data: signals } = useSafeConvexQuery<any[]>(
@@ -199,7 +233,7 @@ export default function CallScreen() {
   // ====== Build & tear down peer connection when call becomes active ======
   const startPeerConnection = useCallback(
     async (asCaller: boolean) => {
-      if (!callId || !activeCall || initStartedRef.current) return;
+      if (!callId || !activeCall || initStartedRef.current || !CallSessionCtor) return;
       if (Platform.OS === 'web') return; // skip on web preview
       const remoteUserId = asCaller ? activeCall.recipientId : activeCall.callerId;
       if (!remoteUserId) return;
@@ -229,7 +263,7 @@ export default function CallScreen() {
         // Continue — getUserMedia will fail explicitly if permissions missing
       }
 
-      const session = new CallSession({
+      const session = new CallSessionCtor({
         callType,
         isCaller: asCaller,
         callId,
@@ -281,7 +315,7 @@ export default function CallScreen() {
         setPermissionDenied(true);
       }
     },
-    [activeCall, applyAudioMode, callId, callType, sendSignal, startInScreenShare]
+    [CallSessionCtor, activeCall, applyAudioMode, callId, callType, sendSignal, startInScreenShare]
   );
 
   // Caller: kick off peer-connection as soon as we have a callId (status may still be ringing)
@@ -459,7 +493,7 @@ export default function CallScreen() {
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   }, [callDurationSec]);
 
-  const showVideo = callType === 'video' && isActive && RTCView != null;
+  const showVideo = callType === 'video' && isActive && RTCViewImpl != null;
 
   // Play ringtone + vibrate when this is an incoming call that's still ringing
   useRingtonePlayer(!!isIncoming);
@@ -471,13 +505,23 @@ export default function CallScreen() {
 
   const callTypeLabel = callType === 'video' ? 'Smilers video call' : 'Smilers voice call';
 
+  if (Platform.OS === 'android' && !screenReady) {
+    return (
+      <View style={[styles.container, styles.callLoadingScreen]} testID="call-screen-loading">
+        <StatusBar style="light" />
+        <ActivityIndicator size="large" color={Colors.white} />
+        <Text style={styles.callLoadingText}>Preparing call…</Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container} testID="call-screen">
       <StatusBar style="light" />
       {/* Video layer or gradient + avatar */}
       {showVideo && remoteStreamURL ? (
         <View style={styles.videoLayer}>
-          <RTCView
+          <RTCViewImpl
             streamURL={remoteStreamURL}
             style={StyleSheet.absoluteFill}
             objectFit="cover"
@@ -486,7 +530,7 @@ export default function CallScreen() {
           {/* Local picture-in-picture */}
           {localStreamURL && !cameraOff ? (
             <View style={styles.pipWrap}>
-              <RTCView
+              <RTCViewImpl
                 streamURL={localStreamURL}
                 style={StyleSheet.absoluteFill}
                 objectFit="cover"
@@ -836,6 +880,16 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.headerBg,
     justifyContent: 'space-between',
+  },
+  callLoadingScreen: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.md,
+  },
+  callLoadingText: {
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.medium,
+    color: Colors.white,
   },
   topArea: {
     alignItems: 'center',
