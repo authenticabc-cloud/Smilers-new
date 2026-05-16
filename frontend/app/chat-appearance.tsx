@@ -389,8 +389,8 @@ const styles = StyleSheet.create({
     minHeight: 64,
   },
   headerBackButton: {
-    width: 42,
-    height: 42,
+    width: 46,
+    height: 46,
     alignItems: 'center',
     justifyContent: 'center',
     marginLeft: -6,

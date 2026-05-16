@@ -140,6 +140,12 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Rebuilt /chat-appearance to visually match the latest user-provided reference: dark header, dual tabs, large wallpaper preview, screenshot-style wallpaper cards, and a matching Bubble Theme tab while preserving local persistence. Self-verified both tabs in preview."
+##       - working: false
+##         agent: "testing"
+##         comment: "Route and interactions were stable, but the back button touch target was 42x42 which is below the recommended 44x44 minimum."
+##       - working: true
+##         agent: "main"
+##         comment: "Increased the chat appearance back button to 46x46 and re-ran preview verification so the touch target now meets the minimum size guidance."
 ##   - task: "Safe Convex fallback for optional Phase 1 endpoints"
 ##     implemented: true
 ##     working: true
@@ -271,3 +277,5 @@
 ##     message: "Please validate the ads module as far as current auth allows: create/review routes, no preview regressions, and any obvious route/runtime issues from the new Ads tab wiring."
 ##   - agent: "main"
 ##     message: "Please validate /chat-appearance against the latest redesign: route should load without runtime errors, Wallpapers and Bubble Theme tabs should switch correctly, and the main layout should stay stable in preview."
+##   - agent: "main"
+##     message: "Testing-agent note for /chat-appearance was addressed locally: the back button touch target is now 46x46, and preview verification was repeated after the fix."
