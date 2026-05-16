@@ -9,7 +9,7 @@ import { useAuth } from '../../providers/AuthProvider';
 /**
  * useMessageNotificationSound
  *
- * Plays the bundled "beep + Smilers" notification sound whenever a new message
+ * Plays the bundled two-part message notification sound whenever a new message
  * arrives via Convex realtime, while the app is in the foreground.
  *
  * - Skips the conversation the user is currently viewing

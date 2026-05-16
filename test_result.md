@@ -299,6 +299,20 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Replaced the bundled lowercase ringtone assets at `/assets/sounds/smilers_never_cry_2.mp3` and `/assets/sounds/smilers_never_cry_3.mp3`. The ringtone catalog already referenced these IDs, so no code changes were needed. Self-verified the `/ringtones` screen still loads and lists both entries in preview."
+##   - task: "Two-part message notification sound"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/assets/sounds/message_notification.mp3"
+##     stuck_count: 0
+##     priority: "medium"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "user"
+##         comment: "User uploaded a new MP3 and asked for all received message notifications to play a beep followed by that sound."
+##       - working: true
+##         agent: "main"
+##         comment: "Backed up the existing bundled message beep, downloaded the new uploaded MP3 as a follow-up sound, concatenated both into the existing `message_notification.mp3` asset so foreground realtime message alerts and native push channels continue using the same filename, and updated the foreground notification hook comment to match the new two-part behavior. Audio analysis confirms the final file behaves like a short repeated two-part notification clip."
 ##   - task: "Chat voice-note controls + disappearing messages + send money redesign"
 ##     implemented: true
 ##     working: true
