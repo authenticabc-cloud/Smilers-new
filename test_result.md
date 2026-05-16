@@ -308,6 +308,20 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Refactored `CallSession.ts` to use dynamic `await import('react-native-webrtc')` loading through a cached getter, changed `createPeerConnection()` to async, updated the call route to await it, and rewrote `RTCViewWrapper.ts` so `react-native-webrtc` is only required at render time instead of module load time. Preview call route still renders after the refactor."
+##   - task: "Call screen web-parity refinements"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/call/[conversationId].tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "user"
+##         comment: "User compared the web call screen against the native voice-call screen and requested three parity fixes: show the actual contact name instead of `Smilers`, expose audio-output choice UI, and add Screen / Add participant buttons like the web app."
+##       - working: true
+##         agent: "main"
+##         comment: "Reworked `/call/[conversationId]` toward the web screenshots: added smarter contact-name resolution, swapped the filled avatar for an outlined call orb, rebuilt the voice-call action row to Mute / Audio / Screen / Add with labels under the circles, added the web-style Audio Output card (Earpiece / Speaker / Bluetooth), and self-verified the call screen plus audio menu in mobile preview screenshots. The Add participant button is present for parity but the actual live invite/escalation flow is not wired yet."
 ##   - task: "EAS update export syntax fix for RTCView wrapper"
 ##     implemented: true
 ##     working: true

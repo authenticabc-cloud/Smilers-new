@@ -26,13 +26,13 @@ import Animated, {
 } from 'react-native-reanimated';
 import { StatusBar } from 'expo-status-bar';
 import { api } from '../../src/convexApi';
-import Avatar from '../../src/components/Avatar';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Shadow, Spacing } from '../../src/theme';
 import { useRingtonePlayer } from '../../src/lib/ringtone/useRingtonePlayer';
 
 type CallType = 'voice' | 'video';
+type AudioOutputRoute = 'earpiece' | 'speaker' | 'bluetooth';
 
 function alertScreenShareIOSError() {
   Alert.alert(
@@ -88,7 +88,8 @@ export default function CallScreen() {
   const [remoteStreamURL, setRemoteStreamURL] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
-  const [speakerOn, setSpeakerOn] = useState(true);
+  const [audioOutput, setAudioOutput] = useState<AudioOutputRoute>(requestedType === 'voice' ? 'earpiece' : 'speaker');
+  const [audioOutputMenuVisible, setAudioOutputMenuVisible] = useState(false);
   const [screenSharing, setScreenSharing] = useState(startInScreenShare);
   const [statusText, setStatusText] = useState('Connecting…');
   const [permissionDenied, setPermissionDenied] = useState(false);
@@ -110,12 +111,12 @@ export default function CallScreen() {
         playsInSilentModeIOS: true,
         staysActiveInBackground: false,
         shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: !speakerOn && callType === 'voice',
+        playThroughEarpieceAndroid: audioOutput !== 'speaker' && callType === 'voice',
       });
     } catch (errorValue: any) {
       console.warn('Audio.setAudioModeAsync failed:', errorValue?.message);
     }
-  }, [callType, speakerOn]);
+  }, [audioOutput, callType]);
 
   useEffect(() => {
     if (Platform.OS !== 'android') {
@@ -458,13 +459,17 @@ export default function CallScreen() {
     sessionRef.current?.switchCamera();
   }, []);
 
-  const toggleSpeaker = useCallback(() => {
-    setSpeakerOn((v) => !v);
+  const handleSelectAudioOutput = useCallback((nextOutput: AudioOutputRoute) => {
+    setAudioOutput(nextOutput);
+    setAudioOutputMenuVisible(false);
   }, []);
 
   const toggleScreenShare = useCallback(async () => {
     const session = sessionRef.current;
-    if (!session) return;
+    if (!session) {
+      Alert.alert('Screen sharing', 'Screen sharing will be available as soon as the call media is ready.');
+      return;
+    }
     if (Platform.OS === 'ios') {
       alertScreenShareIOSError();
       return;
@@ -484,15 +489,67 @@ export default function CallScreen() {
     }
   }, [screenSharing, callType]);
 
+  const handleAddParticipant = useCallback(() => {
+    Alert.alert(
+      'Add participant',
+      'Conference escalation from the live call screen is the next call update. I have added the button to match the web layout, and I can wire the actual invite flow next.'
+    );
+  }, []);
+
   const otherName = useMemo(() => {
-    return conversation?.name || conversation?.otherUserName || 'Smilers';
-  }, [conversation?.name, conversation?.otherUserName]);
+    const conversationName = typeof conversation?.name === 'string' ? conversation.name.trim() : '';
+    const directName = [
+      conversation?.otherUserName,
+      conversation?.otherUser?.name,
+      conversation?.otherUser?.displayName,
+      conversation?.otherUser?.fullName,
+    ].find((value) => typeof value === 'string' && value.trim().length > 0 && value.trim().toLowerCase() !== 'smilers');
+
+    const participantName = Array.isArray(conversation?.participants)
+      ? conversation.participants
+          .map((participant: any) => {
+            if (!participant || participant._id === me?._id || participant.id === me?._id) {
+              return '';
+            }
+            return participant.name || participant.displayName || participant.fullName || participant.username || '';
+          })
+          .find((value: string) => typeof value === 'string' && value.trim().length > 0)
+      : '';
+
+    if (directName) {
+      return String(directName).trim();
+    }
+    if (typeof participantName === 'string' && participantName.trim().length > 0 && participantName.trim().toLowerCase() !== 'smilers') {
+      return participantName.trim();
+    }
+    if (conversationName && conversationName.toLowerCase() !== 'smilers') {
+      return conversationName;
+    }
+    return 'Smilers';
+  }, [conversation, me?._id]);
 
   const durationLabel = useMemo(() => {
     const m = Math.floor(callDurationSec / 60);
     const s = callDurationSec % 60;
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   }, [callDurationSec]);
+
+  const topStatusChip = useMemo(() => {
+    if (isOutgoingRinging) return 'Ringing....';
+    if (isIncoming) return 'Incoming...';
+    if (!isActive && statusText && statusText !== 'Connecting…') return statusText;
+    return '';
+  }, [isActive, isIncoming, isOutgoingRinging, statusText]);
+
+  const primaryCallSubLabel = useMemo(() => {
+    if (isActive) return durationLabel;
+    return callType === 'video' ? 'Video Call' : 'Voice Call';
+  }, [callType, durationLabel, isActive]);
+
+  const secondaryCallSubLabel = useMemo(() => {
+    if (permissionDenied || isActive || isIncoming || isOutgoingRinging) return '';
+    return statusText;
+  }, [isActive, isIncoming, isOutgoingRinging, permissionDenied, statusText]);
 
   const showVideo = callType === 'video' && isActive && RTCViewImpl != null;
 
@@ -503,8 +560,6 @@ export default function CallScreen() {
   const gradientColors = isIncoming
     ? (['#1a3b5d', '#0f1d2e'] as const) // calm blue for incoming
     : (['#3A2608', '#1a1004'] as const); // warm dark brown for outgoing/active
-
-  const callTypeLabel = callType === 'video' ? 'Smilers video call' : 'Smilers voice call';
 
   if (Platform.OS === 'android' && !screenReady) {
     return (
@@ -553,20 +608,28 @@ export default function CallScreen() {
         <LinearGradient colors={gradientColors as any} style={StyleSheet.absoluteFill}>
           <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
             <View style={styles.topArea}>
-              {/* Caller header label */}
-              <Text style={styles.callerKicker}>
-                {isIncoming ? 'Incoming' : isOutgoingRinging ? 'Calling on' : 'On'} {callTypeLabel}
-              </Text>
+              <View style={styles.topUtilityRow}>
+                <View style={styles.topUtilitySide} />
+                {topStatusChip ? (
+                  <View style={styles.statusChip} testID="call-status-chip">
+                    <Text style={styles.statusChipText}>{topStatusChip}</Text>
+                  </View>
+                ) : (
+                  <View style={styles.statusChipSpacer} />
+                )}
+                <View style={styles.topUtilitySide} />
+              </View>
 
               {/* Pulsing avatar */}
               <RingingAvatar
                 name={otherName}
-                size={150}
+                size={158}
                 animate={isIncoming || isOutgoingRinging}
               />
 
               <Text style={styles.name}>{otherName}</Text>
-              <Text style={styles.status}>{isActive ? durationLabel : statusText}</Text>
+              <Text style={styles.status}>{primaryCallSubLabel}</Text>
+              {secondaryCallSubLabel ? <Text style={styles.subStatus}>{secondaryCallSubLabel}</Text> : null}
 
               {isOutgoingRinging ? (
                 <View style={styles.dotsRow}>
@@ -629,61 +692,55 @@ export default function CallScreen() {
     }
     return (
       <>
+        {audioOutputMenuVisible ? (
+          <AudioOutputMenu value={audioOutput} onSelect={handleSelectAudioOutput} />
+        ) : null}
         <View style={styles.controlsTopRow}>
           <SmallControl
             testID="mute-btn"
             onPress={toggleMute}
             active={muted}
             icon={<Feather name={muted ? 'mic-off' : 'mic'} size={22} color={Colors.white} />}
-            label={muted ? 'Unmute' : 'Mute'}
+            label="Mute"
           />
-          {callType === 'video' ? (
-            <>
-              <SmallControl
-                testID="camera-btn"
-                onPress={toggleCamera}
-                active={cameraOff}
-                icon={
-                  <Feather
-                    name={cameraOff ? 'video-off' : 'video'}
-                    size={22}
-                    color={Colors.white}
-                  />
-                }
-                label={cameraOff ? 'Camera on' : 'Camera off'}
-              />
-              <SmallControl
-                testID="flip-camera-btn"
-                onPress={flipCamera}
-                icon={<Ionicons name="camera-reverse-outline" size={22} color={Colors.white} />}
-                label="Flip"
-              />
-            </>
-          ) : (
-            <SmallControl
-              testID="speaker-btn"
-              onPress={toggleSpeaker}
-              active={speakerOn}
-              icon={
-                <Ionicons
-                  name={speakerOn ? 'volume-high' : 'volume-medium-outline'}
-                  size={22}
-                  color={Colors.white}
-                />
-              }
-              label={speakerOn ? 'Speaker' : 'Earpiece'}
-            />
-          )}
-          {isActive ? (
-            <SmallControl
-              testID="share-screen-btn"
-              onPress={toggleScreenShare}
-              active={screenSharing}
-              icon={<Feather name="monitor" size={22} color={Colors.white} />}
-              label={screenSharing ? 'Stop share' : 'Share'}
-            />
-          ) : null}
+          <SmallControl
+            testID="audio-output-btn"
+            onPress={() => setAudioOutputMenuVisible((current) => !current)}
+            active={audioOutputMenuVisible}
+            icon={<Ionicons name="phone-portrait-outline" size={22} color={Colors.white} />}
+            label="Audio"
+          />
+          <SmallControl
+            testID="share-screen-btn"
+            onPress={toggleScreenShare}
+            active={screenSharing}
+            icon={<Feather name="monitor" size={22} color={Colors.white} />}
+            label="Screen"
+          />
+          <SmallControl
+            testID="add-participant-btn"
+            onPress={handleAddParticipant}
+            icon={<Ionicons name="person-add-outline" size={22} color={Colors.white} />}
+            label="Add"
+          />
         </View>
+        {callType === 'video' ? (
+          <View style={styles.controlsSecondaryRow}>
+            <SmallControl
+              testID="camera-btn"
+              onPress={toggleCamera}
+              active={cameraOff}
+              icon={<Feather name={cameraOff ? 'video-off' : 'video'} size={22} color={Colors.white} />}
+              label="Camera"
+            />
+            <SmallControl
+              testID="flip-camera-btn"
+              onPress={flipCamera}
+              icon={<Ionicons name="camera-reverse-outline" size={22} color={Colors.white} />}
+              label="Flip"
+            />
+          </View>
+        ) : null}
         <View style={styles.row}>
           <ControlBtn
             testID="hangup-btn"
@@ -697,7 +754,7 @@ export default function CallScreen() {
                 style={{ transform: [{ rotate: '135deg' }] }}
               />
             }
-            label="End"
+            label=""
           />
         </View>
       </>
@@ -795,6 +852,13 @@ function RingingAvatar({
   }));
 
   const ringSize = size + 24;
+  const initials = name
+    .split(' ')
+    .map((part) => part.trim().charAt(0))
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
 
   return (
     <View style={[styles.ringingWrap, { width: ringSize * 1.8, height: ringSize * 1.8 }]}>
@@ -823,7 +887,73 @@ function RingingAvatar({
           />
         </>
       ) : null}
-      <Avatar name={name} size={size} backgroundColor={Colors.primaryLight} />
+      <View
+        style={[
+          styles.callAvatarCore,
+          {
+            width: size,
+            height: size,
+            borderRadius: size / 2,
+          },
+        ]}
+        testID="call-avatar-core"
+      >
+        <Text style={[styles.callAvatarInitials, { fontSize: size * 0.28 }]}>{initials || '?'}</Text>
+      </View>
+    </View>
+  );
+}
+
+function AudioOutputMenu({
+  value,
+  onSelect,
+}: {
+  value: AudioOutputRoute;
+  onSelect: (next: AudioOutputRoute) => void;
+}) {
+  const options: Array<{
+    key: AudioOutputRoute;
+    label: string;
+    icon: React.ReactNode;
+  }> = [
+    {
+      key: 'earpiece',
+      label: 'Earpiece',
+      icon: <Ionicons name="phone-portrait-outline" size={22} color={Colors.primary} />,
+    },
+    {
+      key: 'speaker',
+      label: 'Speaker',
+      icon: <Ionicons name="volume-high-outline" size={22} color="rgba(255,255,255,0.82)" />,
+    },
+    {
+      key: 'bluetooth',
+      label: 'Bluetooth',
+      icon: <Ionicons name="bluetooth-outline" size={22} color="rgba(255,255,255,0.82)" />,
+    },
+  ];
+
+  return (
+    <View style={styles.audioMenuCard} testID="audio-output-card">
+      <Text style={styles.audioMenuTitle}>AUDIO OUTPUT</Text>
+      {options.map((option) => {
+        const selected = value === option.key;
+        return (
+          <TouchableOpacity
+            key={option.key}
+            style={[styles.audioMenuRow, selected ? styles.audioMenuRowSelected : null]}
+            onPress={() => onSelect(option.key)}
+            activeOpacity={0.82}
+            testID={`audio-output-${option.key}`}
+          >
+            <View style={styles.audioMenuIconWrap}>{option.icon}</View>
+            <Text style={[styles.audioMenuLabel, selected ? styles.audioMenuLabelSelected : null]}>
+              {option.label}
+            </Text>
+            {selected ? <View style={styles.audioMenuSelectedDot} /> : null}
+          </TouchableOpacity>
+        );
+      })}
     </View>
   );
 }
@@ -864,15 +994,17 @@ function SmallControl({
   label: string;
 }) {
   return (
-    <TouchableOpacity
-      style={[styles.smallBtn, active ? styles.smallBtnActive : null]}
-      onPress={onPress}
-      activeOpacity={0.85}
-      testID={testID}
-    >
-      {icon}
+    <View style={styles.smallControlWrap}>
+      <TouchableOpacity
+        style={[styles.smallBtn, active ? styles.smallBtnActive : null]}
+        onPress={onPress}
+        activeOpacity={0.85}
+        testID={testID}
+      >
+        {icon}
+      </TouchableOpacity>
       <Text style={styles.smallBtnLabel} numberOfLines={1}>{label}</Text>
-    </TouchableOpacity>
+    </View>
   );
 }
 
@@ -894,19 +1026,43 @@ const styles = StyleSheet.create({
   },
   topArea: {
     alignItems: 'center',
-    paddingTop: Spacing.xxl,
-    gap: Spacing.md,
+    paddingTop: 18,
+    gap: 8,
     paddingHorizontal: Spacing.lg,
     flex: 1,
+    justifyContent: 'flex-start',
   },
-  callerKicker: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: FontSize.sm,
-    letterSpacing: 0.5,
-    textTransform: 'none',
-    fontWeight: FontWeight.medium,
-    marginTop: Spacing.xl,
-    marginBottom: Spacing.lg,
+  topUtilityRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: Spacing.lg,
+    marginBottom: Spacing.base,
+  },
+  topUtilitySide: {
+    width: 44,
+    height: 44,
+  },
+  statusChip: {
+    minHeight: 54,
+    minWidth: 146,
+    paddingHorizontal: 24,
+    borderRadius: 28,
+    backgroundColor: 'rgba(228,181,59,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(228,181,59,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  statusChipSpacer: {
+    width: 146,
+    height: 54,
+  },
+  statusChipText: {
+    color: '#FFD34E',
+    fontSize: 18,
+    fontWeight: FontWeight.semibold,
   },
   ringingWrap: {
     alignItems: 'center',
@@ -916,8 +1072,20 @@ const styles = StyleSheet.create({
   ring: {
     position: 'absolute',
     borderWidth: 2,
-    borderColor: Colors.primaryLight,
-    backgroundColor: 'rgba(254,243,199,0.2)',
+    borderColor: 'rgba(255,255,255,0.2)',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  callAvatarCore: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 6,
+    borderColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.02)',
+  },
+  callAvatarInitials: {
+    color: 'rgba(255,255,255,0.4)',
+    fontWeight: FontWeight.medium,
+    letterSpacing: 1.5,
   },
   dotsRow: {
     flexDirection: 'row',
@@ -947,21 +1115,21 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
   },
   name: {
-    fontSize: FontSize.xxxl,
+    fontSize: 34,
     fontWeight: FontWeight.bold,
     color: Colors.white,
-    marginTop: Spacing.lg,
+    marginTop: Spacing.lg + 6,
     textAlign: 'center',
   },
   status: {
     fontSize: FontSize.lg,
-    color: Colors.primaryLight,
-    fontWeight: FontWeight.medium,
+    color: 'rgba(255,255,255,0.62)',
+    fontWeight: FontWeight.regular,
   },
   subStatus: {
     fontSize: FontSize.sm,
-    color: Colors.primaryLight,
-    opacity: 0.8,
+    color: 'rgba(255,255,255,0.48)',
+    opacity: 1,
   },
   errorText: {
     color: Colors.danger,
@@ -973,23 +1141,28 @@ const styles = StyleSheet.create({
   controls: {
     paddingHorizontal: Spacing.lg,
     paddingBottom: Spacing.xl,
-    gap: Spacing.lg,
+    gap: 18,
   },
   controlsTopRow: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  controlsSecondaryRow: {
+    flexDirection: 'row',
     justifyContent: 'center',
-    gap: Spacing.md,
-    marginBottom: Spacing.md,
+    gap: Spacing.xl,
+    marginBottom: 4,
   },
   row: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
+    justifyContent: 'center',
     gap: Spacing.lg,
   },
   bigBtn: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
+    width: 106,
+    height: 106,
+    borderRadius: 53,
     alignItems: 'center',
     justifyContent: 'center',
     ...Shadow.lg,
@@ -1009,23 +1182,77 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   smallBtn: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+    width: 76,
+    height: 76,
+    borderRadius: 38,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.12)',
-    gap: 2,
-    paddingHorizontal: 6,
   },
   smallBtnActive: {
     backgroundColor: 'rgba(255,255,255,0.3)',
   },
+  smallControlWrap: {
+    alignItems: 'center',
+    width: 76,
+    gap: 10,
+  },
   smallBtnLabel: {
-    color: Colors.white,
-    fontSize: 10,
+    color: 'rgba(255,255,255,0.72)',
+    fontSize: 11,
     fontWeight: FontWeight.medium,
-    marginTop: 2,
+    textAlign: 'center',
+  },
+  audioMenuCard: {
+    backgroundColor: 'rgba(28,22,4,0.92)',
+    alignSelf: 'center',
+    width: '88%',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(228,181,59,0.18)',
+    overflow: 'hidden',
+    marginBottom: 6,
+  },
+  audioMenuTitle: {
+    color: '#FFD34E',
+    fontSize: 16,
+    fontWeight: FontWeight.bold,
+    letterSpacing: 0.8,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(228,181,59,0.14)',
+  },
+  audioMenuRow: {
+    minHeight: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+    gap: 14,
+  },
+  audioMenuRowSelected: {
+    backgroundColor: 'rgba(228,181,59,0.18)',
+  },
+  audioMenuIconWrap: {
+    width: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  audioMenuLabel: {
+    flex: 1,
+    color: 'rgba(255,255,255,0.82)',
+    fontSize: 16,
+    fontWeight: FontWeight.medium,
+  },
+  audioMenuLabelSelected: {
+    color: '#FFD34E',
+  },
+  audioMenuSelectedDot: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#FFD34E',
   },
 
   /* Video layer */
