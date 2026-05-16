@@ -28,6 +28,7 @@ import PollComposer from '../../src/components/PollComposer';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
+import { getConversationDisplayName, getDisplayInitials } from '../../src/lib/displayName';
 import {
   applyDraftFormatting,
   DRAFT_TEXT_COLORS,
@@ -658,10 +659,10 @@ export default function ChatScreen() {
     [refetchMessages, toggleReaction]
   );
 
-  const title = conversation?.name || conversation?.otherUserName || 'Chat';
+  const title = getConversationDisplayName(conversation, me?._id ? String(me._id) : undefined, 'Chat');
   const isMineSelected = selectedMsg && me && selectedMsg.senderId === me._id;
   const subtitle = formatPresenceSubtitle(conversation);
-  const avatarInitial = title.charAt(0).toUpperCase();
+  const avatarInitial = getDisplayInitials(title);
 
   const handleMenuAction = useCallback(
     (key: string) => {
@@ -1547,17 +1548,17 @@ const styles = StyleSheet.create({
   },
   uploadText: { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium },
   composerToolsWrap: {
-    backgroundColor: '#F7F3EA',
+    backgroundColor: '#F1E7D6',
     borderTopWidth: 1,
-    borderTopColor: '#E5D8C2',
+    borderTopColor: '#D9C9AE',
   },
   composerToolbarRow: {
-    minHeight: 52,
+    minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    gap: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 6,
   },
   composerToolBtn: {
     width: 38,
@@ -1581,9 +1582,9 @@ const styles = StyleSheet.create({
   colorPickerWrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 22,
-    paddingTop: 12,
-    paddingBottom: 4,
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    paddingBottom: 2,
   },
   colorChip: {
     marginRight: 8,
@@ -1618,33 +1619,33 @@ const styles = StyleSheet.create({
   inputBar: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    paddingHorizontal: 8,
-    paddingVertical: 8,
-    gap: 6,
-    backgroundColor: '#F4EFE3',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 4,
+    backgroundColor: '#EFE3CF',
     borderTopWidth: 1,
-    borderTopColor: '#E5D8C2',
+    borderTopColor: '#D9C9AE',
   },
   iconBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 40,
+    height: 40,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
   },
   input: {
     flex: 1,
-    minHeight: 40,
+    minHeight: 46,
     maxHeight: 120,
-    backgroundColor: '#F8F2E7',
+    backgroundColor: '#FBF7F0',
     paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 24,
-    fontSize: 15,
-    lineHeight: 20,
+    paddingVertical: 12,
+    borderRadius: 18,
+    fontSize: 14,
+    lineHeight: 19,
     color: Colors.textPrimary,
     borderWidth: 1,
-    borderColor: '#E7DAC2',
+    borderColor: '#D7C4A5',
   },
   inputBold: {
     fontWeight: FontWeight.bold,
@@ -1656,6 +1657,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
+    marginLeft: 2,
   },
   recordingRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
   recCancelBtn: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FDE2E2' },

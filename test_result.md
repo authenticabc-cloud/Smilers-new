@@ -497,6 +497,62 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Root cause from troubleshoot_agent: useSafeConvexQuery is one-shot (not reactive), so when verifyOtp updates the user record, the change does not propagate; new mounts get stale data, causing redirect loops. Fix: replaced useSafeConvexQuery with reactive useQuery(api.users.getCurrentUser) in BOTH phone-verify and tabs/_layout. Consolidated phone-verify into ONE redirect effect that trusts the local hasVerifiedInstall marker as authoritative and self-heals when server reports verified but marker missing. Removed redundant finalizingVerification state, removed duplicate router.replace effects. Tabs layout still has 10s safety timeout for the initial me query, and never bounces back to phone-verify if hasVerifiedInstall is true. App boots cleanly to Sign In in preview."
+##   - task: "Contact crash fallback hardening"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/(tabs)/contacts.tsx"
+##     stuck_count: 0
+##     priority: "critical"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User reported the app crashes instantly when opening the contact 'Asare Ben Chris'."
+##       - working: true
+##         agent: "main"
+##         comment: "Hardened contacts and avatar name handling with safe display-name extraction, safer contact user-id lookup, and a guarded direct-chat opener so malformed contact records or non-string names no longer cause render/open failures."
+##   - task: "Conversation display names show saved contact names"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/src/lib/displayName.ts"
+##     stuck_count: 0
+##     priority: "critical"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User reported chats and calls were showing 'Smilers' instead of the actual saved contact display names."
+##       - working: true
+##         agent: "main"
+##         comment: "Added shared display-name resolution helpers and wired them into Chats, Contacts, Chat header, Call screen, add-to-call rows, and Avatar initials so the UI prefers the user's saved display name and gracefully handles odd data shapes."
+##   - task: "Call screen overlap and outgoing ringtone polish"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/call/[conversationId].tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User reported the contact name was overlapping call controls, and outgoing calls should play the caller's selected ringtone preference."
+##       - working: true
+##         agent: "main"
+##         comment: "Reduced call-header text pressure, capped/scaled long contact names, tightened control spacing, and updated ringtone playback so the preferred ringtone plays during both incoming and outgoing ringing while vibration remains incoming-only."
+##   - task: "Chat composer web-parity restyle"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/chat/[conversationId].tsx"
+##     stuck_count: 0
+##     priority: "medium"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User said the composer box still did not visually match the web app."
+##       - working: true
+##         agent: "main"
+##         comment: "Adjusted the composer shell, toolbar spacing, input shape, borders, and colors to move the chat composer closer to the latest web screenshot while preserving the rich-text tools added earlier."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"
@@ -504,6 +560,10 @@
 ##   run_ui: true
 ## test_plan:
 ##   current_focus:
+##     - "Contact crash fallback hardening"
+##     - "Conversation display names show saved contact names"
+##     - "Call screen overlap and outgoing ringtone polish"
+##     - "Chat composer web-parity restyle"
 ##     - "Phase 1 utility screens and settings navigation"
 ##     - "Chat appearance screenshot redesign"
 ##     - "Android EAS WebRTC bundle fix"
@@ -558,3 +618,5 @@
 ##     message: "Android production call crash was investigated again using the user's APK symptom and a troubleshooting pass. I removed the remaining top-level `react-native-webrtc` imports from the native call modules and switched them to dynamic loading, which is the critical production-safe fix. The preview call route still renders after the refactor, but the APK must be rebuilt to confirm the native crash is gone."
 ##   - agent: "main"
 ##     message: "The subsequent deployment failure was a different blocker in `eas-update`: JSX inside `src/lib/webrtc/RTCViewWrapper.ts`. I replaced the JSX with `React.createElement(...)`, which keeps the file valid as `.ts` and is safer than renaming the file in this deployment flow."
+##   - agent: "main"
+##     message: "Please validate the latest user-reported chat/call/contact fixes. Priority order: 1) opening a real contact like 'Asare Ben Chris' should no longer crash, 2) chat and call headers should show the saved contact display name instead of the generic 'Smilers' fallback when data is available, 3) the voice-call screen should keep long names clear of the control buttons, 4) outgoing ringing should use the caller's selected ringtone preference, and 5) the chat composer should visually match the new tighter beige web-style box. Authenticated real-data checks are preferred if the Hercules flow is reachable; otherwise still verify route stability and flag any remaining runtime regressions." 

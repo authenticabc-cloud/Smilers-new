@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { getDisplayInitials } from '../lib/displayName';
 import { Colors, FontSize, FontWeight } from '../theme';
 
 interface AvatarProps {
@@ -11,7 +12,7 @@ interface AvatarProps {
 }
 
 export default function Avatar({ name, size = 48, backgroundColor, textColor }: AvatarProps) {
-  const initial = (name || '?').charAt(0).toUpperCase();
+  const initial = getDisplayInitials(name);
   const fontSize = size * 0.45;
 
   return (

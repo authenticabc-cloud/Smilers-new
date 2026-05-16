@@ -15,6 +15,10 @@ interface RingPrefs {
   vibrate: boolean;
 }
 
+interface UseRingtonePlayerOptions {
+  vibrate?: boolean;
+}
+
 const DEFAULT_PREFS: RingPrefs = {
   ringtone: DEFAULT_RING_ID,
   notificationSound: 'smilers_never_cry_2',
@@ -32,7 +36,7 @@ const DEFAULT_PREFS: RingPrefs = {
  * Stops both immediately when `active` flips to false or the hook unmounts.
  * Safe on web (no-ops).
  */
-export function useRingtonePlayer(active: boolean): void {
+export function useRingtonePlayer(active: boolean, options?: UseRingtonePlayerOptions): void {
   const soundRef = useRef<Audio.Sound | null>(null);
   const isPlayingRef = useRef(false);
 
@@ -50,7 +54,7 @@ export function useRingtonePlayer(active: boolean): void {
         const stored = ((await readStoredJson(RINGTONE_PREFS_KEY, null)) as RingPrefs | null) || null;
         const prefs: RingPrefs = stored ? { ...DEFAULT_PREFS, ...stored } : DEFAULT_PREFS;
         const ringSource = getRingSource(prefs.ringtone);
-        const shouldVibrate = prefs.vibrate !== false;
+        const shouldVibrate = options?.vibrate ?? (prefs.vibrate !== false);
         const isSilent = ringSource === null;
 
         // Configure audio mode so ringtone plays through speaker / ringer channel
@@ -112,5 +116,5 @@ export function useRingtonePlayer(active: boolean): void {
       cancelled = true;
       void stop();
     };
-  }, [active]);
+  }, [active, options?.vibrate]);
 }

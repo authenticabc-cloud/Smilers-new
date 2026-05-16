@@ -31,6 +31,7 @@ import Animated, {
 import { StatusBar } from 'expo-status-bar';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
+import { getConversationDisplayName, getDisplayInitials, getDisplayNameFromUser } from '../../src/lib/displayName';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Shadow, Spacing } from '../../src/theme';
 import { useRingtonePlayer } from '../../src/lib/ringtone/useRingtonePlayer';
@@ -550,37 +551,10 @@ export default function CallScreen() {
     }
   }, [screenSharing, callType]);
 
-  const otherName = useMemo(() => {
-    const conversationName = typeof conversation?.name === 'string' ? conversation.name.trim() : '';
-    const directName = [
-      conversation?.otherUserName,
-      conversation?.otherUser?.name,
-      conversation?.otherUser?.displayName,
-      conversation?.otherUser?.fullName,
-    ].find((value) => typeof value === 'string' && value.trim().length > 0 && value.trim().toLowerCase() !== 'smilers');
-
-    const participantName = Array.isArray(conversation?.participants)
-      ? conversation.participants
-          .map((participant: any) => {
-            if (!participant || participant._id === me?._id || participant.id === me?._id) {
-              return '';
-            }
-            return participant.name || participant.displayName || participant.fullName || participant.username || '';
-          })
-          .find((value: string) => typeof value === 'string' && value.trim().length > 0)
-      : '';
-
-    if (directName) {
-      return String(directName).trim();
-    }
-    if (typeof participantName === 'string' && participantName.trim().length > 0 && participantName.trim().toLowerCase() !== 'smilers') {
-      return participantName.trim();
-    }
-    if (conversationName && conversationName.toLowerCase() !== 'smilers') {
-      return conversationName;
-    }
-    return 'Smilers';
-  }, [conversation, me?._id]);
+  const otherName = useMemo(
+    () => getConversationDisplayName(conversation, me?._id ? String(me._id) : undefined, 'Smilers'),
+    [conversation, me?._id],
+  );
 
   const existingParticipantIds = useMemo(
     () => getConversationMemberIds(conversation, me?._id ? String(me._id) : undefined),
@@ -600,7 +574,7 @@ export default function CallScreen() {
       if (!search) {
         return true;
       }
-      const haystack = `${item?.name || ''} ${item?.phone || ''} ${item?.email || ''}`.toLowerCase();
+      const haystack = `${getDisplayNameFromUser(item)} ${item?.phone || ''} ${item?.email || ''}`.toLowerCase();
       return haystack.includes(search);
     });
   }, [addToCallSearch, contacts, existingParticipantIds]);
@@ -649,7 +623,7 @@ export default function CallScreen() {
       setCreatingConference(true);
       try {
         const created: any = await createGroup({
-          name: buildConferenceName(otherName, selectedContact?.name || 'Participant'),
+          name: buildConferenceName(otherName, getDisplayNameFromUser(selectedContact, 'Participant')),
           memberIds,
         });
         const nextConversationId =
@@ -695,8 +669,8 @@ export default function CallScreen() {
 
   const showVideo = callType === 'video' && isActive && RTCViewImpl != null;
 
-  // Play ringtone + vibrate when this is an incoming call that's still ringing
-  useRingtonePlayer(!!isIncoming);
+  // Play the caller's selected ringtone while dialing, and the callee's while receiving.
+  useRingtonePlayer(!!isIncoming || !!isOutgoingRinging, { vibrate: !!isIncoming });
 
   // Background gradient for non-video states (incoming/outgoing/voice/active-voice)
   const gradientColors = isIncoming
@@ -738,7 +712,9 @@ export default function CallScreen() {
           ) : null}
           {/* Top overlay: name + duration */}
           <SafeAreaView edges={['top']} style={styles.videoTopOverlay} pointerEvents="none">
-            <Text style={styles.videoName}>{otherName}</Text>
+            <Text style={styles.videoName} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+              {otherName}
+            </Text>
             <Text style={styles.videoStatus}>{isActive ? durationLabel : statusText}</Text>
           </SafeAreaView>
           {/* Bottom controls overlay */}
@@ -769,7 +745,15 @@ export default function CallScreen() {
                 animate={isIncoming || isOutgoingRinging}
               />
 
-              <Text style={styles.name}>{otherName}</Text>
+              <Text
+                style={styles.name}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+                testID="call-contact-name"
+              >
+                {otherName}
+              </Text>
               <Text style={styles.status}>{primaryCallSubLabel}</Text>
               {secondaryCallSubLabel ? <Text style={styles.subStatus}>{secondaryCallSubLabel}</Text> : null}
 
@@ -832,7 +816,7 @@ export default function CallScreen() {
             </View>
 
             <Text style={styles.privacyMessage}>
-              Would you like to hide <Text style={styles.privacyMessageStrong}>{pendingAddContact?.name || 'this contact'}</Text>'s
+              Would you like to hide <Text style={styles.privacyMessageStrong}>{getDisplayNameFromUser(pendingAddContact, 'this contact')}</Text>'s
               {' '}number from the other participants in this call?
             </Text>
 
@@ -1080,13 +1064,7 @@ function RingingAvatar({
   }));
 
   const ringSize = size + 24;
-  const initials = name
-    .split(' ')
-    .map((part) => part.trim().charAt(0))
-    .filter(Boolean)
-    .slice(0, 2)
-    .join('')
-    .toUpperCase();
+  const initials = getDisplayInitials(name, 2);
 
   return (
     <View style={[styles.ringingWrap, { width: ringSize * 1.8, height: ringSize * 1.8 }]}>
@@ -1244,10 +1222,10 @@ function AddToCallOverlay({
               return (
                 <View style={styles.addToCallRow} testID={`add-to-call-contact-${contactId}`}>
                   <View style={styles.addToCallAvatar}>
-                    <Text style={styles.addToCallAvatarText}>{(item?.name || 'S').charAt(0).toUpperCase()}</Text>
+                    <Text style={styles.addToCallAvatarText}>{getDisplayInitials(getDisplayNameFromUser(item), 1)}</Text>
                   </View>
                   <View style={styles.addToCallNameWrap}>
-                    <Text style={styles.addToCallName} numberOfLines={1}>{item?.name || 'Smilers contact'}</Text>
+                    <Text style={styles.addToCallName} numberOfLines={1}>{getDisplayNameFromUser(item, 'Smilers contact')}</Text>
                   </View>
                   <TouchableOpacity
                     style={styles.addToCallActionBtn}
@@ -1343,8 +1321,8 @@ const styles = StyleSheet.create({
   },
   topArea: {
     alignItems: 'center',
-    paddingTop: 18,
-    gap: 8,
+    paddingTop: 12,
+    gap: 6,
     paddingHorizontal: Spacing.lg,
     flex: 1,
     justifyContent: 'flex-start',
@@ -1432,11 +1410,12 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
   },
   name: {
-    fontSize: 34,
+    fontSize: 30,
     fontWeight: FontWeight.bold,
     color: Colors.white,
-    marginTop: Spacing.lg + 6,
+    marginTop: Spacing.lg,
     textAlign: 'center',
+    maxWidth: '90%',
   },
   status: {
     fontSize: FontSize.lg,
@@ -1458,12 +1437,12 @@ const styles = StyleSheet.create({
   controls: {
     paddingHorizontal: Spacing.lg,
     paddingBottom: Spacing.xl,
-    gap: 18,
+    gap: 14,
   },
   controlsTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 6,
+    marginBottom: 2,
   },
   controlsSecondaryRow: {
     flexDirection: 'row',
@@ -1512,13 +1491,14 @@ const styles = StyleSheet.create({
   smallControlWrap: {
     alignItems: 'center',
     width: 76,
-    gap: 10,
+    gap: 8,
   },
   smallBtnLabel: {
     color: 'rgba(255,255,255,0.72)',
     fontSize: 11,
     fontWeight: FontWeight.medium,
     textAlign: 'center',
+    maxWidth: 70,
   },
   audioMenuCard: {
     backgroundColor: 'rgba(28,22,4,0.92)',
@@ -1838,6 +1818,7 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
     textShadowColor: 'rgba(0,0,0,0.6)',
     textShadowRadius: 4,
+    maxWidth: '86%',
   },
   videoStatus: {
     color: 'rgba(255,255,255,0.85)',

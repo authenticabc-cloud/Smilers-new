@@ -22,6 +22,7 @@ import * as Contacts from 'expo-contacts';
 import Header from '../../src/components/Header';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
+import { getDisplayInitials, getDisplayNameFromUser } from '../../src/lib/displayName';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../src/theme';
 
 type TabKey = 'my' | 'device';
@@ -31,6 +32,19 @@ interface DeviceContact {
   name: string;
   phone?: string;
   email?: string;
+}
+
+function getContactUserId(contact: any): string {
+  const candidate = [
+    contact?.userId,
+    contact?.user?.userId,
+    contact?.user?._id,
+    contact?.user?.id,
+    contact?._id,
+    contact?.id,
+  ].find((value) => typeof value === 'string' && value.trim().length > 0);
+
+  return typeof candidate === 'string' ? candidate.trim() : '';
 }
 
 export default function ContactsScreen() {
@@ -132,6 +146,10 @@ export default function ContactsScreen() {
 
   // ── Actions ──────────────────────────────────────
   const openChat = async (userId: string) => {
+    if (!userId) {
+      Alert.alert('Unavailable contact', 'This contact is missing a valid Smilers account reference.');
+      return;
+    }
     try {
       const conversation: any = await getOrCreateDirect({ otherUserId: userId });
       const conversationId =
@@ -253,7 +271,7 @@ export default function ContactsScreen() {
       {tab === 'my' ? (
         <FlatList
           data={myFiltered}
-          keyExtractor={(item: any, idx: number) => item.userId || item._id || String(idx)}
+          keyExtractor={(item: any, idx: number) => getContactUserId(item) || String(idx)}
           contentContainerStyle={styles.listContent}
           ListHeaderComponent={
             <>
@@ -263,10 +281,10 @@ export default function ContactsScreen() {
                   <Text style={styles.sectionLabel}>PENDING REQUESTS ({pendingList.length})</Text>
                   {pendingList.map((p: any) => (
                     <View key={p._id} style={styles.row} testID={`pending-${p._id}`}>
-                      <ContactAvatar name={p.name} online={false} />
+                      <ContactAvatar name={getDisplayNameFromUser(p)} online={false} />
                       <View style={styles.rowMid}>
                         <Text style={styles.rowName} numberOfLines={1}>
-                          {p.name || 'Smilers user'}
+                          {getDisplayNameFromUser(p)}
                         </Text>
                         <Text style={styles.rowSub} numberOfLines={1}>
                           wants to connect
@@ -304,10 +322,10 @@ export default function ContactsScreen() {
                   <Text style={styles.sectionLabel}>SENT REQUESTS ({outgoingList.length})</Text>
                   {outgoingList.map((o: any) => (
                     <View key={o._id} style={styles.row} testID={`outgoing-${o._id}`}>
-                      <ContactAvatar name={o.name} online={false} />
+                      <ContactAvatar name={getDisplayNameFromUser(o)} online={false} />
                       <View style={styles.rowMid}>
                         <Text style={styles.rowName} numberOfLines={1}>
-                          {o.name || 'Smilers user'}
+                          {getDisplayNameFromUser(o)}
                         </Text>
                         <Text style={styles.rowSub}>Awaiting response</Text>
                       </View>
@@ -333,19 +351,21 @@ export default function ContactsScreen() {
             </>
           }
           renderItem={({ item }) => {
-            const uid = item.userId || item._id;
+            const uid = getContactUserId(item);
             const online = !!item.online || !!item.isOnline;
+            const displayName = getDisplayNameFromUser(item);
+            const contactKey = uid || displayName.toLowerCase().replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '') || 'unknown-contact';
             return (
               <TouchableOpacity
                 style={styles.row}
                 activeOpacity={0.7}
                 onPress={() => openChat(uid)}
-                testID={`contact-${uid}`}
+                testID={`contact-${contactKey}`}
               >
-                <ContactAvatar name={item.name} online={online} />
+                <ContactAvatar name={displayName} online={online} />
                 <View style={styles.rowMid}>
                   <Text style={styles.rowName} numberOfLines={1}>
-                    {item.name || 'Smilers user'}
+                    {displayName}
                   </Text>
                   <Text style={styles.rowSub} numberOfLines={1}>
                     {item.about || 'Hey there! I am using Smilers.'}
@@ -488,7 +508,7 @@ export default function ContactsScreen() {
 
 /* ──────────────── Avatar with green online dot ──────────────── */
 function ContactAvatar({ name, online, size = 48 }: { name?: string; online?: boolean; size?: number }) {
-  const initial = (name || '?').charAt(0).toUpperCase();
+  const initial = getDisplayInitials(name);
   return (
     <View style={{ width: size, height: size }}>
       <View
