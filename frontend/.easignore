@@ -1,0 +1,14 @@
+# Build artifacts and caches - never upload
+dist/
+.expo/
+.metro-cache/
+android/
+ios/
+
+# Test artifacts
+test_reports/
+
+# IDE and OS junk
+.DS_Store
+Thumbs.db
+*.log
