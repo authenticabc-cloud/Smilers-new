@@ -28,28 +28,28 @@ export const RING_CATALOG: RingDefinition[] = [
     name: 'Smilers Never Cry',
     description: 'The signature Smilers theme',
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    source: require('../../../assets/sounds/Smilers_Never_Cry.mp3'),
+    source: require('../../../assets/sounds/smilers_never_cry.mp3'),
   },
   {
     id: 'smilers_never_cry_1',
     name: 'Smilers Never Cry · 1',
     description: 'Full-length signature tune',
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    source: require('../../../assets/sounds/Smilers_Never_Cry_1.mp3'),
+    source: require('../../../assets/sounds/smilers_never_cry_1.mp3'),
   },
   {
     id: 'smilers_never_cry_2',
     name: 'Smilers Never Cry · 2',
     description: 'Bright, melodic short version',
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    source: require('../../../assets/sounds/Smilers_Never_Cry_2.mp3'),
+    source: require('../../../assets/sounds/smilers_never_cry_2.mp3'),
   },
   {
     id: 'smilers_never_cry_3',
     name: 'Smilers Never Cry · 3',
     description: 'Bouncy alternate cut',
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    source: require('../../../assets/sounds/Smilers_Never_Cry_3.mp3'),
+    source: require('../../../assets/sounds/smilers_never_cry_3.mp3'),
   },
   {
     id: 'silent',

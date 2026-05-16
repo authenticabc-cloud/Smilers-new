@@ -108,10 +108,10 @@
           "icon": "./assets/images/icon.png",
           "color": "#E4B53B",
           "sounds": [
-            "./assets/sounds/Smilers_Never_Cry.mp3",
-            "./assets/sounds/Smilers_Never_Cry_1.mp3",
-            "./assets/sounds/Smilers_Never_Cry_2.mp3",
-            "./assets/sounds/Smilers_Never_Cry_3.mp3",
+            "./assets/sounds/smilers_never_cry.mp3",
+            "./assets/sounds/smilers_never_cry_1.mp3",
+            "./assets/sounds/smilers_never_cry_2.mp3",
+            "./assets/sounds/smilers_never_cry_3.mp3",
             "./assets/sounds/message_notification.mp3"
           ]
         }
