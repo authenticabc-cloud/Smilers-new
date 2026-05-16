@@ -94,10 +94,26 @@ export default function CallScreen() {
   const [statusText, setStatusText] = useState('Connecting…');
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [callDurationSec, setCallDurationSec] = useState(0);
+  const [audioModeReady, setAudioModeReady] = useState(false);
 
   const sessionRef = useRef<CallSession | null>(null);
   const initStartedRef = useRef(false);
   const callStartedAtRef = useRef<number | null>(null);
+
+  const applyAudioMode = useCallback(async () => {
+    if (Platform.OS === 'web') return;
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: !speakerOn && callType === 'voice',
+      });
+    } catch (errorValue: any) {
+      console.warn('Audio.setAudioModeAsync failed:', errorValue?.message);
+    }
+  }, [callType, speakerOn]);
 
   // Subscribe to incoming signaling messages for this call
   const { data: signals } = useSafeConvexQuery<any[]>(
@@ -175,23 +191,10 @@ export default function CallScreen() {
     return () => clearInterval(intervalId);
   }, [isActive]);
 
-  // ====== Set up audio routing for calls ======
   useEffect(() => {
-    if (Platform.OS === 'web') return;
-    (async () => {
-      try {
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: true,
-          playsInSilentModeIOS: true,
-          staysActiveInBackground: true,
-          shouldDuckAndroid: true,
-          playThroughEarpieceAndroid: !speakerOn && callType === 'voice',
-        });
-      } catch (errorValue: any) {
-        console.warn('Audio.setAudioModeAsync failed:', errorValue?.message);
-      }
-    })();
-  }, [callType, speakerOn]);
+    if (!audioModeReady) return;
+    void applyAudioMode();
+  }, [applyAudioMode, audioModeReady]);
 
   // ====== Build & tear down peer connection when call becomes active ======
   const startPeerConnection = useCallback(
@@ -220,6 +223,8 @@ export default function CallScreen() {
           setPermissionDenied(true);
           return;
         }
+        await applyAudioMode();
+        setAudioModeReady(true);
       } catch {
         // Continue — getUserMedia will fail explicitly if permissions missing
       }
@@ -276,7 +281,7 @@ export default function CallScreen() {
         setPermissionDenied(true);
       }
     },
-    [activeCall, callId, callType, sendSignal, startInScreenShare]
+    [activeCall, applyAudioMode, callId, callType, sendSignal, startInScreenShare]
   );
 
   // Caller: kick off peer-connection as soon as we have a callId (status may still be ringing)

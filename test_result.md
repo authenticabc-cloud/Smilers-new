@@ -208,6 +208,9 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "After testing-agent review, also gated call-screen Convex queries behind auth so unauthenticated/invalid conversation preview routes stop producing avoidable runtime server-error noise while remaining stable."
+##       - working: true
+##         agent: "main"
+##         comment: "User then requested the Conferences view match a provided screenshot and reported native call taps still backgrounding the app. I redesigned the Conferences state in `/app/frontend/app/(tabs)/groups.tsx` to a dedicated screenshot-style layout with back arrow, search, invite-code row, badge pills, and SOS button; and I moved `Audio.setAudioModeAsync` out of mount-time execution in `/app/frontend/app/call/[conversationId].tsx`, only applying it after permissions pass, while setting `staysActiveInBackground: false` plus adding iOS `UIBackgroundModes: ['audio']` support in `app.json`."
 ##   - task: "Safe Convex fallback for optional Phase 1 endpoints"
 ##     implemented: true
 ##     working: true

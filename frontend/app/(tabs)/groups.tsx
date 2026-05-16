@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   StyleSheet,
   Text,
@@ -30,6 +31,20 @@ function formatRelativeDays(ts?: number): string {
   return `${days} days`;
 }
 
+function formatConferenceDate(ts?: number): string {
+  if (!ts) return 'Today';
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(new Date(ts));
+  } catch {
+    return 'Today';
+  }
+}
+
 function getListItemId(item: any): string | null {
   const value = item?._id || item?.id || item?.conversationId || item?.conferenceId;
   if (value === undefined || value === null || value === '') return null;
@@ -40,6 +55,7 @@ export default function GroupsScreen() {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>('groups');
   const [search, setSearch] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
 
   const { data: groups, loading: groupsLoading } = useSafeConvexQuery<any[]>(
     api.conversations.listGroups,
@@ -80,11 +96,122 @@ export default function GroupsScreen() {
       return;
     }
     if (tab === 'conferences') {
-      router.push(`/call/${itemId}` as any);
+      router.push(`/call/${itemId}?type=video` as any);
       return;
     }
     router.push(`/chat/${itemId}` as any);
   };
+
+  if (tab === 'conferences') {
+    return (
+      <SafeAreaView style={styles.conferenceScreen} edges={['top']} testID="conference-screen">
+        <View style={styles.conferenceHeader} testID="conference-header">
+          <TouchableOpacity
+            onPress={() => setTab('groups')}
+            style={styles.conferenceHeaderButton}
+            testID="conference-back-button"
+          >
+            <Ionicons name="arrow-back" size={28} color={Colors.textPrimary} />
+          </TouchableOpacity>
+          <Text style={styles.conferenceHeaderTitle} testID="conference-header-title">Conferences</Text>
+          <TouchableOpacity onPress={onAdd} style={styles.conferenceHeaderButton} testID="conference-add-button">
+            <Ionicons name="add" size={30} color={Colors.textPrimary} />
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.conferenceSearchOuter} testID="conference-search-outer">
+          <View style={styles.conferenceSearchPill}>
+            <Feather name="search" size={18} color={Colors.textMuted} />
+            <TextInput
+              placeholder="Search conferences..."
+              placeholderTextColor="#A29A8E"
+              value={search}
+              onChangeText={setSearch}
+              style={styles.conferenceSearchInput}
+              autoCapitalize="none"
+              autoCorrect={false}
+              testID="conference-search-input"
+            />
+          </View>
+        </View>
+
+        <View style={styles.inviteRow} testID="conference-invite-row">
+          <TextInput
+            value={inviteCode}
+            onChangeText={setInviteCode}
+            placeholder="ENTER INVITE CODE..."
+            placeholderTextColor="#9C9487"
+            style={styles.inviteInput}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            testID="conference-invite-input"
+          />
+          <TouchableOpacity
+            style={styles.joinButton}
+            onPress={() => Alert.alert('Conference invite codes', 'I’ll wire the join flow when you share the detailed conference instructions.')}
+            testID="conference-join-button"
+          >
+            <Text style={styles.joinButtonText}>Join</Text>
+          </TouchableOpacity>
+        </View>
+
+        <FlatList
+          data={list}
+          keyExtractor={(item: any, index) => getListItemId(item) || `conference-${index}`}
+          contentContainerStyle={styles.conferenceListContent}
+          renderItem={({ item }) => {
+            const itemId = getListItemId(item);
+            const memberCount = item?.memberCount || item?.members?.length || 0;
+            const badgeText = item?.scheduleLabel || item?.frequency || 'weekly';
+            return (
+              <TouchableOpacity
+                style={styles.conferenceRow}
+                activeOpacity={0.82}
+                onPress={() => openItem(item)}
+                disabled={!itemId}
+                testID={`conference-row-${itemId || 'unknown'}`}
+              >
+                <View style={styles.conferenceIconWrap}>
+                  <Ionicons name="videocam" size={24} color={Colors.textPrimary} />
+                </View>
+                <View style={styles.conferenceInfoWrap}>
+                  <Text style={styles.conferenceName} numberOfLines={1}>{(item?.name || 'Conference').toUpperCase()}</Text>
+                  <View style={styles.conferenceMetaRow}>
+                    <Text style={styles.conferenceMetaText}>{formatConferenceDate(item?.updatedAt || item?._creationTime)}</Text>
+                    <View style={styles.conferenceMembersWrap}>
+                      <Ionicons name="people-outline" size={14} color={Colors.textSecondary} />
+                      <Text style={styles.conferenceMetaText}>{memberCount}</Text>
+                    </View>
+                  </View>
+                </View>
+                <View style={styles.conferenceBadge} testID={`conference-badge-${itemId || 'unknown'}`}>
+                  <Text style={styles.conferenceBadgeText}>{badgeText}</Text>
+                </View>
+              </TouchableOpacity>
+            );
+          }}
+          ListEmptyComponent={
+            activeLoading ? (
+              <View style={styles.loadingState} testID="conference-loading-state">
+                <ActivityIndicator size="small" color={Colors.primary} />
+                <Text style={styles.loadingText}>Loading conferences…</Text>
+              </View>
+            ) : (
+              <View style={styles.conferenceEmpty} testID="conference-empty-state">
+                <Ionicons name="videocam-outline" size={40} color={Colors.textMuted} />
+                <Text style={styles.emptyTitle}>No conferences yet</Text>
+                <Text style={styles.emptySub}>Create a group first, then start a conference from it.</Text>
+              </View>
+            )
+          }
+        />
+
+        <TouchableOpacity style={styles.sosButton} onPress={() => router.push('/emergency' as any)} testID="conference-sos-button">
+          <Text style={styles.sosButtonText}>SOS</Text>
+        </TouchableOpacity>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="groups-screen">
@@ -228,6 +355,151 @@ export default function GroupsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
+  conferenceScreen: { flex: 1, backgroundColor: '#F7F3EC' },
+  conferenceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F0C96C',
+    paddingHorizontal: 16,
+    paddingTop: 18,
+    paddingBottom: 18,
+  },
+  conferenceHeaderButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  conferenceHeaderTitle: {
+    fontSize: 24,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+  },
+  conferenceSearchOuter: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+  },
+  conferenceSearchPill: {
+    minHeight: 48,
+    borderRadius: 28,
+    backgroundColor: '#EDE6DA',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+  },
+  conferenceSearchInput: {
+    flex: 1,
+    fontSize: FontSize.base,
+    color: Colors.textPrimary,
+    paddingVertical: 0,
+  },
+  inviteRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 10,
+  },
+  inviteInput: {
+    flex: 1,
+    minHeight: 44,
+    fontSize: FontSize.base,
+    color: '#7E776C',
+    letterSpacing: 0.8,
+  },
+  joinButton: {
+    minWidth: 74,
+    minHeight: 38,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#A9D2F3',
+  },
+  joinButtonText: {
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textPrimary,
+  },
+  conferenceListContent: {
+    paddingBottom: 120,
+  },
+  conferenceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  conferenceIconWrap: {
+    width: 50,
+    height: 50,
+    borderRadius: 14,
+    backgroundColor: '#F4CD75',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  conferenceInfoWrap: {
+    flex: 1,
+  },
+  conferenceName: {
+    fontSize: 17,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+  },
+  conferenceMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 5,
+  },
+  conferenceMetaText: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+  },
+  conferenceMembersWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  conferenceBadge: {
+    minHeight: 30,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#B8D9F2',
+  },
+  conferenceBadgeText: {
+    fontSize: FontSize.sm,
+    color: '#41627C',
+    fontWeight: FontWeight.medium,
+  },
+  conferenceEmpty: {
+    alignItems: 'center',
+    paddingTop: Spacing.xxl * 2,
+    paddingHorizontal: Spacing.lg,
+    gap: Spacing.sm,
+  },
+  sosButton: {
+    position: 'absolute',
+    left: 16,
+    bottom: 92,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#E53B30',
+  },
+  sosButtonText: {
+    fontSize: 18,
+    fontWeight: FontWeight.bold,
+    color: Colors.white,
+  },
 
   header: {
     flexDirection: 'row',

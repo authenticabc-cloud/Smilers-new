@@ -17,7 +17,10 @@
         "NSMicrophoneUsageDescription": "Record voice notes and make voice calls",
         "NSLocationWhenInUseUsageDescription": "Share your location in chats",
         "NSFaceIDUsageDescription": "Unlock Smilers securely with Face ID",
-        "NSContactsUsageDescription": "Find friends who use Smilers"
+        "NSContactsUsageDescription": "Find friends who use Smilers",
+        "UIBackgroundModes": [
+          "audio"
+        ]
       }
     },
     "android": {
