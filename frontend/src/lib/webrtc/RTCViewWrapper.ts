@@ -15,7 +15,7 @@ function getRTCView() {
 export default function RTCViewWrapper(props: any) {
   const RTCView = getRTCView();
   if (!RTCView) {
-    return <View {...props} />;
+    return React.createElement(View, props);
   }
-  return <RTCView {...props} />;
+  return React.createElement(RTCView, props);
 }
