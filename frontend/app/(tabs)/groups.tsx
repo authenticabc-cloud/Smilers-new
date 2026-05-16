@@ -30,6 +30,12 @@ function formatRelativeDays(ts?: number): string {
   return `${days} days`;
 }
 
+function getListItemId(item: any): string | null {
+  const value = item?._id || item?.id || item?.conversationId || item?.conferenceId;
+  if (value === undefined || value === null || value === '') return null;
+  return String(value);
+}
+
 export default function GroupsScreen() {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>('groups');
@@ -64,6 +70,18 @@ export default function GroupsScreen() {
   const onAdd = () => {
     if (tab === 'groups') router.push('/chat-once' as any);
     else router.push('/call/new-conference' as any);
+  };
+
+  const openItem = (item: any) => {
+    const itemId = getListItemId(item);
+    if (!itemId) {
+      return;
+    }
+    if (tab === 'conferences') {
+      router.push(`/call/${itemId}` as any);
+      return;
+    }
+    router.push(`/chat/${itemId}` as any);
   };
 
   return (
@@ -131,7 +149,7 @@ export default function GroupsScreen() {
 
       <FlatList
         data={list}
-        keyExtractor={(item: any) => item._id}
+        keyExtractor={(item: any, index) => getListItemId(item) || `${tab}-fallback-${index}`}
         contentContainerStyle={{ paddingBottom: 120 }}
         renderItem={({ item }) => {
           const memberCount = item.memberCount || item.members?.length || 0;
@@ -141,12 +159,14 @@ export default function GroupsScreen() {
             (memberCount > 0 ? `${memberCount} member${memberCount === 1 ? '' : 's'}` : 'Tap to open');
           const stamp = formatRelativeDays(item.lastMessageAt || item.updatedAt || item._creationTime);
           const initial = (item.name || 'G').charAt(0).toUpperCase();
+          const itemId = getListItemId(item);
           return (
             <TouchableOpacity
               style={styles.row}
-              onPress={() => router.push(`/chat/${item._id}` as any)}
+              onPress={() => openItem(item)}
               activeOpacity={0.7}
-              testID={`group-${item._id}`}
+              disabled={!itemId}
+              testID={`group-${itemId || 'unknown'}`}
             >
               <View style={styles.avatar}>
                 <Text style={styles.avatarText}>{initial}</Text>

@@ -188,6 +188,9 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Replaced raw Convex `useQuery` calls in the Groups tab with `useSafeConvexQuery`, and delayed the optional conferences query until the Conferences sub-tab is active. This prevents missing backend functions or optional endpoints from crashing the screen on tab open. Added a loading state for the active sub-tab."
+##       - working: true
+##         agent: "main"
+##         comment: "After testing-agent review, also hardened list identity/navigation by adding safe item ID extraction plus conference-aware row routing so missing `_id` values do not create undefined keys or unsafe presses."
 ##   - task: "Safe Convex fallback for optional Phase 1 endpoints"
 ##     implemented: true
 ##     working: true
