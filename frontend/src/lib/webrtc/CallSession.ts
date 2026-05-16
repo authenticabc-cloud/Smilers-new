@@ -1,11 +1,10 @@
-import {
-  RTCPeerConnection,
-  RTCIceCandidate,
-  RTCSessionDescription,
-  mediaDevices,
-  MediaStream,
-} from 'react-native-webrtc';
 import { PEER_CONNECTION_CONFIG } from './iceServers';
+
+type MediaStream = any;
+type RTCPeerConnection = any;
+type RTCIceCandidate = any;
+type RTCSessionDescription = any;
+type WebRTCModule = typeof import('react-native-webrtc');
 
 export type SignalType = 'offer' | 'answer' | 'ice-candidate';
 
@@ -41,19 +40,28 @@ export class CallSession {
   private closed = false;
   private remoteDescriptionSet = false;
   private pendingIce: RTCIceCandidate[] = [];
+  private webrtc: WebRTCModule | null = null;
 
   constructor(opts: CallSessionOptions) {
     this.opts = opts;
   }
 
+  private async getWebRTC(): Promise<WebRTCModule> {
+    if (!this.webrtc) {
+      this.webrtc = await import('react-native-webrtc');
+    }
+    return this.webrtc;
+  }
+
   /** Acquire camera/mic and attach to the peer connection. */
   async initLocalMedia(useScreen: boolean = false): Promise<MediaStream> {
+    const webrtc = await this.getWebRTC();
     if (useScreen) {
       // Screen-share-only mode: capture the device screen + mic audio
       const screenStream = await this.captureScreen();
       // Add a mic audio track so the remote can still hear us
       try {
-        const audioStream = (await mediaDevices.getUserMedia({ audio: true, video: false })) as unknown as MediaStream;
+        const audioStream = (await webrtc.mediaDevices.getUserMedia({ audio: true, video: false })) as unknown as MediaStream;
         audioStream.getAudioTracks().forEach((track) => {
           try {
             screenStream.addTrack(track);
@@ -80,7 +88,7 @@ export class CallSession {
             }
           : false,
     };
-    const stream = (await mediaDevices.getUserMedia(constraints)) as unknown as MediaStream;
+    const stream = (await webrtc.mediaDevices.getUserMedia(constraints)) as unknown as MediaStream;
     this.localStream = stream;
     this.opts.onLocalStream?.(stream);
     return stream;
@@ -88,7 +96,8 @@ export class CallSession {
 
   /** Internal: capture the device screen using getDisplayMedia. */
   private async captureScreen(): Promise<MediaStream> {
-    const md: any = mediaDevices as any;
+    const webrtc = await this.getWebRTC();
+    const md: any = webrtc.mediaDevices as any;
     if (typeof md.getDisplayMedia !== 'function') {
       throw new Error('Screen capture is not available on this device.');
     }
@@ -168,7 +177,8 @@ export class CallSession {
 
     if (restoreVideo) {
       try {
-        const camStream = (await mediaDevices.getUserMedia({
+        const webrtc = await this.getWebRTC();
+        const camStream = (await webrtc.mediaDevices.getUserMedia({
           audio: false,
           video: { facingMode: 'user' },
         })) as unknown as MediaStream;
@@ -209,8 +219,9 @@ export class CallSession {
   }
 
   /** Build the RTCPeerConnection and wire all listeners. */
-  createPeerConnection(): RTCPeerConnection {
-    const pc = new RTCPeerConnection(PEER_CONNECTION_CONFIG);
+  async createPeerConnection(): Promise<RTCPeerConnection> {
+    const webrtc = await this.getWebRTC();
+    const pc = new webrtc.RTCPeerConnection(PEER_CONNECTION_CONFIG);
     this.pc = pc;
 
     // ICE candidates → send via signaling
@@ -286,7 +297,8 @@ export class CallSession {
   async handleRemoteOffer(payload: string): Promise<void> {
     if (!this.pc) throw new Error('Peer connection not initialized');
     const offer = JSON.parse(payload);
-    await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
+    const webrtc = await this.getWebRTC();
+    await this.pc.setRemoteDescription(new webrtc.RTCSessionDescription(offer));
     this.remoteDescriptionSet = true;
     await this.flushPendingIce();
 
@@ -304,7 +316,8 @@ export class CallSession {
   async handleRemoteAnswer(payload: string): Promise<void> {
     if (!this.pc) throw new Error('Peer connection not initialized');
     const answer = JSON.parse(payload);
-    await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
+    const webrtc = await this.getWebRTC();
+    await this.pc.setRemoteDescription(new webrtc.RTCSessionDescription(answer));
     this.remoteDescriptionSet = true;
     await this.flushPendingIce();
   }
@@ -315,7 +328,8 @@ export class CallSession {
     let candidate: RTCIceCandidate;
     try {
       const parsed = JSON.parse(payload);
-      candidate = new RTCIceCandidate(parsed);
+      const webrtc = await this.getWebRTC();
+      candidate = new webrtc.RTCIceCandidate(parsed);
     } catch {
       return;
     }

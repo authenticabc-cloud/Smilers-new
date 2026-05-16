@@ -302,7 +302,7 @@ export default function CallScreen() {
 
       try {
         await session.initLocalMedia(startInScreenShare);
-        session.createPeerConnection();
+        await session.createPeerConnection();
         if (asCaller) {
           await session.createOffer();
         }

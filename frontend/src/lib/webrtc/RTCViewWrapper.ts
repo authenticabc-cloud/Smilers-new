@@ -1,5 +1,21 @@
 // Native-only RTCView wrapper. Metro picks this file on iOS/Android.
 // Web has a sibling file `RTCViewWrapper.web.ts` returning a null stub.
-import { RTCView } from 'react-native-webrtc';
+import React from 'react';
+import { View } from 'react-native';
 
-export default RTCView;
+let CachedRTCView: any = null;
+
+function getRTCView() {
+  if (!CachedRTCView) {
+    CachedRTCView = require('react-native-webrtc').RTCView;
+  }
+  return CachedRTCView;
+}
+
+export default function RTCViewWrapper(props: any) {
+  const RTCView = getRTCView();
+  if (!RTCView) {
+    return <View {...props} />;
+  }
+  return <RTCView {...props} />;
+}

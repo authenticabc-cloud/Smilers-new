@@ -285,6 +285,23 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Imported `writeStoredJson`, restarted Expo, and self-verified the disappearing-messages sheet now accepts the 24h option without crashing. `/send-money` also reopened cleanly in preview after the fix."
+##   - task: "Android production call crash RCA and WebRTC import refactor"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/src/lib/webrtc/CallSession.ts"
+##     stuck_count: 0
+##     priority: "critical"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "In the production Android APK, tapping voice or video call still crashed the app. First attempt showed 'Smilers has stopped'; later attempts sent the app to background."
+##       - working: false
+##         agent: "troubleshooting"
+##         comment: "Root cause identified as native `react-native-webrtc` initialization happening too early because `CallSession.ts` and `RTCViewWrapper.ts` still had top-level imports from `react-native-webrtc`, which execute immediately in production APKs even when the route lazy-loads them later."
+##       - working: true
+##         agent: "main"
+##         comment: "Refactored `CallSession.ts` to use dynamic `await import('react-native-webrtc')` loading through a cached getter, changed `createPeerConnection()` to async, updated the call route to await it, and rewrote `RTCViewWrapper.ts` so `react-native-webrtc` is only required at render time instead of module load time. Preview call route still renders after the refactor."
 ##   - task: "Safe Convex fallback for optional Phase 1 endpoints"
 ##     implemented: true
 ##     working: true
@@ -404,6 +421,7 @@
 ##     - "Message language screenshot redesign"
 ##     - "Chat screen screenshot restyle"
 ##     - "Chat voice-note controls + disappearing messages + send money redesign"
+##     - "Android production call crash RCA and WebRTC import refactor"
 ##     - "Web-safe tabs and push notification hooks"
 ##     - "Phase 2A.1 chat actions"
 ##     - "Phase 2A.2a image attachments"
@@ -442,3 +460,5 @@
 ##     message: "Chat screenshots were applied to `/chat/[conversationId]` with the existing Chat Appearance system preserved. Please do one authenticated real-conversation check next to validate live message rendering on the new layout." 
 ##   - agent: "main"
 ##     message: "Latest chat extras and Send Money updates were applied from screenshots. Testing confirmed `/send-money` route stability and surfaced one disappearing-messages import bug, which was fixed and spot-verified locally."
+##   - agent: "main"
+##     message: "Android production call crash was investigated again using the user's APK symptom and a troubleshooting pass. I removed the remaining top-level `react-native-webrtc` imports from the native call modules and switched them to dynamic loading, which is the critical production-safe fix. The preview call route still renders after the refactor, but the APK must be rebuilt to confirm the native crash is gone."
