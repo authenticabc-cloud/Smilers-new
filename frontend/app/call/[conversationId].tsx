@@ -3,9 +3,13 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
+  FlatList,
+  Modal,
   Platform,
+  Pressable,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -33,12 +37,58 @@ import { useRingtonePlayer } from '../../src/lib/ringtone/useRingtonePlayer';
 
 type CallType = 'voice' | 'video';
 type AudioOutputRoute = 'earpiece' | 'speaker' | 'bluetooth';
+type NumberPrivacyMode = 'hide' | 'show';
 
 function alertScreenShareIOSError() {
   Alert.alert(
     'Screen sharing on iOS',
     'iOS screen sharing requires a Broadcast Upload Extension built into the app. We\'ll enable this in a future build — for now, screen sharing is available on Android.'
   );
+}
+
+function getContactUserId(item: any): string {
+  return String(item?.userId || item?._id || item?.id || '');
+}
+
+function getConversationMemberIds(conversation: any, currentUserId?: string | null) {
+  const values = new Set<string>();
+  const addValue = (value: any) => {
+    if (!value) return;
+    const normalized = String(value).trim();
+    if (!normalized || normalized === currentUserId) return;
+    values.add(normalized);
+  };
+
+  [conversation?.memberIds, conversation?.participantIds, conversation?.userIds].forEach((list) => {
+    if (Array.isArray(list)) {
+      list.forEach(addValue);
+    }
+  });
+
+  [conversation?.participants, conversation?.members].forEach((list) => {
+    if (!Array.isArray(list)) return;
+    list.forEach((participant: any) => {
+      addValue(participant?.userId);
+      addValue(participant?._id);
+      addValue(participant?.id);
+    });
+  });
+
+  addValue(conversation?.otherUserId);
+  addValue(conversation?.otherUser?.userId);
+  addValue(conversation?.otherUser?._id);
+  addValue(conversation?.otherUser?.id);
+
+  return Array.from(values);
+}
+
+function buildConferenceName(baseName: string, addedName: string) {
+  const cleanBase = baseName.trim();
+  const cleanAdded = addedName.trim();
+  if (!cleanBase || cleanBase.toLowerCase() === 'smilers') {
+    return cleanAdded ? `${cleanAdded} conference` : 'Conference call';
+  }
+  return `${cleanBase} + ${cleanAdded}`;
 }
 
 export default function CallScreen() {
@@ -73,11 +123,18 @@ export default function CallScreen() {
     null,
     canRunCallQueries,
   );
+  const { data: contacts, loading: contactsLoading } = useSafeConvexQuery<any[]>(
+    api.contacts.getContacts,
+    {},
+    [],
+    isAuthenticated && showAddToCall,
+  );
 
   const initiateCall = useMutation(api.calls.initiateCall);
   const answerCall = useMutation(api.calls.answerCall);
   const endCall = useMutation(api.calls.endCall);
   const declineCall = useMutation(api.calls.declineCall);
+  const createGroup = useMutation((api as any).conversations.createGroup);
   const sendSignal = useMutation(api.signaling.send);
   const markConsumed = useMutation(api.signaling.markConsumed);
   const cleanupSignaling = useMutation(api.signaling.cleanup);
@@ -98,6 +155,10 @@ export default function CallScreen() {
   const [screenReady, setScreenReady] = useState(Platform.OS !== 'android');
   const [RTCViewImpl, setRTCViewImpl] = useState<any>(null);
   const [CallSessionCtor, setCallSessionCtor] = useState<any>(null);
+  const [showAddToCall, setShowAddToCall] = useState(false);
+  const [addToCallSearch, setAddToCallSearch] = useState('');
+  const [pendingAddContact, setPendingAddContact] = useState<any | null>(null);
+  const [creatingConference, setCreatingConference] = useState(false);
 
   const sessionRef = useRef<any>(null);
   const initStartedRef = useRef(false);
@@ -489,13 +550,6 @@ export default function CallScreen() {
     }
   }, [screenSharing, callType]);
 
-  const handleAddParticipant = useCallback(() => {
-    Alert.alert(
-      'Add participant',
-      'Conference escalation from the live call screen is the next call update. I have added the button to match the web layout, and I can wire the actual invite flow next.'
-    );
-  }, []);
-
   const otherName = useMemo(() => {
     const conversationName = typeof conversation?.name === 'string' ? conversation.name.trim() : '';
     const directName = [
@@ -528,11 +582,99 @@ export default function CallScreen() {
     return 'Smilers';
   }, [conversation, me?._id]);
 
+  const existingParticipantIds = useMemo(
+    () => getConversationMemberIds(conversation, me?._id ? String(me._id) : undefined),
+    [conversation, me?._id],
+  );
+
+  const addToCallCandidates = useMemo(() => {
+    const search = addToCallSearch.trim().toLowerCase();
+    const currentParticipants = new Set(existingParticipantIds);
+    const baseList = Array.isArray(contacts) ? contacts : [];
+
+    return baseList.filter((item: any) => {
+      const userId = getContactUserId(item);
+      if (!userId || currentParticipants.has(userId)) {
+        return false;
+      }
+      if (!search) {
+        return true;
+      }
+      const haystack = `${item?.name || ''} ${item?.phone || ''} ${item?.email || ''}`.toLowerCase();
+      return haystack.includes(search);
+    });
+  }, [addToCallSearch, contacts, existingParticipantIds]);
+
   const durationLabel = useMemo(() => {
     const m = Math.floor(callDurationSec / 60);
     const s = callDurationSec % 60;
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   }, [callDurationSec]);
+
+  const openAddParticipantFlow = useCallback(() => {
+    setAudioOutputMenuVisible(false);
+    setAddToCallSearch('');
+    setPendingAddContact(null);
+    setShowAddToCall(true);
+  }, []);
+
+  const handleAddParticipant = useCallback(() => {
+    openAddParticipantFlow();
+  }, [openAddParticipantFlow]);
+
+  const closeAddParticipantFlow = useCallback(() => {
+    if (creatingConference) return;
+    setShowAddToCall(false);
+    setAddToCallSearch('');
+    setPendingAddContact(null);
+  }, [creatingConference]);
+
+  const confirmAddParticipant = useCallback(
+    async (privacyMode: NumberPrivacyMode) => {
+      const selectedContact = pendingAddContact;
+      if (!selectedContact) return;
+
+      const selectedUserId = getContactUserId(selectedContact);
+      if (!selectedUserId) {
+        Alert.alert('Could not add participant', 'This contact does not have a valid Smilers account yet.');
+        return;
+      }
+
+      const memberIds = Array.from(new Set([...existingParticipantIds, selectedUserId]));
+      if (memberIds.length === 0) {
+        Alert.alert('Could not add participant', 'No conference members were available for the new call.');
+        return;
+      }
+
+      setCreatingConference(true);
+      try {
+        const created: any = await createGroup({
+          name: buildConferenceName(otherName, selectedContact?.name || 'Participant'),
+          memberIds,
+        });
+        const nextConversationId =
+          typeof created === 'string' ? created : created?._id || created?.conversationId || created?.id;
+
+        if (!nextConversationId) {
+          throw new Error('Conference conversation was created without an id.');
+        }
+
+        setShowAddToCall(false);
+        setPendingAddContact(null);
+        router.replace(
+          `/call/${nextConversationId}?type=${callType}&privacy=${privacyMode}&addedUserId=${selectedUserId}` as any
+        );
+      } catch (errorValue: any) {
+        Alert.alert(
+          'Could not add participant',
+          errorValue?.message || 'Conference escalation is not enabled on this backend yet.'
+        );
+      } finally {
+        setCreatingConference(false);
+      }
+    },
+    [callType, createGroup, existingParticipantIds, otherName, pendingAddContact, router]
+  );
 
   const topStatusChip = useMemo(() => {
     if (isOutgoingRinging) return 'Ringing....';
@@ -651,6 +793,92 @@ export default function CallScreen() {
           </SafeAreaView>
         </LinearGradient>
       )}
+
+      {showAddToCall ? (
+        <AddToCallOverlay
+          callType={callType}
+          contacts={addToCallCandidates}
+          loading={contactsLoading}
+          onBack={closeAddParticipantFlow}
+          onSearchChange={setAddToCallSearch}
+          searchValue={addToCallSearch}
+          onSelectContact={setPendingAddContact}
+        />
+      ) : null}
+
+      <Modal
+        visible={!!pendingAddContact}
+        transparent
+        animationType="fade"
+        onRequestClose={() => (!creatingConference ? setPendingAddContact(null) : undefined)}
+      >
+        <Pressable style={styles.privacyBackdrop} onPress={() => (!creatingConference ? setPendingAddContact(null) : undefined)}>
+          <Pressable style={styles.privacyCard} onPress={() => undefined} testID="add-to-call-privacy-sheet">
+            <View style={styles.privacyHeaderRow}>
+              <View style={styles.privacyTitleWrap}>
+                <View style={styles.privacyShieldIcon}>
+                  <Ionicons name="shield-checkmark-outline" size={22} color={Colors.primary} />
+                </View>
+                <Text style={styles.privacyTitle}>Privacy Settings</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.privacyCloseBtn}
+                onPress={() => setPendingAddContact(null)}
+                disabled={creatingConference}
+                testID="add-to-call-privacy-close"
+              >
+                <Ionicons name="close" size={26} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.privacyMessage}>
+              Would you like to hide <Text style={styles.privacyMessageStrong}>{pendingAddContact?.name || 'this contact'}</Text>'s
+              {' '}number from the other participants in this call?
+            </Text>
+
+            <TouchableOpacity
+              style={styles.privacyOptionCard}
+              activeOpacity={0.85}
+              onPress={() => confirmAddParticipant('hide')}
+              disabled={creatingConference}
+              testID="add-to-call-hide-number"
+            >
+              <View style={styles.privacyOptionIconWrap}>
+                <Ionicons name="eye-off-outline" size={28} color={Colors.primary} />
+              </View>
+              <View style={styles.privacyOptionTextWrap}>
+                <Text style={styles.privacyOptionTitle}>Hide number</Text>
+                <Text style={styles.privacyOptionSub}>Other participants won&apos;t see this person&apos;s phone number</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.privacyOptionCard}
+              activeOpacity={0.85}
+              onPress={() => confirmAddParticipant('show')}
+              disabled={creatingConference}
+              testID="add-to-call-show-number"
+            >
+              <View style={[styles.privacyOptionIconWrap, styles.privacyOptionIconWrapMuted]}>
+                <Ionicons name="eye-outline" size={28} color={Colors.textSecondary} />
+              </View>
+              <View style={styles.privacyOptionTextWrap}>
+                <Text style={styles.privacyOptionTitle}>Show number</Text>
+                <Text style={styles.privacyOptionSub}>Other participants will be able to see this person&apos;s phone number</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.privacyCancelBtn}
+              onPress={() => setPendingAddContact(null)}
+              disabled={creatingConference}
+              testID="add-to-call-privacy-cancel"
+            >
+              <Text style={styles.privacyCancelText}>{creatingConference ? 'Starting conference…' : 'Cancel'}</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 
@@ -958,6 +1186,95 @@ function AudioOutputMenu({
   );
 }
 
+function AddToCallOverlay({
+  callType,
+  contacts,
+  loading,
+  onBack,
+  onSearchChange,
+  searchValue,
+  onSelectContact,
+}: {
+  callType: CallType;
+  contacts: any[];
+  loading: boolean;
+  onBack: () => void;
+  onSearchChange: (value: string) => void;
+  searchValue: string;
+  onSelectContact: (contact: any) => void;
+}) {
+  return (
+    <View style={styles.addToCallOverlay} testID="add-to-call-screen">
+      <SafeAreaView edges={['top']} style={styles.addToCallHeaderWrap}>
+        <View style={styles.addToCallHeaderRow}>
+          <TouchableOpacity onPress={onBack} style={styles.addToCallBackBtn} testID="add-to-call-back-button">
+            <Ionicons name="arrow-back" size={34} color={Colors.white} />
+          </TouchableOpacity>
+          <View style={styles.addToCallHeaderTextWrap}>
+            <Text style={styles.addToCallTitle}>Add to call</Text>
+            <Text style={styles.addToCallSubtitle}>{callType === 'video' ? 'Video call' : 'Voice call'}</Text>
+          </View>
+        </View>
+      </SafeAreaView>
+
+      <View style={styles.addToCallBody}>
+        <View style={styles.addToCallSearchWrap} testID="add-to-call-search-wrap">
+          <Ionicons name="search-outline" size={30} color={Colors.textMuted} />
+          <TextInput
+            value={searchValue}
+            onChangeText={onSearchChange}
+            placeholder="Search contacts..."
+            placeholderTextColor={Colors.textMuted}
+            style={styles.addToCallSearchInput}
+            testID="add-to-call-search-input"
+          />
+        </View>
+
+        {loading ? (
+          <View style={styles.addToCallEmptyWrap} testID="add-to-call-loading-state">
+            <ActivityIndicator color={Colors.primary} />
+            <Text style={styles.addToCallEmptyText}>Loading contacts…</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={contacts}
+            keyExtractor={(item: any, index) => getContactUserId(item) || `add-to-call-${index}`}
+            renderItem={({ item }) => {
+              const contactId = getContactUserId(item) || 'unknown';
+              return (
+                <View style={styles.addToCallRow} testID={`add-to-call-contact-${contactId}`}>
+                  <View style={styles.addToCallAvatar}>
+                    <Text style={styles.addToCallAvatarText}>{(item?.name || 'S').charAt(0).toUpperCase()}</Text>
+                  </View>
+                  <View style={styles.addToCallNameWrap}>
+                    <Text style={styles.addToCallName} numberOfLines={1}>{item?.name || 'Smilers contact'}</Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.addToCallActionBtn}
+                    activeOpacity={0.85}
+                    onPress={() => onSelectContact(item)}
+                    testID={`add-to-call-action-${contactId}`}
+                  >
+                    <Ionicons name="call-outline" size={28} color={Colors.white} />
+                  </TouchableOpacity>
+                </View>
+              );
+            }}
+            ItemSeparatorComponent={() => <View style={styles.addToCallDivider} />}
+            contentContainerStyle={styles.addToCallListContent}
+            ListEmptyComponent={
+              <View style={styles.addToCallEmptyWrap} testID="add-to-call-empty-state">
+                <Text style={styles.addToCallEmptyTitle}>No contacts available</Text>
+                <Text style={styles.addToCallEmptyText}>Try another search or add more contacts first.</Text>
+              </View>
+            }
+          />
+        )}
+      </View>
+    </View>
+  );
+}
+
 /**
  * Three bouncing dots while we wait for the other side to pick up.
  */
@@ -1253,6 +1570,229 @@ const styles = StyleSheet.create({
     height: 18,
     borderRadius: 9,
     backgroundColor: '#FFD34E',
+  },
+  addToCallOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#F8F4EC',
+    zIndex: 20,
+  },
+  addToCallHeaderWrap: {
+    backgroundColor: Colors.headerBg,
+    paddingBottom: 22,
+  },
+  addToCallHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+  },
+  addToCallBackBtn: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addToCallHeaderTextWrap: {
+    flex: 1,
+  },
+  addToCallTitle: {
+    color: Colors.white,
+    fontSize: 30,
+    fontWeight: FontWeight.bold,
+  },
+  addToCallSubtitle: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 18,
+    marginTop: 6,
+  },
+  addToCallBody: {
+    flex: 1,
+    backgroundColor: '#FBF8F1',
+  },
+  addToCallSearchWrap: {
+    marginHorizontal: 18,
+    marginTop: 28,
+    marginBottom: 14,
+    minHeight: 88,
+    borderRadius: 26,
+    backgroundColor: '#EEE7D7',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 22,
+  },
+  addToCallSearchInput: {
+    flex: 1,
+    fontSize: 20,
+    color: Colors.textPrimary,
+  },
+  addToCallListContent: {
+    paddingBottom: 80,
+  },
+  addToCallRow: {
+    minHeight: 96,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+    gap: 16,
+    backgroundColor: '#FBF8F1',
+  },
+  addToCallDivider: {
+    height: 1,
+    backgroundColor: '#D9D0BD',
+  },
+  addToCallAvatar: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF7DE',
+  },
+  addToCallAvatarText: {
+    color: '#F4B318',
+    fontSize: 22,
+    fontWeight: FontWeight.bold,
+  },
+  addToCallNameWrap: {
+    flex: 1,
+  },
+  addToCallName: {
+    fontSize: 18,
+    color: Colors.textPrimary,
+    fontWeight: FontWeight.semibold,
+  },
+  addToCallActionBtn: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#07D44D',
+  },
+  addToCallEmptyWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: 54,
+    paddingHorizontal: 24,
+    gap: 10,
+  },
+  addToCallEmptyTitle: {
+    fontSize: 20,
+    color: Colors.textPrimary,
+    fontWeight: FontWeight.bold,
+  },
+  addToCallEmptyText: {
+    fontSize: 15,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  privacyBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.42)',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  privacyCard: {
+    borderRadius: 22,
+    backgroundColor: '#FCF8F0',
+    paddingTop: 22,
+    paddingHorizontal: 18,
+    paddingBottom: 22,
+    borderWidth: 1,
+    borderColor: '#E1D5BF',
+    ...Shadow.lg,
+  },
+  privacyHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 18,
+  },
+  privacyTitleWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  privacyShieldIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFF6DD',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  privacyTitle: {
+    flex: 1,
+    fontSize: 24,
+    color: Colors.textPrimary,
+    fontWeight: FontWeight.bold,
+  },
+  privacyCloseBtn: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  privacyMessage: {
+    fontSize: 18,
+    color: Colors.textSecondary,
+    lineHeight: 30,
+    marginBottom: 22,
+  },
+  privacyMessageStrong: {
+    color: Colors.textPrimary,
+    fontWeight: FontWeight.bold,
+  },
+  privacyOptionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#E1D5BF',
+    backgroundColor: '#FFFDF9',
+    paddingHorizontal: 18,
+    paddingVertical: 18,
+    marginBottom: 18,
+  },
+  privacyOptionIconWrap: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF7DE',
+  },
+  privacyOptionIconWrapMuted: {
+    backgroundColor: '#F5EFE4',
+  },
+  privacyOptionTextWrap: {
+    flex: 1,
+  },
+  privacyOptionTitle: {
+    fontSize: 18,
+    color: Colors.textPrimary,
+    fontWeight: FontWeight.bold,
+  },
+  privacyOptionSub: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    lineHeight: 22,
+    marginTop: 4,
+  },
+  privacyCancelBtn: {
+    minHeight: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  privacyCancelText: {
+    fontSize: 20,
+    color: Colors.textPrimary,
+    fontWeight: FontWeight.medium,
   },
 
   /* Video layer */

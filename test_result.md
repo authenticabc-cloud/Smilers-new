@@ -322,6 +322,23 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Reworked `/call/[conversationId]` toward the web screenshots: added smarter contact-name resolution, swapped the filled avatar for an outlined call orb, rebuilt the voice-call action row to Mute / Audio / Screen / Add with labels under the circles, added the web-style Audio Output card (Earpiece / Speaker / Bluetooth), and self-verified the call screen plus audio menu in mobile preview screenshots. The Add participant button is present for parity but the actual live invite/escalation flow is not wired yet."
+##   - task: "Add participant / conference-escalation flow"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/call/[conversationId].tsx"
+##     stuck_count: 1
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "user"
+##         comment: "User then provided the exact Add to call and Privacy Settings screenshots and asked for the real add-participant flow to match them, including the conference escalation path."
+##       - working: false
+##         agent: "main"
+##         comment: "First implementation had a render-order bug (`Cannot access openAddParticipantFlow before initialization`) when the call screen mounted."
+##       - working: true
+##         agent: "main"
+##         comment: "Fixed the render-order bug, added the screenshot-matched Add to call overlay and Privacy Settings modal inside the live call route, and wired add-participant to create a new group conversation via `conversations.createGroup` before replacing the route with the new conference call. Self-verified the add-to-call overlay opens cleanly in mobile preview. Privacy hide/show selection is captured in the flow and passed forward, but backend participant-number visibility enforcement is still pending because no dedicated API exists in this codebase yet."
 ##   - task: "EAS update export syntax fix for RTCView wrapper"
 ##     implemented: true
 ##     working: true
