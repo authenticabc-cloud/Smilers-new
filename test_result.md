@@ -539,6 +539,9 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Reduced call-header text pressure, capped/scaled long contact names, tightened control spacing, and updated ringtone playback so the preferred ringtone plays during both incoming and outgoing ringing while vibration remains incoming-only."
+##       - working: true
+##         agent: "main"
+##         comment: "After testing-agent feedback about compact-height overlap, reworked the non-video voice-call hero area into a centered content block, added compact-layout sizing/spacing for short mobile heights, and self-verified `/call/testconversation1?type=voice` at 375x667 with the status text no longer colliding with the control region."
 ##   - task: "Chat composer web-parity restyle"
 ##     implemented: true
 ##     working: true
@@ -620,3 +623,5 @@
 ##     message: "The subsequent deployment failure was a different blocker in `eas-update`: JSX inside `src/lib/webrtc/RTCViewWrapper.ts`. I replaced the JSX with `React.createElement(...)`, which keeps the file valid as `.ts` and is safer than renaming the file in this deployment flow."
 ##   - agent: "main"
 ##     message: "Please validate the latest user-reported chat/call/contact fixes. Priority order: 1) opening a real contact like 'Asare Ben Chris' should no longer crash, 2) chat and call headers should show the saved contact display name instead of the generic 'Smilers' fallback when data is available, 3) the voice-call screen should keep long names clear of the control buttons, 4) outgoing ringing should use the caller's selected ringtone preference, and 5) the chat composer should visually match the new tighter beige web-style box. Authenticated real-data checks are preferred if the Hercules flow is reachable; otherwise still verify route stability and flag any remaining runtime regressions." 
+##   - agent: "main"
+##     message: "Testing-agent reported one concrete UI regression on compact call screens. That is now addressed: the voice-call hero/status stack was restructured for short mobile heights and self-verified locally at 375x667 with no visual overlap into the control row. Remaining blocked checks still require authenticated real data and a native outgoing-call audio pass."

@@ -86,6 +86,11 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - ✅ Fixed the follow-up EAS Update export blocker by removing JSX from `src/lib/webrtc/RTCViewWrapper.ts` and switching to `React.createElement(...)`, which keeps the wrapper valid as a `.ts` file during OTA/export bundling
 - ✅ Refined the native voice-call screen toward the web screenshots: smarter contact-name resolution, outlined avatar orb, web-style Mute / Audio / Screen / Add controls, and an in-call Audio Output chooser matching the provided reference more closely
 - ✅ Added the in-call Add to call escalation flow to match the provided screenshots: tapping Add now opens a dedicated add-participant overlay with contact search, then shows the Privacy Settings choice sheet before creating a new group conversation and replacing into the conference call route
+- ✅ Added shared safe display-name resolution across Contacts, Chats, Chat header, Call screen, add-to-call rows, and Avatar initials so saved contact names are preferred over the generic `Smilers` fallback and malformed name payloads no longer crash renders
+- ✅ Hardened contact opening with safer contact-user-id lookup and guard rails around direct-chat creation so bad or incomplete contact records degrade gracefully instead of crashing the app
+- ✅ Updated ringtone playback so the user's selected preferred ringtone is used during outgoing ringing as well as incoming ringing (with vibration still limited to incoming-call behavior)
+- ✅ Tightened the chat composer box again toward the web screenshot with a denser beige shell, slimmer toolbar spacing, and a more web-like input shape
+- ✅ Reworked the non-video call layout for compact screens: the avatar/name/status area is now centered and uses compact spacing/sizing so contact metadata no longer overlaps the action controls on short mobile heights
 - ✅ Added `/app/auth_testing.md` and `/app/auth-testing.md` to document current manual auth verification expectations for future testing runs
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_POLLS_FILES.md` because the Convex backend source is not present in this repo; it documents the required schema, `messages.send`, and `votePoll` backend changes
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_STATUS_STORIES.md` because the Convex backend source is not present in this repo; it documents the required `statuses` endpoints, story views, DM reply support, and direct-conversation mutation
@@ -164,6 +169,7 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - Full end-to-end authenticated ad-credit verification is still pending for the same auth-gated reason, and code generation/redeem/billing depend on the backend changes from `/app/CONVEX_BACKEND_INSTRUCTIONS_AD_CREDIT_CODES.md`.
 - Full end-to-end authenticated search/starred verification is still pending because browser automation cannot complete the Hercules sign-in flow here, so in-app button navigation from Chats/Profile still needs one signed-in device pass.
 - Full end-to-end authenticated wallet/send-money verification is still pending because browser automation cannot complete the Hercules sign-in flow here, and the exact mutation arg shapes for some `wallet.ts` / `transfers.ts` actions still need validation against the live backend.
+- The latest real-data regression checks for the user-reported contact/call issues are still partially pending because automation could not authenticate into a live account with real contacts; manual signed-in validation is still needed for: the specific `Asare Ben Chris` crash case, saved contact-name parity in live chats/calls, and hearing the preferred ringtone during a real native outgoing call.
 
 ## Files
 - `/app/frontend/app/_layout.tsx` — Root with AuthProvider + ConvexProvider

@@ -11,6 +11,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -94,6 +95,7 @@ function buildConferenceName(baseName: string, addedName: string) {
 
 export default function CallScreen() {
   const router = useRouter();
+  const { height: windowHeight } = useWindowDimensions();
   const { isAuthenticated } = useAuth();
   const { conversationId: rawConversationId, type: rawTypeParam } = useLocalSearchParams<{
     conversationId?: string | string[];
@@ -103,6 +105,8 @@ export default function CallScreen() {
   const typeParam = Array.isArray(rawTypeParam) ? rawTypeParam[0] : rawTypeParam;
   const requestedType: CallType = typeParam === 'video' || typeParam === 'screen' ? 'video' : 'voice';
   const startInScreenShare = typeParam === 'screen';
+  const compactCallLayout = windowHeight < 720;
+  const heroAvatarSize = compactCallLayout ? 132 : 158;
   const hasValidConversationId = typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
   const canRunCallQueries = isAuthenticated && hasValidConversationId;
 
@@ -725,8 +729,8 @@ export default function CallScreen() {
       ) : (
         <LinearGradient colors={gradientColors as any} style={StyleSheet.absoluteFill}>
           <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-            <View style={styles.topArea}>
-              <View style={styles.topUtilityRow}>
+            <View style={[styles.topArea, compactCallLayout ? styles.topAreaCompact : null]}>
+              <View style={[styles.topUtilityRow, compactCallLayout ? styles.topUtilityRowCompact : null]}>
                 <View style={styles.topUtilitySide} />
                 {topStatusChip ? (
                   <View style={styles.statusChip} testID="call-status-chip">
@@ -738,42 +742,47 @@ export default function CallScreen() {
                 <View style={styles.topUtilitySide} />
               </View>
 
-              {/* Pulsing avatar */}
-              <RingingAvatar
-                name={otherName}
-                size={158}
-                animate={isIncoming || isOutgoingRinging}
-              />
+              <View style={[styles.heroContent, compactCallLayout ? styles.heroContentCompact : null]}>
+                <RingingAvatar
+                  name={otherName}
+                  size={heroAvatarSize}
+                  animate={isIncoming || isOutgoingRinging}
+                />
 
-              <Text
-                style={styles.name}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.72}
-                testID="call-contact-name"
-              >
-                {otherName}
-              </Text>
-              <Text style={styles.status}>{primaryCallSubLabel}</Text>
-              {secondaryCallSubLabel ? <Text style={styles.subStatus}>{secondaryCallSubLabel}</Text> : null}
-
-              {isOutgoingRinging ? (
-                <View style={styles.dotsRow}>
-                  <BouncingDot delay={0} />
-                  <BouncingDot delay={150} />
-                  <BouncingDot delay={300} />
-                </View>
-              ) : null}
-
-              {permissionDenied ? (
-                <Text style={styles.errorText} testID="call-permission-error">
-                  Camera or microphone permission denied. Enable them in your device settings to use calls.
+                <Text
+                  style={[styles.name, compactCallLayout ? styles.nameCompact : null]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.72}
+                  testID="call-contact-name"
+                >
+                  {otherName}
                 </Text>
-              ) : null}
+                <Text style={[styles.status, compactCallLayout ? styles.statusCompact : null]}>{primaryCallSubLabel}</Text>
+                {secondaryCallSubLabel ? (
+                  <Text style={[styles.subStatus, compactCallLayout ? styles.subStatusCompact : null]}>
+                    {secondaryCallSubLabel}
+                  </Text>
+                ) : null}
+
+                {isOutgoingRinging ? (
+                  <View style={[styles.dotsRow, compactCallLayout ? styles.dotsRowCompact : null]}>
+                    <BouncingDot delay={0} />
+                    <BouncingDot delay={150} />
+                    <BouncingDot delay={300} />
+                  </View>
+                ) : null}
+
+                {permissionDenied ? (
+                  <Text style={styles.errorText} testID="call-permission-error">
+                    Camera or microphone permission denied. Enable them in your device settings to use calls.
+                  </Text>
+                ) : null}
+              </View>
             </View>
 
             {/* Bottom controls */}
-            <View style={styles.controls}>{renderControls()}</View>
+            <View style={[styles.controls, compactCallLayout ? styles.controlsCompact : null]}>{renderControls()}</View>
           </SafeAreaView>
         </LinearGradient>
       )}
@@ -1327,6 +1336,9 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'flex-start',
   },
+  topAreaCompact: {
+    paddingTop: 6,
+  },
   topUtilityRow: {
     width: '100%',
     flexDirection: 'row',
@@ -1334,6 +1346,20 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginTop: Spacing.lg,
     marginBottom: Spacing.base,
+  },
+  topUtilityRowCompact: {
+    marginTop: Spacing.base,
+    marginBottom: Spacing.sm,
+  },
+  heroContent: {
+    flex: 1,
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingBottom: Spacing.lg,
+  },
+  heroContentCompact: {
+    paddingBottom: Spacing.md,
   },
   topUtilitySide: {
     width: 44,
@@ -1387,6 +1413,9 @@ const styles = StyleSheet.create({
     gap: 6,
     marginTop: Spacing.lg,
   },
+  dotsRowCompact: {
+    marginTop: Spacing.base,
+  },
   dot: {
     width: 8,
     height: 8,
@@ -1417,15 +1446,26 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     maxWidth: '90%',
   },
+  nameCompact: {
+    fontSize: 26,
+    marginTop: Spacing.base,
+  },
   status: {
     fontSize: FontSize.lg,
     color: 'rgba(255,255,255,0.62)',
     fontWeight: FontWeight.regular,
   },
+  statusCompact: {
+    fontSize: FontSize.base,
+    marginTop: 2,
+  },
   subStatus: {
     fontSize: FontSize.sm,
     color: 'rgba(255,255,255,0.48)',
     opacity: 1,
+  },
+  subStatusCompact: {
+    marginTop: 2,
   },
   errorText: {
     color: Colors.danger,
@@ -1438,6 +1478,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingBottom: Spacing.xl,
     gap: 14,
+  },
+  controlsCompact: {
+    paddingBottom: Spacing.lg,
+    gap: 10,
   },
   controlsTopRow: {
     flexDirection: 'row',
