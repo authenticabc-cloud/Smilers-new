@@ -22,6 +22,7 @@ import Header from '../../src/components/Header';
 import Avatar from '../../src/components/Avatar';
 import SosButton from '../../src/components/SosButton';
 import { api } from '../../src/convexApi';
+import { getLanguageByCode } from '../../src/lib/languages';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { uploadFile } from '../../src/lib/uploadFile';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
@@ -65,7 +66,7 @@ export default function ProfileScreen() {
   const name = me?.name || userInfo?.name || 'Smilers';
   const email = me?.email || userInfo?.email || '';
   const about = me?.about || 'Hey there! I am using Smilers.';
-  const language = me?.preferredLanguage || 'No preference — show original';
+  const language = getLanguageByCode(me?.preferredLanguage || '')?.name || 'No preference — show original';
   const avatarUri = (me as any)?.avatarUrl || (me as any)?.photoUrl || undefined;
 
   const openEditor = useCallback(

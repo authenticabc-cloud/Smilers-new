@@ -6,6 +6,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -20,13 +21,13 @@ import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
 import { useAuth } from '../src/providers/AuthProvider';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
-import { LANGUAGES, LanguageItem } from '../src/lib/languages';
+import { getLanguageByCode, LANGUAGES, LanguageItem } from '../src/lib/languages';
 import { readStoredJson, writeStoredJson } from '../src/lib/settingsStorage';
-import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
+import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/theme';
 
 const LOCAL_KEY = 'smilers_user_languages';
 
-export default function LanguagesScreen() {
+function LegacyLanguagesScreen() {
   const router = useRouter();
   const { isAuthenticated } = useAuth();
   const { data: me, refetch } = useSafeConvexQuery<any | null>(
@@ -437,5 +438,290 @@ const styles = StyleSheet.create({
   footerText: {
     fontSize: FontSize.sm,
     color: Colors.textMuted,
+  },
+});
+
+const PREFERRED_LANGUAGE_KEY = 'smilers_preferred_language';
+
+export default function LanguagesScreen() {
+  const router = useRouter();
+  const { isAuthenticated } = useAuth();
+  const { data: me, refetch } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null, isAuthenticated);
+  const updateProfile = useMutation(api.users.updateProfile);
+
+  const [initialized, setInitialized] = useState(false);
+  const [query, setQuery] = useState('');
+  const [selectedCode, setSelectedCode] = useState('en');
+  const [savingCode, setSavingCode] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialized) return;
+    let active = true;
+    const load = async () => {
+      const local = (await readStoredJson(PREFERRED_LANGUAGE_KEY, 'en')) as string;
+      const preferred = me?.preferredLanguage || local || 'en';
+      const selected = getLanguageByCode(preferred) || getLanguageByCode('en');
+      if (!active || !selected) return;
+      setSelectedCode(selected.code);
+      setQuery(selected.name);
+      setInitialized(true);
+    };
+    void load();
+    return () => {
+      active = false;
+    };
+  }, [initialized, me?.preferredLanguage]);
+
+  const selectedLanguage = useMemo(() => getLanguageByCode(selectedCode) || LANGUAGES[0], [selectedCode]);
+
+  const filteredLanguages = useMemo(() => {
+    const term = query.trim().toLowerCase();
+    if (!term) return LANGUAGES.slice(0, 16);
+    return LANGUAGES.filter((item) => {
+      const haystack = `${item.name} ${item.nativeName} ${item.code}`.toLowerCase();
+      return haystack.includes(term);
+    });
+  }, [query]);
+
+  const clearSearch = useCallback(() => {
+    setQuery('');
+  }, []);
+
+  const saveLanguage = useCallback(
+    async (item: LanguageItem) => {
+      if (savingCode) return;
+      setSavingCode(item.code);
+      setSelectedCode(item.code);
+      setQuery(item.name);
+
+      let savedToServer = false;
+      try {
+        await updateProfile({ preferredLanguage: item.code });
+        savedToServer = true;
+      } catch (errorValue: any) {
+        console.warn('updateProfile(preferredLanguage) failed:', errorValue?.message);
+      }
+
+      try {
+        await writeStoredJson(PREFERRED_LANGUAGE_KEY, item.code);
+      } catch {}
+
+      if (savedToServer) {
+        try {
+          await refetch();
+        } catch {}
+      }
+
+      setSavingCode(null);
+      Alert.alert(
+        'Message language updated',
+        `All messages you receive will be auto-translated into ${item.name}.`,
+        [{ text: 'OK', onPress: () => router.back() }],
+      );
+    },
+    [refetch, router, savingCode, updateProfile],
+  );
+
+  return (
+    <SafeAreaView style={screenshotStyles.container} edges={['top']} testID="languages-screen">
+      <StatusBar barStyle="dark-content" backgroundColor="#DAA514" />
+
+      <View style={screenshotStyles.topBar} testID="languages-top-bar">
+        <TouchableOpacity onPress={() => router.back()} style={screenshotStyles.backButton} testID="languages-back-button">
+          <Ionicons name="arrow-back" size={26} color={Colors.textPrimary} />
+        </TouchableOpacity>
+      </View>
+
+      <KeyboardAvoidingView style={screenshotStyles.flexOne} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView contentContainerStyle={screenshotStyles.content} keyboardShouldPersistTaps="handled" testID="languages-scroll-view">
+          <View style={screenshotStyles.sectionHeader} testID="languages-section-header">
+            <Ionicons name="globe-outline" size={30} color={Colors.primary} />
+            <View style={screenshotStyles.sectionTextWrap}>
+              <Text style={screenshotStyles.sectionLabel} testID="languages-section-label">MESSAGE LANGUAGE</Text>
+              <Text style={screenshotStyles.sectionHelp} testID="languages-section-help">
+                All messages you receive will be auto-translated into this language.
+              </Text>
+            </View>
+          </View>
+
+          <View style={screenshotStyles.searchRow} testID="languages-search-row">
+            <View style={screenshotStyles.searchShell}>
+              <TextInput
+                value={query}
+                onChangeText={setQuery}
+                placeholder="Search language"
+                placeholderTextColor="#9D9385"
+                autoCapitalize="words"
+                autoCorrect={false}
+                style={screenshotStyles.searchInput}
+                testID="languages-search-input"
+              />
+            </View>
+
+            <TouchableOpacity onPress={clearSearch} style={screenshotStyles.clearButton} testID="languages-clear-button">
+              {savingCode ? (
+                <ActivityIndicator size="small" color={Colors.textPrimary} />
+              ) : (
+                <Ionicons name="close" size={24} color={Colors.textPrimary} />
+              )}
+            </TouchableOpacity>
+          </View>
+
+          <View style={screenshotStyles.resultsCard} testID="languages-results-card">
+            {!initialized ? (
+              <View style={screenshotStyles.feedbackState} testID="languages-loading-state">
+                <ActivityIndicator size="small" color={Colors.primary} />
+                <Text style={screenshotStyles.feedbackText}>Loading languages…</Text>
+              </View>
+            ) : filteredLanguages.length === 0 ? (
+              <View style={screenshotStyles.feedbackState} testID="languages-empty-state">
+                <Ionicons name="search-outline" size={26} color={Colors.textMuted} />
+                <Text style={screenshotStyles.feedbackText}>No languages match “{query}”.</Text>
+              </View>
+            ) : (
+              filteredLanguages.map((item, index) => {
+                const selected = item.code === selectedLanguage.code;
+                return (
+                  <TouchableOpacity
+                    key={item.code}
+                    style={[screenshotStyles.languageRow, index === filteredLanguages.length - 1 ? screenshotStyles.languageRowLast : null]}
+                    onPress={() => saveLanguage(item)}
+                    activeOpacity={0.82}
+                    testID={`language-row-${item.code}`}
+                  >
+                    <View style={screenshotStyles.languageTextWrap}>
+                      <Text style={[screenshotStyles.languageName, selected ? screenshotStyles.languageNameSelected : null]} numberOfLines={1}>
+                        {item.name}
+                      </Text>
+                    </View>
+                    {selected ? <Ionicons name="checkmark-circle" size={22} color={Colors.primary} /> : null}
+                  </TouchableOpacity>
+                );
+              })
+            )}
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+}
+
+const screenshotStyles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F8F3EA',
+  },
+  flexOne: {
+    flex: 1,
+  },
+  topBar: {
+    minHeight: 54,
+    backgroundColor: '#DAA514',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#DBCBAF',
+  },
+  backButton: {
+    width: 42,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  content: {
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 36,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 18,
+  },
+  sectionTextWrap: {
+    flex: 1,
+  },
+  sectionLabel: {
+    fontSize: 17,
+    fontWeight: FontWeight.semibold,
+    letterSpacing: 0.8,
+    color: Colors.primary,
+  },
+  sectionHelp: {
+    marginTop: 8,
+    fontSize: 17,
+    lineHeight: 24,
+    color: '#5F5A52',
+  },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 16,
+  },
+  searchShell: {
+    flex: 1,
+    minHeight: 94,
+    borderRadius: 22,
+    backgroundColor: '#FCF8F0',
+    borderWidth: 4,
+    borderColor: '#E4BE43',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+    ...Shadow.md,
+  },
+  searchInput: {
+    fontSize: 25,
+    color: Colors.textPrimary,
+    paddingVertical: 0,
+  },
+  clearButton: {
+    width: 74,
+    height: 74,
+    borderRadius: 37,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F4EDE2',
+  },
+  resultsCard: {
+    borderRadius: 26,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    ...Shadow.md,
+  },
+  feedbackState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 32,
+  },
+  feedbackText: {
+    fontSize: 15,
+    color: Colors.textSecondary,
+  },
+  languageRow: {
+    minHeight: 84,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0E8DB',
+  },
+  languageRowLast: {
+    borderBottomWidth: 0,
+  },
+  languageTextWrap: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  languageName: {
+    fontSize: 24,
+    color: '#22201C',
+  },
+  languageNameSelected: {
+    fontWeight: FontWeight.semibold,
+    color: Colors.primaryDark,
   },
 });
