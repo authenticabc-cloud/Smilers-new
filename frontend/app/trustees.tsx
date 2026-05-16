@@ -16,7 +16,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
-import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../src/providers/AuthProvider';
@@ -29,18 +28,29 @@ interface Trustee {
   name?: string;
   phone?: string;
   email?: string;
-  relationship?: string;
   contactId?: string;
 }
 
-interface FormState {
-  name: string;
-  phone: string;
-  email: string;
-  relationship: string;
+interface SmilersContact {
+  _id?: string;
+  id?: string;
+  userId?: string;
+  name?: string;
+  phone?: string;
+  email?: string;
 }
 
-const EMPTY_FORM: FormState = { name: '', phone: '', email: '', relationship: '' };
+function normalizeValue(value?: string) {
+  return (value || '').trim().toLowerCase();
+}
+
+function normalizePhone(value?: string) {
+  return (value || '').replace(/\D/g, '');
+}
+
+function getContactKey(contact: SmilersContact) {
+  return String(contact.userId || contact._id || contact.id || contact.phone || contact.email || contact.name || 'contact');
+}
 
 export default function TrusteesScreen() {
   const router = useRouter();
@@ -51,99 +61,99 @@ export default function TrusteesScreen() {
     [],
     isAuthenticated,
   );
+  const { data: contacts, loading: contactsLoading } = useSafeConvexQuery<SmilersContact[]>(
+    api.contacts.getContacts,
+    {},
+    [],
+    isAuthenticated,
+  );
   const addTrustee = useMutation(api.trustees.addTrustee);
-  const updateTrustee = useMutation(api.trustees.updateTrustee);
   const removeTrustee = useMutation(api.trustees.removeTrustee);
 
-  const list = useMemo(() => trustees || [], [trustees]);
-  const atCap = list.length >= MAX_TRUSTEES;
+  const trusteeList = useMemo(() => trustees || [], [trustees]);
+  const atCap = trusteeList.length >= MAX_TRUSTEES;
 
   const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<Trustee | null>(null);
-  const [form, setForm] = useState<FormState>(EMPTY_FORM);
-  const [submitting, setSubmitting] = useState(false);
+  const [search, setSearch] = useState('');
+  const [submittingKey, setSubmittingKey] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
+
+  const existingTrusteeKeys = useMemo(() => {
+    const keys = new Set<string>();
+    trusteeList.forEach((item) => {
+      if (item.contactId) keys.add(normalizeValue(item.contactId));
+      if (item.phone) keys.add(normalizePhone(item.phone));
+      if (item.email) keys.add(normalizeValue(item.email));
+      if (item.name) keys.add(normalizeValue(item.name));
+    });
+    return keys;
+  }, [trusteeList]);
+
+  const availableContacts = useMemo(() => {
+    const source = Array.isArray(contacts) ? contacts : [];
+    const query = search.trim().toLowerCase();
+    return source
+      .filter((contact) => {
+        const phoneKey = normalizePhone(contact.phone);
+        const emailKey = normalizeValue(contact.email);
+        const idKey = normalizeValue(String(contact.userId || contact._id || contact.id || ''));
+        const nameKey = normalizeValue(contact.name);
+        if (existingTrusteeKeys.has(idKey) || existingTrusteeKeys.has(phoneKey) || existingTrusteeKeys.has(emailKey) || existingTrusteeKeys.has(nameKey)) {
+          return false;
+        }
+        if (!query) return true;
+        const haystack = `${contact.name || ''} ${contact.phone || ''}`.toLowerCase();
+        return haystack.includes(query);
+      })
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }, [contacts, existingTrusteeKeys, search]);
 
   const openAdd = useCallback(() => {
     if (atCap) {
-      Alert.alert(
-        'Trustee limit reached',
-        `You can have up to ${MAX_TRUSTEES} trustees. Remove an existing trustee first to add a new one.`,
-      );
+      Alert.alert('Trustee limit reached', `You can add up to ${MAX_TRUSTEES} trustees.`);
       return;
     }
-    setEditing(null);
-    setForm(EMPTY_FORM);
+    setSearch('');
     setModalOpen(true);
   }, [atCap]);
 
-  const openEdit = useCallback((trustee: Trustee) => {
-    setEditing(trustee);
-    setForm({
-      name: trustee.name || '',
-      phone: trustee.phone || '',
-      email: trustee.email || '',
-      relationship: trustee.relationship || '',
-    });
-    setModalOpen(true);
-  }, []);
-
   const closeModal = useCallback(() => {
-    if (submitting) return;
+    if (submittingKey) return;
     setModalOpen(false);
-    setEditing(null);
-    setForm(EMPTY_FORM);
-  }, [submitting]);
+    setSearch('');
+  }, [submittingKey]);
 
-  const validate = useCallback((): string | null => {
-    const name = form.name.trim();
-    const phone = form.phone.trim();
-    const email = form.email.trim();
-    if (!name) return 'Please enter a name.';
-    if (!phone && !email) return 'Please enter a phone number or email.';
-    if (phone && phone.replace(/\D/g, '').length < 6) return 'Phone number looks too short.';
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return 'Please enter a valid email.';
-    return null;
-  }, [form]);
-
-  const submit = useCallback(async () => {
-    const errorMsg = validate();
-    if (errorMsg) {
-      Alert.alert('Check your entry', errorMsg);
-      return;
-    }
-    setSubmitting(true);
-    const payload: any = {
-      name: form.name.trim(),
-      phone: form.phone.trim() || undefined,
-      email: form.email.trim() || undefined,
-      relationship: form.relationship.trim() || undefined,
-    };
-    try {
-      if (editing) {
-        await updateTrustee({ trusteeId: editing._id, ...payload });
-      } else {
-        await addTrustee(payload);
+  const onAddContact = useCallback(
+    async (contact: SmilersContact) => {
+      const contactKey = getContactKey(contact);
+      if (atCap) {
+        Alert.alert('Trustee limit reached', `You can add up to ${MAX_TRUSTEES} trustees.`);
+        return;
       }
-      await refetch();
-      setModalOpen(false);
-      setEditing(null);
-      setForm(EMPTY_FORM);
-    } catch (errorValue: any) {
-      Alert.alert(
-        editing ? 'Could not update trustee' : 'Could not add trustee',
-        errorValue?.message || 'Please try again.',
-      );
-    } finally {
-      setSubmitting(false);
-    }
-  }, [addTrustee, editing, form, refetch, updateTrustee, validate]);
+      setSubmittingKey(contactKey);
+      try {
+        await addTrustee({
+          name: contact.name || 'Smilers contact',
+          phone: contact.phone || undefined,
+          email: contact.email || undefined,
+        });
+        await refetch();
+        setModalOpen(false);
+        setSearch('');
+      } catch (errorValue: any) {
+        Alert.alert('Could not add trustee', errorValue?.message || 'Please try again.');
+      } finally {
+        setSubmittingKey(null);
+      }
+    },
+    [addTrustee, atCap, refetch],
+  );
 
   const onRemove = useCallback(
     (trustee: Trustee) => {
       Alert.alert(
         `Remove ${trustee.name || 'this trustee'}?`,
-        'They will no longer be alerted in an emergency.',
+        'They will no longer be notified in an emergency.',
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -169,212 +179,138 @@ export default function TrusteesScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="trustees-screen">
-      <Header
-        title="Trustees"
-        showBack
-        onBack={() => router.back()}
-        variant="dark"
-        subtitle={`${list.length} of ${MAX_TRUSTEES}`}
-        right={
-          <TouchableOpacity
-            onPress={openAdd}
-            style={[styles.addBtn, atCap ? styles.addBtnDisabled : null]}
-            disabled={atCap}
-            testID="trustees-add"
-          >
-            <Ionicons name="add" size={18} color={atCap ? Colors.textMuted : Colors.headerBg} />
-            <Text style={[styles.addBtnText, atCap ? { color: Colors.textMuted } : null]}>Add</Text>
-          </TouchableOpacity>
-        }
-      />
+      <View style={styles.header} testID="trustees-header">
+        <TouchableOpacity onPress={() => router.back()} style={styles.headerButton} testID="trustees-back-button">
+          <Ionicons name="arrow-back" size={28} color={Colors.white} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle} testID="trustees-header-title">Trustees</Text>
+        <View style={styles.headerSpacer} />
+      </View>
 
-      <ScrollView
-        contentContainerStyle={{ paddingBottom: 48 }}
-        refreshing={loading}
-        testID="trustees-list"
-      >
-        <View style={styles.intro}>
-          <View style={styles.introIconWrap}>
-            <Ionicons name="shield-checkmark" size={28} color={Colors.primary} />
-          </View>
-          <Text style={styles.introTitle}>Your circle of trust</Text>
-          <Text style={styles.introBody}>
-            Add up to {MAX_TRUSTEES} contacts who will be notified instantly when you trigger an SOS. They’ll receive your last
-            known location.
+      <ScrollView contentContainerStyle={styles.content} testID="trustees-scroll-view">
+        <View style={styles.introPanel} testID="trustees-intro-panel">
+          <Text style={styles.introText}>
+            Trustees are your emergency contacts (max 5). They will be notified with your live location when you trigger an emergency alert.
           </Text>
         </View>
 
-        {loading && list.length === 0 ? (
-          <View style={styles.loadingWrap} testID="trustees-loading">
-            <ActivityIndicator size="small" color={Colors.primary} />
-          </View>
-        ) : list.length === 0 ? (
-          <View style={styles.emptyWrap} testID="trustees-empty">
-            <Ionicons name="people-outline" size={48} color={Colors.textMuted} />
-            <Text style={styles.emptyTitle}>No trustees yet</Text>
-            <Text style={styles.emptyBody}>Tap “Add” to add your first trusted contact.</Text>
-            <TouchableOpacity style={styles.emptyBtn} onPress={openAdd} testID="trustees-empty-add">
-              <Ionicons name="add" size={20} color={Colors.white} />
-              <Text style={styles.emptyBtnText}>Add Trustee</Text>
-            </TouchableOpacity>
+        {loading && trusteeList.length === 0 ? (
+          <View style={styles.loadingWrap} testID="trustees-loading-state">
+            <ActivityIndicator color={Colors.primary} />
           </View>
         ) : (
-          <View style={styles.list}>
-            {list.map((t, index) => (
-              <View key={t._id} style={styles.row} testID={`trustees-row-${index}`}>
-                <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>{(t.name || 'T').charAt(0).toUpperCase()}</Text>
+          <View style={styles.cardsWrap} testID="trustees-cards-wrap">
+            {trusteeList.map((trustee, index) => (
+              <View key={trustee._id} style={styles.trusteeCard} testID={`trustees-card-${index}`}>
+                <View style={styles.trusteeBadgeCircle}>
+                  <Ionicons name="shield-checkmark-outline" size={26} color={Colors.primary} />
+                </View>
+                <View style={styles.trusteeTextWrap}>
+                  <Text style={styles.trusteeName} numberOfLines={1} testID={`trustees-name-${index}`}>
+                    {(trustee.name || 'Trustee').toUpperCase()}
+                  </Text>
+                  <Text style={styles.trusteeMeta} numberOfLines={1} testID={`trustees-meta-${index}`}>
+                    {trustee.phone || trustee.email || 'Smilers Contact'}
+                  </Text>
                 </View>
                 <TouchableOpacity
-                  style={styles.rowMid}
-                  onPress={() => openEdit(t)}
-                  activeOpacity={0.7}
-                  testID={`trustees-row-edit-${index}`}
-                >
-                  <Text style={styles.rowName} numberOfLines={1}>
-                    {t.name || 'Trustee'}
-                  </Text>
-                  <Text style={styles.rowMeta} numberOfLines={1}>
-                    {t.phone || t.email || '—'}
-                  </Text>
-                  {t.relationship ? (
-                    <Text style={styles.rowRel} numberOfLines={1}>
-                      {t.relationship}
-                    </Text>
-                  ) : null}
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.iconBtn}
-                  onPress={() => openEdit(t)}
-                  hitSlop={8}
-                  testID={`trustees-edit-${index}`}
-                >
-                  <Ionicons name="create-outline" size={20} color={Colors.textSecondary} />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.iconBtn}
-                  onPress={() => onRemove(t)}
-                  hitSlop={8}
-                  disabled={removingId === t._id}
+                  onPress={() => onRemove(trustee)}
+                  style={styles.removeButton}
+                  disabled={removingId === trustee._id}
                   testID={`trustees-remove-${index}`}
                 >
-                  {removingId === t._id ? (
+                  {removingId === trustee._id ? (
                     <ActivityIndicator size="small" color={Colors.danger} />
                   ) : (
-                    <Ionicons name="trash-outline" size={20} color={Colors.danger} />
+                    <Ionicons name="close" size={34} color={Colors.danger} />
                   )}
                 </TouchableOpacity>
               </View>
             ))}
+
+            {!atCap ? (
+              <TouchableOpacity style={styles.addTrusteeCard} onPress={openAdd} testID="trustees-add-card">
+                <View style={styles.addBadgeCircle}>
+                  <Ionicons name="add" size={30} color={Colors.primary} />
+                </View>
+                <Text style={styles.addTrusteeText}>Add Trustee ({trusteeList.length}/{MAX_TRUSTEES})</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         )}
-
-        <View style={styles.tipCard}>
-          <Ionicons name="information-circle-outline" size={18} color={Colors.textSecondary} />
-          <Text style={styles.tipText}>
-            Tip: choose people who can quickly act on your behalf — a family member, a close friend, or a colleague who lives
-            nearby.
-          </Text>
-        </View>
       </ScrollView>
 
-      <Modal
-        visible={modalOpen}
-        animationType="slide"
-        transparent
-        onRequestClose={closeModal}
-      >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.modalBackdrop}
-        >
-          <View style={styles.modalCard}>
+      <Modal visible={modalOpen} transparent animationType="slide" onRequestClose={closeModal}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalBackdrop}>
+          <TouchableOpacity style={styles.modalScrim} activeOpacity={1} onPress={closeModal} testID="trustees-modal-scrim" />
+          <View style={styles.modalSheet} testID="trustees-modal-sheet">
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                {editing ? 'Edit trustee' : 'Add trustee'}
-              </Text>
-              <TouchableOpacity onPress={closeModal} hitSlop={10} testID="trustee-modal-close">
-                <Ionicons name="close" size={24} color={Colors.textPrimary} />
+              <View style={styles.modalHeaderSpacer} />
+              <Text style={styles.modalTitle} testID="trustees-modal-title">Add Trustee</Text>
+              <TouchableOpacity onPress={closeModal} style={styles.modalCloseButton} testID="trustees-modal-close">
+                <Ionicons name="close" size={26} color={Colors.textPrimary} />
               </TouchableOpacity>
             </View>
 
-            <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 16 }}>
-              <Text style={styles.label}>Name *</Text>
+            <View style={styles.searchShell} testID="trustees-search-shell">
+              <Ionicons name="search-outline" size={28} color={Colors.textMuted} />
               <TextInput
-                value={form.name}
-                onChangeText={(v) => setForm((f) => ({ ...f, name: v }))}
-                placeholder="e.g. Jane Smith"
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Search by name or phone..."
                 placeholderTextColor={Colors.textMuted}
-                autoCapitalize="words"
-                style={styles.input}
-                editable={!submitting}
-                testID="trustee-name-input"
-              />
-
-              <Text style={styles.label}>Phone</Text>
-              <TextInput
-                value={form.phone}
-                onChangeText={(v) => setForm((f) => ({ ...f, phone: v }))}
-                placeholder="+1 555 555 5555"
-                placeholderTextColor={Colors.textMuted}
-                keyboardType="phone-pad"
-                style={styles.input}
-                editable={!submitting}
-                testID="trustee-phone-input"
-              />
-
-              <Text style={styles.label}>Email</Text>
-              <TextInput
-                value={form.email}
-                onChangeText={(v) => setForm((f) => ({ ...f, email: v }))}
-                placeholder="jane@example.com"
-                placeholderTextColor={Colors.textMuted}
-                keyboardType="email-address"
                 autoCapitalize="none"
-                style={styles.input}
-                editable={!submitting}
-                testID="trustee-email-input"
+                autoCorrect={false}
+                style={styles.searchInput}
+                testID="trustees-search-input"
               />
-
-              <Text style={styles.label}>Relationship</Text>
-              <TextInput
-                value={form.relationship}
-                onChangeText={(v) => setForm((f) => ({ ...f, relationship: v }))}
-                placeholder="e.g. Sister, Best friend, Doctor"
-                placeholderTextColor={Colors.textMuted}
-                autoCapitalize="sentences"
-                style={styles.input}
-                editable={!submitting}
-                testID="trustee-relationship-input"
-              />
-
-              <Text style={styles.helper}>
-                Provide at least a phone number or email so we can reach them in an emergency.
-              </Text>
-            </ScrollView>
-
-            <View style={styles.modalActions}>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.modalBtnGhost]}
-                onPress={closeModal}
-                disabled={submitting}
-                testID="trustee-cancel"
-              >
-                <Text style={styles.modalBtnGhostText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.modalBtnPrimary, submitting ? { opacity: 0.7 } : null]}
-                onPress={submit}
-                disabled={submitting}
-                testID="trustee-submit"
-              >
-                {submitting ? (
-                  <ActivityIndicator size="small" color={Colors.headerBg} />
-                ) : (
-                  <Text style={styles.modalBtnPrimaryText}>{editing ? 'Save changes' : 'Add trustee'}</Text>
-                )}
-              </TouchableOpacity>
             </View>
+
+            <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.modalListContent} testID="trustees-modal-list">
+              {contactsLoading ? (
+                <View style={styles.loadingWrap} testID="trustees-contacts-loading">
+                  <ActivityIndicator color={Colors.primary} />
+                </View>
+              ) : availableContacts.length === 0 ? (
+                <View style={styles.emptyModal} testID="trustees-contacts-empty">
+                  <Ionicons name="people-outline" size={34} color={Colors.textMuted} />
+                  <Text style={styles.emptyModalTitle}>No Smilers contacts found</Text>
+                  <Text style={styles.emptyModalBody}>Only Smilers contacts in the user’s contact list can be added as trustees.</Text>
+                </View>
+              ) : (
+                availableContacts.map((contact, index) => {
+                  const contactKey = getContactKey(contact);
+                  const adding = submittingKey === contactKey;
+                  return (
+                    <View key={contactKey} style={styles.contactRow} testID={`trustees-contact-row-${index}`}>
+                      <View style={styles.trusteeBadgeCircle}>
+                        <Ionicons name="shield-checkmark-outline" size={26} color={Colors.primary} />
+                      </View>
+                      <View style={styles.contactTextWrap}>
+                        <Text style={styles.contactName} numberOfLines={1} testID={`trustees-contact-name-${index}`}>
+                          {contact.name || 'Smilers Contact'}
+                        </Text>
+                        <Text style={styles.contactMeta} numberOfLines={1} testID={`trustees-contact-meta-${index}`}>
+                          {contact.phone || contact.email || 'Smilers user'}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        onPress={() => onAddContact(contact)}
+                        style={styles.contactAddButton}
+                        disabled={adding}
+                        testID={`trustees-contact-add-${index}`}
+                      >
+                        {adding ? (
+                          <ActivityIndicator size="small" color={Colors.primary} />
+                        ) : (
+                          <Ionicons name="add" size={30} color={Colors.primary} />
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })
+              )}
+            </ScrollView>
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -383,191 +319,222 @@ export default function TrusteesScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
-  addBtn: {
+  container: {
+    flex: 1,
+    backgroundColor: '#F6F1E7',
+  },
+  header: {
+    minHeight: 116,
+    backgroundColor: '#3D2A00',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: Colors.primary,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: Radius.md,
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: 20,
   },
-  addBtnDisabled: {
-    backgroundColor: 'rgba(255,255,255,0.12)',
-  },
-  addBtnText: {
-    color: Colors.headerBg,
-    fontWeight: FontWeight.bold,
-    fontSize: FontSize.sm,
-  },
-  intro: {
-    alignItems: 'center',
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.lg,
-    backgroundColor: Colors.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.borderLight,
-    gap: 6,
-  },
-  introIconWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: Colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: Spacing.sm,
-  },
-  introTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: FontWeight.bold,
-    color: Colors.textPrimary,
-  },
-  introBody: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  loadingWrap: { paddingVertical: Spacing.xl, alignItems: 'center' },
-  emptyWrap: {
-    alignItems: 'center',
-    paddingVertical: Spacing.xl,
-    gap: 8,
-    paddingHorizontal: Spacing.lg,
-  },
-  emptyTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: FontWeight.bold,
-    color: Colors.textPrimary,
-    marginTop: Spacing.sm,
-  },
-  emptyBody: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-  },
-  emptyBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: Spacing.md,
-    backgroundColor: Colors.primary,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: 12,
-    borderRadius: Radius.pill,
-  },
-  emptyBtnText: { color: Colors.white, fontWeight: FontWeight.bold, fontSize: FontSize.base },
-  list: { marginTop: Spacing.sm },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.base,
-    paddingVertical: 12,
-    gap: Spacing.md,
-    backgroundColor: Colors.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.borderLight,
-  },
-  avatar: {
+  headerButton: {
     width: 44,
     height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: FontWeight.bold,
+    color: Colors.white,
+    marginLeft: 18,
+  },
+  headerSpacer: {
+    flex: 1,
+  },
+  content: {
+    paddingBottom: 48,
+  },
+  introPanel: {
+    backgroundColor: '#EFE6D6',
+    paddingHorizontal: 22,
+    paddingVertical: 28,
+    borderBottomWidth: 1,
+    borderBottomColor: '#DDD2BF',
+  },
+  introText: {
+    fontSize: 17,
+    lineHeight: 42 / 1.5,
+    color: '#6C655A',
+  },
+  loadingWrap: {
+    paddingTop: Spacing.xxl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardsWrap: {
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    gap: 16,
+  },
+  trusteeCard: {
+    minHeight: 110,
     borderRadius: 22,
-    backgroundColor: Colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarText: { color: Colors.primaryDark, fontWeight: FontWeight.bold, fontSize: FontSize.lg },
-  rowMid: { flex: 1 },
-  rowName: {
-    fontSize: FontSize.base,
-    fontWeight: FontWeight.semibold,
-    color: Colors.textPrimary,
-  },
-  rowMeta: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
-  rowRel: { fontSize: FontSize.xs, color: Colors.primaryDark, marginTop: 2, fontWeight: FontWeight.semibold },
-  iconBtn: {
-    padding: 8,
-    minWidth: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tipCard: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-    margin: Spacing.base,
-    padding: Spacing.md,
-    backgroundColor: '#FFFBEB',
-    borderRadius: Radius.md,
     borderWidth: 1,
-    borderColor: '#FDE68A',
+    borderColor: '#E1D7C8',
+    backgroundColor: '#F7F2E7',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    gap: 16,
   },
-  tipText: { flex: 1, fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
+  trusteeBadgeCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#FBF4DB',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  trusteeTextWrap: {
+    flex: 1,
+  },
+  trusteeName: {
+    fontSize: 22,
+    fontWeight: FontWeight.bold,
+    color: '#1F1711',
+  },
+  trusteeMeta: {
+    marginTop: 4,
+    fontSize: 16,
+    color: '#6E665B',
+  },
+  removeButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addTrusteeCard: {
+    minHeight: 122,
+    borderRadius: 22,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: '#E8CC74',
+    backgroundColor: '#F9F4EA',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    gap: 18,
+  },
+  addBadgeCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#FBF4DB',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addTrusteeText: {
+    fontSize: 21,
+    fontWeight: FontWeight.medium,
+    color: '#E0B82B',
+  },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.55)',
     justifyContent: 'flex-end',
   },
-  modalCard: {
-    backgroundColor: Colors.surface,
-    borderTopLeftRadius: Radius.xl,
-    borderTopRightRadius: Radius.xl,
-    paddingHorizontal: Spacing.base,
-    paddingTop: Spacing.base,
-    paddingBottom: Spacing.lg,
-    maxHeight: '92%',
+  modalScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.34)',
+  },
+  modalSheet: {
+    maxHeight: '76%',
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    backgroundColor: '#F8F2E8',
+    paddingTop: 18,
+    paddingHorizontal: 16,
+    paddingBottom: 20,
   },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: Spacing.md,
+    marginBottom: 18,
+  },
+  modalHeaderSpacer: {
+    width: 44,
   },
   modalTitle: {
-    fontSize: FontSize.xl,
+    fontSize: 24,
     fontWeight: FontWeight.bold,
-    color: Colors.textPrimary,
+    color: '#1F1711',
   },
-  label: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.bold,
-    color: Colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginTop: Spacing.md,
-    marginBottom: 6,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.md,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Platform.OS === 'ios' ? 12 : 10,
-    fontSize: FontSize.base,
-    color: Colors.textPrimary,
-    backgroundColor: Colors.background,
-  },
-  helper: {
-    fontSize: FontSize.xs,
-    color: Colors.textMuted,
-    marginTop: Spacing.md,
-    lineHeight: 18,
-  },
-  modalActions: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-    marginTop: Spacing.base,
-  },
-  modalBtn: {
-    flex: 1,
-    height: 48,
-    borderRadius: Radius.md,
+  modalCloseButton: {
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modalBtnGhost: { backgroundColor: Colors.borderLight },
-  modalBtnGhostText: { color: Colors.textPrimary, fontWeight: FontWeight.semibold, fontSize: FontSize.base },
-  modalBtnPrimary: { backgroundColor: Colors.primary },
-  modalBtnPrimaryText: { color: Colors.headerBg, fontWeight: FontWeight.bold, fontSize: FontSize.base },
+  searchShell: {
+    minHeight: 78,
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: '#E7BF3B',
+    backgroundColor: '#FCF7EE',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 18,
+    color: Colors.textPrimary,
+    paddingVertical: 0,
+  },
+  modalListContent: {
+    paddingTop: 18,
+    paddingBottom: 24,
+  },
+  contactRow: {
+    minHeight: 92,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    paddingHorizontal: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: '#ECE1D2',
+  },
+  contactTextWrap: {
+    flex: 1,
+  },
+  contactName: {
+    fontSize: 18,
+    fontWeight: FontWeight.semibold,
+    color: '#1F1711',
+  },
+  contactMeta: {
+    marginTop: 3,
+    fontSize: 15,
+    color: '#6E665B',
+  },
+  contactAddButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyModal: {
+    alignItems: 'center',
+    gap: 8,
+    paddingTop: Spacing.xl,
+    paddingHorizontal: Spacing.lg,
+  },
+  emptyModalTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+  },
+  emptyModalBody: {
+    fontSize: FontSize.sm,
+    textAlign: 'center',
+    color: Colors.textSecondary,
+  },
 });

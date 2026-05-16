@@ -211,6 +211,17 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "User then requested the Conferences view match a provided screenshot and reported native call taps still backgrounding the app. I redesigned the Conferences state in `/app/frontend/app/(tabs)/groups.tsx` to a dedicated screenshot-style layout with back arrow, search, invite-code row, badge pills, and SOS button; and I moved `Audio.setAudioModeAsync` out of mount-time execution in `/app/frontend/app/call/[conversationId].tsx`, only applying it after permissions pass, while setting `staysActiveInBackground: false` plus adding iOS `UIBackgroundModes: ['audio']` support in `app.json`."
+##   - task: "Trustees page screenshot redesign"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/trustees.tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: true
+##         agent: "main"
+##         comment: "Rebuilt `/trustees` to mirror the latest reference: dark brown header, explanatory panel, large trustee cards, dashed Add Trustee card, and a bottom-sheet Add Trustee flow with a gold-outlined search box. Add flow now searches Smilers contacts by name or phone using `api.contacts.getContacts`, and only contacts from that Smilers contact list can be added."
 ##   - task: "Safe Convex fallback for optional Phase 1 endpoints"
 ##     implemented: true
 ##     working: true
@@ -326,6 +337,7 @@
 ##     - "Android EAS tarball corruption cleanup"
 ##     - "Groups tab native crash fix"
 ##     - "Groups plus / conferences plus / call route crash fixes"
+##     - "Trustees page screenshot redesign"
 ##     - "Web-safe tabs and push notification hooks"
 ##     - "Phase 2A.1 chat actions"
 ##     - "Phase 2A.2a image attachments"
@@ -356,3 +368,5 @@
 ##     message: "User reported a native crash when opening the Groups tab. I hardened `/app/frontend/app/(tabs)/groups.tsx` by replacing raw Convex queries with `useSafeConvexQuery` and only enabling the optional conferences query when its sub-tab is active. Please validate route stability as far as auth allows."
 ##   - agent: "main"
 ##     message: "Please validate the latest navigation/crash fixes: Groups `+` should open `/groups-create`, Conferences `+` should open `/conference-create`, and `/call/[conversationId]` should no longer red-screen on route open for voice/video. Also confirm the Conferences tab itself stays stable." 
+##   - agent: "main"
+##     message: "Please validate `/trustees` against the new reference: main Trustees page should match the screenshot direction, Add Trustee should open a bottom sheet, the sheet should include a search box for name/phone, and only Smilers contacts from `api.contacts.getContacts` should appear as addable candidates." 
