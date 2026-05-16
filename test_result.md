@@ -174,6 +174,20 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Found a corrupt filename in `/app/frontend` with inode 133032 (`b'\\x01\\x90\\xf8@@\\xd0\\xc39@8'`), deleted it directly, re-scanned the entire frontend tree to confirm zero invalid `@@` / control-character filenames remain, and hardened `.easignore` with `*@@*`, `*.pyc`, and `__pycache__/` exclusions."
+##   - task: "Groups tab native crash fix"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/(tabs)/groups.tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "On the native build, tapping the Groups tab crashes the app."
+##       - working: true
+##         agent: "main"
+##         comment: "Replaced raw Convex `useQuery` calls in the Groups tab with `useSafeConvexQuery`, and delayed the optional conferences query until the Conferences sub-tab is active. This prevents missing backend functions or optional endpoints from crashing the screen on tab open. Added a loading state for the active sub-tab."
 ##   - task: "Safe Convex fallback for optional Phase 1 endpoints"
 ##     implemented: true
 ##     working: true
@@ -287,6 +301,7 @@
 ##     - "Chat appearance screenshot redesign"
 ##     - "Android EAS WebRTC bundle fix"
 ##     - "Android EAS tarball corruption cleanup"
+##     - "Groups tab native crash fix"
 ##     - "Web-safe tabs and push notification hooks"
 ##     - "Phase 2A.1 chat actions"
 ##     - "Phase 2A.2a image attachments"
@@ -313,3 +328,5 @@
 ##     message: "Deployment logs showed the true Android build blocker in EAGER_BUNDLE: react-native-webrtc importing `event-target-shim/index`. I added a deploy-safe fix via npm override to event-target-shim@5.0.1 and a prepare hook so the local WebRTC patch still runs even if postinstall is overwritten during deployment."
 ##   - agent: "main"
 ##     message: "The next deployment log showed a different blocker during tarball upload: a corrupt filename in `/app/frontend`. I deleted the malformed file by inode and strengthened `.easignore` so similar junk names do not get archived again."
+##   - agent: "main"
+##     message: "User reported a native crash when opening the Groups tab. I hardened `/app/frontend/app/(tabs)/groups.tsx` by replacing raw Convex queries with `useSafeConvexQuery` and only enabling the optional conferences query when its sub-tab is active. Please validate route stability as far as auth allows."

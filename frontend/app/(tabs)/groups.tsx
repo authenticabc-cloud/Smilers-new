@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
   StyleSheet,
   Text,
@@ -10,8 +11,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useQuery } from 'convex/react';
 import { api } from '../../src/convexApi';
+import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 
 type Tab = 'groups' | 'conferences';
@@ -34,8 +35,20 @@ export default function GroupsScreen() {
   const [tab, setTab] = useState<Tab>('groups');
   const [search, setSearch] = useState('');
 
-  const groups = useQuery(api.conversations.listGroups);
-  const conferences = useQuery((api as any).conferences?.listMine);
+  const { data: groups, loading: groupsLoading } = useSafeConvexQuery<any[]>(
+    api.conversations.listGroups,
+    {},
+    [],
+    true,
+  );
+  const { data: conferences, loading: conferencesLoading } = useSafeConvexQuery<any[]>(
+    (api as any).conferences.listMine,
+    {},
+    [],
+    tab === 'conferences',
+  );
+
+  const activeLoading = tab === 'groups' ? groupsLoading : conferencesLoading;
 
   const list = useMemo(() => {
     const raw: any[] = tab === 'groups'
@@ -159,7 +172,12 @@ export default function GroupsScreen() {
           );
         }}
         ListEmptyComponent={
-          groups !== undefined || conferences !== undefined ? (
+          activeLoading ? (
+            <View style={styles.loadingState} testID="groups-loading-state">
+              <ActivityIndicator size="small" color={Colors.primary} />
+              <Text style={styles.loadingText}>Loading {tab === 'groups' ? 'groups' : 'conferences'}…</Text>
+            </View>
+          ) : groups !== undefined || conferences !== undefined ? (
             <View style={styles.empty} testID="groups-empty">
               <Ionicons
                 name={tab === 'groups' ? 'people-outline' : 'videocam-outline'}
@@ -289,4 +307,14 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary, marginTop: Spacing.sm },
   emptySub: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center' },
+  loadingState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: Spacing.xxl * 2,
+    gap: Spacing.sm,
+  },
+  loadingText: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+  },
 });
