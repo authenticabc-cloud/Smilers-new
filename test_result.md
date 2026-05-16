@@ -285,6 +285,20 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Updated the chat route with Android-safe keyboard avoidance, added a formatting toolbar above the composer with bold and palette controls, added five draft color choices, and introduced lightweight rich-text tag parsing so sent messages can render bold and colored text bubbles. Self-verified that the chat route still renders in preview; full signed-in composer/keyboard parity still needs on-device validation because the unauthenticated preview cannot reach the live conversation composer state."
+##   - task: "Ringtone asset refresh"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/assets/sounds/smilers_never_cry_2.mp3"
+##     stuck_count: 0
+##     priority: "medium"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "user"
+##         comment: "User uploaded replacement `Smilers_Never_Cry_2.mp3` and `Smilers_Never_Cry_3.mp3` files and asked to add them to the ringtones."
+##       - working: true
+##         agent: "main"
+##         comment: "Replaced the bundled lowercase ringtone assets at `/assets/sounds/smilers_never_cry_2.mp3` and `/assets/sounds/smilers_never_cry_3.mp3`. The ringtone catalog already referenced these IDs, so no code changes were needed. Self-verified the `/ringtones` screen still loads and lists both entries in preview."
 ##   - task: "Chat voice-note controls + disappearing messages + send money redesign"
 ##     implemented: true
 ##     working: true
