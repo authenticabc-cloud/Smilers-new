@@ -69,6 +69,7 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - ✅ Fixed React 19 TypeScript incompatibility from `react-native-country-codes-picker` so the preview/build loads cleanly again
 - ✅ Fixed invalid chat-route update loop by stabilizing query fallback handling and chat fallbacks; `/chat/test-conversation` now renders the unavailable state without `Maximum update depth exceeded`
 - ✅ Rebuilt `/chat-appearance` to closely match the latest user-provided screenshot reference with a dark brown header, wallpaper/bubble-theme tabs, large live preview, screenshot-style wallpaper cards, and preserved local appearance persistence
+- ✅ Hardened Android production bundling for WebRTC calls by adding an npm `prepare` hook for the existing `patch-rn-webrtc.js` and forcing `react-native-webrtc` to resolve `event-target-shim@5.0.1`, preventing the EAS `Missing "./index" specifier in "event-target-shim" package` failure during the JavaScript bundle phase
 - ✅ Added `/app/auth_testing.md` and `/app/auth-testing.md` to document current manual auth verification expectations for future testing runs
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_POLLS_FILES.md` because the Convex backend source is not present in this repo; it documents the required schema, `messages.send`, and `votePoll` backend changes
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_STATUS_STORIES.md` because the Convex backend source is not present in this repo; it documents the required `statuses` endpoints, story views, DM reply support, and direct-conversation mutation

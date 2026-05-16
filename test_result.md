@@ -146,6 +146,20 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Increased the chat appearance back button to 46x46 and re-ran preview verification so the touch target now meets the minimum size guidance."
+##   - task: "Android EAS WebRTC bundle fix"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/package.json"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "Production Android build failed in EAGER_BUNDLE with `Missing \"./index\" specifier in \"event-target-shim\" package` from react-native-webrtc -> app/call/[conversationId].tsx."
+##       - working: true
+##         agent: "main"
+##         comment: "Applied a durable deploy-safe fix: added npm `prepare` hook for `scripts/patch-rn-webrtc.js` so the patch still runs when deployment overwrites postinstall, and added npm override forcing react-native-webrtc to use event-target-shim@5.0.1 which supports the `/index` subpath. Local Android export advanced past the previous event-target-shim bundle error; the next local stop was Hermes bytecode generation in this container, which is separate from the original EAS blocker."
 ##   - task: "Safe Convex fallback for optional Phase 1 endpoints"
 ##     implemented: true
 ##     working: true
@@ -257,6 +271,7 @@
 ##   current_focus:
 ##     - "Phase 1 utility screens and settings navigation"
 ##     - "Chat appearance screenshot redesign"
+##     - "Android EAS WebRTC bundle fix"
 ##     - "Web-safe tabs and push notification hooks"
 ##     - "Phase 2A.1 chat actions"
 ##     - "Phase 2A.2a image attachments"
@@ -279,3 +294,5 @@
 ##     message: "Please validate /chat-appearance against the latest redesign: route should load without runtime errors, Wallpapers and Bubble Theme tabs should switch correctly, and the main layout should stay stable in preview."
 ##   - agent: "main"
 ##     message: "Testing-agent note for /chat-appearance was addressed locally: the back button touch target is now 46x46, and preview verification was repeated after the fix."
+##   - agent: "main"
+##     message: "Deployment logs showed the true Android build blocker in EAGER_BUNDLE: react-native-webrtc importing `event-target-shim/index`. I added a deploy-safe fix via npm override to event-target-shim@5.0.1 and a prepare hook so the local WebRTC patch still runs even if postinstall is overwritten during deployment."
