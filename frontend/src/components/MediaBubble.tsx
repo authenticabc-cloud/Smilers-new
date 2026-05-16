@@ -16,6 +16,10 @@ import * as Linking from 'expo-linking';
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '../convexApi';
 import {
+  parseRichTextSegments,
+  stripRichTextTags,
+} from '../lib/chatRichText';
+import {
   getBubbleRadius,
   getBubbleTailRadius,
   getIncomingBubbleColor,
@@ -129,7 +133,7 @@ export default function MediaBubble({
                 {parentMsg.senderName || (parentMsg.senderId === myUserId ? 'You' : 'Reply')}
               </Text>
               <Text style={styles.quoteText} numberOfLines={2}>
-                {parentMsg.text || `[${parentMsg.type}]`}
+                {stripRichTextTags(parentMsg.text) || `[${parentMsg.type}]`}
               </Text>
             </View>
           </View>
@@ -180,8 +184,27 @@ function BubbleBody({ msg, timeStr, textStyle, isMine }: { msg: any; timeStr: st
       if (extractFirstUrl(msg.text || '')) {
         return <LinkPreviewMessage msg={msg} textStyle={textStyle} isMine={isMine} />;
       }
-      return <Text style={[styles.bubbleText, textStyle]}>{msg.text || ''}</Text>;
+      return <RichMessageText text={msg.text || ''} textStyle={textStyle} />;
   }
+}
+
+function RichMessageText({ text, textStyle, numberOfLines }: { text: string; textStyle?: any; numberOfLines?: number }) {
+  const segments = useMemo(() => parseRichTextSegments(text), [text]);
+  return (
+    <Text style={[styles.bubbleText, textStyle]} numberOfLines={numberOfLines}>
+      {segments.map((segment, index) => (
+        <Text
+          key={`${index}-${segment.text}`}
+          style={[
+            segment.bold ? styles.richTextBold : null,
+            segment.color ? { color: segment.color } : null,
+          ]}
+        >
+          {segment.text}
+        </Text>
+      ))}
+    </Text>
+  );
 }
 
 function LinkPreviewMessage({ msg, textStyle, isMine }: { msg: any; textStyle?: any; isMine: boolean }) {
@@ -191,6 +214,7 @@ function LinkPreviewMessage({ msg, textStyle, isMine }: { msg: any; textStyle?: 
   const path = safeUrl.includes('/') ? `/${safeUrl.split('/').slice(1).join('/')}` : '/';
   const cardTextColor = isMine ? '#F6FFF9' : Colors.textPrimary;
   const subColor = isMine ? 'rgba(246,255,249,0.78)' : Colors.textSecondary;
+  const leadText = stripRichTextTags((msg.text || '').replace(url, '').trim() || domain);
 
   const onOpen = async () => {
     try {
@@ -200,7 +224,7 @@ function LinkPreviewMessage({ msg, textStyle, isMine }: { msg: any; textStyle?: 
 
   return (
     <TouchableOpacity onPress={onOpen} activeOpacity={0.82} testID={`link-preview-${msg._id}`}>
-      <Text style={[styles.bubbleText, textStyle, styles.linkLeadText]}>{(msg.text || '').replace(url, '').trim() || domain}</Text>
+      <Text style={[styles.bubbleText, textStyle, styles.linkLeadText]}>{leadText}</Text>
       <View style={[styles.linkCard, isMine ? styles.linkCardMine : null]}>
         <Text style={[styles.linkCardTitle, { color: cardTextColor }]} numberOfLines={1}>{domain}</Text>
         <Text style={[styles.linkCardDomain, { color: subColor }]} numberOfLines={1}>{domain}</Text>
@@ -241,7 +265,7 @@ function ImageMessage({ msg, timeStr, textStyle }: { msg: any; timeStr: string; 
             <Text style={styles.bubbleTimeOverlay}>{timeStr}</Text>
           </View>
         </View>
-        {msg.text ? <Text style={[styles.bubbleText, textStyle, styles.imageCaption]}>{msg.text}</Text> : null}
+        {msg.text ? <RichMessageText text={msg.text} textStyle={[textStyle, styles.imageCaption]} /> : null}
       </TouchableOpacity>
       <ImageViewer visible={open} onClose={() => setOpen(false)} uri={src} />
     </>
@@ -600,6 +624,7 @@ const styles = StyleSheet.create({
   viewerBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   viewerImage: { width: '100%', height: '100%' },
   viewerClose: { position: 'absolute', top: 48, right: 16, padding: 8, backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 20 },
+  richTextBold: { fontWeight: FontWeight.bold },
   deletedBubble: { opacity: 0.55 },
   deletedContent: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   deletedText: { fontStyle: 'italic', color: Colors.textMuted },

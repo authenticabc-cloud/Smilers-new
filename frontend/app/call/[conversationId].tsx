@@ -127,7 +127,7 @@ export default function CallScreen() {
     api.contacts.getContacts,
     {},
     [],
-    isAuthenticated && showAddToCall,
+    isAuthenticated,
   );
 
   const initiateCall = useMutation(api.calls.initiateCall);

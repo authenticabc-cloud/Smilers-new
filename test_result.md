@@ -271,6 +271,20 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Refined the chat UI toward the web look: removed forced uppercase title styling, switched date/time formatting to the web-style day-first / 24-hour format, reduced default message text sizing, tightened MediaBubble radius/tail/padding, softened bubble chrome, and spot-verified the chat route still renders in preview after the update."
+##   - task: "Chat composer keyboard-safe rich text tools"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/chat/[conversationId].tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "user"
+##         comment: "User then asked for three final chat-composer fixes before testing: the composer should move above the keyboard like the web app, a bold `B` tool should appear, and a color picker should allow black / red / blue / green / gold text like the screenshot."
+##       - working: true
+##         agent: "main"
+##         comment: "Updated the chat route with Android-safe keyboard avoidance, added a formatting toolbar above the composer with bold and palette controls, added five draft color choices, and introduced lightweight rich-text tag parsing so sent messages can render bold and colored text bubbles. Self-verified that the chat route still renders in preview; full signed-in composer/keyboard parity still needs on-device validation because the unauthenticated preview cannot reach the live conversation composer state."
 ##   - task: "Chat voice-note controls + disappearing messages + send money redesign"
 ##     implemented: true
 ##     working: true

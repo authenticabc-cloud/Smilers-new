@@ -29,6 +29,13 @@ import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
 import {
+  applyDraftFormatting,
+  DRAFT_TEXT_COLORS,
+  DraftTextColorKey,
+  resolveDraftColor,
+  stripRichTextTags,
+} from '../../src/lib/chatRichText';
+import {
   CHAT_APPEARANCE_KEY,
   DEFAULT_CHAT_APPEARANCE,
   QUICK_TEMPLATES_KEY,
@@ -99,6 +106,10 @@ export default function ChatScreen() {
   const [isRecordingPaused, setIsRecordingPaused] = useState(false);
   const [recDuration, setRecDuration] = useState(0);
   const [disappearingMode, setDisappearingMode] = useState<(typeof DISAPPEARING_OPTIONS)[number]['key']>('off');
+  const [composerFocused, setComposerFocused] = useState(false);
+  const [draftBold, setDraftBold] = useState(false);
+  const [draftColor, setDraftColor] = useState<DraftTextColorKey | null>(null);
+  const [showColorPicker, setShowColorPicker] = useState(false);
   const recRef = useRef<Audio.Recording | null>(null);
   const recTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const recCancelledRef = useRef(false);
@@ -217,6 +228,14 @@ export default function ChatScreen() {
   }, [conversationId, visibleMessages.length, markRead]);
 
   useEffect(() => {
+    if (!composerFocused) return;
+    const timer = setTimeout(() => {
+      listRef.current?.scrollToEnd({ animated: true });
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [composerFocused]);
+
+  useEffect(() => {
     if (!canQueryConversation) {
       setFallbackReady(true);
       return;
@@ -227,21 +246,32 @@ export default function ChatScreen() {
   }, [canQueryConversation, conversationId]);
 
   const isConversationAvailable = !!conversation;
+  const composerTextColor = resolveDraftColor(draftColor) || Colors.textPrimary;
+  const showComposerFormatting = composerFocused || text.trim().length > 0 || showColorPicker;
+
+  const resetComposerFormatting = useCallback(() => {
+    setDraftBold(false);
+    setDraftColor(null);
+    setShowColorPicker(false);
+  }, []);
 
   const handleSend = async () => {
     const value = text.trim();
     if (!value || !conversationId || !isConversationAvailable || sending) return;
 
+    const formattedValue = applyDraftFormatting(value, { bold: draftBold, color: draftColor });
+
     setSending(true);
     const replyToMessageId = replyTo?._id;
     setText('');
     setReplyTo(null);
+    resetComposerFormatting();
 
     try {
       await sendMessage({
         conversationId,
         type: 'text',
-        text: value,
+        text: formattedValue,
         ...(replyToMessageId ? { replyToMessageId } : {}),
       });
       await refetchMessages();
@@ -265,6 +295,9 @@ export default function ChatScreen() {
 
       setUploading(true);
       const caption = text.trim();
+      const formattedCaption = caption
+        ? applyDraftFormatting(caption, { bold: draftBold, color: draftColor })
+        : '';
       const replyToMessageId = replyTo?._id;
 
       try {
@@ -272,12 +305,13 @@ export default function ChatScreen() {
         await sendMessage({
           conversationId,
           type: 'image',
-          text: caption,
+          text: formattedCaption,
           storageId,
           ...(replyToMessageId ? { replyToMessageId } : {}),
         });
         setText('');
         setReplyTo(null);
+        resetComposerFormatting();
         await refetchMessages();
       } catch (errorValue: any) {
         Alert.alert('Upload failed', errorValue?.message || 'Unable to send image right now.');
@@ -285,7 +319,7 @@ export default function ChatScreen() {
         setUploading(false);
       }
     },
-    [conversationId, convex, isConversationAvailable, refetchMessages, replyTo, sendMessage, text]
+    [conversationId, convex, draftBold, draftColor, isConversationAvailable, refetchMessages, replyTo, resetComposerFormatting, sendMessage, text]
   );
 
   const pickPhoto = useCallback(async () => {
@@ -525,7 +559,7 @@ export default function ChatScreen() {
   );
 
   const onCopy = useCallback(async () => {
-    const copiedText = selectedMsg?.text || '';
+    const copiedText = stripRichTextTags(selectedMsg?.text) || '';
     closeActionSheet();
     if (!copiedText) return;
     try {
@@ -744,8 +778,8 @@ export default function ChatScreen() {
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={0}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 12}
       >
         {(messagesLoading || conversationLoading) && !fallbackReady ? (
           <View style={styles.loadingWrap}>
@@ -802,7 +836,7 @@ export default function ChatScreen() {
             <View style={styles.flexOne}>
               <Text style={styles.replyLabel}>Replying to {replyTo.senderName || 'message'}</Text>
               <Text style={styles.replyText} numberOfLines={1} testID="reply-preview-text">
-                {replyTo.text || `[${replyTo.type}]`}
+                {stripRichTextTags(replyTo.text) || `[${replyTo.type}]`}
               </Text>
             </View>
             <TouchableOpacity onPress={() => setReplyTo(null)} hitSlop={10} testID="reply-preview-close">
@@ -815,6 +849,54 @@ export default function ChatScreen() {
           <View style={styles.uploadBar} testID="uploading-bar">
             <ActivityIndicator size="small" color={Colors.primary} />
             <Text style={styles.uploadText}>Uploading…</Text>
+          </View>
+        ) : null}
+
+        {showComposerFormatting ? (
+          <View style={styles.composerToolsWrap} testID="composer-tools-wrap">
+            {showColorPicker ? (
+              <View style={styles.colorPickerWrap} testID="composer-color-picker">
+                {DRAFT_TEXT_COLORS.map((option) => {
+                  const selected = draftColor === option.key;
+                  const isBlack = option.key === 'black';
+                  return (
+                    <TouchableOpacity
+                      key={option.key}
+                      style={[styles.colorChip, selected ? styles.colorChipSelected : null]}
+                      onPress={() => setDraftColor(option.key)}
+                      testID={`composer-color-${option.key}`}
+                    >
+                      <View
+                        style={[
+                          styles.colorChipInner,
+                          isBlack ? styles.colorChipInnerLight : { backgroundColor: option.hex },
+                          selected ? styles.colorChipInnerSelected : null,
+                        ]}
+                      >
+                        <Text style={[styles.colorChipLabel, isBlack ? styles.colorChipLabelDark : null]}>{option.label}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ) : null}
+
+            <View style={styles.composerToolbarRow}>
+              <TouchableOpacity
+                style={[styles.composerToolBtn, draftBold ? styles.composerToolBtnActive : null]}
+                onPress={() => setDraftBold((current) => !current)}
+                testID="composer-bold-toggle"
+              >
+                <Text style={[styles.composerToolText, draftBold ? styles.composerToolTextActive : null]}>B</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.composerToolBtn, showColorPicker ? styles.composerToolBtnActive : null]}
+                onPress={() => setShowColorPicker((current) => !current)}
+                testID="composer-palette-toggle"
+              >
+                <Ionicons name="color-palette-outline" size={22} color={showColorPicker ? Colors.primary : Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
           </View>
         ) : null}
 
@@ -883,9 +965,15 @@ export default function ChatScreen() {
                 onChangeText={handleTyping}
                 placeholder="Type your message…"
                 placeholderTextColor={Colors.textMuted}
-                style={styles.input}
+                style={[
+                  styles.input,
+                  { color: composerTextColor },
+                  draftBold ? styles.inputBold : null,
+                ]}
                 multiline
                 editable={isConversationAvailable && !sending && !uploading}
+                onFocus={() => setComposerFocused(true)}
+                onBlur={() => setComposerFocused(false)}
                 testID="message-input"
               />
               <TouchableOpacity
@@ -1458,6 +1546,75 @@ const styles = StyleSheet.create({
     borderTopColor: Colors.border,
   },
   uploadText: { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium },
+  composerToolsWrap: {
+    backgroundColor: '#F7F3EA',
+    borderTopWidth: 1,
+    borderTopColor: '#E5D8C2',
+  },
+  composerToolbarRow: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  composerToolBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  composerToolBtnActive: {
+    backgroundColor: '#FFF7DE',
+  },
+  composerToolText: {
+    fontSize: 22,
+    color: Colors.textPrimary,
+    fontWeight: FontWeight.medium,
+  },
+  composerToolTextActive: {
+    color: Colors.primary,
+    fontWeight: FontWeight.bold,
+  },
+  colorPickerWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 22,
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
+  colorChip: {
+    marginRight: 8,
+  },
+  colorChipSelected: {
+    transform: [{ scale: 1.02 }],
+  },
+  colorChipInner: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+  },
+  colorChipInnerLight: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#D4CCBC',
+  },
+  colorChipInnerSelected: {
+    borderColor: '#E5D8C2',
+  },
+  colorChipLabel: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: FontWeight.bold,
+  },
+  colorChipLabelDark: {
+    color: Colors.textSecondary,
+  },
   inputBar: {
     flexDirection: 'row',
     alignItems: 'flex-end',
@@ -1488,6 +1645,9 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     borderWidth: 1,
     borderColor: '#E7DAC2',
+  },
+  inputBold: {
+    fontWeight: FontWeight.bold,
   },
   sendBtn: {
     width: 46,
