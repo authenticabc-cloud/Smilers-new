@@ -251,7 +251,7 @@
 ##     file: "/app/frontend/app/chat/[conversationId].tsx"
 ##     stuck_count: 0
 ##     priority: "high"
-##     needs_retesting: true
+##     needs_retesting: false
 ##     status_history:
 ##       - working: true
 ##         agent: "user"
@@ -265,6 +265,12 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Applied the final QA note by increasing chat header and composer secondary icon tap targets to at least 44x44 while preserving the screenshot direction."
+##       - working: true
+##         agent: "user"
+##         comment: "User then compared the web and native chat screens and asked for the conversation UI to mirror the web app more closely, especially font sizes and chat boxes/bubbles."
+##       - working: true
+##         agent: "main"
+##         comment: "Refined the chat UI toward the web look: removed forced uppercase title styling, switched date/time formatting to the web-style day-first / 24-hour format, reduced default message text sizing, tightened MediaBubble radius/tail/padding, softened bubble chrome, and spot-verified the chat route still renders in preview after the update."
 ##   - task: "Chat voice-note controls + disappearing messages + send money redesign"
 ##     implemented: true
 ##     working: true

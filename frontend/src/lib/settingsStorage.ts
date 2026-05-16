@@ -33,7 +33,7 @@ export const DEFAULT_CHAT_APPEARANCE = {
   outgoingColor: 'eucalyptus',
   incomingColor: 'mist',
   bubbleStyle: 'rounded',
-  textSize: 'lg',
+  textSize: 'base',
 };
 
 function getWebStorage() {

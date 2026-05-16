@@ -23,7 +23,7 @@ import {
   getTextSize,
 } from '../lib/chatAppearance';
 import { useSafeConvexQuery } from '../hooks/useSafeConvexQuery';
-import { Colors, FontSize, FontWeight, Radius, Shadow } from '../theme';
+import { Colors, FontSize, FontWeight, Radius } from '../theme';
 
 let CURRENT_SOUND: Audio.Sound | null = null;
 let CURRENT_STOP: (() => void) | null = null;
@@ -60,7 +60,7 @@ export default function MediaBubble({
   onToggleReaction,
 }: BubbleProps) {
   const time = msg._creationTime ? new Date(msg._creationTime) : new Date();
-  const timeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
   const tickColor =
     msg.readBy?.length > 1 ? Colors.tickBlue : msg.deliveredTo?.length ? Colors.tickYellow : Colors.tickGray;
   const tickIcon = msg.readBy?.length > 1 || msg.deliveredTo?.length ? 'checkmark-done' : 'checkmark';
@@ -88,7 +88,8 @@ export default function MediaBubble({
     borderBottomRightRadius: isMine ? bubbleTailRadius : bubbleRadius,
     borderBottomLeftRadius: isMine ? bubbleRadius : bubbleTailRadius,
   };
-  const bubbleTextStyle = { fontSize: getTextSize(appearance?.textSize) };
+  const messageTextSize = getTextSize(appearance?.textSize);
+  const bubbleTextStyle = { fontSize: messageTextSize, lineHeight: messageTextSize + 6 };
   const isOutgoing = isMine;
   const messageTextColor = isOutgoing ? '#F6FFF9' : Colors.textPrimary;
   const metaTextColor = isOutgoing ? 'rgba(246,255,249,0.82)' : Colors.textMuted;
@@ -507,27 +508,42 @@ function formatBytes(bytes?: number): string | undefined {
 const IMG_W = Math.min(260, Dimensions.get('window').width * 0.65);
 
 const styles = StyleSheet.create({
-  bubbleRow: { marginVertical: 6, flexDirection: 'row', position: 'relative' },
+  bubbleRow: { marginVertical: 5, flexDirection: 'row', position: 'relative' },
   bubbleRowMine: { justifyContent: 'flex-end' },
   bubbleRowOther: { justifyContent: 'flex-start' },
-  bubble: { maxWidth: '78%', paddingHorizontal: 12, paddingVertical: 8, borderRadius: Radius.lg, ...Shadow.sm },
+  bubble: {
+    maxWidth: '80%',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: Radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(61,42,0,0.08)',
+  },
   bubbleMine: { backgroundColor: Colors.bubbleOut, borderBottomRightRadius: 4 },
   bubbleOther: { backgroundColor: Colors.bubbleIn, borderBottomLeftRadius: 4 },
-  bubbleImage: { padding: 4 },
-  bubbleText: { fontSize: FontSize.base, color: Colors.textPrimary },
-  encryptedRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 6 },
-  encryptedText: { fontSize: 11, fontWeight: FontWeight.semibold },
-  bubbleMeta: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', marginTop: 4 },
-  bubbleTime: { fontSize: 10, color: Colors.textMuted },
-  bubbleTimeOverlay: { color: Colors.white, fontSize: 10, fontWeight: FontWeight.medium },
-  quoteBlock: { flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.06)', borderRadius: 8, padding: 6, marginBottom: 6, gap: 6 },
+  bubbleImage: { padding: 5 },
+  bubbleText: { fontSize: FontSize.sm, lineHeight: 20, color: Colors.textPrimary },
+  encryptedRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4 },
+  encryptedText: { fontSize: 10, fontWeight: FontWeight.semibold },
+  bubbleMeta: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', marginTop: 6 },
+  bubbleTime: { fontSize: 11, color: Colors.textMuted },
+  bubbleTimeOverlay: { color: Colors.white, fontSize: 11, fontWeight: FontWeight.medium },
+  quoteBlock: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(61,42,0,0.08)',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    marginBottom: 8,
+    gap: 7,
+  },
   quoteAccent: { width: 3, borderRadius: 2, backgroundColor: Colors.primary },
-  quoteName: { fontSize: 11, fontWeight: FontWeight.bold, color: Colors.primary },
-  quoteText: { fontSize: 12, color: Colors.textSecondary },
+  quoteName: { fontSize: 12, fontWeight: FontWeight.bold, color: Colors.primary },
+  quoteText: { fontSize: 13, lineHeight: 18, color: Colors.textSecondary },
   imageWrap: { position: 'relative' },
   image: { width: IMG_W, height: IMG_W, borderRadius: Radius.md, backgroundColor: Colors.borderLight },
   imagePlaceholder: { width: IMG_W, height: IMG_W, borderRadius: Radius.md, backgroundColor: Colors.borderLight, alignItems: 'center', justifyContent: 'center' },
-  imageCaption: { marginTop: 6 },
+  imageCaption: { marginTop: 8 },
   imageTimeOverlay: { position: 'absolute', right: 8, bottom: 8, backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 },
   reactionsRow: { position: 'absolute', bottom: -10, flexDirection: 'row', gap: 4 },
   reactionsRowMine: { right: 8 },
@@ -537,33 +553,33 @@ const styles = StyleSheet.create({
   reactionChipEmoji: { fontSize: 12 },
   reactionChipCount: { fontSize: 10, color: Colors.textSecondary, fontWeight: FontWeight.semibold },
   placeholderBody: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 2 },
-  linkLeadText: { marginBottom: 8 },
+  linkLeadText: { marginBottom: 10 },
   linkCard: {
-    borderRadius: 18,
+    borderRadius: 14,
     backgroundColor: 'rgba(0,0,0,0.08)',
-    padding: 12,
+    padding: 10,
   },
   linkCardMine: {
     backgroundColor: 'rgba(255,255,255,0.12)',
   },
-  linkCardTitle: { fontSize: FontSize.base, fontWeight: FontWeight.bold },
-  linkCardDomain: { marginTop: 2, fontSize: FontSize.sm },
-  linkCardPath: { marginTop: 2, fontSize: FontSize.xs },
+  linkCardTitle: { fontSize: 14, fontWeight: FontWeight.bold },
+  linkCardDomain: { marginTop: 2, fontSize: 12 },
+  linkCardPath: { marginTop: 2, fontSize: 11 },
   linkCardActionRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
-  linkCardActionText: { fontSize: FontSize.xs, fontWeight: FontWeight.medium },
+  linkCardActionText: { fontSize: 11, fontWeight: FontWeight.medium },
   placeholderIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
-  placeholderTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  placeholderTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   placeholderSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
   voiceBody: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4, minWidth: 180 },
   voicePlayBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
   voicePlayBtnLoading: { width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
-  voiceBar: { flex: 1, height: 4, borderRadius: 2, backgroundColor: 'rgba(0,0,0,0.12)', overflow: 'hidden' },
+  voiceBar: { flex: 1, height: 5, borderRadius: 3, backgroundColor: 'rgba(0,0,0,0.12)', overflow: 'hidden' },
   voiceProgress: { height: '100%', backgroundColor: Colors.primary },
   voiceDuration: { fontSize: 11, color: Colors.textSecondary, fontVariant: ['tabular-nums'], minWidth: 32 },
   pollBody: { paddingVertical: 2, minWidth: 220, gap: 6 },
   pollHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   pollLabel: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.primary, letterSpacing: 1 },
-  pollQuestion: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary, marginBottom: 4 },
+  pollQuestion: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.textPrimary, marginBottom: 4 },
   pollOption: { borderRadius: 10, overflow: 'hidden', backgroundColor: 'rgba(0,0,0,0.04)', marginVertical: 2, position: 'relative' },
   pollFill: { position: 'absolute', left: 0, top: 0, bottom: 0, opacity: 0.45 },
   pollOptionRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 8 },
@@ -576,7 +592,7 @@ const styles = StyleSheet.create({
   fileBody: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 6, minWidth: 200 },
   fileIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#8B5CF6', alignItems: 'center', justifyContent: 'center' },
   fileIconMine: { backgroundColor: '#E3F2D7' },
-  fileName: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  fileName: { fontSize: 14, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   fileNameMine: { color: '#F6FFF9' },
   fileMeta: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
   fileMetaMine: { color: 'rgba(246,255,249,0.78)' },

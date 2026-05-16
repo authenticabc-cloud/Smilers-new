@@ -194,19 +194,19 @@ export function getIncomingBubbleColor(key?: string) {
 }
 
 export function getBubbleRadius(key?: string) {
-  if (key === 'classic') return Radius.md;
-  if (key === 'compact') return 14;
-  return 24;
+  if (key === 'classic') return 14;
+  if (key === 'compact') return 12;
+  return 18;
 }
 
 export function getBubbleTailRadius(key?: string) {
-  if (key === 'compact') return 6;
-  if (key === 'classic') return 8;
-  return 5;
+  if (key === 'compact') return 4;
+  if (key === 'classic') return 6;
+  return 6;
 }
 
 export function getTextSize(key?: string) {
-  if (key === 'sm') return FontSize.sm;
-  if (key === 'lg') return FontSize.xl;
-  return FontSize.base;
+  if (key === 'sm') return 13;
+  if (key === 'lg') return 17;
+  return 15;
 }

@@ -51,7 +51,7 @@ const DISAPPEARING_OPTIONS = [
 
 function formatChatDayChip(ts?: number) {
   if (!ts) return '';
-  return new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+  return new Date(ts).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 function isSameCalendarDay(a?: number, b?: number) {
@@ -713,7 +713,7 @@ export default function ChatScreen() {
             <Text style={styles.headerAvatarText}>{avatarInitial}</Text>
           </View>
           <View style={styles.headerTextWrap}>
-            <Text style={styles.chatHeaderTitle} numberOfLines={1} testID="chat-header-title">{title.toUpperCase()}</Text>
+            <Text style={styles.chatHeaderTitle} numberOfLines={1} testID="chat-header-title">{title}</Text>
             <Text style={styles.chatHeaderSubtitle} numberOfLines={1} testID="chat-header-subtitle">{subtitle}</Text>
           </View>
         </View>
@@ -1293,13 +1293,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   chatHeaderTitle: {
-    fontSize: 18,
-    fontWeight: FontWeight.bold,
+    fontSize: 17,
+    fontWeight: FontWeight.semibold,
     color: Colors.white,
   },
   chatHeaderSubtitle: {
     marginTop: 2,
-    fontSize: 12,
+    fontSize: 11,
     color: 'rgba(255,255,255,0.84)',
   },
   encryptionBanner: {
@@ -1312,27 +1312,27 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   encryptionBannerText: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#2A7C48',
     fontWeight: FontWeight.medium,
   },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   listContent: {
-    paddingHorizontal: Spacing.base,
-    paddingTop: Spacing.md,
-    paddingBottom: Spacing.lg,
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 20,
   },
   dayChipWrap: {
     alignItems: 'center',
-    marginVertical: 10,
+    marginVertical: 8,
   },
   dayChipText: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#766C5E',
     backgroundColor: 'rgba(247, 241, 224, 0.95)',
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 5,
+    borderRadius: 14,
     overflow: 'hidden',
   },
   bubbleRow: {
@@ -1483,7 +1483,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 24,
-    fontSize: FontSize.base,
+    fontSize: 15,
+    lineHeight: 20,
     color: Colors.textPrimary,
     borderWidth: 1,
     borderColor: '#E7DAC2',
