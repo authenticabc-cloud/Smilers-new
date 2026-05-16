@@ -35,6 +35,11 @@ function fmtDur(sec: number): string {
   return `${minutes}:${remainder.toString().padStart(2, '0')}`;
 }
 
+function extractFirstUrl(text?: string) {
+  const match = text?.match(/https?:\/\/[^\s]+/i);
+  return match?.[0];
+}
+
 interface BubbleProps {
   msg: any;
   isMine: boolean;
@@ -84,6 +89,9 @@ export default function MediaBubble({
     borderBottomLeftRadius: isMine ? bubbleRadius : bubbleTailRadius,
   };
   const bubbleTextStyle = { fontSize: getTextSize(appearance?.textSize) };
+  const isOutgoing = isMine;
+  const messageTextColor = isOutgoing ? '#F6FFF9' : Colors.textPrimary;
+  const metaTextColor = isOutgoing ? 'rgba(246,255,249,0.82)' : Colors.textMuted;
 
   if (msg.deletedAt) {
     return (
@@ -107,6 +115,11 @@ export default function MediaBubble({
         style={[styles.bubble, isMine ? styles.bubbleMine : styles.bubbleOther, bubbleDynamicStyle, msg.type === 'image' ? styles.bubbleImage : null]}
         testID={`message-bubble-${msg._id}`}
       >
+        <View style={styles.encryptedRow}>
+          <Ionicons name="shield-checkmark-outline" size={12} color={isOutgoing ? '#F6FFF9' : Colors.primary} />
+          <Text style={[styles.encryptedText, { color: isOutgoing ? '#F6FFF9' : Colors.primary }]}>Encrypted</Text>
+        </View>
+
         {parentMsg ? (
           <View style={styles.quoteBlock}>
             <View style={styles.quoteAccent} />
@@ -121,11 +134,11 @@ export default function MediaBubble({
           </View>
         ) : null}
 
-        <BubbleBody msg={msg} timeStr={timeStr} textStyle={bubbleTextStyle} />
+        <BubbleBody msg={msg} timeStr={timeStr} textStyle={[bubbleTextStyle, { color: messageTextColor }]} isMine={isMine} />
 
         <View style={styles.bubbleMeta}>
           {msg.starred ? <Feather name="star" size={11} color={Colors.tickYellow} style={styles.starIcon} /> : null}
-          {msg.type === 'image' ? null : <Text style={styles.bubbleTime}>{timeStr}</Text>}
+          {msg.type === 'image' ? null : <Text style={[styles.bubbleTime, { color: metaTextColor }]}>{timeStr}</Text>}
           {isMine ? <Ionicons name={tickIcon as any} size={14} color={tickColor} style={styles.tickIcon} /> : null}
         </View>
       </TouchableOpacity>
@@ -149,7 +162,7 @@ export default function MediaBubble({
   );
 }
 
-function BubbleBody({ msg, timeStr, textStyle }: { msg: any; timeStr: string; textStyle?: any }) {
+function BubbleBody({ msg, timeStr, textStyle, isMine }: { msg: any; timeStr: string; textStyle?: any; isMine: boolean }) {
   switch (msg.type) {
     case 'image':
       return <ImageMessage msg={msg} timeStr={timeStr} textStyle={textStyle} />;
@@ -160,11 +173,44 @@ function BubbleBody({ msg, timeStr, textStyle }: { msg: any; timeStr: string; te
       return <PollMessage msg={msg} />;
     case 'file':
     case 'document':
-      return <FileMessage msg={msg} />;
+      return <FileMessage msg={msg} isMine={isMine} />;
     case 'text':
     default:
+      if (extractFirstUrl(msg.text || '')) {
+        return <LinkPreviewMessage msg={msg} textStyle={textStyle} isMine={isMine} />;
+      }
       return <Text style={[styles.bubbleText, textStyle]}>{msg.text || ''}</Text>;
   }
+}
+
+function LinkPreviewMessage({ msg, textStyle, isMine }: { msg: any; textStyle?: any; isMine: boolean }) {
+  const url = extractFirstUrl(msg.text || '') || '';
+  const safeUrl = url.replace(/^https?:\/\//, '');
+  const domain = safeUrl.split('/')[0] || 'link';
+  const path = safeUrl.includes('/') ? `/${safeUrl.split('/').slice(1).join('/')}` : '/';
+  const cardTextColor = isMine ? '#F6FFF9' : Colors.textPrimary;
+  const subColor = isMine ? 'rgba(246,255,249,0.78)' : Colors.textSecondary;
+
+  const onOpen = async () => {
+    try {
+      await Linking.openURL(url);
+    } catch {}
+  };
+
+  return (
+    <TouchableOpacity onPress={onOpen} activeOpacity={0.82} testID={`link-preview-${msg._id}`}>
+      <Text style={[styles.bubbleText, textStyle, styles.linkLeadText]}>{(msg.text || '').replace(url, '').trim() || domain}</Text>
+      <View style={[styles.linkCard, isMine ? styles.linkCardMine : null]}>
+        <Text style={[styles.linkCardTitle, { color: cardTextColor }]} numberOfLines={1}>{domain}</Text>
+        <Text style={[styles.linkCardDomain, { color: subColor }]} numberOfLines={1}>{domain}</Text>
+        <Text style={[styles.linkCardPath, { color: subColor }]} numberOfLines={1}>{path}</Text>
+        <View style={styles.linkCardActionRow}>
+          <Feather name="external-link" size={13} color={cardTextColor} />
+          <Text style={[styles.linkCardActionText, { color: cardTextColor }]}>Tap to open</Text>
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
 }
 
 function ImageMessage({ msg, timeStr, textStyle }: { msg: any; timeStr: string; textStyle?: any }) {
@@ -390,7 +436,7 @@ function PollMessage({ msg }: { msg: any }) {
   );
 }
 
-function FileMessage({ msg }: { msg: any }) {
+function FileMessage({ msg, isMine }: { msg: any; isMine: boolean }) {
   const url = useQuery(
     api.files.getUrl,
     msg.fileUrl ? 'skip' : msg.storageId ? { storageId: msg.storageId } : 'skip'
@@ -412,16 +458,16 @@ function FileMessage({ msg }: { msg: any }) {
       activeOpacity={0.7}
       testID={`file-open-${msg._id}`}
     >
-      <View style={[styles.fileIcon, !src ? { opacity: 0.5 } : null]}>
-        <Feather name="file-text" size={22} color={Colors.white} />
+      <View style={[styles.fileIcon, isMine ? styles.fileIconMine : null, !src ? { opacity: 0.5 } : null]}>
+        <Feather name="file-text" size={22} color={isMine ? '#2C4129' : Colors.white} />
       </View>
       <View style={styles.flexOne}>
-        <Text style={styles.fileName} numberOfLines={2}>{msg.fileName || 'Document'}</Text>
-        <Text style={styles.fileMeta}>
+        <Text style={[styles.fileName, isMine ? styles.fileNameMine : null]} numberOfLines={2}>{msg.fileName || 'Document'}</Text>
+        <Text style={[styles.fileMeta, isMine ? styles.fileMetaMine : null]}>
           {[formatBytes(msg.fileSize), msg.mimeType?.split('/')?.pop()?.toUpperCase()].filter(Boolean).join(' · ') || 'File'}
         </Text>
       </View>
-      <Feather name={src ? 'download' : 'loader'} size={20} color={Colors.primary} />
+      <Feather name={src ? 'download' : 'loader'} size={20} color={isMine ? '#F6FFF9' : Colors.primary} />
     </TouchableOpacity>
   );
 }
@@ -469,6 +515,8 @@ const styles = StyleSheet.create({
   bubbleOther: { backgroundColor: Colors.bubbleIn, borderBottomLeftRadius: 4 },
   bubbleImage: { padding: 4 },
   bubbleText: { fontSize: FontSize.base, color: Colors.textPrimary },
+  encryptedRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 6 },
+  encryptedText: { fontSize: 11, fontWeight: FontWeight.semibold },
   bubbleMeta: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', marginTop: 4 },
   bubbleTime: { fontSize: 10, color: Colors.textMuted },
   bubbleTimeOverlay: { color: Colors.white, fontSize: 10, fontWeight: FontWeight.medium },
@@ -489,6 +537,20 @@ const styles = StyleSheet.create({
   reactionChipEmoji: { fontSize: 12 },
   reactionChipCount: { fontSize: 10, color: Colors.textSecondary, fontWeight: FontWeight.semibold },
   placeholderBody: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 2 },
+  linkLeadText: { marginBottom: 8 },
+  linkCard: {
+    borderRadius: 18,
+    backgroundColor: 'rgba(0,0,0,0.08)',
+    padding: 12,
+  },
+  linkCardMine: {
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  linkCardTitle: { fontSize: FontSize.base, fontWeight: FontWeight.bold },
+  linkCardDomain: { marginTop: 2, fontSize: FontSize.sm },
+  linkCardPath: { marginTop: 2, fontSize: FontSize.xs },
+  linkCardActionRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
+  linkCardActionText: { fontSize: FontSize.xs, fontWeight: FontWeight.medium },
   placeholderIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
   placeholderTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   placeholderSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
@@ -513,8 +575,11 @@ const styles = StyleSheet.create({
   pollTotal: { fontSize: 11, color: Colors.textMuted, marginTop: 2 },
   fileBody: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 6, minWidth: 200 },
   fileIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#8B5CF6', alignItems: 'center', justifyContent: 'center' },
+  fileIconMine: { backgroundColor: '#E3F2D7' },
   fileName: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  fileNameMine: { color: '#F6FFF9' },
   fileMeta: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
+  fileMetaMine: { color: 'rgba(246,255,249,0.78)' },
   viewerWrap: { flex: 1, backgroundColor: '#000' },
   viewerBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   viewerImage: { width: '100%', height: '100%' },

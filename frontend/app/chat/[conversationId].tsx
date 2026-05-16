@@ -22,7 +22,6 @@ import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
-import Header from '../../src/components/Header';
 import AttachmentSheet from '../../src/components/AttachmentSheet';
 import MediaBubble from '../../src/components/MediaBubble';
 import PollComposer from '../../src/components/PollComposer';
@@ -42,6 +41,32 @@ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 const EMPTY_MESSAGES_PAGE = { page: [] as any[] };
 const EMPTY_FORWARD_CONVERSATIONS: any[] = [];
+
+function formatChatDayChip(ts?: number) {
+  if (!ts) return '';
+  return new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function isSameCalendarDay(a?: number, b?: number) {
+  if (!a || !b) return false;
+  const da = new Date(a);
+  const db = new Date(b);
+  return da.getFullYear() === db.getFullYear() && da.getMonth() === db.getMonth() && da.getDate() === db.getDate();
+}
+
+function formatPresenceSubtitle(conversation: any) {
+  if (!conversation) return 'tap for info';
+  if (conversation.type === 'group') {
+    return `${conversation?.participants?.length || conversation?.memberCount || 0} members`;
+  }
+  if (conversation.otherUser?.lastSeen) {
+    return `last seen ${new Date(conversation.otherUser.lastSeen).toLocaleDateString()}`;
+  }
+  if (conversation.lastSeen) {
+    return `last seen ${new Date(conversation.lastSeen).toLocaleDateString()}`;
+  }
+  return 'last seen recently';
+}
 
 export default function ChatScreen() {
   const router = useRouter();
@@ -538,6 +563,8 @@ export default function ChatScreen() {
 
   const title = conversation?.name || conversation?.otherUserName || 'Chat';
   const isMineSelected = selectedMsg && me && selectedMsg.senderId === me._id;
+  const subtitle = formatPresenceSubtitle(conversation);
+  const avatarInitial = title.charAt(0).toUpperCase();
 
   const handleMenuAction = useCallback(
     (key: string) => {
@@ -614,40 +641,43 @@ export default function ChatScreen() {
       edges={['top', 'bottom']}
       testID="chat-screen"
     >
-      <Header
-        title={title}
-        showBack
-        onBack={() => router.back()}
-        variant="dark"
-        subtitle={conversation?.type === 'group' ? `${conversation?.participants?.length || 0} members` : 'tap for info'}
-        right={
-          <>
-            <TouchableOpacity
-              testID="call-btn"
-              onPress={() => router.push(`/call/${conversationId}?type=voice` as any)}
-              hitSlop={10}
-            >
-              <Ionicons name="call-outline" size={22} color={Colors.white} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              testID="video-btn"
-              onPress={() => router.push(`/call/${conversationId}?type=video` as any)}
-              hitSlop={10}
-              style={{ marginLeft: 16 }}
-            >
-              <Ionicons name="videocam-outline" size={22} color={Colors.white} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              testID="chat-menu-btn"
-              onPress={() => setShowOptionsMenu(true)}
-              hitSlop={10}
-              style={{ marginLeft: 16 }}
-            >
-              <Feather name="more-vertical" size={22} color={Colors.white} />
-            </TouchableOpacity>
-          </>
-        }
-      />
+      <View style={styles.chatHeader} testID="chat-header">
+        <View style={styles.chatHeaderLeft}>
+          <TouchableOpacity testID="chat-back-btn" onPress={() => router.back()} style={styles.headerIconButton}>
+            <Ionicons name="arrow-back" size={24} color={Colors.white} />
+          </TouchableOpacity>
+          <View style={styles.headerAvatar} testID="chat-header-avatar">
+            <Text style={styles.headerAvatarText}>{avatarInitial}</Text>
+          </View>
+          <View style={styles.headerTextWrap}>
+            <Text style={styles.chatHeaderTitle} numberOfLines={1} testID="chat-header-title">{title.toUpperCase()}</Text>
+            <Text style={styles.chatHeaderSubtitle} numberOfLines={1} testID="chat-header-subtitle">{subtitle}</Text>
+          </View>
+        </View>
+
+        <View style={styles.chatHeaderActions}>
+          <TouchableOpacity testID="call-btn" onPress={() => router.push(`/call/${conversationId}?type=voice` as any)} style={styles.headerIconButton}>
+            <Ionicons name="call-outline" size={21} color={Colors.white} />
+          </TouchableOpacity>
+          <TouchableOpacity testID="video-btn" onPress={() => router.push(`/call/${conversationId}?type=video` as any)} style={styles.headerIconButton}>
+            <Ionicons name="videocam-outline" size={22} color={Colors.white} />
+          </TouchableOpacity>
+          <TouchableOpacity testID="chat-scheduled-btn" onPress={() => router.push('/scheduled' as any)} style={styles.headerIconButton}>
+            <Ionicons name="time-outline" size={21} color={Colors.white} />
+          </TouchableOpacity>
+          <TouchableOpacity testID="chat-encryption-btn" onPress={() => router.push('/encryption' as any)} style={styles.headerIconButton}>
+            <Ionicons name="shield-checkmark-outline" size={21} color={Colors.white} />
+          </TouchableOpacity>
+          <TouchableOpacity testID="chat-menu-btn" onPress={() => setShowOptionsMenu(true)} style={styles.headerIconButton}>
+            <Feather name="more-vertical" size={20} color={Colors.white} />
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <View style={styles.encryptionBanner} testID="chat-encryption-banner">
+        <Ionicons name="shield-checkmark-outline" size={16} color="#2A7C48" />
+        <Text style={styles.encryptionBannerText}>End-to-end encrypted</Text>
+      </View>
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
@@ -672,17 +702,28 @@ export default function ChatScreen() {
             data={messages}
             keyExtractor={(item: any) => item._id}
             contentContainerStyle={styles.listContent}
-            renderItem={({ item }) => (
-              <MediaBubble
-                msg={item}
-                isMine={item.senderId === me?._id}
-                myUserId={me?._id}
-                parentMsg={item.replyToMessageId ? msgById.get(item.replyToMessageId) : undefined}
-                appearance={chatAppearance}
-                onLongPress={() => onLongPressMessage(item)}
-                onToggleReaction={(emoji) => onToggleMyReaction(item._id, emoji)}
-              />
-            )}
+            renderItem={({ item, index }) => {
+              const previous = index > 0 ? messages[index - 1] : null;
+              const showDayChip = !previous || !isSameCalendarDay(item?._creationTime, previous?._creationTime);
+              return (
+                <>
+                  {showDayChip ? (
+                    <View style={styles.dayChipWrap} testID={`chat-day-chip-${item._id}`}>
+                      <Text style={styles.dayChipText}>{formatChatDayChip(item?._creationTime)}</Text>
+                    </View>
+                  ) : null}
+                  <MediaBubble
+                    msg={item}
+                    isMine={item.senderId === me?._id}
+                    myUserId={me?._id}
+                    parentMsg={item.replyToMessageId ? msgById.get(item.replyToMessageId) : undefined}
+                    appearance={chatAppearance}
+                    onLongPress={() => onLongPressMessage(item)}
+                    onToggleReaction={(emoji) => onToggleMyReaction(item._id, emoji)}
+                  />
+                </>
+              );
+            }}
             onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
             ListEmptyComponent={
               <View style={styles.empty}>
@@ -735,6 +776,14 @@ export default function ChatScreen() {
             <>
               <TouchableOpacity
                 style={styles.iconBtn}
+                onPress={() => setText((current) => `${current}${current ? ' ' : ''}😊`)}
+                disabled={!isConversationAvailable || uploading}
+                testID="emoji-btn"
+              >
+                <Ionicons name="happy-outline" size={22} color={Colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.iconBtn}
                 onPress={() => setShowAttachSheet(true)}
                 disabled={!isConversationAvailable || uploading}
                 testID="attach-btn"
@@ -761,11 +810,11 @@ export default function ChatScreen() {
               />
               <TouchableOpacity
                 style={styles.iconBtn}
-                onPress={takePhoto}
+                onPress={() => router.push('/scheduled' as any)}
                 disabled={!isConversationAvailable || uploading}
-                testID="camera-btn"
+                testID="schedule-btn"
               >
-                <Feather name="camera" size={22} color={Colors.textSecondary} />
+                <Feather name="clock" size={20} color={Colors.textSecondary} />
               </TouchableOpacity>
               {text.trim().length === 0 ? (
                 <TouchableOpacity style={styles.sendBtn} onPress={startRecording} disabled={!isConversationAvailable || uploading} testID="mic-btn">
@@ -1093,10 +1142,90 @@ function MessageBubble({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
+  chatHeader: {
+    minHeight: 74,
+    backgroundColor: '#3D2A00',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  chatHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  chatHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 8,
+  },
+  headerIconButton: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#E4B53B',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 8,
+  },
+  headerAvatarText: {
+    fontSize: 18,
+    fontWeight: FontWeight.bold,
+    color: '#3D2A00',
+  },
+  headerTextWrap: {
+    flex: 1,
+  },
+  chatHeaderTitle: {
+    fontSize: 18,
+    fontWeight: FontWeight.bold,
+    color: Colors.white,
+  },
+  chatHeaderSubtitle: {
+    marginTop: 2,
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.84)',
+  },
+  encryptionBanner: {
+    minHeight: 34,
+    backgroundColor: '#DFF1DB',
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  encryptionBannerText: {
+    fontSize: 13,
+    color: '#2A7C48',
+    fontWeight: FontWeight.medium,
+  },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   listContent: {
-    padding: Spacing.base,
-    paddingBottom: Spacing.md,
+    paddingHorizontal: Spacing.base,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.lg,
+  },
+  dayChipWrap: {
+    alignItems: 'center',
+    marginVertical: 10,
+  },
+  dayChipText: {
+    fontSize: 12,
+    color: '#766C5E',
+    backgroundColor: 'rgba(247, 241, 224, 0.95)',
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 16,
+    overflow: 'hidden',
   },
   bubbleRow: {
     marginVertical: 6,
@@ -1224,30 +1353,37 @@ const styles = StyleSheet.create({
   inputBar: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    padding: Spacing.sm,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
     gap: 6,
-    backgroundColor: Colors.surface,
+    backgroundColor: '#F4EFE3',
     borderTopWidth: 1,
-    borderTopColor: Colors.border,
+    borderTopColor: '#E5D8C2',
   },
   iconBtn: {
-    padding: 8,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   input: {
     flex: 1,
     minHeight: 40,
     maxHeight: 120,
-    backgroundColor: Colors.background,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: Radius.lg,
+    backgroundColor: '#F8F2E7',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 24,
     fontSize: FontSize.base,
     color: Colors.textPrimary,
+    borderWidth: 1,
+    borderColor: '#E7DAC2',
   },
   sendBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
     backgroundColor: Colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
