@@ -33,6 +33,7 @@ import {
   DEFAULT_CHAT_APPEARANCE,
   QUICK_TEMPLATES_KEY,
   readStoredJson,
+  writeStoredJson,
 } from '../../src/lib/settingsStorage';
 import { uploadFile } from '../../src/lib/uploadFile';
 import { useAuth } from '../../src/providers/AuthProvider';

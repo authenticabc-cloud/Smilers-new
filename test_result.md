@@ -265,6 +265,26 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Applied the final QA note by increasing chat header and composer secondary icon tap targets to at least 44x44 while preserving the screenshot direction."
+##   - task: "Chat voice-note controls + disappearing messages + send money redesign"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/send-money.tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: true
+##         agent: "user"
+##         comment: "User requested three new screenshot-driven updates: voice recording should have pause and cancel buttons, disappearing messages should use a small top button near the call icons that opens options, and Send Money should match the provided screenshots."
+##       - working: true
+##         agent: "main"
+##         comment: "Updated `/chat/[conversationId]` with pause/resume/cancel/send voice-note controls plus waveform styling, added a top disappearing-messages button and option sheet, and rebuilt `/send-money` to a screenshot-style Send / Requests / History experience with transfer and contact-picker modals."
+##       - working: false
+##         agent: "testing"
+##         comment: "Testing found one real bug: selecting a disappearing-messages option crashed because `writeStoredJson` was missing in the chat route imports."
+##       - working: true
+##         agent: "main"
+##         comment: "Imported `writeStoredJson`, restarted Expo, and self-verified the disappearing-messages sheet now accepts the 24h option without crashing. `/send-money` also reopened cleanly in preview after the fix."
 ##   - task: "Safe Convex fallback for optional Phase 1 endpoints"
 ##     implemented: true
 ##     working: true
@@ -383,6 +403,7 @@
 ##     - "Trustees page screenshot redesign"
 ##     - "Message language screenshot redesign"
 ##     - "Chat screen screenshot restyle"
+##     - "Chat voice-note controls + disappearing messages + send money redesign"
 ##     - "Web-safe tabs and push notification hooks"
 ##     - "Phase 2A.1 chat actions"
 ##     - "Phase 2A.2a image attachments"
@@ -419,3 +440,5 @@
 ##     message: "Login and Sign Up were explicitly skipped by the user. The Message Language screen was rebuilt to mirror the latest screenshot with Akan (Asante Twi) included; testing confirmed the `Ak` search results and route stability." 
 ##   - agent: "main"
 ##     message: "Chat screenshots were applied to `/chat/[conversationId]` with the existing Chat Appearance system preserved. Please do one authenticated real-conversation check next to validate live message rendering on the new layout." 
+##   - agent: "main"
+##     message: "Latest chat extras and Send Money updates were applied from screenshots. Testing confirmed `/send-money` route stability and surfaced one disappearing-messages import bug, which was fixed and spot-verified locally."
