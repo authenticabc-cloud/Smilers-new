@@ -1,7 +1,11 @@
 import React, { useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
+  Modal,
+  Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -12,28 +16,33 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
-import Avatar from '../src/components/Avatar';
-import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../src/providers/AuthProvider';
-import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
+import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/theme';
 
-type TransferTab = 'send' | 'request' | 'pending';
+type MoneyTab = 'send' | 'requests' | 'history';
 
 function formatEur(value: number | undefined | null) {
   return `€${Number(value || 0).toFixed(2)}`;
 }
 
+function getContactId(contact: any) {
+  return String(contact?._id || contact?.userId || contact?.id || '');
+}
+
 export default function SendMoneyScreen() {
   const router = useRouter();
   const { isAuthenticated } = useAuth();
-  const [tab, setTab] = useState<TransferTab>('send');
+  const [tab, setTab] = useState<MoneyTab>('send');
   const [search, setSearch] = useState('');
   const [selectedUserId, setSelectedUserId] = useState('');
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  const [showPickerModal, setShowPickerModal] = useState(false);
+  const [transferMode, setTransferMode] = useState<'send' | 'request'>('send');
 
   const { data: contacts } = useSafeConvexQuery<any[]>(api.contacts.getContacts, {}, [], isAuthenticated);
   const { data: transferHistory, refetch: refetchHistory } = useSafeConvexQuery<any[]>(api.transfers.getTransferHistory, {}, [], isAuthenticated);
@@ -44,21 +53,34 @@ export default function SendMoneyScreen() {
 
   const contactList = useMemo(() => {
     const list = Array.isArray(contacts) ? contacts : [];
-    if (!search.trim()) return list;
-    const normalized = search.trim().toLowerCase();
-    return list.filter((item: any) => {
-      const name = String(item?.name || '').toLowerCase();
-      const email = String(item?.email || '').toLowerCase();
-      return name.includes(normalized) || email.includes(normalized);
-    });
+    const term = search.trim().toLowerCase();
+    if (!term) return list;
+    return list.filter((item: any) => `${item?.name || ''} ${item?.phone || ''} ${item?.email || ''}`.toLowerCase().includes(term));
   }, [contacts, search]);
 
-  const selectedContact = contactList.find((item: any) => item._id === selectedUserId || item.userId === selectedUserId) || null;
+  const quickContacts = useMemo(() => contactList.slice(0, 12), [contactList]);
+  const selectedContact = useMemo(
+    () => contactList.find((item: any) => getContactId(item) === selectedUserId) || null,
+    [contactList, selectedUserId]
+  );
+
+  const openTransfer = (mode: 'send' | 'request', contactId?: string) => {
+    setTransferMode(mode);
+    if (contactId) setSelectedUserId(contactId);
+    setShowTransferModal(true);
+  };
+
+  const closeTransfer = () => {
+    if (busy) return;
+    setShowTransferModal(false);
+    setAmount('');
+    setNote('');
+  };
 
   const runTransferAction = async () => {
     const numericAmount = Number(amount);
     if (!selectedUserId) {
-      Alert.alert('Choose a contact', 'Select who you want to send or request money from.');
+      Alert.alert('Choose a contact', 'Select who you want to pay or request money from.');
       return;
     }
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
@@ -68,7 +90,7 @@ export default function SendMoneyScreen() {
 
     setBusy(true);
     try {
-      if (tab === 'send') {
+      if (transferMode === 'send') {
         let sent = false;
         for (const args of [{ toUserId: selectedUserId, amount: numericAmount, note }, { userId: selectedUserId, amount: numericAmount, note }, { recipientId: selectedUserId, amount: numericAmount, note }]) {
           try {
@@ -90,12 +112,10 @@ export default function SendMoneyScreen() {
         if (!requested) throw new Error('Request endpoint rejected the request shape.');
       }
 
-      setAmount('');
-      setNote('');
-      setSelectedUserId('');
       await refetchHistory();
       await refetchPending();
-      Alert.alert(tab === 'send' ? 'Money sent' : 'Request sent', tab === 'send' ? 'Your transfer has been submitted.' : 'Your money request has been submitted.');
+      closeTransfer();
+      Alert.alert(transferMode === 'send' ? 'Money sent' : 'Request sent', transferMode === 'send' ? 'Your transfer has been submitted.' : 'Your request has been submitted.');
     } catch (errorValue: any) {
       Alert.alert('Transfer failed', errorValue?.message || 'Unknown error');
     } finally {
@@ -123,23 +143,73 @@ export default function SendMoneyScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="send-money-screen">
-      <Header title="Send Money" showBack onBack={() => router.back()} variant="dark" />
-
-      <View style={styles.segmentWrap} testID="send-money-segments">
-        <SegmentButton label="Send" active={tab === 'send'} onPress={() => setTab('send')} testID="send-money-tab-send" />
-        <SegmentButton label="Request" active={tab === 'request'} onPress={() => setTab('request')} testID="send-money-tab-request" />
-        <SegmentButton label="Pending" active={tab === 'pending'} onPress={() => setTab('pending')} testID="send-money-tab-pending" />
+      <View style={styles.header} testID="send-money-header">
+        <TouchableOpacity onPress={() => router.back()} style={styles.headerButton} testID="send-money-back-button">
+          <Ionicons name="arrow-back" size={28} color={Colors.white} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle} testID="send-money-header-title">Send Money</Text>
       </View>
 
-      {tab === 'pending' ? (
+      <View style={styles.tabsRow} testID="send-money-tabs-row">
+        <MoneyTabButton label="Send" active={tab === 'send'} onPress={() => setTab('send')} testID="send-money-tab-send" />
+        <MoneyTabButton label="Requests" active={tab === 'requests'} onPress={() => setTab('requests')} testID="send-money-tab-requests" />
+        <MoneyTabButton label="History" active={tab === 'history'} onPress={() => setTab('history')} testID="send-money-tab-history" />
+      </View>
+
+      {tab === 'send' ? (
+        <ScrollView contentContainerStyle={styles.content} testID="send-money-send-scroll">
+          <View style={styles.actionCardsRow} testID="send-money-action-cards">
+            <TouchableOpacity style={[styles.actionCard, styles.actionCardPrimary]} onPress={() => openTransfer('send')} testID="send-money-open-send-card">
+              <View style={styles.actionIconWrapPrimary}>
+                <Feather name="send" size={24} color={Colors.primary} />
+              </View>
+              <Text style={styles.actionCardTitle}>Send</Text>
+              <Text style={styles.actionCardSub}>Send money instantly</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.actionCard} onPress={() => openTransfer('request')} testID="send-money-open-request-card">
+              <View style={styles.actionIconWrapSecondary}>
+                <Feather name="download" size={24} color={Colors.primary} />
+              </View>
+              <Text style={styles.actionCardTitle}>Request</Text>
+              <Text style={styles.actionCardSub}>Ask for a payment</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionTitle}>QUICK SEND</Text>
+            <Text style={styles.sectionCount}>{quickContacts.length} contacts</Text>
+          </View>
+
+          {quickContacts.map((contact: any, index: number) => {
+            const contactId = getContactId(contact);
+            return (
+              <View style={styles.quickRow} key={contactId || `contact-${index}`} testID={`send-money-contact-row-${index}`}>
+                <View style={styles.quickAvatarWrap}>
+                  <Ionicons name="wallet-outline" size={22} color={Colors.primary} />
+                </View>
+                <View style={styles.flexOne}>
+                  <Text style={styles.quickName}>{contact?.name || 'Smilers User'}</Text>
+                  <Text style={styles.quickSub}>{contact?.phone || contact?.email || 'Available'}</Text>
+                </View>
+                <TouchableOpacity style={styles.quickSendButton} onPress={() => openTransfer('send', contactId)} testID={`send-money-quick-send-${index}`}>
+                  <Feather name="send" size={18} color={Colors.primary} />
+                </TouchableOpacity>
+              </View>
+            );
+          })}
+        </ScrollView>
+      ) : tab === 'requests' ? (
         <FlatList
           data={Array.isArray(pendingRequests) ? pendingRequests : []}
           keyExtractor={(item: any, index: number) => item._id || `pending-${index}`}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={styles.content}
           renderItem={({ item, index }) => (
             <View style={styles.pendingCard} testID={`pending-transfer-${index}`}>
               <View style={styles.pendingTop}>
-                <Avatar name={item?.fromName || item?.toName || 'Smilers User'} size={44} />
+                <View style={styles.quickAvatarWrap}>
+                  <Feather name="download" size={22} color={Colors.primary} />
+                </View>
                 <View style={styles.flexOne}>
                   <Text style={styles.pendingTitle}>{item?.fromName || item?.toName || 'Money request'}</Text>
                   <Text style={styles.pendingSub}>{formatEur(item?.amount)} · {item?.note || 'Awaiting response'}</Text>
@@ -165,127 +235,214 @@ export default function SendMoneyScreen() {
         />
       ) : (
         <FlatList
-          data={contactList}
-          keyExtractor={(item: any, index: number) => item._id || item.userId || `contact-${index}`}
-          contentContainerStyle={styles.listContent}
-          ListHeaderComponent={
-            <View style={styles.formCard} testID="transfer-form-card">
-              <Text style={styles.formTitle}>{tab === 'send' ? 'Send money to a contact' : 'Request money from a contact'}</Text>
-              <Text style={styles.formSub}>
-                {selectedContact ? `Selected: ${selectedContact.name || 'Smilers User'}` : 'Choose a contact below, then enter an amount.'}
-              </Text>
-              <View style={styles.searchWrap}>
-                <Feather name="search" size={18} color={Colors.textMuted} />
-                <TextInput value={search} onChangeText={setSearch} placeholder="Search contacts" placeholderTextColor={Colors.textMuted} style={styles.searchInput} testID="transfer-contact-search" />
+          data={Array.isArray(transferHistory) ? transferHistory : []}
+          keyExtractor={(item: any, index: number) => item._id || `history-${index}`}
+          contentContainerStyle={styles.content}
+          renderItem={({ item, index }) => (
+            <View style={styles.historyRow} testID={`transfer-history-${index}`}>
+              <View style={styles.historyIconWrap}>
+                <Feather name={(item.amount || 0) >= 0 ? 'arrow-down-left' : 'arrow-up-right'} size={16} color={(item.amount || 0) >= 0 ? '#16a34a' : Colors.primary} />
               </View>
-              <TextInput value={amount} onChangeText={setAmount} placeholder="Amount in EUR" placeholderTextColor={Colors.textMuted} keyboardType="decimal-pad" style={styles.input} testID="transfer-amount-input" />
-              <TextInput value={note} onChangeText={setNote} placeholder="Optional note" placeholderTextColor={Colors.textMuted} style={styles.input} testID="transfer-note-input" />
-              <TouchableOpacity style={[styles.primaryBtn, (!selectedUserId || !amount || busy) && styles.disabledBtn]} onPress={runTransferAction} disabled={!selectedUserId || !amount || busy} testID="transfer-submit-button">
-                <Text style={styles.primaryBtnText}>{busy ? (tab === 'send' ? 'Sending…' : 'Requesting…') : tab === 'send' ? 'Send Money' : 'Request Money'}</Text>
-              </TouchableOpacity>
+              <View style={styles.flexOne}>
+                <Text style={styles.historyRowTitle}>{item.title || item.type || 'Transfer'}</Text>
+                <Text style={styles.historyRowSub}>{item.status || 'Processed'}{item.note ? ` · ${item.note}` : ''}</Text>
+              </View>
+              <Text style={[styles.historyAmount, { color: (item.amount || 0) >= 0 ? '#16a34a' : Colors.textPrimary }]}>
+                {(item.amount || 0) >= 0 ? '+' : ''}{formatEur(item.amount)}
+              </Text>
             </View>
-          }
-          renderItem={({ item, index }) => {
-            const uid = item._id || item.userId;
-            const selected = uid === selectedUserId;
-            return (
-              <TouchableOpacity style={[styles.contactRow, selected ? styles.contactRowActive : null]} onPress={() => setSelectedUserId(uid)} testID={`transfer-contact-${index}`}>
-                <Avatar name={item?.name || 'Smilers User'} size={46} />
-                <View style={styles.flexOne}>
-                  <Text style={styles.contactName}>{item?.name || 'Smilers User'}</Text>
-                  <Text style={styles.contactSub} numberOfLines={1}>{item?.email || item?.phone || 'Available'}</Text>
-                </View>
-                {selected ? <Feather name="check-circle" size={20} color={Colors.primary} /> : null}
-              </TouchableOpacity>
-            );
-          }}
-          ListFooterComponent={
-            <View style={styles.historyWrap} testID="transfer-history-section">
-              <Text style={styles.historyTitle}>Recent Activity</Text>
-              {(Array.isArray(transferHistory) ? transferHistory : []).length ? (
-                (transferHistory as any[]).slice(0, 12).map((entry: any, index: number) => (
-                  <View style={styles.historyRow} key={entry._id || `history-${index}`} testID={`transfer-history-${index}`}>
-                    <View style={styles.historyIconWrap}>
-                      <Feather name={(entry.amount || 0) >= 0 ? 'arrow-down-left' : 'arrow-up-right'} size={16} color={(entry.amount || 0) >= 0 ? '#16a34a' : Colors.primary} />
-                    </View>
-                    <View style={styles.flexOne}>
-                      <Text style={styles.historyRowTitle}>{entry.title || entry.type || 'Transfer'}</Text>
-                      <Text style={styles.historyRowSub}>{entry.status || 'Processed'}{entry.note ? ` · ${entry.note}` : ''}</Text>
-                    </View>
-                    <Text style={[styles.historyAmount, { color: (entry.amount || 0) >= 0 ? '#16a34a' : Colors.textPrimary }]}>
-                      {(entry.amount || 0) >= 0 ? '+' : ''}{formatEur(entry.amount)}
-                    </Text>
-                  </View>
-                ))
-              ) : (
-                <View style={styles.empty} testID="transfer-history-empty">
-                  <Ionicons name="swap-horizontal" size={32} color={Colors.textMuted} />
-                  <Text style={styles.emptyTitle}>No transfers yet</Text>
-                  <Text style={styles.emptySub}>Your sent and requested money history will appear here.</Text>
-                </View>
-              )}
-            </View>
-          }
+          )}
           ListEmptyComponent={
-            <View style={styles.empty} testID="transfer-contacts-empty">
-              <Feather name="users" size={32} color={Colors.textMuted} />
-              <Text style={styles.emptyTitle}>No contacts found</Text>
-              <Text style={styles.emptySub}>Add contacts first before sending or requesting money.</Text>
+            <View style={styles.empty} testID="transfer-history-empty">
+              <Ionicons name="swap-horizontal" size={32} color={Colors.textMuted} />
+              <Text style={styles.emptyTitle}>No transfers yet</Text>
+              <Text style={styles.emptySub}>Your sent and requested money history will appear here.</Text>
             </View>
           }
         />
       )}
+
+      <Modal visible={showTransferModal} transparent animationType="slide" onRequestClose={closeTransfer}>
+        <Pressable style={styles.modalBackdrop} onPress={closeTransfer}>
+          <Pressable style={styles.modalSheet} onPress={() => {}} testID="send-money-transfer-modal">
+            <Text style={styles.modalTitle}>{transferMode === 'send' ? 'Send Money' : 'Request Money'}</Text>
+
+            <View style={styles.selectedContactCard} testID="send-money-selected-contact-card">
+              <View style={styles.quickAvatarWrap}>
+                <Ionicons name="wallet-outline" size={22} color={Colors.primary} />
+              </View>
+              <View style={styles.flexOne}>
+                <Text style={styles.quickName}>{selectedContact?.name || 'Choose contact'}</Text>
+                <Text style={styles.quickSub}>{selectedContact?.phone || selectedContact?.email || 'Select a Smilers contact'}</Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowPickerModal(true)} testID="send-money-change-contact-button">
+                <Text style={styles.changeButtonText}>Change</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.inputLabel}>Amount</Text>
+            <TextInput
+              value={amount}
+              onChangeText={setAmount}
+              placeholder="0.00"
+              placeholderTextColor="#9D9385"
+              keyboardType="decimal-pad"
+              style={styles.amountInput}
+              testID="send-money-amount-input"
+            />
+
+            <Text style={styles.inputLabel}>Note</Text>
+            <TextInput
+              value={note}
+              onChangeText={setNote}
+              placeholder="What is it for?"
+              placeholderTextColor="#9D9385"
+              style={styles.noteInput}
+              testID="send-money-note-input"
+            />
+
+            <TouchableOpacity style={[styles.primaryButton, busy ? styles.primaryButtonDisabled : null]} onPress={runTransferAction} disabled={busy} testID="send-money-submit-button">
+              <Text style={styles.primaryButtonText}>{busy ? 'Processing…' : transferMode === 'send' ? 'Send Money' : 'Request Money'}</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal visible={showPickerModal} transparent animationType="slide" onRequestClose={() => setShowPickerModal(false)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setShowPickerModal(false)}>
+          <Pressable style={[styles.modalSheet, styles.pickerSheet]} onPress={() => {}} testID="send-money-picker-modal">
+            <Text style={styles.modalTitle}>Select Contact</Text>
+            <View style={styles.searchWrap}>
+              <Feather name="search" size={18} color={Colors.textMuted} />
+              <TextInput value={search} onChangeText={setSearch} placeholder="Search contacts" placeholderTextColor={Colors.textMuted} style={styles.searchInput} testID="send-money-contact-search" />
+            </View>
+            <ScrollView contentContainerStyle={styles.pickerContent}>
+              {contactList.map((contact: any, index: number) => {
+                const contactId = getContactId(contact);
+                return (
+                  <TouchableOpacity
+                    key={contactId || `picker-${index}`}
+                    style={styles.contactPickerRow}
+                    onPress={() => {
+                      setSelectedUserId(contactId);
+                      setShowPickerModal(false);
+                    }}
+                    testID={`send-money-picker-contact-${index}`}
+                  >
+                    <View style={styles.quickAvatarWrap}>
+                      <Ionicons name="wallet-outline" size={22} color={Colors.primary} />
+                    </View>
+                    <View style={styles.flexOne}>
+                      <Text style={styles.quickName}>{contact?.name || 'Smilers User'}</Text>
+                      <Text style={styles.quickSub}>{contact?.phone || contact?.email || 'Available'}</Text>
+                    </View>
+                    {selectedUserId === contactId ? <Feather name="check-circle" size={20} color={Colors.primary} /> : null}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
 
-function SegmentButton({ label, active, onPress, testID }: { label: string; active: boolean; onPress: () => void; testID: string }) {
+function MoneyTabButton({ label, active, onPress, testID }: { label: string; active: boolean; onPress: () => void; testID: string }) {
   return (
-    <TouchableOpacity style={[styles.segmentButton, active ? styles.segmentButtonActive : null]} onPress={onPress} activeOpacity={0.85} testID={testID}>
-      <Text style={[styles.segmentText, active ? styles.segmentTextActive : null]}>{label}</Text>
+    <TouchableOpacity style={styles.tabButton} onPress={onPress} activeOpacity={0.85} testID={testID}>
+      <Text style={[styles.tabText, active ? styles.tabTextActive : null]}>{label}</Text>
+      <View style={[styles.tabUnderline, active ? styles.tabUnderlineActive : null]} />
     </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
-  segmentWrap: { flexDirection: 'row', gap: Spacing.sm, paddingHorizontal: Spacing.base, paddingTop: Spacing.base },
-  segmentButton: { flex: 1, minHeight: 44, borderRadius: Radius.pill, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center' },
-  segmentButtonActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  segmentText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.textPrimary },
-  segmentTextActive: { color: Colors.white, fontWeight: FontWeight.bold },
-  listContent: { padding: Spacing.base, paddingBottom: 40, gap: Spacing.base },
-  formCard: { backgroundColor: Colors.surface, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.borderLight, padding: Spacing.base, gap: Spacing.sm },
-  formTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  formSub: { fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
-  searchWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: Colors.background, borderRadius: Radius.pill, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, minHeight: 46 },
-  searchInput: { flex: 1, fontSize: FontSize.base, color: Colors.textPrimary },
-  input: { backgroundColor: Colors.background, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: Spacing.md, paddingVertical: 12, fontSize: FontSize.base, color: Colors.textPrimary },
-  primaryBtn: { minHeight: 48, borderRadius: Radius.pill, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
-  primaryBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.white },
-  disabledBtn: { opacity: 0.6 },
-  contactRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, backgroundColor: Colors.surface, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.borderLight, padding: Spacing.base },
-  contactRowActive: { borderColor: Colors.primary, backgroundColor: Colors.primaryLight },
+  container: { flex: 1, backgroundColor: '#F8F2E8' },
+  header: {
+    minHeight: 96,
+    backgroundColor: '#3D2A00',
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  headerButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white, marginLeft: 12 },
+  tabsRow: { flexDirection: 'row', backgroundColor: '#F8F2E8', borderBottomWidth: 1, borderBottomColor: '#E6D9C2' },
+  tabButton: { flex: 1, alignItems: 'center' },
+  tabText: { fontSize: 16, color: '#7A7266', fontWeight: FontWeight.medium, paddingVertical: 16 },
+  tabTextActive: { color: Colors.primaryDark, fontWeight: FontWeight.bold },
+  tabUnderline: { width: '100%', height: 3, backgroundColor: 'transparent' },
+  tabUnderlineActive: { backgroundColor: Colors.primary },
+  content: { padding: 16, paddingBottom: 40 },
+  actionCardsRow: { flexDirection: 'row', gap: 12, marginBottom: 24 },
+  actionCard: {
+    flex: 1,
+    borderRadius: 22,
+    padding: 18,
+    backgroundColor: '#FFF8ED',
+    borderWidth: 1,
+    borderColor: '#E8DCC2',
+    ...Shadow.sm,
+  },
+  actionCardPrimary: { backgroundColor: '#FFF2CC' },
+  actionIconWrapPrimary: { width: 54, height: 54, borderRadius: 27, backgroundColor: '#FFF8E1', alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
+  actionIconWrapSecondary: { width: 54, height: 54, borderRadius: 27, backgroundColor: '#EAF3FF', alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
+  actionCardTitle: { fontSize: 20, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  actionCardSub: { marginTop: 4, fontSize: 14, color: Colors.textSecondary },
+  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
+  sectionTitle: { fontSize: 18, color: '#7D7569', letterSpacing: 1.4 },
+  sectionCount: { fontSize: 13, color: Colors.textMuted },
+  quickRow: {
+    minHeight: 78,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EEE2D0',
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  quickAvatarWrap: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#FFF2CC', alignItems: 'center', justifyContent: 'center' },
+  quickName: { fontSize: 17, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  quickSub: { marginTop: 2, fontSize: 13, color: Colors.textSecondary },
+  quickSendButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#F4EBDB', alignItems: 'center', justifyContent: 'center' },
   flexOne: { flex: 1 },
-  contactName: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
-  contactSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
-  historyWrap: { marginTop: Spacing.base, gap: Spacing.sm },
-  historyTitle: { fontSize: FontSize.xs, fontWeight: FontWeight.bold, color: Colors.primary, letterSpacing: 1 },
-  historyRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, backgroundColor: Colors.surface, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.borderLight, padding: Spacing.base },
-  historyIconWrap: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
-  historyRowTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
-  historyRowSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
-  historyAmount: { fontSize: FontSize.base, fontWeight: FontWeight.bold },
-  pendingCard: { backgroundColor: Colors.surface, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.borderLight, padding: Spacing.base, gap: Spacing.md },
-  pendingTop: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
-  pendingTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
-  pendingSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
-  pendingActions: { flexDirection: 'row', gap: Spacing.sm },
-  pendingBtn: { flex: 1, minHeight: 44, borderRadius: Radius.pill, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
-  pendingBtnGhost: { backgroundColor: '#fee2e2' },
-  pendingBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.white },
+  pendingCard: { backgroundColor: '#FFFFFF', borderRadius: 22, borderWidth: 1, borderColor: '#E8DCC2', padding: 16, gap: 14, marginBottom: 12 },
+  pendingTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  pendingTitle: { fontSize: 16, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  pendingSub: { fontSize: 14, color: Colors.textSecondary, marginTop: 2 },
+  pendingActions: { flexDirection: 'row', gap: 10 },
+  pendingBtn: { flex: 1, minHeight: 46, borderRadius: Radius.pill, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
+  pendingBtnGhost: { backgroundColor: '#FDE2E2' },
+  pendingBtnText: { fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white },
   pendingBtnGhostText: { color: Colors.danger },
-  empty: { alignItems: 'center', gap: 8, paddingVertical: Spacing.xl, paddingHorizontal: Spacing.lg },
-  emptyTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary, textAlign: 'center' },
-  emptySub: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center', lineHeight: 20 },
+  historyRow: { minHeight: 74, borderRadius: 20, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E8DCC2', paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
+  historyIconWrap: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#FFF2CC', alignItems: 'center', justifyContent: 'center' },
+  historyRowTitle: { fontSize: 16, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  historyRowSub: { marginTop: 2, fontSize: 13, color: Colors.textSecondary },
+  historyAmount: { fontSize: 15, fontWeight: FontWeight.bold },
+  empty: { alignItems: 'center', gap: 8, paddingVertical: 40, paddingHorizontal: 22 },
+  emptyTitle: { fontSize: 16, fontWeight: FontWeight.semibold, color: Colors.textPrimary, textAlign: 'center' },
+  emptySub: { fontSize: 14, color: Colors.textSecondary, textAlign: 'center', lineHeight: 20 },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.42)', justifyContent: 'flex-end' },
+  modalSheet: { backgroundColor: '#F8F2E8', borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 18, paddingBottom: 24 },
+  pickerSheet: { maxHeight: '72%' },
+  modalTitle: { fontSize: 24, fontWeight: FontWeight.bold, color: Colors.textPrimary, textAlign: 'center', marginBottom: 18 },
+  selectedContactCard: { minHeight: 80, borderRadius: 20, backgroundColor: '#FFF8ED', borderWidth: 1, borderColor: '#E8DCC2', paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 18 },
+  changeButtonText: { fontSize: 15, color: Colors.primary, fontWeight: FontWeight.semibold },
+  inputLabel: { fontSize: 14, color: '#81796C', marginBottom: 8 },
+  amountInput: { minHeight: 60, borderRadius: 18, backgroundColor: '#FFFDF8', borderWidth: 1, borderColor: '#E8DCC2', paddingHorizontal: 16, fontSize: 28, color: Colors.textPrimary, marginBottom: 14 },
+  noteInput: { minHeight: 56, borderRadius: 18, backgroundColor: '#FFFDF8', borderWidth: 1, borderColor: '#E8DCC2', paddingHorizontal: 16, fontSize: 16, color: Colors.textPrimary, marginBottom: 18 },
+  primaryButton: { minHeight: 50, borderRadius: Radius.pill, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
+  primaryButtonDisabled: { opacity: 0.7 },
+  primaryButtonText: { fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white },
+  searchWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FFFDF8', borderRadius: Radius.pill, borderWidth: 1, borderColor: '#E8DCC2', paddingHorizontal: 16, minHeight: 48, marginBottom: 12 },
+  searchInput: { flex: 1, fontSize: 16, color: Colors.textPrimary },
+  pickerContent: { paddingBottom: 12 },
+  contactPickerRow: { minHeight: 72, borderRadius: 18, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E8DCC2', paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 10 },
 });

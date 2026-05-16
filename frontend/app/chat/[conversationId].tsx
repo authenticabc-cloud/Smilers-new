@@ -41,6 +41,12 @@ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 const EMPTY_MESSAGES_PAGE = { page: [] as any[] };
 const EMPTY_FORWARD_CONVERSATIONS: any[] = [];
+const DISAPPEARING_OPTIONS = [
+  { key: 'off', label: 'Off', ms: 0 },
+  { key: '24h', label: '24 hours', ms: 24 * 60 * 60 * 1000 },
+  { key: '7d', label: '7 days', ms: 7 * 24 * 60 * 60 * 1000 },
+  { key: '90d', label: '90 days', ms: 90 * 24 * 60 * 60 * 1000 },
+] as const;
 
 function formatChatDayChip(ts?: number) {
   if (!ts) return '';
@@ -83,16 +89,20 @@ export default function ChatScreen() {
   const [showForwardPicker, setShowForwardPicker] = useState(false);
   const [showTemplatePicker, setShowTemplatePicker] = useState(false);
   const [showOptionsMenu, setShowOptionsMenu] = useState(false);
+  const [showDisappearingSheet, setShowDisappearingSheet] = useState(false);
   const [muted, setMuted] = useState(false);
   const [fallbackReady, setFallbackReady] = useState(false);
   const [quickTemplates, setQuickTemplates] = useState<any[]>([]);
   const [chatAppearance, setChatAppearance] = useState(DEFAULT_CHAT_APPEARANCE);
   const [isRecording, setIsRecording] = useState(false);
+  const [isRecordingPaused, setIsRecordingPaused] = useState(false);
   const [recDuration, setRecDuration] = useState(0);
+  const [disappearingMode, setDisappearingMode] = useState<(typeof DISAPPEARING_OPTIONS)[number]['key']>('off');
   const recRef = useRef<Audio.Recording | null>(null);
   const recTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const recCancelledRef = useRef(false);
   const recStartMsRef = useRef(0);
+  const recDurationMsRef = useRef(0);
   const listRef = useRef<FlatList<any>>(null);
   const hasValidConversationId =
     typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
@@ -156,6 +166,23 @@ export default function ChatScreen() {
     });
   }, [showTemplatePicker]);
 
+  useEffect(() => {
+    if (!conversationId) return;
+    let active = true;
+    readStoredJson(`disappearing_mode_${conversationId}`, 'off').then((storedValue) => {
+      if (!active) return;
+      const nextValue = typeof storedValue === 'string' ? storedValue : 'off';
+      setDisappearingMode(
+        DISAPPEARING_OPTIONS.some((item) => item.key === nextValue)
+          ? (nextValue as (typeof DISAPPEARING_OPTIONS)[number]['key'])
+          : 'off'
+      );
+    });
+    return () => {
+      active = false;
+    };
+  }, [conversationId]);
+
   const sendMessage = useMutation(api.messages.send);
   const setTyping = useMutation(api.typing.setTyping);
   const markRead = useMutation(api.messages.markRead);
@@ -169,17 +196,24 @@ export default function ChatScreen() {
     return Array.isArray(arr) ? [...arr].reverse() : [];
   }, [messagesPage]);
 
+  const visibleMessages = useMemo(() => {
+    const ttlMs = DISAPPEARING_OPTIONS.find((item) => item.key === disappearingMode)?.ms || 0;
+    if (!ttlMs) return messages;
+    const cutoff = Date.now() - ttlMs;
+    return messages.filter((message) => Number(message?._creationTime || 0) >= cutoff);
+  }, [disappearingMode, messages]);
+
   const msgById = useMemo(() => {
     const map = new Map<string, any>();
-    messages.forEach((message) => map.set(message._id, message));
+    visibleMessages.forEach((message) => map.set(message._id, message));
     return map;
-  }, [messages]);
+  }, [visibleMessages]);
 
   useEffect(() => {
-    if (conversationId && messages.length > 0) {
+    if (conversationId && visibleMessages.length > 0) {
       markRead({ conversationId }).catch(() => {});
     }
-  }, [conversationId, messages.length, markRead]);
+  }, [conversationId, visibleMessages.length, markRead]);
 
   useEffect(() => {
     if (!canQueryConversation) {
@@ -360,15 +394,21 @@ export default function ChatScreen() {
       } catch {}
       recCancelledRef.current = false;
       setRecDuration(0);
+      recDurationMsRef.current = 0;
       recStartMsRef.current = Date.now();
       setIsRecording(true);
+      setIsRecordingPaused(false);
       const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      recording.setProgressUpdateInterval(200);
+      recording.setOnRecordingStatusUpdate((status) => {
+        if (!status.isLoaded) return;
+        recDurationMsRef.current = status.durationMillis || 0;
+        setRecDuration(Math.floor((status.durationMillis || 0) / 1000));
+      });
       recRef.current = recording;
-      recTimer.current = setInterval(() => {
-        setRecDuration(Math.floor((Date.now() - recStartMsRef.current) / 1000));
-      }, 250);
     } catch (errorValue: any) {
       setIsRecording(false);
+      setIsRecordingPaused(false);
       Alert.alert('Recording failed', errorValue?.message || 'Could not start recording');
     }
   }, [isRecording]);
@@ -381,11 +421,13 @@ export default function ChatScreen() {
       }
       const recording = recRef.current;
       recRef.current = null;
-      const totalMs = Date.now() - recStartMsRef.current;
+      const totalMs = recDurationMsRef.current;
       const totalSec = Math.max(1, Math.round(totalMs / 1000));
       const replyToMessageId = replyTo?._id;
       setIsRecording(false);
+      setIsRecordingPaused(false);
       setRecDuration(0);
+      recDurationMsRef.current = 0;
       if (!recording) return;
       try {
         await recording.stopAndUnloadAsync();
@@ -423,6 +465,26 @@ export default function ChatScreen() {
     recCancelledRef.current = true;
     finishRecording('cancel');
   }, [finishRecording]);
+
+  const pauseRecording = useCallback(async () => {
+    if (!recRef.current || isRecordingPaused) return;
+    try {
+      await recRef.current.pauseAsync();
+      setIsRecordingPaused(true);
+    } catch (errorValue: any) {
+      Alert.alert('Pause failed', errorValue?.message || 'Could not pause recording');
+    }
+  }, [isRecordingPaused]);
+
+  const resumeRecording = useCallback(async () => {
+    if (!recRef.current || !isRecordingPaused) return;
+    try {
+      await recRef.current.startAsync();
+      setIsRecordingPaused(false);
+    } catch (errorValue: any) {
+      Alert.alert('Resume failed', errorValue?.message || 'Could not resume recording');
+    }
+  }, [isRecordingPaused]);
 
   useEffect(() => {
     return () => {
@@ -662,7 +724,7 @@ export default function ChatScreen() {
           <TouchableOpacity testID="video-btn" onPress={() => router.push(`/call/${conversationId}?type=video` as any)} style={styles.headerIconButton}>
             <Ionicons name="videocam-outline" size={22} color={Colors.white} />
           </TouchableOpacity>
-          <TouchableOpacity testID="chat-scheduled-btn" onPress={() => router.push('/scheduled' as any)} style={styles.headerIconButton}>
+          <TouchableOpacity testID="chat-disappearing-btn" onPress={() => setShowDisappearingSheet(true)} style={styles.headerIconButton}>
             <Ionicons name="time-outline" size={21} color={Colors.white} />
           </TouchableOpacity>
           <TouchableOpacity testID="chat-encryption-btn" onPress={() => router.push('/encryption' as any)} style={styles.headerIconButton}>
@@ -699,11 +761,11 @@ export default function ChatScreen() {
         ) : (
           <FlatList
             ref={listRef}
-            data={messages}
+            data={visibleMessages}
             keyExtractor={(item: any) => item._id}
             contentContainerStyle={styles.listContent}
             renderItem={({ item, index }) => {
-              const previous = index > 0 ? messages[index - 1] : null;
+              const previous = index > 0 ? visibleMessages[index - 1] : null;
               const showDayChip = !previous || !isSameCalendarDay(item?._creationTime, previous?._creationTime);
               return (
                 <>
@@ -759,15 +821,32 @@ export default function ChatScreen() {
           {isRecording ? (
             <View style={styles.recordingRow}>
               <TouchableOpacity style={styles.recCancelBtn} onPress={cancelRecording} testID="rec-cancel">
-                <Feather name="trash-2" size={20} color={Colors.danger} />
+                <Feather name="x" size={22} color={Colors.danger} />
               </TouchableOpacity>
               <View style={styles.recIndicator}>
-                <View style={styles.recDot} />
+                <View style={styles.recWaveWrap}>
+                  {[10, 16, 22, 14, 20, 26, 18, 12, 24, 15, 21, 13].map((height, index) => (
+                    <View
+                      key={`wave-${index}`}
+                      style={[
+                        styles.recWaveBar,
+                        { height: height + ((recDuration + index) % 3) * 3 },
+                        isRecordingPaused ? styles.recWaveBarPaused : null,
+                      ]}
+                    />
+                  ))}
+                </View>
                 <Text style={styles.recTimer}>
                   {`${Math.floor(recDuration / 60)}:${(recDuration % 60).toString().padStart(2, '0')}`}
                 </Text>
-                <Text style={styles.recHint} numberOfLines={1}>Recording…</Text>
               </View>
+              <TouchableOpacity
+                style={styles.recPauseBtn}
+                onPress={isRecordingPaused ? resumeRecording : pauseRecording}
+                testID="rec-pause-toggle"
+              >
+                <Feather name={isRecordingPaused ? 'play' : 'pause'} size={20} color={Colors.textPrimary} />
+              </TouchableOpacity>
               <TouchableOpacity style={styles.recSendBtn} onPress={() => finishRecording('send')} testID="rec-send">
                 <Feather name="send" size={20} color={Colors.white} />
               </TouchableOpacity>
@@ -874,6 +953,34 @@ export default function ChatScreen() {
                 <ActionRow icon="trash-2" lib="feather" label="Delete" onPress={onDelete} danger />
               ) : null}
             </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal visible={showDisappearingSheet} transparent animationType="fade" onRequestClose={() => setShowDisappearingSheet(false)}>
+        <Pressable style={styles.sheetBackdrop} onPress={() => setShowDisappearingSheet(false)}>
+          <Pressable style={[styles.sheet, styles.disappearingSheet]} onPress={() => {}} testID="disappearing-sheet">
+            <Text style={styles.disappearingTitle}>Disappearing messages</Text>
+            {DISAPPEARING_OPTIONS.map((option) => {
+              const selected = disappearingMode === option.key;
+              return (
+                <TouchableOpacity
+                  key={option.key}
+                  style={styles.disappearingRow}
+                  onPress={async () => {
+                    setDisappearingMode(option.key);
+                    if (conversationId) {
+                      await writeStoredJson(`disappearing_mode_${conversationId}`, option.key);
+                    }
+                    setShowDisappearingSheet(false);
+                  }}
+                  testID={`disappearing-option-${option.key}`}
+                >
+                  <Text style={[styles.disappearingLabel, selected ? styles.disappearingLabelSelected : null]}>{option.label}</Text>
+                  {selected ? <Ionicons name="checkmark-circle" size={20} color={Colors.primary} /> : null}
+                </TouchableOpacity>
+              );
+            })}
           </Pressable>
         </Pressable>
       </Modal>
@@ -1388,13 +1495,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  recordingRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  recCancelBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FEE2E2' },
-  recIndicator: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: Colors.background, borderRadius: Radius.lg },
-  recDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.danger },
+  recordingRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  recCancelBtn: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FDE2E2' },
+  recIndicator: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: '#F8F2E7',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: '#E7DAC2',
+  },
+  recWaveWrap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 3 },
+  recWaveBar: { width: 4, borderRadius: 3, backgroundColor: Colors.primary },
+  recWaveBarPaused: { opacity: 0.35 },
   recTimer: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textPrimary, fontVariant: ['tabular-nums'] as any },
-  recHint: { flex: 1, fontSize: FontSize.sm, color: Colors.textSecondary },
-  recSendBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.primary },
+  recPauseBtn: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EEE4D1' },
+  recSendBtn: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.primary },
   sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
   sheet: {
     backgroundColor: Colors.surface,
@@ -1451,6 +1571,18 @@ const styles = StyleSheet.create({
   forwardSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
   forwardEmpty: { textAlign: 'center', color: Colors.textMuted, paddingVertical: Spacing.lg },
   forwardSheet: { maxHeight: '70%' },
+  disappearingSheet: { paddingHorizontal: 16, paddingBottom: 24 },
+  disappearingTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary, paddingHorizontal: 4, paddingBottom: 12 },
+  disappearingRow: {
+    minHeight: 50,
+    borderRadius: Radius.lg,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  disappearingLabel: { fontSize: FontSize.base, color: Colors.textPrimary },
+  disappearingLabelSelected: { color: Colors.primaryDark, fontWeight: FontWeight.semibold },
   templatePickerHeader: {
     flexDirection: 'row',
     alignItems: 'center',
