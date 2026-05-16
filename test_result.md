@@ -228,6 +228,23 @@
 ##       - working: true
 ##         agent: "testing"
 ##         comment: "Preview validation passed: `/trustees` loaded cleanly, Add Trustee sheet opened correctly, search field accepted input, and the Smilers-only empty-state behavior rendered correctly when no eligible contacts were available."
+##   - task: "Message language screenshot redesign"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/languages.tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "user"
+##         comment: "User explicitly skipped Login and Sign Up, then provided the Message Language web screenshot and requested a matching language picker with Akan (Asante Twi) and all recognized languages."
+##       - working: true
+##         agent: "main"
+##         comment: "Reworked `/languages` from a multi-select translation-skip screen into a screenshot-style single-select Message Language picker, added Akan (Asante Twi) plus more recognized languages including Kazakh, and updated the profile language label to show the full mapped language name instead of a raw code."
+##       - working: true
+##         agent: "testing"
+##         comment: "Testing confirmed `/languages` loads without runtime errors and searching `Ak` returns Akan (Asante Twi), Kazakh, and Slovak. Profile row mapping was confirmed in code review, though the auth-gated profile UI was not exercised end-to-end in this run."
 ##   - task: "Safe Convex fallback for optional Phase 1 endpoints"
 ##     implemented: true
 ##     working: true
@@ -344,6 +361,7 @@
 ##     - "Groups tab native crash fix"
 ##     - "Groups plus / conferences plus / call route crash fixes"
 ##     - "Trustees page screenshot redesign"
+##     - "Message language screenshot redesign"
 ##     - "Web-safe tabs and push notification hooks"
 ##     - "Phase 2A.1 chat actions"
 ##     - "Phase 2A.2a image attachments"
@@ -376,3 +394,5 @@
 ##     message: "Please validate the latest navigation/crash fixes: Groups `+` should open `/groups-create`, Conferences `+` should open `/conference-create`, and `/call/[conversationId]` should no longer red-screen on route open for voice/video. Also confirm the Conferences tab itself stays stable." 
 ##   - agent: "main"
 ##     message: "Please validate `/trustees` against the new reference: main Trustees page should match the screenshot direction, Add Trustee should open a bottom sheet, the sheet should include a search box for name/phone, and only Smilers contacts from `api.contacts.getContacts` should appear as addable candidates." 
+##   - agent: "main"
+##     message: "Login and Sign Up were explicitly skipped by the user. The Message Language screen was rebuilt to mirror the latest screenshot with Akan (Asante Twi) included; testing confirmed the `Ak` search results and route stability." 
