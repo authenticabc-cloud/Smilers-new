@@ -191,6 +191,20 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "After testing-agent review, also hardened list identity/navigation by adding safe item ID extraction plus conference-aware row routing so missing `_id` values do not create undefined keys or unsafe presses."
+##   - task: "Groups plus / conferences plus / call route crash fixes"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/(tabs)/groups.tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "Groups `+` opened Chat Once instead of new group; Conferences tab felt shaky/loading; Conferences `+` background-crashed; pressing voice/video call buttons crashed the app."
+##       - working: true
+##         agent: "main"
+##         comment: "Reworked Groups and Conferences flows: Groups `+` now opens `/groups-create`, Conferences `+` now opens `/conference-create`, Conferences tab now uses existing group conversations as conference-ready entries instead of depending on an optional missing backend endpoint, and call routing now uses safe Convex queries plus removed the unguarded `useKeepAwake()` crash source from `/call/[conversationId]`. Self-verified `/groups-create`, `/conference-create`, `/call/testconversation1?type=voice`, and `/call/testconversation1?type=video` in preview without red-screen crashes."
 ##   - task: "Safe Convex fallback for optional Phase 1 endpoints"
 ##     implemented: true
 ##     working: true
@@ -305,6 +319,7 @@
 ##     - "Android EAS WebRTC bundle fix"
 ##     - "Android EAS tarball corruption cleanup"
 ##     - "Groups tab native crash fix"
+##     - "Groups plus / conferences plus / call route crash fixes"
 ##     - "Web-safe tabs and push notification hooks"
 ##     - "Phase 2A.1 chat actions"
 ##     - "Phase 2A.2a image attachments"
@@ -333,3 +348,5 @@
 ##     message: "The next deployment log showed a different blocker during tarball upload: a corrupt filename in `/app/frontend`. I deleted the malformed file by inode and strengthened `.easignore` so similar junk names do not get archived again."
 ##   - agent: "main"
 ##     message: "User reported a native crash when opening the Groups tab. I hardened `/app/frontend/app/(tabs)/groups.tsx` by replacing raw Convex queries with `useSafeConvexQuery` and only enabling the optional conferences query when its sub-tab is active. Please validate route stability as far as auth allows."
+##   - agent: "main"
+##     message: "Please validate the latest navigation/crash fixes: Groups `+` should open `/groups-create`, Conferences `+` should open `/conference-create`, and `/call/[conversationId]` should no longer red-screen on route open for voice/video. Also confirm the Conferences tab itself stays stable." 

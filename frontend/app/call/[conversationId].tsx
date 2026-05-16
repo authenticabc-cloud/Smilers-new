@@ -11,11 +11,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useMutation, useQuery } from 'convex/react';
+import { useMutation } from 'convex/react';
 import { Camera } from 'expo-camera';
 import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useKeepAwake } from 'expo-keep-awake';
 import Animated, {
   Easing,
   cancelAnimation,
@@ -27,6 +26,7 @@ import Animated, {
 import { StatusBar } from 'expo-status-bar';
 import { api } from '../../src/convexApi';
 import Avatar from '../../src/components/Avatar';
+import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { CallSession } from '../../src/lib/webrtc/CallSession';
 import { Colors, FontSize, FontWeight, Shadow, Spacing } from '../../src/theme';
 import RTCView from '../../src/lib/webrtc/RTCViewWrapper';
@@ -43,21 +43,33 @@ function alertScreenShareIOSError() {
 
 export default function CallScreen() {
   const router = useRouter();
-  const { conversationId, type: typeParam } = useLocalSearchParams<{
-    conversationId: string;
-    type?: string;
+  const { conversationId: rawConversationId, type: rawTypeParam } = useLocalSearchParams<{
+    conversationId?: string | string[];
+    type?: string | string[];
   }>();
+  const conversationId = Array.isArray(rawConversationId) ? rawConversationId[0] : rawConversationId;
+  const typeParam = Array.isArray(rawTypeParam) ? rawTypeParam[0] : rawTypeParam;
   const requestedType: CallType = typeParam === 'video' || typeParam === 'screen' ? 'video' : 'voice';
   const startInScreenShare = typeParam === 'screen';
+  const hasValidConversationId = typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
 
-  const me = useQuery(api.users.getCurrentUser, conversationId ? {} : 'skip');
-  const conversation = useQuery(
-    api.conversations.getConversation,
-    conversationId ? { conversationId } : 'skip'
+  const { data: me, loading: meLoading } = useSafeConvexQuery<any | null>(
+    api.users.getCurrentUser,
+    {},
+    null,
+    hasValidConversationId,
   );
-  const activeCall = useQuery(
-    api.calls.getActiveCall,
-    conversationId ? { conversationId } : 'skip'
+  const { data: conversation, loading: conversationLoading } = useSafeConvexQuery<any | null>(
+    api.conversations.getConversation,
+    conversationId ? { conversationId } : {},
+    null,
+    hasValidConversationId,
+  );
+  const { data: activeCall, loading: activeCallLoading } = useSafeConvexQuery<any | null>(
+    (api as any).calls.getActiveCall,
+    conversationId ? { conversationId } : {},
+    null,
+    hasValidConversationId,
   );
 
   const initiateCall = useMutation(api.calls.initiateCall);
@@ -85,9 +97,11 @@ export default function CallScreen() {
   const callStartedAtRef = useRef<number | null>(null);
 
   // Subscribe to incoming signaling messages for this call
-  const signals: any[] | undefined = useQuery(
-    api.signaling.poll,
-    callId ? { callId } : 'skip'
+  const { data: signals } = useSafeConvexQuery<any[]>(
+    (api as any).signaling.poll,
+    callId ? { callId } : {},
+    [],
+    !!callId,
   );
 
   // Derived role: outgoing if I'm the caller, incoming otherwise
@@ -109,10 +123,13 @@ export default function CallScreen() {
     const shouldAutoInitiate =
       !activeCall &&
       !callId &&
+      hasValidConversationId &&
       conversationId &&
       conversation &&
       me &&
-      activeCall !== undefined; // wait until Convex query resolved (null vs undefined)
+      !activeCallLoading &&
+      !conversationLoading &&
+      !meLoading;
     if (!shouldAutoInitiate) return;
     let cancelled = false;
     (async () => {
@@ -128,7 +145,7 @@ export default function CallScreen() {
     return () => {
       cancelled = true;
     };
-  }, [activeCall, callId, conversation, conversationId, initiateCall, me, requestedType]);
+  }, [activeCall, activeCallLoading, callId, conversation, conversationId, conversationLoading, hasValidConversationId, initiateCall, me, meLoading, requestedType]);
 
   // ====== Update status text based on state ======
   useEffect(() => {
@@ -185,14 +202,18 @@ export default function CallScreen() {
 
       // Request permissions
       try {
-        const cam = await Camera.requestCameraPermissionsAsync();
+        let camGranted = true;
+        if (callType === 'video') {
+          const cam = await Camera.requestCameraPermissionsAsync();
+          camGranted = cam.status === 'granted';
+        }
         const micPermission = await Camera.requestMicrophonePermissionsAsync().catch(() => null);
         const micGranted = micPermission?.status === 'granted';
-        if (callType === 'video' && cam.status !== 'granted') {
+        if (callType === 'video' && !camGranted) {
           setPermissionDenied(true);
           return;
         }
-        if (!micGranted && cam.status !== 'granted') {
+        if (!micGranted) {
           setPermissionDenied(true);
           return;
         }
@@ -431,9 +452,6 @@ export default function CallScreen() {
   }, [callDurationSec]);
 
   const showVideo = callType === 'video' && isActive && RTCView != null;
-
-  // Keep the screen on during any call interaction (ringing or active)
-  useKeepAwake();
 
   // Play ringtone + vibrate when this is an incoming call that's still ringing
   useRingtonePlayer(!!isIncoming);

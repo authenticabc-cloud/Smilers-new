@@ -47,29 +47,31 @@ export default function GroupsScreen() {
     [],
     true,
   );
-  const { data: conferences, loading: conferencesLoading } = useSafeConvexQuery<any[]>(
-    (api as any).conferences.listMine,
-    {},
-    [],
-    tab === 'conferences',
-  );
 
-  const activeLoading = tab === 'groups' ? groupsLoading : conferencesLoading;
+  const conferenceCandidates = useMemo(() => {
+    const raw = Array.isArray(groups) ? groups : [];
+    return raw.filter((item: any) => (item?.type || 'group') === 'group');
+  }, [groups]);
+
+  const activeLoading = groupsLoading;
 
   const list = useMemo(() => {
     const raw: any[] = tab === 'groups'
       ? (Array.isArray(groups) ? groups : [])
-      : (Array.isArray(conferences) ? conferences : []);
+      : conferenceCandidates;
     const q = search.trim().toLowerCase();
     if (!q) return raw;
     return raw.filter((g: any) =>
       `${g.name || ''} ${g.description || ''} ${g.lastMessageText || ''}`.toLowerCase().includes(q),
     );
-  }, [conferences, groups, search, tab]);
+  }, [conferenceCandidates, groups, search, tab]);
 
   const onAdd = () => {
-    if (tab === 'groups') router.push('/chat-once' as any);
-    else router.push('/call/new-conference' as any);
+    if (tab === 'groups') {
+      router.push('/groups-create' as any);
+      return;
+    }
+    router.push('/conference-create' as any);
   };
 
   const openItem = (item: any) => {
@@ -154,9 +156,13 @@ export default function GroupsScreen() {
         renderItem={({ item }) => {
           const memberCount = item.memberCount || item.members?.length || 0;
           const sub =
-            item.lastMessageText ||
-            item.description ||
-            (memberCount > 0 ? `${memberCount} member${memberCount === 1 ? '' : 's'}` : 'Tap to open');
+            tab === 'conferences'
+              ? memberCount > 0
+                ? `${memberCount} member${memberCount === 1 ? '' : 's'} ready for conference`
+                : 'Tap to start a conference'
+              : item.lastMessageText ||
+                item.description ||
+                (memberCount > 0 ? `${memberCount} member${memberCount === 1 ? '' : 's'}` : 'Tap to open');
           const stamp = formatRelativeDays(item.lastMessageAt || item.updatedAt || item._creationTime);
           const initial = (item.name || 'G').charAt(0).toUpperCase();
           const itemId = getListItemId(item);
@@ -197,7 +203,7 @@ export default function GroupsScreen() {
               <ActivityIndicator size="small" color={Colors.primary} />
               <Text style={styles.loadingText}>Loading {tab === 'groups' ? 'groups' : 'conferences'}…</Text>
             </View>
-          ) : groups !== undefined || conferences !== undefined ? (
+          ) : (
             <View style={styles.empty} testID="groups-empty">
               <Ionicons
                 name={tab === 'groups' ? 'people-outline' : 'videocam-outline'}
@@ -210,10 +216,10 @@ export default function GroupsScreen() {
               <Text style={styles.emptySub}>
                 {tab === 'groups'
                   ? 'Create a group to chat with multiple people'
-                  : 'Start a conference call with several people'}
+                  : 'Create a group first, then start a conference from it'}
               </Text>
             </View>
-          ) : null
+          )
         }
       />
     </SafeAreaView>
