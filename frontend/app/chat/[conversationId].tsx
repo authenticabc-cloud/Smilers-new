@@ -1134,30 +1134,6 @@ export default function ChatScreen() {
             </View>
           ) : (
             <>
-              <TouchableOpacity
-                style={styles.iconBtn}
-                onPress={() => setShowEmojiPicker(true)}
-                disabled={!isConversationAvailable || uploading}
-                testID="emoji-btn"
-              >
-                <Ionicons name="happy-outline" size={22} color={Colors.textSecondary} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.iconBtn}
-                onPress={() => setShowAttachSheet(true)}
-                disabled={!isConversationAvailable || uploading}
-                testID="attach-btn"
-              >
-                <Feather name="paperclip" size={22} color={Colors.textSecondary} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.iconBtn}
-                onPress={() => setShowTemplatePicker(true)}
-                disabled={!isConversationAvailable || uploading}
-                testID="templates-btn"
-              >
-                <MaterialCommunityIcons name="message-text-outline" size={22} color={Colors.textSecondary} />
-              </TouchableOpacity>
               <TextInput
                 value={text}
                 onChangeText={handleTyping}
@@ -1174,26 +1150,62 @@ export default function ChatScreen() {
                 onBlur={() => setComposerFocused(false)}
                 testID="message-input"
               />
-              <TouchableOpacity
-                style={styles.iconBtn}
-                onPress={() => router.push('/scheduled' as any)}
-                disabled={!isConversationAvailable || uploading}
-                testID="schedule-btn"
-              >
-                <Feather name="clock" size={20} color={Colors.textSecondary} />
-              </TouchableOpacity>
-              {text.trim().length === 0 ? (
-                <TouchableOpacity style={styles.sendBtn} onPress={startRecording} disabled={!isConversationAvailable || uploading} testID="mic-btn">
-                  <Feather name="mic" size={20} color={Colors.white} />
-                </TouchableOpacity>
-              ) : (
+              {text.trim().length > 0 ? (
                 <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={!isConversationAvailable || uploading} testID="send-btn">
                   <Feather name="send" size={20} color={Colors.white} />
                 </TouchableOpacity>
-              )}
+              ) : <View style={styles.sendBtnSpacer} testID="send-btn-spacer" />}
             </>
           )}
           </View>
+
+          {!isRecording ? (
+            <View style={styles.webToolbarRow} testID="composer-web-toolbar-row">
+              <TouchableOpacity
+                style={styles.webToolBtn}
+                onPress={() => setShowAttachSheet(true)}
+                disabled={!isConversationAvailable || uploading}
+                testID="composer-toolbar-apps"
+              >
+                <Ionicons name="apps-outline" size={20} color={Colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.webToolBtn, styles.webToolBtnDisabled]} disabled testID="composer-toolbar-gif">
+                <Text style={styles.webToolGifLabel}>GIF</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.webToolBtn}
+                onPress={() => setShowTemplatePicker(true)}
+                disabled={!isConversationAvailable || uploading}
+                testID="composer-toolbar-templates"
+              >
+                <Ionicons name="clipboard-outline" size={20} color={Colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.webToolBtn}
+                onPress={() => setShowComposerFormatting((current) => !current)}
+                disabled={!isConversationAvailable || uploading}
+                testID="composer-toolbar-tools"
+              >
+                <Feather name="sliders" size={18} color={Colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.webToolBtn, text.trim().length > 0 ? styles.webToolBtnDisabled : null]}
+                onPress={startRecording}
+                disabled={!isConversationAvailable || uploading || text.trim().length > 0}
+                testID="composer-toolbar-mic"
+              >
+                <Feather name="mic" size={18} color={text.trim().length > 0 ? Colors.textMuted : Colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.webToolBtn}
+                onPress={() => setShowEmojiPicker(true)}
+                disabled={!isConversationAvailable || uploading}
+                testID="composer-toolbar-palette"
+              >
+                <Ionicons name="color-palette-outline" size={20} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+          ) : null}
         </View>
       </KeyboardAvoidingView>
 
@@ -1834,8 +1846,8 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     paddingHorizontal: 8,
     paddingTop: 8,
-    paddingBottom: 8,
-    gap: 2,
+    paddingBottom: 4,
+    gap: 6,
     backgroundColor: '#EFE3CF',
     borderTopWidth: 1,
     borderTopColor: '#D9C9AE',
@@ -1872,6 +1884,40 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginLeft: 2,
+  },
+  sendBtnSpacer: {
+    width: 40,
+    height: 40,
+  },
+  webToolbarRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 10,
+    paddingTop: 4,
+    paddingBottom: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#D9C9AE',
+    backgroundColor: '#EFE3CF',
+  },
+  webToolBtn: {
+    width: 38,
+    height: 34,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F7EFE1',
+    borderWidth: 1,
+    borderColor: '#DDCFB5',
+  },
+  webToolBtnDisabled: {
+    opacity: 0.45,
+  },
+  webToolGifLabel: {
+    fontSize: 11,
+    fontWeight: FontWeight.bold,
+    color: Colors.textSecondary,
+    letterSpacing: 0.2,
   },
   recordingRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
   recCancelBtn: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FDE2E2' },
