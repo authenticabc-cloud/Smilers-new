@@ -65,7 +65,11 @@ export function useMessageNotificationSound() {
         playThroughEarpieceAndroid: false,
       }).catch(() => {});
       const stored = (await readStoredJson('smilers_ringtone_prefs', null)) as { notificationSound?: RingId } | null;
-      const followup = getRingSource(stored?.notificationSound || 'smilers_notification');
+      const selectedTone = stored?.notificationSound || 'smilers_notification';
+      if (selectedTone === 'silent') {
+        return;
+      }
+      const followup = getRingSource(selectedTone);
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       await playClip(require('../../../assets/sounds/message_notification_beep.mp3'));
       if (followup) {

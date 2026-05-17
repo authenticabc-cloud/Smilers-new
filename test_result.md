@@ -764,6 +764,9 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Hardened Android notification setup by adding POST_NOTIFICATIONS + full-screen-intent permissions in app config, syncing the Messages channel to the selected message sound, trimming the attachment sheet width, and scheduling a missed-call local notification when an incoming call ends unanswered while the app is alive enough to observe that transition."
+##       - working: true
+##         agent: "main"
+##         comment: "After iteration 27, fixed two follow-up regressions: foreground message alerts now stay fully silent when Silent is selected (no forced beep first), and missed-call local notifications no longer fire after an answered call because incoming answered state is tracked separately from merely seeing the ringing state."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"
@@ -857,3 +860,5 @@
 ##     message: "Latest regression + language batch is ready for validation: the Asare Ben Chris crash path now has a real RCA-backed fix for the translation render loop, `/message-language` now owns the single preferred-language picker, `/languages` is back to being the multi-select skip-translation list, and the shared language catalog now contains 111 official-language entries with distinct variants and grouped headings. Real signed-in validation is still required for the exact Asare Ben Chris conversation on device." 
 ##   - agent: "main"
 ##     message: "Latest audio/notification pass is ready for validation: the slider/tools button now immediately refocuses the message input, notification-sound choices are reduced to Smilers Notification + Silent, Android message/call channels now sync to the selected sounds, the attachment sheet is slimmer, missed-call local notifications are scheduled when an incoming call ends unanswered while the app can observe it, and translation now processes only the newest pending messages in parallel for much faster results. Killed-state ringing/notifications may still depend on native build permissions and the backend push payload actually targeting the native Expo token instead of web/Chrome notifications." 
+##   - agent: "main"
+##     message: "Iteration 27 found and the main agent fixed two regressions: Silent mode now suppresses the foreground beep entirely, and answered incoming calls no longer trigger a false missed-call notification. Translation endpoint also re-verified fast (~0.58s in local curl after the latest speed pass). The largest unresolved area remains true killed-state push/ringing, which likely requires the external Convex backend to send Expo mobile pushes to the native token instead of only web/Chrome push flows." 

@@ -170,6 +170,7 @@ export default function CallScreen() {
   const initStartedRef = useRef(false);
   const callStartedAtRef = useRef<number | null>(null);
   const incomingCallSeenRef = useRef(false);
+  const incomingCallAnsweredRef = useRef(false);
 
   const applyAudioMode = useCallback(async () => {
     if (Platform.OS === 'web') return;
@@ -479,6 +480,11 @@ export default function CallScreen() {
   useEffect(() => {
     if (isIncoming) {
       incomingCallSeenRef.current = true;
+      incomingCallAnsweredRef.current = false;
+    }
+
+    if (isActive) {
+      incomingCallAnsweredRef.current = true;
     }
 
     if (
@@ -493,10 +499,10 @@ export default function CallScreen() {
       const timeoutId = setTimeout(() => router.back(), 700);
       return () => clearTimeout(timeoutId);
     }
-  }, [activeCall, isIncoming, router]);
+  }, [activeCall, isActive, isIncoming, router]);
 
   useEffect(() => {
-    if (!activeCall || isActive || !incomingCallSeenRef.current) {
+    if (!activeCall || isActive || !incomingCallSeenRef.current || incomingCallAnsweredRef.current) {
       return;
     }
 
@@ -509,6 +515,7 @@ export default function CallScreen() {
     }
 
     incomingCallSeenRef.current = false;
+    incomingCallAnsweredRef.current = false;
 
     void Notifications.scheduleNotificationAsync({
       content: {
