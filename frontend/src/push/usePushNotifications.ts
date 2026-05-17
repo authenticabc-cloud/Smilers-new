@@ -105,9 +105,9 @@ async function setupCategoriesAndChannels(prefs?: { ringtone?: string | null; no
 export function usePushNotifications() {
   const router = useRouter();
   const { isAuthenticated } = useAuth();
-  const convex = useConvex();
   const registerDevice = useMutation(api.pushNotifications.registerMobileDevice);
   const declineCall = useMutation(api.calls.declineCall);
+  const markDelivered = useMutation((api as any).messages.markDelivered);
   const lastResponse = useRef<string | null>(null);
 
   // 1) On login: request permission, register token with backend
@@ -220,6 +220,17 @@ export function usePushNotifications() {
       return;
     }
 
+    const receiveSub = Notifications.addNotificationReceivedListener((notification) => {
+      const data = notification.request.content.data || {};
+      const type = (data as any).type as string | undefined;
+      const conversationId = (data as any).conversationId as string | undefined;
+      if (type === 'message' && conversationId) {
+        markDelivered({ conversationId }).catch((errorValue: any) => {
+          console.warn('[push] markDelivered failed:', errorValue?.message || errorValue);
+        });
+      }
+    });
+
     const sub = Notifications.addNotificationResponseReceivedListener(handleResponse);
 
     // Also handle the case where the app was launched by tapping a notification
@@ -227,6 +238,9 @@ export function usePushNotifications() {
       if (resp) handleResponse(resp);
     });
 
-    return () => sub.remove();
-  }, [handleResponse]);
+    return () => {
+      receiveSub.remove();
+      sub.remove();
+    };
+  }, [handleResponse, markDelivered]);
 }

@@ -219,6 +219,7 @@ export default function ChatScreen() {
 
   const sendMessage = useMutation(api.messages.send);
   const setTyping = useMutation(api.typing.setTyping);
+  const markDelivered = useMutation((api as any).messages.markDelivered);
   const markRead = useMutation(api.messages.markRead);
   const toggleReaction = useMutation(api.messages.toggleReaction);
   const deleteMessage = useMutation(api.messages.deleteMessage);
@@ -331,6 +332,12 @@ export default function ChatScreen() {
     displayMessages.forEach((message) => map.set(message._id, message));
     return map;
   }, [displayMessages]);
+
+  useEffect(() => {
+    if (conversationId && visibleMessages.length > 0) {
+      markDelivered({ conversationId }).catch(() => {});
+    }
+  }, [conversationId, visibleMessages.length, markDelivered]);
 
   useEffect(() => {
     if (conversationId && visibleMessages.length > 0) {
@@ -1507,8 +1514,8 @@ function MessageBubble({
   const text = msg.text || (msg.type !== 'text' ? `[${msg.type}]` : '');
   const time = msg._creationTime ? new Date(msg._creationTime) : new Date();
   const timeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const tickColor = msg.readBy?.length > 1 ? Colors.tickBlue : msg.deliveredTo?.length ? Colors.tickYellow : Colors.tickGray;
-  const tickIcon = msg.readBy?.length > 1 || msg.deliveredTo?.length ? 'checkmark-done' : 'checkmark';
+  const tickColor = msg.readBy?.length ? Colors.tickBlue : msg.deliveredTo?.length ? Colors.tickYellow : Colors.tickGray;
+  const tickIcon = msg.readBy?.length || msg.deliveredTo?.length ? 'checkmark-done' : 'checkmark';
 
   const reactionSummary = useMemo(() => {
     const reactions: any[] = Array.isArray(msg.reactions) ? msg.reactions : [];

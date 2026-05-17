@@ -66,8 +66,8 @@ export default function MediaBubble({
   const time = msg._creationTime ? new Date(msg._creationTime) : new Date();
   const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
   const tickColor =
-    msg.readBy?.length > 1 ? Colors.tickBlue : msg.deliveredTo?.length ? Colors.tickYellow : Colors.tickGray;
-  const tickIcon = msg.readBy?.length > 1 || msg.deliveredTo?.length ? 'checkmark-done' : 'checkmark';
+    msg.readBy?.length ? Colors.tickBlue : msg.deliveredTo?.length ? Colors.tickYellow : Colors.tickGray;
+  const tickIcon = msg.readBy?.length || msg.deliveredTo?.length ? 'checkmark-done' : 'checkmark';
 
   const reactionSummary = useMemo(() => {
     const reactions: any[] = Array.isArray(msg.reactions) ? msg.reactions : [];
