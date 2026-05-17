@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, AppState, StyleSheet, Text, View } from 'react-native';
 import { Redirect, Tabs, useRootNavigationState } from 'expo-router';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
@@ -36,6 +36,26 @@ export default function TabsLayout() {
     } else {
       setBootstrapAttempted(false);
     }
+  }, [isAuthenticated, updateCurrentUser]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+
+    const syncPresence = () => {
+      updateCurrentUser({}).catch((e) => console.warn('presence sync failed:', e?.message));
+    };
+
+    const subscription = AppState.addEventListener('change', () => {
+      syncPresence();
+    });
+    const heartbeat = setInterval(syncPresence, 60000);
+
+    return () => {
+      subscription.remove();
+      clearInterval(heartbeat);
+    };
   }, [isAuthenticated, updateCurrentUser]);
 
   useEffect(() => {

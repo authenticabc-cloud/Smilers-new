@@ -556,6 +556,79 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Adjusted the composer shell, toolbar spacing, input shape, borders, and colors to move the chat composer closer to the latest web screenshot while preserving the rich-text tools added earlier."
+##   - task: "Display-name crash recursion fix"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/src/lib/displayName.ts"
+##     stuck_count: 1
+##     priority: "critical"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User reported the specific contact 'Asare Ben Chris' still crashed when opened after the earlier safe-fallback patch."
+##       - working: false
+##         agent: "troubleshoot_agent"
+##         comment: "Identified infinite recursion in normalizeDisplayText when circular conversation/user references are present."
+##       - working: true
+##         agent: "main"
+##         comment: "Added WeakSet-based circular-reference protection plus a recursion-depth guard in the shared display-name formatter so malformed conversation/user objects do not stack-overflow the app."
+##   - task: "Saved contact names from contacts fallback"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/call/[conversationId].tsx"
+##     stuck_count: 0
+##     priority: "critical"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User reported that call/chat surfaces still sometimes showed the generic 'Smilers' label instead of the saved contact name."
+##       - working: true
+##         agent: "main"
+##         comment: "Added contact-list fallback lookups so Chats, Chat header, and Call screen can resolve the locally saved contact display name even when the conversation payload itself is generic."
+##   - task: "Composer dock gap removal and emoji expansion"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/chat/[conversationId].tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User reported a visible gap above the keyboard, wanted a more horizontal web-like composer, and wanted more than one emoji choice."
+##       - working: true
+##         agent: "main"
+##         comment: "Moved the composer into a bottom dock with keyboard-aware safe-area padding, tightened the input row to be more horizontal, and replaced the single-tap emoji insert with a richer emoji picker sheet."
+##   - task: "Automatic incoming-message translation"
+##     implemented: true
+##     working: true
+##     file: "/app/backend/server.py"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User requested automatic translation into the receiver's preferred language, following the language-settings instructions."
+##       - working: true
+##         agent: "main"
+##         comment: "Added a FastAPI `/api/translate` endpoint backed by Gemini 3 Flash through the Emergent key, plus frontend translation caching so incoming chat text can be auto-translated into the user's preferred language while respecting skip-language preferences."
+##   - task: "Presence freshness and ringtone channel sync"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/(tabs)/_layout.tsx"
+##     stuck_count: 0
+##     priority: "medium"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User requested more realistic last-seen freshness and incoming-call ringtone behavior across app states."
+##       - working: true
+##         agent: "main"
+##         comment: "Added foreground/background heartbeat presence sync, periodic conversation refresh for fresher last-seen labels, Android call-channel ringtone syncing to the selected ringtone, and bundled the ringtone assets in app config for notification-channel use."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"
@@ -563,6 +636,11 @@
 ##   run_ui: true
 ## test_plan:
 ##   current_focus:
+##     - "Display-name crash recursion fix"
+##     - "Saved contact names from contacts fallback"
+##     - "Composer dock gap removal and emoji expansion"
+##     - "Automatic incoming-message translation"
+##     - "Presence freshness and ringtone channel sync"
 ##     - "Contact crash fallback hardening"
 ##     - "Conversation display names show saved contact names"
 ##     - "Call screen overlap and outgoing ringtone polish"
@@ -625,3 +703,5 @@
 ##     message: "Please validate the latest user-reported chat/call/contact fixes. Priority order: 1) opening a real contact like 'Asare Ben Chris' should no longer crash, 2) chat and call headers should show the saved contact display name instead of the generic 'Smilers' fallback when data is available, 3) the voice-call screen should keep long names clear of the control buttons, 4) outgoing ringing should use the caller's selected ringtone preference, and 5) the chat composer should visually match the new tighter beige web-style box. Authenticated real-data checks are preferred if the Hercules flow is reachable; otherwise still verify route stability and flag any remaining runtime regressions." 
 ##   - agent: "main"
 ##     message: "Testing-agent reported one concrete UI regression on compact call screens. That is now addressed: the voice-call hero/status stack was restructured for short mobile heights and self-verified locally at 375x667 with no visual overlap into the control row. Remaining blocked checks still require authenticated real data and a native outgoing-call audio pass."
+##   - agent: "main"
+##     message: "New batch ready for validation: 1) circular-reference crash protection was added for the specific contact-open flow, 2) chat/call titles now try the saved Contacts data before falling back to conversation labels, 3) the composer now docks flush to the bottom with a richer emoji picker, 4) incoming text translation now goes through a new `/api/translate` backend endpoint using Gemini 3 Flash + the Emergent key and respects preferred/skip languages, and 5) presence + Android incoming-call notification channels now sync more aggressively for fresher last-seen and ringtone behavior. Authenticated device validation is still especially important for the real Asare Ben Chris contact, real saved-name parity, and native background/locked-call ringtone behavior." 

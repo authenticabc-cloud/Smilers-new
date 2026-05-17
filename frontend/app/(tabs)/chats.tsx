@@ -9,7 +9,7 @@ import Avatar from '../../src/components/Avatar';
 import FabStack from '../../src/components/FabStack';
 import SosButton from '../../src/components/SosButton';
 import { api } from '../../src/convexApi';
-import { getConversationDisplayName } from '../../src/lib/displayName';
+import { findSavedContactDisplayName, getConversationDisplayName } from '../../src/lib/displayName';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 
 function relTime(iso?: string) {
@@ -30,6 +30,7 @@ export default function ChatsScreen() {
   const router = useRouter();
   const [showMenu, setShowMenu] = useState(false);
   const me = useQuery(api.users.getCurrentUser, {});
+  const contacts = useQuery(api.contacts.getContacts, {});
   const conversations = useQuery(api.conversations.listConversations);
   const loading = conversations === undefined;
   const list: any[] = Array.isArray(conversations) ? conversations : [];
@@ -131,6 +132,7 @@ export default function ChatsScreen() {
           <ConversationRow
             item={item}
             currentUserId={me?._id}
+            contacts={contacts}
             onPress={() => router.push(`/chat/${item._id}` as any)}
           />
         )}
@@ -195,8 +197,9 @@ function PinnedRow({
   );
 }
 
-function ConversationRow({ item, currentUserId, onPress }: { item: any; currentUserId?: string; onPress: () => void }) {
-  const name = getConversationDisplayName(item, currentUserId, 'Smilers user');
+function ConversationRow({ item, currentUserId, contacts, onPress }: { item: any; currentUserId?: string; contacts?: any[]; onPress: () => void }) {
+  const savedContactName = findSavedContactDisplayName(contacts, item, currentUserId);
+  const name = savedContactName || getConversationDisplayName(item, currentUserId, 'Smilers user');
   return (
     <TouchableOpacity onPress={onPress} style={styles.row} activeOpacity={0.7} testID={`conv-${item._id}`}>
       <Avatar name={name} size={52} />

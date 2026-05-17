@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -13,7 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useConvex, useMutation } from 'convex/react';
@@ -28,7 +29,7 @@ import PollComposer from '../../src/components/PollComposer';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
-import { getConversationDisplayName, getDisplayInitials } from '../../src/lib/displayName';
+import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials } from '../../src/lib/displayName';
 import {
   applyDraftFormatting,
   DRAFT_TEXT_COLORS,
@@ -43,6 +44,8 @@ import {
   readStoredJson,
   writeStoredJson,
 } from '../../src/lib/settingsStorage';
+import { formatLastSeenLabel } from '../../src/lib/presence';
+import { translateIncomingMessageText } from '../../src/lib/translation';
 import { uploadFile } from '../../src/lib/uploadFile';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
@@ -55,6 +58,11 @@ const DISAPPEARING_OPTIONS = [
   { key: '24h', label: '24 hours', ms: 24 * 60 * 60 * 1000 },
   { key: '7d', label: '7 days', ms: 7 * 24 * 60 * 60 * 1000 },
   { key: '90d', label: '90 days', ms: 90 * 24 * 60 * 60 * 1000 },
+] as const;
+const EMOJI_SECTIONS = [
+  { key: 'smileys', title: 'Smileys', items: ['😀', '😁', '😂', '🤣', '😊', '😍', '😘', '😎', '🤗', '🥳', '🤔', '😭'] },
+  { key: 'gestures', title: 'Gestures', items: ['👍', '👏', '🙏', '👋', '🤝', '💪', '🙌', '👌', '🤍', '❤️', '💛', '🔥'] },
+  { key: 'fun', title: 'Fun', items: ['🎉', '✨', '🌟', '💯', '🎶', '🎵', '🌹', '🍾', '🥰', '😇', '🤩', '😴'] },
 ] as const;
 
 function formatChatDayChip(ts?: number) {
@@ -74,18 +82,13 @@ function formatPresenceSubtitle(conversation: any) {
   if (conversation.type === 'group') {
     return `${conversation?.participants?.length || conversation?.memberCount || 0} members`;
   }
-  if (conversation.otherUser?.lastSeen) {
-    return `last seen ${new Date(conversation.otherUser.lastSeen).toLocaleDateString()}`;
-  }
-  if (conversation.lastSeen) {
-    return `last seen ${new Date(conversation.lastSeen).toLocaleDateString()}`;
-  }
-  return 'last seen recently';
+  return formatLastSeenLabel(conversation);
 }
 
 export default function ChatScreen() {
   const router = useRouter();
   const convex = useConvex();
+  const insets = useSafeAreaInsets();
   const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
   useAuth();
   const [text, setText] = useState('');
@@ -111,6 +114,9 @@ export default function ChatScreen() {
   const [draftBold, setDraftBold] = useState(false);
   const [draftColor, setDraftColor] = useState<DraftTextColorKey | null>(null);
   const [showColorPicker, setShowColorPicker] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [translatedMessageMap, setTranslatedMessageMap] = useState<Record<string, string>>({});
   const recRef = useRef<Audio.Recording | null>(null);
   const recTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const recCancelledRef = useRef(false);
@@ -121,7 +127,7 @@ export default function ChatScreen() {
     typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
   const canQueryConversation = !!conversationId && hasValidConversationId;
 
-  const { data: conversation, loading: conversationLoading } = useSafeConvexQuery<any | null>(
+  const { data: conversation, loading: conversationLoading, refetch: refetchConversation } = useSafeConvexQuery<any | null>(
     api.conversations.getConversation,
     conversationId ? { conversationId } : {},
     null,
@@ -136,6 +142,7 @@ export default function ChatScreen() {
     canQueryConversation
   );
   const { data: me } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null);
+  const { data: contacts } = useSafeConvexQuery<any[]>(api.contacts.getContacts, {}, [], !!me);
   const { data: conversationsForForward } = useSafeConvexQuery<any[]>(
     api.conversations.listConversations,
     {},
@@ -149,6 +156,15 @@ export default function ChatScreen() {
       playsInSilentModeIOS: true,
       shouldDuckAndroid: true,
     }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener('keyboardDidShow', () => setIsKeyboardVisible(true));
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => setIsKeyboardVisible(false));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
   }, []);
 
   useEffect(() => {
@@ -216,11 +232,79 @@ export default function ChatScreen() {
     return messages.filter((message) => Number(message?._creationTime || 0) >= cutoff);
   }, [disappearingMode, messages]);
 
+  const preferredLanguage = typeof me?.preferredLanguage === 'string' ? me.preferredLanguage : '';
+  const skipTranslationLanguages = useMemo(() => {
+    const values = new Set<string>();
+    [me?.languages, me?.skipTranslationLanguages, me?.spokenLanguages].forEach((list) => {
+      if (Array.isArray(list)) {
+        list.forEach((code) => {
+          if (typeof code === 'string' && code.trim()) {
+            values.add(code.trim());
+          }
+        });
+      }
+    });
+    if (preferredLanguage) {
+      values.add(preferredLanguage);
+    }
+    return Array.from(values);
+  }, [me?.languages, me?.preferredLanguage, me?.skipTranslationLanguages, me?.spokenLanguages, preferredLanguage]);
+
+  useEffect(() => {
+    if (!preferredLanguage || visibleMessages.length === 0) {
+      return;
+    }
+
+    const candidates = visibleMessages.filter((message) => {
+      if (!message?._id || !message?.text || message?.senderId === me?._id) {
+        return false;
+      }
+      return !translatedMessageMap[message._id];
+    });
+
+    if (candidates.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      const updates: Record<string, string> = {};
+      for (const message of candidates) {
+        const translated = await translateIncomingMessageText({
+          text: String(message.text || ''),
+          targetLanguage: preferredLanguage,
+          skipLanguages: skipTranslationLanguages,
+        });
+        if (!cancelled && translated) {
+          updates[message._id] = translated;
+        }
+      }
+
+      if (!cancelled && Object.keys(updates).length > 0) {
+        setTranslatedMessageMap((current) => ({ ...current, ...updates }));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [me?._id, preferredLanguage, skipTranslationLanguages, translatedMessageMap, visibleMessages]);
+
+  const displayMessages = useMemo(
+    () => visibleMessages.map((message) => (
+      translatedMessageMap[message._id]
+        ? { ...message, text: translatedMessageMap[message._id], originalText: message.text }
+        : message
+    )),
+    [translatedMessageMap, visibleMessages],
+  );
+
   const msgById = useMemo(() => {
     const map = new Map<string, any>();
-    visibleMessages.forEach((message) => map.set(message._id, message));
+    displayMessages.forEach((message) => map.set(message._id, message));
     return map;
-  }, [visibleMessages]);
+  }, [displayMessages]);
 
   useEffect(() => {
     if (conversationId && visibleMessages.length > 0) {
@@ -245,6 +329,16 @@ export default function ChatScreen() {
     const timer = setTimeout(() => setFallbackReady(true), 2500);
     return () => clearTimeout(timer);
   }, [canQueryConversation, conversationId]);
+
+  useEffect(() => {
+    if (!canQueryConversation) {
+      return;
+    }
+    const timer = setInterval(() => {
+      refetchConversation().catch(() => {});
+    }, 45000);
+    return () => clearInterval(timer);
+  }, [canQueryConversation, refetchConversation]);
 
   const isConversationAvailable = !!conversation;
   const composerTextColor = resolveDraftColor(draftColor) || Colors.textPrimary;
@@ -659,7 +753,11 @@ export default function ChatScreen() {
     [refetchMessages, toggleReaction]
   );
 
-  const title = getConversationDisplayName(conversation, me?._id ? String(me._id) : undefined, 'Chat');
+  const savedContactTitle = useMemo(
+    () => findSavedContactDisplayName(contacts, conversation, me?._id ? String(me._id) : undefined),
+    [contacts, conversation, me?._id],
+  );
+  const title = savedContactTitle || getConversationDisplayName(conversation, me?._id ? String(me._id) : undefined, 'Chat');
   const isMineSelected = selectedMsg && me && selectedMsg.senderId === me._id;
   const subtitle = formatPresenceSubtitle(conversation);
   const avatarInitial = getDisplayInitials(title);
@@ -736,7 +834,7 @@ export default function ChatScreen() {
   return (
     <SafeAreaView
       style={[styles.container, { backgroundColor: getWallpaperColor(chatAppearance.wallpaper) }]}
-      edges={['top', 'bottom']}
+      edges={['top']}
       testID="chat-screen"
     >
       <View style={styles.chatHeader} testID="chat-header">
@@ -779,8 +877,8 @@ export default function ChatScreen() {
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 12}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
       >
         {(messagesLoading || conversationLoading) && !fallbackReady ? (
           <View style={styles.loadingWrap}>
@@ -797,7 +895,7 @@ export default function ChatScreen() {
         ) : (
           <FlatList
             ref={listRef}
-            data={visibleMessages}
+            data={displayMessages}
             keyExtractor={(item: any) => item._id}
             contentContainerStyle={styles.listContent}
             renderItem={({ item, index }) => {
@@ -831,77 +929,84 @@ export default function ChatScreen() {
           />
         )}
 
-        {replyTo && isConversationAvailable ? (
-          <View style={styles.replyPill} testID="reply-preview-pill">
-            <View style={styles.replyAccent} />
-            <View style={styles.flexOne}>
-              <Text style={styles.replyLabel}>Replying to {replyTo.senderName || 'message'}</Text>
-              <Text style={styles.replyText} numberOfLines={1} testID="reply-preview-text">
-                {stripRichTextTags(replyTo.text) || `[${replyTo.type}]`}
-              </Text>
-            </View>
-            <TouchableOpacity onPress={() => setReplyTo(null)} hitSlop={10} testID="reply-preview-close">
-              <Feather name="x" size={18} color={Colors.textSecondary} />
-            </TouchableOpacity>
-          </View>
-        ) : null}
-
-        {uploading ? (
-          <View style={styles.uploadBar} testID="uploading-bar">
-            <ActivityIndicator size="small" color={Colors.primary} />
-            <Text style={styles.uploadText}>Uploading…</Text>
-          </View>
-        ) : null}
-
-        {showComposerFormatting ? (
-          <View style={styles.composerToolsWrap} testID="composer-tools-wrap">
-            {showColorPicker ? (
-              <View style={styles.colorPickerWrap} testID="composer-color-picker">
-                {DRAFT_TEXT_COLORS.map((option) => {
-                  const selected = draftColor === option.key;
-                  const isBlack = option.key === 'black';
-                  return (
-                    <TouchableOpacity
-                      key={option.key}
-                      style={[styles.colorChip, selected ? styles.colorChipSelected : null]}
-                      onPress={() => setDraftColor(option.key)}
-                      testID={`composer-color-${option.key}`}
-                    >
-                      <View
-                        style={[
-                          styles.colorChipInner,
-                          isBlack ? styles.colorChipInnerLight : { backgroundColor: option.hex },
-                          selected ? styles.colorChipInnerSelected : null,
-                        ]}
-                      >
-                        <Text style={[styles.colorChipLabel, isBlack ? styles.colorChipLabelDark : null]}>{option.label}</Text>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
+        <View
+          style={[
+            styles.composerDock,
+            { paddingBottom: isKeyboardVisible ? 0 : Math.max(insets.bottom, Platform.OS === 'ios' ? 8 : 6) },
+          ]}
+          testID="composer-dock"
+        >
+          {replyTo && isConversationAvailable ? (
+            <View style={styles.replyPill} testID="reply-preview-pill">
+              <View style={styles.replyAccent} />
+              <View style={styles.flexOne}>
+                <Text style={styles.replyLabel}>Replying to {replyTo.senderName || 'message'}</Text>
+                <Text style={styles.replyText} numberOfLines={1} testID="reply-preview-text">
+                  {stripRichTextTags(replyTo.text) || `[${replyTo.type}]`}
+                </Text>
               </View>
-            ) : null}
-
-            <View style={styles.composerToolbarRow}>
-              <TouchableOpacity
-                style={[styles.composerToolBtn, draftBold ? styles.composerToolBtnActive : null]}
-                onPress={() => setDraftBold((current) => !current)}
-                testID="composer-bold-toggle"
-              >
-                <Text style={[styles.composerToolText, draftBold ? styles.composerToolTextActive : null]}>B</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.composerToolBtn, showColorPicker ? styles.composerToolBtnActive : null]}
-                onPress={() => setShowColorPicker((current) => !current)}
-                testID="composer-palette-toggle"
-              >
-                <Ionicons name="color-palette-outline" size={22} color={showColorPicker ? Colors.primary : Colors.textSecondary} />
+              <TouchableOpacity onPress={() => setReplyTo(null)} hitSlop={10} testID="reply-preview-close">
+                <Feather name="x" size={18} color={Colors.textSecondary} />
               </TouchableOpacity>
             </View>
-          </View>
-        ) : null}
+          ) : null}
 
-        <View style={styles.inputBar}>
+          {uploading ? (
+            <View style={styles.uploadBar} testID="uploading-bar">
+              <ActivityIndicator size="small" color={Colors.primary} />
+              <Text style={styles.uploadText}>Uploading…</Text>
+            </View>
+          ) : null}
+
+          {showComposerFormatting ? (
+            <View style={styles.composerToolsWrap} testID="composer-tools-wrap">
+              {showColorPicker ? (
+                <View style={styles.colorPickerWrap} testID="composer-color-picker">
+                  {DRAFT_TEXT_COLORS.map((option) => {
+                    const selected = draftColor === option.key;
+                    const isBlack = option.key === 'black';
+                    return (
+                      <TouchableOpacity
+                        key={option.key}
+                        style={[styles.colorChip, selected ? styles.colorChipSelected : null]}
+                        onPress={() => setDraftColor(option.key)}
+                        testID={`composer-color-${option.key}`}
+                      >
+                        <View
+                          style={[
+                            styles.colorChipInner,
+                            isBlack ? styles.colorChipInnerLight : { backgroundColor: option.hex },
+                            selected ? styles.colorChipInnerSelected : null,
+                          ]}
+                        >
+                          <Text style={[styles.colorChipLabel, isBlack ? styles.colorChipLabelDark : null]}>{option.label}</Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              ) : null}
+
+              <View style={styles.composerToolbarRow}>
+                <TouchableOpacity
+                  style={[styles.composerToolBtn, draftBold ? styles.composerToolBtnActive : null]}
+                  onPress={() => setDraftBold((current) => !current)}
+                  testID="composer-bold-toggle"
+                >
+                  <Text style={[styles.composerToolText, draftBold ? styles.composerToolTextActive : null]}>B</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.composerToolBtn, showColorPicker ? styles.composerToolBtnActive : null]}
+                  onPress={() => setShowColorPicker((current) => !current)}
+                  testID="composer-palette-toggle"
+                >
+                  <Ionicons name="color-palette-outline" size={20} color={showColorPicker ? Colors.primary : Colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
+
+          <View style={styles.inputBar}>
           {isRecording ? (
             <View style={styles.recordingRow}>
               <TouchableOpacity style={styles.recCancelBtn} onPress={cancelRecording} testID="rec-cancel">
@@ -939,7 +1044,7 @@ export default function ChatScreen() {
             <>
               <TouchableOpacity
                 style={styles.iconBtn}
-                onPress={() => setText((current) => `${current}${current ? ' ' : ''}😊`)}
+                onPress={() => setShowEmojiPicker(true)}
                 disabled={!isConversationAvailable || uploading}
                 testID="emoji-btn"
               >
@@ -996,6 +1101,7 @@ export default function ChatScreen() {
               )}
             </>
           )}
+          </View>
         </View>
       </KeyboardAvoidingView>
 
@@ -1013,6 +1119,39 @@ export default function ChatScreen() {
         onClose={() => setShowPollComposer(false)}
         onSubmit={onSubmitPoll}
       />
+
+      <Modal visible={showEmojiPicker} transparent animationType="slide" onRequestClose={() => setShowEmojiPicker(false)}>
+        <Pressable style={styles.emojiBackdrop} onPress={() => setShowEmojiPicker(false)}>
+          <Pressable style={styles.emojiSheet} onPress={() => {}} testID="emoji-picker-sheet">
+            <View style={styles.emojiSheetHeader}>
+              <Text style={styles.emojiSheetTitle}>Smileys & reactions</Text>
+              <TouchableOpacity onPress={() => setShowEmojiPicker(false)} testID="emoji-picker-close">
+                <Feather name="x" size={20} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            {EMOJI_SECTIONS.map((section) => (
+              <View key={section.key} style={styles.emojiSection}>
+                <Text style={styles.emojiSectionTitle}>{section.title}</Text>
+                <View style={styles.emojiGrid}>
+                  {section.items.map((emoji, index) => (
+                    <TouchableOpacity
+                      key={`${section.key}-${emoji}`}
+                      style={styles.emojiOption}
+                      onPress={() => {
+                        setText((current) => `${current}${current ? ' ' : ''}${emoji}`);
+                        setComposerFocused(true);
+                      }}
+                      testID={`emoji-option-${section.key}-${index}`}
+                    >
+                      <Text style={styles.emojiOptionText}>{emoji}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            ))}
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <Modal visible={!!selectedMsg} transparent animationType="fade" onRequestClose={closeActionSheet}>
         <Pressable style={styles.sheetBackdrop} onPress={closeActionSheet}>
@@ -1552,6 +1691,9 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#D9C9AE',
   },
+  composerDock: {
+    backgroundColor: '#EFE3CF',
+  },
   composerToolbarRow: {
     minHeight: 48,
     flexDirection: 'row',
@@ -1619,28 +1761,29 @@ const styles = StyleSheet.create({
   inputBar: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    gap: 4,
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 8,
+    gap: 2,
     backgroundColor: '#EFE3CF',
     borderTopWidth: 1,
     borderTopColor: '#D9C9AE',
   },
   iconBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 16,
+    width: 34,
+    height: 34,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
   input: {
     flex: 1,
-    minHeight: 46,
+    minHeight: 42,
     maxHeight: 120,
     backgroundColor: '#FBF7F0',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 16,
     fontSize: 14,
     lineHeight: 19,
     color: Colors.textPrimary,
@@ -1651,9 +1794,9 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
   },
   sendBtn: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: Colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1679,6 +1822,51 @@ const styles = StyleSheet.create({
   recTimer: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textPrimary, fontVariant: ['tabular-nums'] as any },
   recPauseBtn: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EEE4D1' },
   recSendBtn: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.primary },
+  emojiBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
+  emojiSheet: {
+    backgroundColor: '#FFF8EC',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 18,
+    paddingTop: 14,
+    paddingBottom: 18,
+  },
+  emojiSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  emojiSheetTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+  },
+  emojiSection: {
+    marginTop: 10,
+  },
+  emojiSectionTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textSecondary,
+    marginBottom: 8,
+  },
+  emojiGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  emojiOption: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: '#F4E7D2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emojiOptionText: {
+    fontSize: 22,
+  },
   sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
   sheet: {
     backgroundColor: Colors.surface,

@@ -112,7 +112,11 @@
           "color": "#E4B53B",
           "sounds": [
             "./assets/sounds/message_notification.mp3",
-            "./assets/sounds/ringtone.mp3"
+            "./assets/sounds/ringtone.mp3",
+            "./assets/sounds/smilers_never_cry.mp3",
+            "./assets/sounds/smilers_never_cry_1.mp3",
+            "./assets/sounds/smilers_never_cry_2.mp3",
+            "./assets/sounds/smilers_never_cry_3.mp3"
           ]
         }
       ],

@@ -32,7 +32,7 @@ import Animated, {
 import { StatusBar } from 'expo-status-bar';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
-import { getConversationDisplayName, getDisplayInitials, getDisplayNameFromUser } from '../../src/lib/displayName';
+import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials, getDisplayNameFromUser } from '../../src/lib/displayName';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Shadow, Spacing } from '../../src/theme';
 import { useRingtonePlayer } from '../../src/lib/ringtone/useRingtonePlayer';
@@ -555,9 +555,13 @@ export default function CallScreen() {
     }
   }, [screenSharing, callType]);
 
+  const savedContactName = useMemo(
+    () => findSavedContactDisplayName(contacts, conversation || activeCall, me?._id ? String(me._id) : undefined),
+    [contacts, conversation, activeCall, me?._id],
+  );
   const otherName = useMemo(
-    () => getConversationDisplayName(conversation, me?._id ? String(me._id) : undefined, 'Smilers'),
-    [conversation, me?._id],
+    () => savedContactName || getConversationDisplayName(conversation || activeCall, me?._id ? String(me._id) : undefined, 'Smilers'),
+    [activeCall, conversation, me?._id, savedContactName],
   );
 
   const existingParticipantIds = useMemo(

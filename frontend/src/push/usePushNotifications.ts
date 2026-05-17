@@ -6,6 +6,7 @@ import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import { useMutation, useConvex } from 'convex/react';
 import { api } from '../convexApi';
+import { readStoredJson } from '../lib/settingsStorage';
 import { useAuth } from '../providers/AuthProvider';
 
 // Foreground display behavior — show banner + sound for incoming pushes
@@ -21,8 +22,25 @@ if (Platform.OS !== 'web') {
 }
 
 const CALL_CATEGORY = 'incoming-call';
+const RINGTONE_PREFS_KEY = 'smilers_ringtone_prefs';
 
-async function setupCategoriesAndChannels() {
+function resolveCallChannelSound(ringtoneId?: string | null) {
+  switch (ringtoneId) {
+    case 'smilers_never_cry_1':
+      return 'smilers_never_cry_1';
+    case 'smilers_never_cry_2':
+      return 'smilers_never_cry_2';
+    case 'smilers_never_cry_3':
+      return 'smilers_never_cry_3';
+    case 'silent':
+      return undefined;
+    case 'smilers_never_cry':
+    default:
+      return 'smilers_never_cry';
+  }
+}
+
+async function setupCategoriesAndChannels(selectedRingtoneId?: string | null) {
   if (Platform.OS === 'web') {
     return;
   }
@@ -46,7 +64,7 @@ async function setupCategoriesAndChannels() {
     await Notifications.setNotificationChannelAsync('calls', {
       name: 'Incoming Calls',
       importance: Notifications.AndroidImportance.MAX,
-      sound: 'ringtone',
+      sound: resolveCallChannelSound(selectedRingtoneId),
       vibrationPattern: [0, 1000, 500, 1000, 500, 1000],
       lightColor: '#E4B53B',
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
@@ -85,7 +103,8 @@ export function usePushNotifications() {
 
     (async () => {
       try {
-        await setupCategoriesAndChannels();
+        const prefs = await readStoredJson(RINGTONE_PREFS_KEY, null);
+        await setupCategoriesAndChannels((prefs as any)?.ringtone || null);
 
         if (!Device.isDevice) {
           console.log('[push] Skipping registration: not a physical device');

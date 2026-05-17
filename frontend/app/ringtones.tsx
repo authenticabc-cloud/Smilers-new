@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   ScrollView,
   StyleSheet,
   Switch,
@@ -13,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { Audio } from 'expo-av';
+import * as Notifications from 'expo-notifications';
 import { useMutation } from 'convex/react';
 import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
@@ -40,6 +42,22 @@ const DEFAULT_PREFS: RingPrefs = {
   notificationSound: 'smilers_never_cry_2',
   vibrate: true,
 };
+
+function resolveCallChannelSound(ringtoneId?: RingId | null) {
+  switch (ringtoneId) {
+    case 'smilers_never_cry_1':
+      return 'smilers_never_cry_1';
+    case 'smilers_never_cry_2':
+      return 'smilers_never_cry_2';
+    case 'smilers_never_cry_3':
+      return 'smilers_never_cry_3';
+    case 'silent':
+      return undefined;
+    case 'smilers_never_cry':
+    default:
+      return 'smilers_never_cry';
+  }
+}
 
 type Mode = 'ringtone' | 'notificationSound';
 
@@ -172,6 +190,22 @@ export default function RingtonesScreen() {
         } catch {}
       } catch (errorValue: any) {
         console.warn('updateProfile(ringtonePrefs) failed:', errorValue?.message);
+      }
+      if (Platform.OS === 'android') {
+        try {
+          await Notifications.setNotificationChannelAsync('calls', {
+            name: 'Incoming Calls',
+            importance: Notifications.AndroidImportance.MAX,
+            sound: resolveCallChannelSound(next.ringtone),
+            vibrationPattern: [0, 1000, 500, 1000, 500, 1000],
+            lightColor: '#E4B53B',
+            lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+            bypassDnd: true,
+            enableVibrate: next.vibrate,
+          });
+        } catch (channelError: any) {
+          console.warn('failed to update call notification channel:', channelError?.message);
+        }
       }
     },
     [refetch, updateProfile],

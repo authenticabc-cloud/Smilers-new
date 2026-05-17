@@ -7,6 +7,7 @@ import { useMutation } from 'convex/react';
 import Avatar from '../../src/components/Avatar';
 import Header from '../../src/components/Header';
 import { api } from '../../src/convexApi';
+import { formatLastSeenLabel } from '../../src/lib/presence';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
@@ -57,7 +58,7 @@ export default function UserProfileScreen() {
 
             <View style={styles.card} testID="user-profile-details-card">
               <DetailRow icon="mail-outline" label="Email" value={user?.email || 'Hidden'} />
-              <DetailRow icon="time-outline" label="Last seen" value={user?.lastSeen ? new Date(user.lastSeen).toLocaleString() : 'Recently'} />
+              <DetailRow icon="time-outline" label="Last seen" value={formatLastSeenLabel(user, 'last seen recently')} />
               <DetailRow icon="shield-checkmark-outline" label="Privacy" value={user?.privacyLevel || 'Standard'} />
             </View>
 
