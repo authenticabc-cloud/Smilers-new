@@ -1,28 +1,33 @@
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
 const translationCache = new Map<string, string>();
 
+export interface TranslationResult {
+  ok: boolean;
+  translatedText: string;
+}
+
 export async function translateIncomingMessageText(input: {
   text: string;
   targetLanguage: string;
   skipLanguages?: string[];
-}): Promise<string> {
+}): Promise<TranslationResult> {
   const text = input.text?.trim();
   const targetLanguage = input.targetLanguage?.trim();
   const skipLanguages = Array.isArray(input.skipLanguages) ? input.skipLanguages.filter(Boolean) : [];
 
   if (!text || !targetLanguage) {
-    return input.text;
+    return { ok: false, translatedText: input.text };
   }
 
   if (!BACKEND_URL) {
     console.warn('[translation] Missing EXPO_PUBLIC_BACKEND_URL, skipping translation');
-    return input.text;
+    return { ok: false, translatedText: input.text };
   }
 
   const cacheKey = `${targetLanguage.toLowerCase()}::${skipLanguages.sort().join(',').toLowerCase()}::${text}`;
   const cached = translationCache.get(cacheKey);
   if (cached) {
-    return cached;
+    return { ok: true, translatedText: cached };
   }
 
   try {
@@ -38,7 +43,7 @@ export async function translateIncomingMessageText(input: {
 
     if (!response.ok) {
       console.warn('[translation] non-200 response', response.status);
-      return input.text;
+      return { ok: false, translatedText: input.text };
     }
 
     const result = await response.json();
@@ -47,9 +52,9 @@ export async function translateIncomingMessageText(input: {
       : input.text;
 
     translationCache.set(cacheKey, translated);
-    return translated;
+    return { ok: true, translatedText: translated };
   } catch (errorValue) {
     console.warn('[translation] request failed', errorValue);
-    return input.text;
+    return { ok: false, translatedText: input.text };
   }
 }

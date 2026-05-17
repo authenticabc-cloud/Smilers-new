@@ -94,7 +94,7 @@ export default function ChatScreen() {
   const convex = useConvex();
   const insets = useSafeAreaInsets();
   const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
-  useAuth();
+  const { isAuthenticated } = useAuth();
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -133,7 +133,7 @@ export default function ChatScreen() {
   const listRef = useRef<FlatList<any>>(null);
   const hasValidConversationId =
     typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
-  const canQueryConversation = !!conversationId && hasValidConversationId;
+  const canQueryConversation = !!conversationId && hasValidConversationId && isAuthenticated;
 
   const conversation = useQuery(
     api.conversations.getConversation,
@@ -145,7 +145,7 @@ export default function ChatScreen() {
     canQueryConversation ? { conversationId, paginationOpts: { numItems: 50, cursor: null } } : 'skip'
   ) as any;
   const messagesLoading = canQueryConversation && messagesPage === undefined;
-  const me = useQuery(api.users.getCurrentUser, {}) as any | null | undefined;
+  const me = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip') as any | null | undefined;
   const contacts = useQuery(api.contacts.getContacts, me ? {} : 'skip') as any[] | undefined;
   const refetchMessages = useCallback(async () => {}, []);
   const { data: conversationsForForward } = useSafeConvexQuery<any[]>(
@@ -285,7 +285,7 @@ export default function ChatScreen() {
       const results = await Promise.all(
         candidates.map(async (message) => ({
           id: message._id,
-          translated: await translateIncomingMessageText({
+          result: await translateIncomingMessageText({
             text: String(message.text || ''),
             targetLanguage: preferredLanguageLabel,
             skipLanguages: skipTranslationLanguages,
@@ -293,10 +293,10 @@ export default function ChatScreen() {
         })),
       );
 
-      results.forEach(({ id, translated }) => {
+      results.forEach(({ id, result }) => {
         translatingIdsRef.current.delete(id);
-        if (!cancelled && translated) {
-          updates[id] = translated;
+        if (!cancelled && result.ok) {
+          updates[id] = result.translatedText;
           translatedIdsRef.current.add(id);
         }
       });
