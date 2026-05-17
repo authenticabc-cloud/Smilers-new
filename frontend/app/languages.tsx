@@ -32,8 +32,9 @@ function LegacyLanguagesScreen() {
   const { isAuthenticated } = useAuth();
   const { data: me, refetch } = useSafeConvexQuery<any | null>(
     api.users.getCurrentUser,
-    isAuthenticated ? {} : 'skip',
+    {},
     null,
+    isAuthenticated,
   );
   const updateProfile = useMutation(api.users.updateProfile);
 
