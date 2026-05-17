@@ -91,6 +91,10 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - ✅ Updated ringtone playback so the user's selected preferred ringtone is used during outgoing ringing as well as incoming ringing (with vibration still limited to incoming-call behavior)
 - ✅ Tightened the chat composer box again toward the web screenshot with a denser beige shell, slimmer toolbar spacing, and a more web-like input shape
 - ✅ Reworked the non-video call layout for compact screens: the avatar/name/status area is now centered and uses compact spacing/sizing so contact metadata no longer overlaps the action controls on short mobile heights
+- ✅ Replaced the simple emoji modal with a fuller web-style emoji picker sheet: category icon row, many more emoji categories, and recent emojis support
+- ✅ Reworked the attachment popup toward the web reference into a floating action card with Photo, Video from Gallery, Record Video, Document, and Location rows
+- ✅ Restored chat keyboard avoidance for typing and switched voice-note recording to an explicit `prepareToRecordAsync` + `startAsync` flow for more reliable recording startup
+- ✅ Expanded ringtone options with `Classic Ring` and `Smilers Notification`, and updated foreground message alerts to play a two-step beep + selected notification tone sequence
 - ✅ Added `/app/auth_testing.md` and `/app/auth-testing.md` to document current manual auth verification expectations for future testing runs
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_POLLS_FILES.md` because the Convex backend source is not present in this repo; it documents the required schema, `messages.send`, and `votePoll` backend changes
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_STATUS_STORIES.md` because the Convex backend source is not present in this repo; it documents the required `statuses` endpoints, story views, DM reply support, and direct-conversation mutation
@@ -170,6 +174,7 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - Full end-to-end authenticated search/starred verification is still pending because browser automation cannot complete the Hercules sign-in flow here, so in-app button navigation from Chats/Profile still needs one signed-in device pass.
 - Full end-to-end authenticated wallet/send-money verification is still pending because browser automation cannot complete the Hercules sign-in flow here, and the exact mutation arg shapes for some `wallet.ts` / `transfers.ts` actions still need validation against the live backend.
 - The latest real-data regression checks for the user-reported contact/call issues are still partially pending because automation could not authenticate into a live account with real contacts; manual signed-in validation is still needed for: the specific `Asare Ben Chris` crash case, saved contact-name parity in live chats/calls, and hearing the preferred ringtone during a real native outgoing call.
+- The newest chat-polish items still need signed-in native-device validation for the real keyboard/composer-on-typing behavior, actual voice-note capture/send, and audible message/incoming-call sounds under real notification conditions.
 
 ## Files
 - `/app/frontend/app/_layout.tsx` — Root with AuthProvider + ConvexProvider
