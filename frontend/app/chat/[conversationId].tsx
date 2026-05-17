@@ -875,9 +875,13 @@ export default function ChatScreen() {
     () => getSavedContactRecord(contacts, conversation, me?._id ? String(me._id) : undefined),
     [contacts, conversation, me?._id],
   );
+  const mergedPresenceSource = useMemo(
+    () => ({ ...(conversation || {}), ...(savedContactRecord || {}), otherUser: { ...(conversation?.otherUser || {}), ...(savedContactRecord || {}) } }),
+    [conversation, savedContactRecord],
+  );
   const title = savedContactTitle || getConversationDisplayName(conversation, me?._id ? String(me._id) : undefined, 'Chat');
   const isMineSelected = selectedMsg && me && selectedMsg.senderId === me._id;
-  const subtitle = formatPresenceSubtitle(savedContactRecord || conversation);
+  const subtitle = formatPresenceSubtitle(mergedPresenceSource);
   const avatarInitial = getDisplayInitials(title);
 
   const handleMenuAction = useCallback(

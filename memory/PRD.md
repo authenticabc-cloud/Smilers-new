@@ -102,6 +102,9 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - ✅ Simplified notification-sound choices to only `Smilers Notification` and `Silent`, synced the Android Messages notification channel to that choice, and made foreground translation faster by processing only recent untranslated messages in parallel
 - ✅ Fixed an audio-mode conflict between foreground message sounds and voice-note recording, and reduced the attachment sheet footprint slightly again
 - ✅ Added app-side Android notification hardening for native behavior: `POST_NOTIFICATIONS`, `USE_FULL_SCREEN_INTENT`, message/call channel syncing, and a missed-call local notification when an incoming call ends unanswered while the app is alive enough to observe it
+- ✅ Fixed the repeated call-screen naming issue for caller-launched calls by passing the resolved saved contact name into the call route, and updated caller hangup during ringing to use `declineCall` so the remote side can stop ringing correctly
+- ✅ Replaced the composer tools-button `requestAnimationFrame(...focus())` timing with an interaction-safe focus pattern to avoid the real-device backgrounding issue
+- ✅ Improved live status handling by merging saved contact data with conversation presence data instead of letting saved contact records hide online/last-seen fields
 - ✅ Added `/app/auth_testing.md` and `/app/auth-testing.md` to document current manual auth verification expectations for future testing runs
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_POLLS_FILES.md` because the Convex backend source is not present in this repo; it documents the required schema, `messages.send`, and `votePoll` backend changes
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_STATUS_STORIES.md` because the Convex backend source is not present in this repo; it documents the required `statuses` endpoints, story views, DM reply support, and direct-conversation mutation

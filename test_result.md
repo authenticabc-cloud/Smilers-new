@@ -767,6 +767,37 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "After iteration 27, fixed two follow-up regressions: foreground message alerts now stay fully silent when Silent is selected (no forced beep first), and missed-call local notifications no longer fire after an answered call because incoming answered state is tracked separately from merely seeing the ringing state."
+##   - task: "Call name, hangup, and tools-button stability"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/call/[conversationId].tsx"
+##     stuck_count: 0
+##     priority: "critical"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User reported that call screen still showed 'Smilers' instead of the saved receiver name, caller hangup still let the receiver continue ringing, and the red-circled composer tools button still backgrounded the app."
+##       - working: false
+##         agent: "troubleshoot_agent"
+##         comment: "RCA: call route lacked an authoritative saved-name param for outgoing calls, and caller hangup during ringing should use declineCall rather than endCall. Separate RCA found requestAnimationFrame + TextInput.focus was the likely iOS backgrounding trigger for the tools button."
+##       - working: true
+##         agent: "main"
+##         comment: "Chat now passes the resolved saved contact name into the call route, the call screen prioritizes that route name, caller hangup during ringing now uses declineCall, and the tools/sliders button now uses InteractionManager + delayed refocus instead of requestAnimationFrame. Local preview verified the call route shows 'Asare Ben Chris' and the tools button no longer crashes/breaks the chat route."
+##   - task: "Presence subtitle source merge"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/chat/[conversationId].tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "testing_agent"
+##         comment: "Iteration 28 found that savedContactRecord could hide conversation presence fields, so online status might still not show even after prior subtitle fixes."
+##       - working: true
+##         agent: "main"
+##         comment: "Merged saved-contact data with conversation presence fields before formatting the chat subtitle, so saved names and live online/last-seen data can coexist instead of overriding each other."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"
@@ -774,6 +805,8 @@
 ##   run_ui: true
 ## test_plan:
 ##   current_focus:
+##     - "Call name, hangup, and tools-button stability"
+##     - "Presence subtitle source merge"
 ##     - "Notification sound simplification and faster translation"
 ##     - "Voice-note audio-mode conflict fix"
 ##     - "Incoming notification channel hardening"
@@ -862,3 +895,5 @@
 ##     message: "Latest audio/notification pass is ready for validation: the slider/tools button now immediately refocuses the message input, notification-sound choices are reduced to Smilers Notification + Silent, Android message/call channels now sync to the selected sounds, the attachment sheet is slimmer, missed-call local notifications are scheduled when an incoming call ends unanswered while the app can observe it, and translation now processes only the newest pending messages in parallel for much faster results. Killed-state ringing/notifications may still depend on native build permissions and the backend push payload actually targeting the native Expo token instead of web/Chrome notifications." 
 ##   - agent: "main"
 ##     message: "Iteration 27 found and the main agent fixed two regressions: Silent mode now suppresses the foreground beep entirely, and answered incoming calls no longer trigger a false missed-call notification. Translation endpoint also re-verified fast (~0.58s in local curl after the latest speed pass). The largest unresolved area remains true killed-state push/ringing, which likely requires the external Convex backend to send Expo mobile pushes to the native token instead of only web/Chrome push flows." 
+##   - agent: "main"
+##     message: "Iteration 28 validated the latest call/chat fixes: the call route now displays the passed saved contact name locally, the compact call layout kept the name and controls visible, the tools button no longer broke preview after the InteractionManager focus change, and translation API remained fast. One follow-up presence merge issue was fixed immediately after the report so saved contact names no longer mask online/last-seen fields." 
