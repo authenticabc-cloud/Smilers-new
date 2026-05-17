@@ -798,6 +798,23 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Merged saved-contact data with conversation presence fields before formatting the chat subtitle, so saved names and live online/last-seen data can coexist instead of overriding each other."
+##   - task: "Delivery vs read tick separation"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/src/push/usePushNotifications.ts"
+##     stuck_count: 0
+##     priority: "critical"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User reported messages stay on one tick even when the receiver has internet and is inside the app; they only move to two ticks when the receiver opens that conversation."
+##       - working: true
+##         agent: "main"
+##         comment: "Added separate delivery acknowledgements: `usePushNotifications` now calls `messages.markDelivered` when a message push is received while the app is running, and chat screen calls `markDelivered` before `markRead` when visible messages load. Also adjusted tick rendering to treat `readBy.length > 0` as read instead of requiring >1."
+##       - working: true
+##         agent: "testing_agent"
+##         comment: "Iteration 30 confirmed the new code paths exist and the chat route stays stable, but true two-device delivery-vs-read validation still requires authenticated devices/accounts."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"
@@ -805,6 +822,7 @@
 ##   run_ui: true
 ## test_plan:
 ##   current_focus:
+##     - "Delivery vs read tick separation"
 ##     - "Call name, hangup, and tools-button stability"
 ##     - "Presence subtitle source merge"
 ##     - "Notification sound simplification and faster translation"
@@ -897,3 +915,5 @@
 ##     message: "Iteration 27 found and the main agent fixed two regressions: Silent mode now suppresses the foreground beep entirely, and answered incoming calls no longer trigger a false missed-call notification. Translation endpoint also re-verified fast (~0.58s in local curl after the latest speed pass). The largest unresolved area remains true killed-state push/ringing, which likely requires the external Convex backend to send Expo mobile pushes to the native token instead of only web/Chrome push flows." 
 ##   - agent: "main"
 ##     message: "Iteration 28 validated the latest call/chat fixes: the call route now displays the passed saved contact name locally, the compact call layout kept the name and controls visible, the tools button no longer broke preview after the InteractionManager focus change, and translation API remained fast. One follow-up presence merge issue was fixed immediately after the report so saved contact names no longer mask online/last-seen fields." 
+##   - agent: "main"
+##     message: "Iteration 30 validated the new receipt code paths: chat now separates delivered vs read logic, the app acknowledges deliveries when message pushes arrive while running, and the chat route still renders gracefully in preview. The remaining risk is backend/runtime availability of `messages.markDelivered`, which still needs a real two-device signed-in test to prove sender ticks advance before the receiver opens the conversation." 
