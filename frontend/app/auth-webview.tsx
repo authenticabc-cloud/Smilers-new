@@ -10,7 +10,7 @@ import Header from '../src/components/Header';
 import { useAuth } from '../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/theme';
 
-const WEB_APP_URL = process.env.EXPO_PUBLIC_WEB_APP_URL || 'https://smilers.online';
+const WEB_APP_URL = process.env.EXPO_PUBLIC_WEB_APP_URL || process.env.EXPO_PUBLIC_BACKEND_URL!;
 
 function buildSignInUrl(callbackUrl: string) {
   const url = new URL(WEB_APP_URL);

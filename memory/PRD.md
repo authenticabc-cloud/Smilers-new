@@ -107,6 +107,8 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - ✅ Improved live status handling by merging saved contact data with conversation presence data instead of letting saved contact records hide online/last-seen fields
 - ✅ Added separate delivery acknowledgements for message ticks: the app now attempts `messages.markDelivered` when a message push is received while running, and the chat screen calls `markDelivered` before `markRead` so delivered vs read can diverge more like the web app
 - ✅ Fixed tick rendering assumptions so `readBy.length > 0` is enough to show the read state, rather than incorrectly requiring more than one reader entry
+- ✅ Deployment-facing package cleanup: removed mixed Yarn lock usage, switched `packageManager` to npm, generated a consistent `package-lock.json`, and moved `eslint` + `eslint-config-expo` into runtime dependencies so the build-time `expo install` / config checks can find them reliably
+- ✅ Deployment-facing auth URL cleanup: added `EXPO_PUBLIC_WEB_APP_URL` to frontend env and removed the hardcoded `https://smilers.online` fallback in mobile auth screens/providers
 - ✅ Added `/app/auth_testing.md` and `/app/auth-testing.md` to document current manual auth verification expectations for future testing runs
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_POLLS_FILES.md` because the Convex backend source is not present in this repo; it documents the required schema, `messages.send`, and `votePoll` backend changes
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_STATUS_STORIES.md` because the Convex backend source is not present in this repo; it documents the required `statuses` endpoints, story views, DM reply support, and direct-conversation mutation
@@ -188,6 +190,7 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - The latest real-data regression checks for the user-reported contact/call issues are still partially pending because automation could not authenticate into a live account with real contacts; manual signed-in validation is still needed for: the specific `Asare Ben Chris` crash case, saved contact-name parity in live chats/calls, and hearing the preferred ringtone during a real native outgoing call.
 - The newest chat-polish items still need signed-in native-device validation for the real keyboard/composer-on-typing behavior, actual voice-note capture/send, and audible message/incoming-call sounds under real notification conditions.
 - The biggest remaining gap is true killed-state incoming-call/message delivery. The app-side notification channels and permissions are now in place, but the external Convex backend must also be sending Expo mobile pushes to the registered native token (not only web/Chrome push) for ringing/notifications to work when the native app is killed.
+- The current Android production build log still ends with a pure remote infrastructure failure in the EAS worker: Gradle wrapper download returns HTTP 502 while fetching `gradle-8.14.3-bin.zip`. That final blocker is outside app code; repo-side fixes now target the earlier package/env issues so any remaining failure is isolated to the remote Gradle download step.
 
 ## Files
 - `/app/frontend/app/_layout.tsx` — Root with AuthProvider + ConvexProvider

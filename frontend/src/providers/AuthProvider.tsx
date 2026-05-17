@@ -8,7 +8,7 @@ WebBrowser.maybeCompleteAuthSession();
 
 const OIDC_AUTHORITY = process.env.EXPO_PUBLIC_OIDC_AUTHORITY!;
 const OIDC_CLIENT_ID = process.env.EXPO_PUBLIC_OIDC_CLIENT_ID!;
-const WEB_APP_URL = process.env.EXPO_PUBLIC_WEB_APP_URL || 'https://smilers.online';
+const WEB_APP_URL = process.env.EXPO_PUBLIC_WEB_APP_URL || process.env.EXPO_PUBLIC_BACKEND_URL!;
 
 const STORAGE_KEYS = {
   ID_TOKEN: 'smilers_id_token',

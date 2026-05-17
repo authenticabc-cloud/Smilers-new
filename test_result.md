@@ -815,6 +815,23 @@
 ##       - working: true
 ##         agent: "testing_agent"
 ##         comment: "Iteration 30 confirmed the new code paths exist and the chat route stays stable, but true two-device delivery-vs-read validation still requires authenticated devices/accounts."
+##   - task: "Deployment package/env stabilization"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/package.json"
+##     stuck_count: 0
+##     priority: "critical"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "Deployment logs showed two app-side/package-side issues before the final Gradle failure: `eslint-config-expo` was referenced but not reliably available during the build flow, and mobile auth still had a hardcoded `https://smilers.online` fallback instead of an environment-driven web app URL."
+##       - working: false
+##         agent: "deployment_agent"
+##         comment: "Deployment RCA split the failure into code/package blockers vs a pure infrastructure blocker. Recommended repo-side fixes: remove mixed package-manager state, make eslint tooling reliably installable in the chosen package manager, and eliminate the hardcoded auth web URL fallback."
+##       - working: true
+##         agent: "main"
+##         comment: "Switched the frontend package manager state fully to npm, removed yarn.lock, generated a consistent package-lock, moved `eslint` + `eslint-config-expo` into dependencies, verified `require('eslint-config-expo/flat')` works locally, and added `EXPO_PUBLIC_WEB_APP_URL` while removing the hardcoded `https://smilers.online` fallback from auth-webview/AuthProvider."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"
@@ -822,6 +839,7 @@
 ##   run_ui: true
 ## test_plan:
 ##   current_focus:
+##     - "Deployment package/env stabilization"
 ##     - "Delivery vs read tick separation"
 ##     - "Call name, hangup, and tools-button stability"
 ##     - "Presence subtitle source merge"
@@ -917,3 +935,5 @@
 ##     message: "Iteration 28 validated the latest call/chat fixes: the call route now displays the passed saved contact name locally, the compact call layout kept the name and controls visible, the tools button no longer broke preview after the InteractionManager focus change, and translation API remained fast. One follow-up presence merge issue was fixed immediately after the report so saved contact names no longer mask online/last-seen fields." 
 ##   - agent: "main"
 ##     message: "Iteration 30 validated the new receipt code paths: chat now separates delivered vs read logic, the app acknowledges deliveries when message pushes arrive while running, and the chat route still renders gracefully in preview. The remaining risk is backend/runtime availability of `messages.markDelivered`, which still needs a real two-device signed-in test to prove sender ticks advance before the receiver opens the conversation." 
+##   - agent: "main"
+##     message: "Deployment log analysis isolated the final Android build failure as a remote Gradle download 502 in the EAS worker, but the repo-side blockers before that were still worth fixing. Package manager state is now consistently npm-based, eslint tooling is in runtime dependencies, and auth web URL resolution is env-driven instead of hardcoded to smilers.online."
