@@ -131,23 +131,28 @@ export function getEntityUserIds(entity: any, currentUserId?: string | null): st
 }
 
 export function findSavedContactDisplayName(contacts: any[] | undefined, entity: any, currentUserId?: string | null): string {
+  const contact = getSavedContactRecord(contacts, entity, currentUserId);
+  return contact ? getDisplayNameFromUser(contact, '') : '';
+}
+
+export function getSavedContactRecord(contacts: any[] | undefined, entity: any, currentUserId?: string | null): any | null {
   if (!Array.isArray(contacts) || contacts.length === 0) {
-    return '';
+    return null;
   }
 
   const ids = new Set(getEntityUserIds(entity, currentUserId));
   if (ids.size === 0) {
-    return '';
+    return null;
   }
 
   for (const contact of contacts) {
     const contactIds = getEntityUserIds(contact);
     if (contactIds.some((id) => ids.has(id))) {
-      return getDisplayNameFromUser(contact, '');
+      return contact;
     }
   }
 
-  return '';
+  return null;
 }
 
 export function getDisplayNameFromUser(user: any, fallback = 'Smilers user'): string {

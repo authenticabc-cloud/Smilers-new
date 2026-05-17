@@ -98,12 +98,14 @@ export default function CallScreen() {
   const router = useRouter();
   const { height: windowHeight } = useWindowDimensions();
   const { isAuthenticated } = useAuth();
-  const { conversationId: rawConversationId, type: rawTypeParam } = useLocalSearchParams<{
+  const { conversationId: rawConversationId, type: rawTypeParam, displayName: rawDisplayName } = useLocalSearchParams<{
     conversationId?: string | string[];
     type?: string | string[];
+    displayName?: string | string[];
   }>();
   const conversationId = Array.isArray(rawConversationId) ? rawConversationId[0] : rawConversationId;
   const typeParam = Array.isArray(rawTypeParam) ? rawTypeParam[0] : rawTypeParam;
+  const routeDisplayName = Array.isArray(rawDisplayName) ? rawDisplayName[0] : rawDisplayName;
   const requestedType: CallType = typeParam === 'video' || typeParam === 'screen' ? 'video' : 'voice';
   const startInScreenShare = typeParam === 'screen';
   const compactCallLayout = windowHeight < 720;
@@ -442,14 +444,18 @@ export default function CallScreen() {
     initStartedRef.current = false;
     if (id) {
       try {
-        await endCall({ callId: id });
+        if (activeCall?.status === 'ringing') {
+          await declineCall({ callId: id });
+        } else {
+          await endCall({ callId: id });
+        }
       } catch {}
       try {
         await cleanupSignaling({ callId: id });
       } catch {}
     }
     router.back();
-  }, [callId, cleanupSignaling, endCall, router]);
+  }, [activeCall?.status, callId, cleanupSignaling, declineCall, endCall, router]);
 
   const handleDecline = useCallback(async () => {
     const id = callId;
@@ -595,12 +601,15 @@ export default function CallScreen() {
   }, [screenSharing, callType]);
 
   const savedContactName = useMemo(
-    () => findSavedContactDisplayName(contacts, conversation || activeCall, me?._id ? String(me._id) : undefined),
-    [contacts, conversation, activeCall, me?._id],
+    () => findSavedContactDisplayName(contacts, conversation, me?._id ? String(me._id) : undefined),
+    [contacts, conversation, me?._id],
   );
   const otherName = useMemo(
-    () => savedContactName || getConversationDisplayName(conversation || activeCall, me?._id ? String(me._id) : undefined, 'Smilers'),
-    [activeCall, conversation, me?._id, savedContactName],
+    () => {
+      const routeName = typeof routeDisplayName === 'string' ? routeDisplayName.trim() : '';
+      return routeName || savedContactName || getConversationDisplayName(conversation, me?._id ? String(me._id) : undefined, 'Smilers');
+    },
+    [conversation, me?._id, routeDisplayName, savedContactName],
   );
 
   const existingParticipantIds = useMemo(

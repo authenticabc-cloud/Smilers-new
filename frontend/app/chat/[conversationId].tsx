@@ -31,7 +31,7 @@ import PollComposer from '../../src/components/PollComposer';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
-import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials } from '../../src/lib/displayName';
+import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
 import { getLanguageByCode } from '../../src/lib/languages';
 import {
   applyDraftFormatting,
@@ -865,9 +865,13 @@ export default function ChatScreen() {
     () => findSavedContactDisplayName(contacts, conversation, me?._id ? String(me._id) : undefined),
     [contacts, conversation, me?._id],
   );
+  const savedContactRecord = useMemo(
+    () => getSavedContactRecord(contacts, conversation, me?._id ? String(me._id) : undefined),
+    [contacts, conversation, me?._id],
+  );
   const title = savedContactTitle || getConversationDisplayName(conversation, me?._id ? String(me._id) : undefined, 'Chat');
   const isMineSelected = selectedMsg && me && selectedMsg.senderId === me._id;
-  const subtitle = formatPresenceSubtitle(conversation);
+  const subtitle = formatPresenceSubtitle(savedContactRecord || conversation);
   const avatarInitial = getDisplayInitials(title);
 
   const handleMenuAction = useCallback(
@@ -904,7 +908,7 @@ export default function ChatScreen() {
             );
             return;
           }
-          router.push(`/call/${conversationId}?type=screen` as any);
+          router.push(`/call/${conversationId}?type=screen&displayName=${encodeURIComponent(title)}` as any);
           break;
         case 'block':
           Alert.alert(
@@ -960,10 +964,18 @@ export default function ChatScreen() {
         </View>
 
         <View style={styles.chatHeaderActions}>
-          <TouchableOpacity testID="call-btn" onPress={() => router.push(`/call/${conversationId}?type=voice` as any)} style={styles.headerIconButton}>
+          <TouchableOpacity
+            testID="call-btn"
+            onPress={() => router.push(`/call/${conversationId}?type=voice&displayName=${encodeURIComponent(title)}` as any)}
+            style={styles.headerIconButton}
+          >
             <Ionicons name="call-outline" size={21} color={Colors.white} />
           </TouchableOpacity>
-          <TouchableOpacity testID="video-btn" onPress={() => router.push(`/call/${conversationId}?type=video` as any)} style={styles.headerIconButton}>
+          <TouchableOpacity
+            testID="video-btn"
+            onPress={() => router.push(`/call/${conversationId}?type=video&displayName=${encodeURIComponent(title)}` as any)}
+            style={styles.headerIconButton}
+          >
             <Ionicons name="videocam-outline" size={22} color={Colors.white} />
           </TouchableOpacity>
           <TouchableOpacity testID="chat-disappearing-btn" onPress={() => setShowDisappearingSheet(true)} style={styles.headerIconButton}>
