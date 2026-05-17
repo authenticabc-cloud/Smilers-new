@@ -21,7 +21,7 @@ import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
 import { useAuth } from '../src/providers/AuthProvider';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
-import { getLanguageByCode, LANGUAGES, LanguageItem } from '../src/lib/languages';
+import { getLanguageByCode, LANGUAGES, LanguageItem, UN_OFFICIAL_LANGUAGE_CODES } from '../src/lib/languages';
 import { readStoredJson, writeStoredJson } from '../src/lib/settingsStorage';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/theme';
 
@@ -60,10 +60,6 @@ function LegacyLanguagesScreen() {
       if (!initial) {
         initial = (await readStoredJson(LOCAL_KEY, [])) as string[];
       }
-      // Always include the user's primary preferredLanguage if it's set.
-      if (me?.preferredLanguage && !initial.includes(me.preferredLanguage)) {
-        initial = [me.preferredLanguage, ...initial];
-      }
       if (!cancelled) {
         setSelected(Array.isArray(initial) ? initial : []);
         setInitialized(true);
@@ -90,6 +86,22 @@ function LegacyLanguagesScreen() {
       .map((code) => LANGUAGES.find((l) => l.code === code))
       .filter((l): l is LanguageItem => Boolean(l));
   }, [selected]);
+
+  const groupedFiltered = useMemo(() => {
+    if (search.trim()) {
+      return [{ title: 'SEARCH RESULTS', items: filtered }];
+    }
+
+    const unOfficial = filtered.filter((item) => UN_OFFICIAL_LANGUAGE_CODES.includes(item.code as any));
+    const otherLanguages = filtered.filter((item) => !UN_OFFICIAL_LANGUAGE_CODES.includes(item.code as any));
+
+    return [
+      { title: 'UN OFFICIAL LANGUAGES', items: unOfficial },
+      { title: 'OTHER LANGUAGES', items: otherLanguages },
+    ].filter((section) => section.items.length > 0);
+  }, [filtered, search]);
+
+  const defaultLanguage = getLanguageByCode(me?.preferredLanguage || '') || getLanguageByCode('en');
 
   const toggle = useCallback((code: string) => {
     setSelected((prev) => {
@@ -170,37 +182,19 @@ function LegacyLanguagesScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={styles.intro}>
-          <Text style={styles.introTitle}>Languages you understand</Text>
-          <Text style={styles.introBody}>
-            Messages in these languages will <Text style={styles.bold}>not</Text> be auto-translated. Everything else is
-            translated into your primary language.
+          <Text style={styles.introBodyCentered}>
+            Your <Text style={styles.bold}>default language</Text> is your primary language.
+          </Text>
+          <Text style={styles.introBodyCentered}>
+            Messages in your <Text style={styles.bold}>selected languages</Text> will not be translated. Tap a language to select it.
           </Text>
         </View>
 
-        {selectedLanguages.length > 0 ? (
-          <View style={styles.chipsWrap}>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.chipsRow}
-            >
-              {selectedLanguages.map((l) => (
-                <Pressable
-                  key={l.code}
-                  onPress={() => toggle(l.code)}
-                  style={styles.chip}
-                  testID={`language-chip-${l.code}`}
-                >
-                  <Text style={styles.chipFlag}>{l.flag}</Text>
-                  <Text style={styles.chipText} numberOfLines={1}>
-                    {l.name}
-                  </Text>
-                  <Ionicons name="close" size={14} color={Colors.primaryDark} />
-                </Pressable>
-              ))}
-            </ScrollView>
-          </View>
-        ) : null}
+        <View style={styles.defaultRow} testID="languages-default-row">
+          <Ionicons name="star" size={18} color={Colors.primary} />
+          <Text style={styles.defaultLabel}>Default:</Text>
+          <Text style={styles.defaultValue}>{defaultLanguage?.name || 'English'}</Text>
+        </View>
 
         <View style={styles.searchWrap}>
           <Ionicons name="search" size={18} color={Colors.textMuted} />
@@ -237,42 +231,47 @@ function LegacyLanguagesScreen() {
               <Text style={styles.emptyText}>No languages match “{search}”.</Text>
             </View>
           ) : (
-            filtered.map((l, index) => {
-              const checked = selected.includes(l.code);
-              const isPrimary = me?.preferredLanguage === l.code;
-              return (
-                <TouchableOpacity
-                  key={l.code}
-                  style={[styles.row, index === 0 ? styles.rowFirst : null]}
-                  activeOpacity={0.7}
-                  onPress={() => toggle(l.code)}
-                  testID={`language-row-${l.code}`}
-                >
-                  <Text style={styles.rowFlag}>{l.flag}</Text>
-                  <View style={styles.rowMid}>
-                    <View style={styles.rowTitleLine}>
-                      <Text style={styles.rowName} numberOfLines={1}>
-                        {l.name}
-                      </Text>
-                      {isPrimary ? (
-                        <View style={styles.primaryBadge}>
-                          <Text style={styles.primaryBadgeText}>Primary</Text>
+            groupedFiltered.map((section) => (
+              <View key={section.title}>
+                <Text style={styles.sectionHeading}>{section.title}</Text>
+                {section.items.map((l) => {
+                  const checked = selected.includes(l.code);
+                  const isPrimary = me?.preferredLanguage === l.code;
+                  return (
+                    <TouchableOpacity
+                      key={l.code}
+                      style={styles.row}
+                      activeOpacity={0.7}
+                      onPress={() => toggle(l.code)}
+                      testID={`language-row-${l.code}`}
+                    >
+                      <View
+                        style={[styles.checkbox, checked ? styles.checkboxOn : null]}
+                        testID={`language-checkbox-${l.code}${checked ? '-on' : '-off'}`}
+                      >
+                        {checked ? <Ionicons name="checkmark" size={16} color={Colors.white} /> : null}
+                      </View>
+                      <View style={styles.rowMid}>
+                        <View style={styles.rowTitleLine}>
+                          <Text style={[styles.rowName, isPrimary ? styles.rowNamePrimary : null]} numberOfLines={1}>
+                            {l.name}
+                          </Text>
+                          {isPrimary ? (
+                            <View style={styles.primaryBadge}>
+                              <Text style={styles.primaryBadgeText}>DEFAULT</Text>
+                            </View>
+                          ) : null}
                         </View>
-                      ) : null}
-                    </View>
-                    <Text style={styles.rowNative} numberOfLines={1}>
-                      {l.nativeName}
-                    </Text>
-                  </View>
-                  <View
-                    style={[styles.checkbox, checked ? styles.checkboxOn : null]}
-                    testID={`language-checkbox-${l.code}${checked ? '-on' : '-off'}`}
-                  >
-                    {checked ? <Ionicons name="checkmark" size={16} color={Colors.white} /> : null}
-                  </View>
-                </TouchableOpacity>
-              );
-            })
+                        <Text style={styles.rowNative} numberOfLines={1}>
+                          {l.nativeName}
+                        </Text>
+                      </View>
+                      {checked ? <Ionicons name="checkmark" size={22} color={Colors.primary} /> : null}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ))
           )}
 
           <View style={styles.footer}>
@@ -311,6 +310,13 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: Colors.borderLight,
+    gap: 6,
+  },
+  introBodyCentered: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    lineHeight: 20,
+    textAlign: 'center',
   },
   introTitle: {
     fontSize: FontSize.lg,
@@ -374,6 +380,36 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
   },
   loadingWrap: { alignItems: 'center', paddingVertical: Spacing.xl },
+  defaultRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: Colors.surface,
+    marginHorizontal: Spacing.base,
+    marginBottom: 4,
+    paddingHorizontal: Spacing.base,
+    paddingVertical: 10,
+    borderRadius: Radius.md,
+  },
+  defaultLabel: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+  },
+  defaultValue: {
+    fontSize: FontSize.sm,
+    color: Colors.textPrimary,
+    fontWeight: FontWeight.bold,
+  },
+  sectionHeading: {
+    fontSize: 12,
+    fontWeight: FontWeight.bold,
+    color: Colors.textMuted,
+    letterSpacing: 0.8,
+    marginTop: 14,
+    marginBottom: 6,
+    marginHorizontal: Spacing.base,
+    textTransform: 'uppercase',
+  },
   emptyWrap: {
     alignItems: 'center',
     paddingVertical: Spacing.xl,
@@ -398,6 +434,9 @@ const styles = StyleSheet.create({
     fontSize: FontSize.base,
     fontWeight: FontWeight.semibold,
     color: Colors.textPrimary,
+  },
+  rowNamePrimary: {
+    color: Colors.primaryDark,
   },
   rowNative: {
     fontSize: FontSize.sm,
@@ -443,7 +482,7 @@ const styles = StyleSheet.create({
 
 const PREFERRED_LANGUAGE_KEY = 'smilers_preferred_language';
 
-export default function LanguagesScreen() {
+export function MessageLanguageScreen() {
   const router = useRouter();
   const { isAuthenticated } = useAuth();
   const { data: me, refetch } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null, isAuthenticated);
@@ -463,7 +502,7 @@ export default function LanguagesScreen() {
       const selected = getLanguageByCode(preferred) || getLanguageByCode('en');
       if (!active || !selected) return;
       setSelectedCode(selected.code);
-      setQuery(selected.name);
+      setQuery('');
       setInitialized(true);
     };
     void load();
@@ -476,7 +515,7 @@ export default function LanguagesScreen() {
 
   const filteredLanguages = useMemo(() => {
     const term = query.trim().toLowerCase();
-    if (!term) return LANGUAGES.slice(0, 16);
+    if (!term) return LANGUAGES;
     return LANGUAGES.filter((item) => {
       const haystack = `${item.name} ${item.nativeName} ${item.code}`.toLowerCase();
       return haystack.includes(term);
@@ -492,7 +531,7 @@ export default function LanguagesScreen() {
       if (savingCode) return;
       setSavingCode(item.code);
       setSelectedCode(item.code);
-      setQuery(item.name);
+      setQuery('');
 
       let savedToServer = false;
       try {
@@ -725,3 +764,5 @@ const screenshotStyles = StyleSheet.create({
     color: Colors.primaryDark,
   },
 });
+
+export default LegacyLanguagesScreen;

@@ -38,6 +38,7 @@ export default function RootLayout() {
               <Stack.Screen name="ai-chat" />
               <Stack.Screen name="blocked" />
               <Stack.Screen name="notifications" />
+              <Stack.Screen name="message-language" />
               <Stack.Screen name="earnings" />
               <Stack.Screen name="privacy" />
               <Stack.Screen name="app-lock" />

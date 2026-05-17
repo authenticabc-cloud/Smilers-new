@@ -105,7 +105,7 @@ export default function ProfileScreen() {
   }, [closeEditor, editValue, editingField, updateProfile]);
 
   const goToLanguagePicker = useCallback(() => {
-    router.push('/languages' as any);
+    router.push('/message-language' as any);
   }, [router]);
 
   const performUpload = useCallback(

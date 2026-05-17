@@ -1,0 +1,1 @@
+export { MessageLanguageScreen as default } from './languages';

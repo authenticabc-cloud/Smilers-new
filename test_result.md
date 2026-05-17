@@ -674,6 +674,51 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Switched foreground message alerts to a two-step playback sequence (beep + selected notification tone), added `Classic Ring` and `Smilers Notification` to the shared ringtone catalog, and expanded bundled sound declarations so the extra ringtone options now appear in settings."
+##   - task: "Asare Ben Chris crash fix via translation-loop RCA"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/chat/[conversationId].tsx"
+##     stuck_count: 2
+##     priority: "critical"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User reported the Asare Ben Chris crash still persisted, with the screen looking shaky for a moment before Android closed the app."
+##       - working: false
+##         agent: "troubleshoot_agent"
+##         comment: "Identified an infinite render loop in the chat auto-translation effect because translatedMessageMap was both a dependency and state updated by the same effect."
+##       - working: true
+##         agent: "main"
+##         comment: "Removed translatedMessageMap from the effect dependency loop, added a ref to track already-translated message IDs, and clear that ref when conversationId changes so translated conversations no longer trigger runaway rerenders."
+##   - task: "Split message-language vs languages-tab flows"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/languages.tsx"
+##     stuck_count: 0
+##     priority: "critical"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User clarified that Message Language and Languages are different flows: Message Language is a single preferred-language picker for auto-translation, while Languages is the multi-select skip-translation list."
+##       - working: true
+##         agent: "main"
+##         comment: "Split the flows by making `/message-language` the dedicated single-select preferred-language route and restoring `/languages` as the multi-select settings screen with search, default-language callout, and grouped checkbox rows."
+##   - task: "Expanded official language catalog"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/src/lib/languages.ts"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User reported only a tiny subset of languages was visible compared with the web app and asked for all recognised official languages, with distinct variants where the web separates them."
+##       - working: true
+##         agent: "main"
+##         comment: "Expanded the shared language catalog to 111 entries, preserved distinct variants like Chinese Simplified/Traditional and Portuguese/Brazil, grouped UN official languages separately, and made the message-language picker show the full list by default instead of truncating to 16 items."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"
@@ -681,6 +726,9 @@
 ##   run_ui: true
 ## test_plan:
 ##   current_focus:
+##     - "Asare Ben Chris crash fix via translation-loop RCA"
+##     - "Split message-language vs languages-tab flows"
+##     - "Expanded official language catalog"
 ##     - "Emoji categories and attachment-sheet web parity"
 ##     - "Composer typing visibility and voice-note start fix"
 ##     - "Message alert sound and extra ringtone catalog"
@@ -757,3 +805,5 @@
 ##     message: "Iteration 24's only concrete preview regression is fixed: the compact call-screen contact title is visible again after removing the problematic single-line auto-fit clamp and rechecking `/call/testconversation1?type=voice` at 375x667." 
 ##   - agent: "main"
 ##     message: "Latest user-requested chat polish is ready for validation: the emoji picker now has many more categories and a web-like category row, the attachment sheet now follows the floating web-card layout with the requested five actions, chat keyboard avoidance was restored to keep the composer visible while typing, voice-note startup now uses an explicit prepare/start recorder flow, and the ringtone catalog / message alert playback now include the extra sound options. Device validation is still especially important for actual recording, typing above the keyboard, and hearing the selected message/incoming-call sounds." 
+##   - agent: "main"
+##     message: "Latest regression + language batch is ready for validation: the Asare Ben Chris crash path now has a real RCA-backed fix for the translation render loop, `/message-language` now owns the single preferred-language picker, `/languages` is back to being the multi-select skip-translation list, and the shared language catalog now contains 111 official-language entries with distinct variants and grouped headings. Real signed-in validation is still required for the exact Asare Ben Chris conversation on device." 

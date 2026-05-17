@@ -32,6 +32,7 @@ import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
 import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials } from '../../src/lib/displayName';
+import { getLanguageByCode } from '../../src/lib/languages';
 import {
   applyDraftFormatting,
   DRAFT_TEXT_COLORS,
@@ -115,6 +116,7 @@ export default function ChatScreen() {
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [translatedMessageMap, setTranslatedMessageMap] = useState<Record<string, string>>({});
   const [recentEmojis, setRecentEmojis] = useState<string[]>(['😀', '😂', '😍', '🙏', '🔥', '🎉', '❤️', '👍']);
+  const translatedIdsRef = useRef<Set<string>>(new Set());
   const recRef = useRef<Audio.Recording | null>(null);
   const recTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const recCancelledRef = useRef(false);
@@ -231,25 +233,26 @@ export default function ChatScreen() {
   }, [disappearingMode, messages]);
 
   const preferredLanguage = typeof me?.preferredLanguage === 'string' ? me.preferredLanguage : '';
+  const preferredLanguageLabel = getLanguageByCode(preferredLanguage)?.name || preferredLanguage;
   const skipTranslationLanguages = useMemo(() => {
     const values = new Set<string>();
     [me?.languages, me?.skipTranslationLanguages, me?.spokenLanguages].forEach((list) => {
       if (Array.isArray(list)) {
         list.forEach((code) => {
           if (typeof code === 'string' && code.trim()) {
-            values.add(code.trim());
+            values.add(getLanguageByCode(code.trim())?.name || code.trim());
           }
         });
       }
     });
-    if (preferredLanguage) {
-      values.add(preferredLanguage);
+    if (preferredLanguageLabel) {
+      values.add(preferredLanguageLabel);
     }
     return Array.from(values);
-  }, [me?.languages, me?.preferredLanguage, me?.skipTranslationLanguages, me?.spokenLanguages, preferredLanguage]);
+  }, [me?.languages, me?.preferredLanguage, me?.skipTranslationLanguages, me?.spokenLanguages, preferredLanguageLabel]);
 
   useEffect(() => {
-    if (!preferredLanguage || visibleMessages.length === 0) {
+    if (!preferredLanguageLabel || visibleMessages.length === 0) {
       return;
     }
 
@@ -257,7 +260,7 @@ export default function ChatScreen() {
       if (!message?._id || !message?.text || message?.senderId === me?._id) {
         return false;
       }
-      return !translatedMessageMap[message._id];
+      return !translatedIdsRef.current.has(message._id);
     });
 
     if (candidates.length === 0) {
@@ -269,9 +272,10 @@ export default function ChatScreen() {
     (async () => {
       const updates: Record<string, string> = {};
       for (const message of candidates) {
+        translatedIdsRef.current.add(message._id);
         const translated = await translateIncomingMessageText({
           text: String(message.text || ''),
-          targetLanguage: preferredLanguage,
+          targetLanguage: preferredLanguageLabel,
           skipLanguages: skipTranslationLanguages,
         });
         if (!cancelled && translated) {
@@ -287,7 +291,12 @@ export default function ChatScreen() {
     return () => {
       cancelled = true;
     };
-  }, [me?._id, preferredLanguage, skipTranslationLanguages, translatedMessageMap, visibleMessages]);
+  }, [me?._id, preferredLanguageLabel, skipTranslationLanguages, visibleMessages]);
+
+  useEffect(() => {
+    translatedIdsRef.current.clear();
+    setTranslatedMessageMap({});
+  }, [conversationId]);
 
   const displayMessages = useMemo(
     () => visibleMessages.map((message) => (
