@@ -720,7 +720,7 @@ export default function CallScreen() {
           ) : null}
           {/* Top overlay: name + duration */}
           <SafeAreaView edges={['top']} style={styles.videoTopOverlay} pointerEvents="none">
-            <Text style={styles.videoName} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+            <Text style={styles.videoName} numberOfLines={1} ellipsizeMode="tail">
               {otherName}
             </Text>
             <Text style={styles.videoStatus}>{isActive ? durationLabel : statusText}</Text>
@@ -755,9 +755,6 @@ export default function CallScreen() {
 
                 <Text
                   style={[styles.name, compactCallLayout ? styles.nameCompact : null]}
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.72}
                   testID="call-contact-name"
                 >
                   {otherName}
@@ -1444,6 +1441,7 @@ const styles = StyleSheet.create({
   },
   name: {
     fontSize: 30,
+    lineHeight: 36,
     fontWeight: FontWeight.bold,
     color: Colors.white,
     marginTop: Spacing.lg,
@@ -1451,7 +1449,8 @@ const styles = StyleSheet.create({
     maxWidth: '90%',
   },
   nameCompact: {
-    fontSize: 26,
+    fontSize: 24,
+    lineHeight: 28,
     marginTop: Spacing.base,
   },
   status: {

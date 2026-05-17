@@ -542,6 +542,9 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "After testing-agent feedback about compact-height overlap, reworked the non-video voice-call hero area into a centered content block, added compact-layout sizing/spacing for short mobile heights, and self-verified `/call/testconversation1?type=voice` at 375x667 with the status text no longer colliding with the control region."
+##       - working: true
+##         agent: "main"
+##         comment: "Follow-up testing exposed a compact web-preview regression where `call-contact-name` rendered with zero height. Removed the single-line auto-clamp on the voice-call title, set explicit line-height sizing, and self-verified the compact 375x667 route now shows the caller/contact name visibly again."
 ##   - task: "Chat composer web-parity restyle"
 ##     implemented: true
 ##     working: true
@@ -705,3 +708,5 @@
 ##     message: "Testing-agent reported one concrete UI regression on compact call screens. That is now addressed: the voice-call hero/status stack was restructured for short mobile heights and self-verified locally at 375x667 with no visual overlap into the control row. Remaining blocked checks still require authenticated real data and a native outgoing-call audio pass."
 ##   - agent: "main"
 ##     message: "New batch ready for validation: 1) circular-reference crash protection was added for the specific contact-open flow, 2) chat/call titles now try the saved Contacts data before falling back to conversation labels, 3) the composer now docks flush to the bottom with a richer emoji picker, 4) incoming text translation now goes through a new `/api/translate` backend endpoint using Gemini 3 Flash + the Emergent key and respects preferred/skip languages, and 5) presence + Android incoming-call notification channels now sync more aggressively for fresher last-seen and ringtone behavior. Authenticated device validation is still especially important for the real Asare Ben Chris contact, real saved-name parity, and native background/locked-call ringtone behavior." 
+##   - agent: "main"
+##     message: "Iteration 24's only concrete preview regression is fixed: the compact call-screen contact title is visible again after removing the problematic single-line auto-fit clamp and rechecking `/call/testconversation1?type=voice` at 375x667." 
