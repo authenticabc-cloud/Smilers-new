@@ -719,6 +719,51 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Expanded the shared language catalog to 111 entries, preserved distinct variants like Chinese Simplified/Traditional and Portuguese/Brazil, grouped UN official languages separately, and made the message-language picker show the full list by default instead of truncating to 16 items."
+##   - task: "Notification sound simplification and faster translation"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/ringtones.tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User asked to keep only the customised message tone and Silent in notification sounds, and reported translation had become very slow or stalled."
+##       - working: true
+##         agent: "main"
+##         comment: "Filtered notification-sound choices down to Smilers Notification + Silent, synced the Android messages channel to those choices, and sped up chat translation by translating only the newest pending messages in parallel instead of walking the entire visible list sequentially."
+##   - task: "Voice-note audio-mode conflict fix"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/src/lib/notification/useMessageNotificationSound.ts"
+##     stuck_count: 1
+##     priority: "critical"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User reported voice-note recording still showed the recording bar but did not truly work."
+##       - working: false
+##         agent: "troubleshoot_agent"
+##         comment: "Identified a global audio-mode conflict: message notification playback was switching audio mode to allowsRecordingIOS=false and breaking later recording sessions."
+##       - working: true
+##         agent: "main"
+##         comment: "Updated the notification-sound hook to keep recording-compatible audio mode so voice-note recording is no longer undermined by global message-sound playback."
+##   - task: "Incoming notification channel hardening"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/src/push/usePushNotifications.ts"
+##     stuck_count: 0
+##     priority: "critical"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User reported native notifications/ringing were the biggest blocker, especially for off-app and killed-state behavior, and wanted missed-call notifications too."
+##       - working: true
+##         agent: "main"
+##         comment: "Hardened Android notification setup by adding POST_NOTIFICATIONS + full-screen-intent permissions in app config, syncing the Messages channel to the selected message sound, trimming the attachment sheet width, and scheduling a missed-call local notification when an incoming call ends unanswered while the app is alive enough to observe that transition."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"
@@ -726,6 +771,9 @@
 ##   run_ui: true
 ## test_plan:
 ##   current_focus:
+##     - "Notification sound simplification and faster translation"
+##     - "Voice-note audio-mode conflict fix"
+##     - "Incoming notification channel hardening"
 ##     - "Asare Ben Chris crash fix via translation-loop RCA"
 ##     - "Split message-language vs languages-tab flows"
 ##     - "Expanded official language catalog"
@@ -807,3 +855,5 @@
 ##     message: "Latest user-requested chat polish is ready for validation: the emoji picker now has many more categories and a web-like category row, the attachment sheet now follows the floating web-card layout with the requested five actions, chat keyboard avoidance was restored to keep the composer visible while typing, voice-note startup now uses an explicit prepare/start recorder flow, and the ringtone catalog / message alert playback now include the extra sound options. Device validation is still especially important for actual recording, typing above the keyboard, and hearing the selected message/incoming-call sounds." 
 ##   - agent: "main"
 ##     message: "Latest regression + language batch is ready for validation: the Asare Ben Chris crash path now has a real RCA-backed fix for the translation render loop, `/message-language` now owns the single preferred-language picker, `/languages` is back to being the multi-select skip-translation list, and the shared language catalog now contains 111 official-language entries with distinct variants and grouped headings. Real signed-in validation is still required for the exact Asare Ben Chris conversation on device." 
+##   - agent: "main"
+##     message: "Latest audio/notification pass is ready for validation: the slider/tools button now immediately refocuses the message input, notification-sound choices are reduced to Smilers Notification + Silent, Android message/call channels now sync to the selected sounds, the attachment sheet is slimmer, missed-call local notifications are scheduled when an incoming call ends unanswered while the app can observe it, and translation now processes only the newest pending messages in parallel for much faster results. Killed-state ringing/notifications may still depend on native build permissions and the backend push payload actually targeting the native Expo token instead of web/Chrome notifications." 

@@ -21,6 +21,7 @@ import { useMutation } from 'convex/react';
 import { Camera } from 'expo-camera';
 import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Notifications from 'expo-notifications';
 import Animated, {
   Easing,
   cancelAnimation,
@@ -168,6 +169,7 @@ export default function CallScreen() {
   const sessionRef = useRef<any>(null);
   const initStartedRef = useRef(false);
   const callStartedAtRef = useRef<number | null>(null);
+  const incomingCallSeenRef = useRef(false);
 
   const applyAudioMode = useCallback(async () => {
     if (Platform.OS === 'web') return;
@@ -475,6 +477,10 @@ export default function CallScreen() {
 
   // If remote ends the call, also tear down locally
   useEffect(() => {
+    if (isIncoming) {
+      incomingCallSeenRef.current = true;
+    }
+
     if (
       activeCall &&
       (activeCall.status === 'ended' || activeCall.status === 'declined') &&
@@ -487,7 +493,33 @@ export default function CallScreen() {
       const timeoutId = setTimeout(() => router.back(), 700);
       return () => clearTimeout(timeoutId);
     }
-  }, [activeCall, router]);
+  }, [activeCall, isIncoming, router]);
+
+  useEffect(() => {
+    if (!activeCall || isActive || !incomingCallSeenRef.current) {
+      return;
+    }
+
+    if (activeCall.status !== 'ended') {
+      return;
+    }
+
+    if (Platform.OS === 'web') {
+      return;
+    }
+
+    incomingCallSeenRef.current = false;
+
+    void Notifications.scheduleNotificationAsync({
+      content: {
+        title: 'Missed call',
+        body: `Missed call from ${otherName}`,
+        data: { type: 'message', conversationId },
+        sound: 'message_notification',
+      },
+      trigger: null,
+    }).catch(() => undefined);
+  }, [activeCall, conversationId, isActive, otherName]);
 
   // Cleanup on unmount
   useEffect(() => {

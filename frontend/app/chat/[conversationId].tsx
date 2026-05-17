@@ -117,6 +117,7 @@ export default function ChatScreen() {
   const [translatedMessageMap, setTranslatedMessageMap] = useState<Record<string, string>>({});
   const [recentEmojis, setRecentEmojis] = useState<string[]>(['😀', '😂', '😍', '🙏', '🔥', '🎉', '❤️', '👍']);
   const translatedIdsRef = useRef<Set<string>>(new Set());
+  const messageInputRef = useRef<TextInput | null>(null);
   const recRef = useRef<Audio.Recording | null>(null);
   const recTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const recCancelledRef = useRef(false);
@@ -261,7 +262,7 @@ export default function ChatScreen() {
         return false;
       }
       return !translatedIdsRef.current.has(message._id);
-    });
+    }).slice(-8);
 
     if (candidates.length === 0) {
       return;
@@ -271,17 +272,23 @@ export default function ChatScreen() {
 
     (async () => {
       const updates: Record<string, string> = {};
-      for (const message of candidates) {
-        translatedIdsRef.current.add(message._id);
-        const translated = await translateIncomingMessageText({
-          text: String(message.text || ''),
-          targetLanguage: preferredLanguageLabel,
-          skipLanguages: skipTranslationLanguages,
-        });
+      candidates.forEach((message) => translatedIdsRef.current.add(message._id));
+      const results = await Promise.all(
+        candidates.map(async (message) => ({
+          id: message._id,
+          translated: await translateIncomingMessageText({
+            text: String(message.text || ''),
+            targetLanguage: preferredLanguageLabel,
+            skipLanguages: skipTranslationLanguages,
+          }),
+        })),
+      );
+
+      results.forEach(({ id, translated }) => {
         if (!cancelled && translated) {
-          updates[message._id] = translated;
+          updates[id] = translated;
         }
-      }
+      });
 
       if (!cancelled && Object.keys(updates).length > 0) {
         setTranslatedMessageMap((current) => ({ ...current, ...updates }));
@@ -1144,6 +1151,7 @@ export default function ChatScreen() {
           ) : (
             <>
               <TextInput
+                ref={messageInputRef}
                 value={text}
                 onChangeText={handleTyping}
                 placeholder="Type your message…"
@@ -1191,7 +1199,10 @@ export default function ChatScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.webToolBtn}
-                onPress={() => setShowComposerFormatting((current) => !current)}
+                onPress={() => {
+                  setShowComposerFormatting((current) => !current);
+                  requestAnimationFrame(() => messageInputRef.current?.focus());
+                }}
                 disabled={!isConversationAvailable || uploading}
                 testID="composer-toolbar-tools"
               >

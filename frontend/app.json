@@ -80,13 +80,15 @@
         "USE_BIOMETRIC",
         "USE_FINGERPRINT",
         "VIBRATE",
+        "POST_NOTIFICATIONS",
         "RECEIVE_BOOT_COMPLETED",
         "MODIFY_AUDIO_SETTINGS",
         "WAKE_LOCK",
         "ACCESS_NETWORK_STATE",
         "CHANGE_NETWORK_STATE",
         "BLUETOOTH",
-        "BLUETOOTH_CONNECT"
+        "BLUETOOTH_CONNECT",
+        "USE_FULL_SCREEN_INTENT"
       ]
     },
     "web": {

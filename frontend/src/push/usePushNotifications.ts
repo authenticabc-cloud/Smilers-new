@@ -24,6 +24,16 @@ if (Platform.OS !== 'web') {
 const CALL_CATEGORY = 'incoming-call';
 const RINGTONE_PREFS_KEY = 'smilers_ringtone_prefs';
 
+function resolveMessageChannelSound(notificationSoundId?: string | null) {
+  switch (notificationSoundId) {
+    case 'silent':
+      return undefined;
+    case 'smilers_notification':
+    default:
+      return 'message_notification';
+  }
+}
+
 function resolveCallChannelSound(ringtoneId?: string | null) {
   switch (ringtoneId) {
     case 'ringtone':
@@ -44,7 +54,7 @@ function resolveCallChannelSound(ringtoneId?: string | null) {
   }
 }
 
-async function setupCategoriesAndChannels(selectedRingtoneId?: string | null) {
+async function setupCategoriesAndChannels(prefs?: { ringtone?: string | null; notificationSound?: string | null } | null) {
   if (Platform.OS === 'web') {
     return;
   }
@@ -68,7 +78,7 @@ async function setupCategoriesAndChannels(selectedRingtoneId?: string | null) {
     await Notifications.setNotificationChannelAsync('calls', {
       name: 'Incoming Calls',
       importance: Notifications.AndroidImportance.MAX,
-      sound: resolveCallChannelSound(selectedRingtoneId),
+      sound: resolveCallChannelSound(prefs?.ringtone),
       vibrationPattern: [0, 1000, 500, 1000, 500, 1000],
       lightColor: '#E4B53B',
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
@@ -78,7 +88,7 @@ async function setupCategoriesAndChannels(selectedRingtoneId?: string | null) {
     await Notifications.setNotificationChannelAsync('messages', {
       name: 'Messages',
       importance: Notifications.AndroidImportance.HIGH,
-      sound: 'message_notification',
+      sound: resolveMessageChannelSound(prefs?.notificationSound),
       vibrationPattern: [0, 250, 250, 250],
       lightColor: '#E4B53B',
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
@@ -107,8 +117,8 @@ export function usePushNotifications() {
 
     (async () => {
       try {
-        const prefs = await readStoredJson(RINGTONE_PREFS_KEY, null);
-        await setupCategoriesAndChannels((prefs as any)?.ringtone || null);
+        const prefs = (await readStoredJson(RINGTONE_PREFS_KEY, null)) as any;
+        await setupCategoriesAndChannels(prefs || null);
 
         if (!Device.isDevice) {
           console.log('[push] Skipping registration: not a physical device');

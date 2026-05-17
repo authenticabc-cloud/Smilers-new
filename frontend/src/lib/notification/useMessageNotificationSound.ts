@@ -58,7 +58,7 @@ export function useMessageNotificationSound() {
     try {
       playingRef.current = true;
       await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
+        allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
         staysActiveInBackground: false,
         shouldDuckAndroid: true,

@@ -63,6 +63,16 @@ function resolveCallChannelSound(ringtoneId?: RingId | null) {
   }
 }
 
+function resolveMessageChannelSound(notificationSoundId?: RingId | null) {
+  switch (notificationSoundId) {
+    case 'silent':
+      return undefined;
+    case 'smilers_notification':
+    default:
+      return 'message_notification';
+  }
+}
+
 type Mode = 'ringtone' | 'notificationSound';
 
 export default function RingtonesScreen() {
@@ -207,6 +217,14 @@ export default function RingtonesScreen() {
             bypassDnd: true,
             enableVibrate: next.vibrate,
           });
+          await Notifications.setNotificationChannelAsync('messages', {
+            name: 'Messages',
+            importance: Notifications.AndroidImportance.HIGH,
+            sound: resolveMessageChannelSound(next.notificationSound),
+            vibrationPattern: [0, 250, 250, 250],
+            lightColor: '#E4B53B',
+            lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+          });
         } catch (channelError: any) {
           console.warn('failed to update call notification channel:', channelError?.message);
         }
@@ -244,7 +262,12 @@ export default function RingtonesScreen() {
       ? 'Plays for incoming voice and video calls.'
       : 'Plays for messages, group activity, and other alerts.';
 
-  const list = useMemo(() => RING_CATALOG, []);
+  const list = useMemo(
+    () => (mode === 'notificationSound'
+      ? RING_CATALOG.filter((ring) => ring.id === 'smilers_notification' || ring.id === 'silent')
+      : RING_CATALOG.filter((ring) => ring.id !== 'smilers_notification')),
+    [mode],
+  );
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="ringtones-screen">
