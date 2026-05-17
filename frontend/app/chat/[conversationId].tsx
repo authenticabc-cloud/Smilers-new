@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  InteractionManager,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -79,6 +80,11 @@ function formatPresenceSubtitle(conversation: any) {
   if (!conversation) return 'tap for info';
   if (conversation.type === 'group') {
     return `${conversation?.participants?.length || conversation?.memberCount || 0} members`;
+  }
+  const directStatus = [conversation?.status, conversation?.presence, conversation?.otherUser?.status]
+    .find((value) => typeof value === 'string' && value.trim().length > 0);
+  if (typeof directStatus === 'string' && directStatus.trim().length > 0) {
+    return directStatus.trim();
   }
   return formatLastSeenLabel(conversation);
 }
@@ -1213,7 +1219,9 @@ export default function ChatScreen() {
                 style={styles.webToolBtn}
                 onPress={() => {
                   setShowComposerFormatting((current) => !current);
-                  requestAnimationFrame(() => messageInputRef.current?.focus());
+                  InteractionManager.runAfterInteractions(() => {
+                    setTimeout(() => messageInputRef.current?.focus(), 80);
+                  });
                 }}
                 disabled={!isConversationAvailable || uploading}
                 testID="composer-toolbar-tools"

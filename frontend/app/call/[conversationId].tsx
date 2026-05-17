@@ -526,13 +526,13 @@ export default function CallScreen() {
     void Notifications.scheduleNotificationAsync({
       content: {
         title: 'Missed call',
-        body: `Missed call from ${otherName}`,
+        body: 'You have a missed Smilers call',
         data: { type: 'message', conversationId },
         sound: 'message_notification',
       },
       trigger: null,
     }).catch(() => undefined);
-  }, [activeCall, conversationId, isActive, otherName]);
+  }, [activeCall, conversationId, isActive]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -1379,14 +1379,14 @@ const styles = StyleSheet.create({
   },
   topArea: {
     alignItems: 'center',
-    paddingTop: 12,
+    paddingTop: 18,
     gap: 6,
     paddingHorizontal: Spacing.lg,
     flex: 1,
     justifyContent: 'flex-start',
   },
   topAreaCompact: {
-    paddingTop: 6,
+    paddingTop: 10,
   },
   topUtilityRow: {
     width: '100%',
@@ -1404,10 +1404,12 @@ const styles = StyleSheet.create({
     flex: 1,
     width: '100%',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
+    paddingTop: Spacing.xl,
     paddingBottom: Spacing.lg,
   },
   heroContentCompact: {
+    paddingTop: Spacing.lg,
     paddingBottom: Spacing.md,
   },
   topUtilitySide: {
@@ -1488,18 +1490,18 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
   },
   name: {
-    fontSize: 30,
-    lineHeight: 36,
+    fontSize: 31,
+    lineHeight: 37,
     fontWeight: FontWeight.bold,
     color: Colors.white,
-    marginTop: Spacing.lg,
+    marginTop: Spacing.xl,
     textAlign: 'center',
     maxWidth: '90%',
   },
   nameCompact: {
     fontSize: 24,
-    lineHeight: 28,
-    marginTop: Spacing.base,
+    lineHeight: 29,
+    marginTop: Spacing.md,
   },
   status: {
     fontSize: FontSize.lg,
@@ -1528,7 +1530,7 @@ const styles = StyleSheet.create({
   controls: {
     paddingHorizontal: Spacing.lg,
     paddingBottom: Spacing.xl,
-    gap: 14,
+    gap: 16,
   },
   controlsCompact: {
     paddingBottom: Spacing.lg,
@@ -1573,9 +1575,9 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   smallBtn: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
+    width: 70,
+    height: 70,
+    borderRadius: 35,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.12)',
@@ -1585,15 +1587,15 @@ const styles = StyleSheet.create({
   },
   smallControlWrap: {
     alignItems: 'center',
-    width: 76,
+    width: 74,
     gap: 8,
   },
   smallBtnLabel: {
     color: 'rgba(255,255,255,0.72)',
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: FontWeight.medium,
     textAlign: 'center',
-    maxWidth: 70,
+    maxWidth: 74,
   },
   audioMenuCard: {
     backgroundColor: 'rgba(28,22,4,0.92)',

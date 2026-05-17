@@ -1,0 +1,81 @@
+{
+  "summary": "Backend + frontend regression validation completed for call/chat/translation batch. Backend APIs passed (4/4 pytest), /api/translate returned fast 200 responses with valid translated_text, call route correctly rendered passed displayName (Asare Ben Chris), and composer tools tap did not crash in preview. Public tunnel preview was intermittently unavailable (502/ngrok timeout), and authenticated multi-device validations remain blocked.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Public Expo preview availability",
+        "issue": "Public preview URL intermittently returned 502 and 'preview environment is not responding' due ngrok tunnel timeouts.",
+        "testID": "N/A",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Chat subtitle/presence with saved contact",
+        "issue": "Code path still risks hiding real online presence: subtitle uses formatPresenceSubtitle(savedContactRecord || conversation), so when a saved contact exists but has no status fields, conversation online/lastSeen data is bypassed.",
+        "affected_testIDs": [
+          "chat-header-subtitle"
+        ]
+      },
+      {
+        "flow": "Caller hangup while ringing -> receiver ringing stop",
+        "issue": "Code review confirms caller hangup now calls declineCall when status is ringing, but receiver-side ring-stop behavior could not be fully validated without a second signed-in live device/session.",
+        "affected_testIDs": [
+          "hangup-btn",
+          "decline-call-btn"
+        ]
+      },
+      {
+        "flow": "Saved contact names in real conversations",
+        "issue": "Route-param displayName behavior passed in preview, but end-to-end saved-contact resolution in real authenticated conversation remains unverified in this run.",
+        "affected_testIDs": [
+          "call-contact-name",
+          "chat-header-title"
+        ]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": [
+      {
+        "component": "Expo web runtime",
+        "issue": "Non-blocking warnings persist (expo-notifications web listener limits, expo-av deprecation, shadow/textShadow/pointerEvents deprecations)."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_core_api.py",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/test_reports/artifacts/iteration_28_ui_local/step1_root.jpg",
+    "/app/test_reports/artifacts/iteration_28_ui_local/step2_call.jpg",
+    "/app/test_reports/artifacts/iteration_28_ui_local/step3_chat.jpg",
+    "/root/.emergent/automation_output/20260517_165947/console_20260517_165947.log",
+    "/root/.emergent/automation_output/20260517_165908/console_20260517_165908.log"
+  ],
+  "action_items": [
+    "Fix presence subtitle source selection so saved-contact display name can be used without discarding conversation presence/online fields.",
+    "Retest caller hangup during ringing with two signed-in devices/accounts to confirm receiver ringtone stops immediately.",
+    "Retest real authenticated conversation to verify saved contact names render across chat header and call screen without fallback to generic labels.",
+    "Stabilize public Expo tunnel startup/retries (ngrok timeout issue) so public-endpoint UI validation is reliable."
+  ],
+  "critical_code_review_comments": [
+    "`/app/frontend/app/chat/[conversationId].tsx`: `subtitle` currently passes `savedContactRecord || conversation` into presence formatter; this can suppress real conversation online/last-seen data when contact object lacks status fields.",
+    "`/app/frontend/app/call/[conversationId].tsx`: `handleHangup` correctly uses `declineCall` for `ringing` state, matching requested RCA direction.",
+    "`/app/frontend/app/chat/[conversationId].tsx` remains very large (>700 lines), increasing regression risk around composer, translation, and presence side effects."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_28.json"
+  ],
+  "success_rate": {
+    "backend": "100%",
+    "frontend": "72%"
+  },
+  "seed_data_creation": "None",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Validated locally on mobile viewport: /call/testconversation1?type=voice&displayName=Asare%20Ben%20Chris shows exact passed name and visible controls; /chat/testconversation1 remains stable with unavailable fallback and tools-button tap did not crash. Public preview URL had intermittent 502/unresponsive tunnel behavior, so local preview was used for UI regression checks.",
+  "rca_of_issue": "RCA-1 (presence subtitle): subtitle prioritizes savedContactRecord object for formatting, but that object usually contains identity fields only; presence fields are on conversation/otherUser, causing online/last-seen degradation. RCA-2 (public preview instability): expo supervisor logs show repeated ngrok tunnel connection timeouts, matching observed 502/unresponsive public preview page during automation. MOCKED APIs: NONE."
+}

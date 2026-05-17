@@ -10,7 +10,12 @@ export async function translateIncomingMessageText(input: {
   const targetLanguage = input.targetLanguage?.trim();
   const skipLanguages = Array.isArray(input.skipLanguages) ? input.skipLanguages.filter(Boolean) : [];
 
-  if (!text || !targetLanguage || !BACKEND_URL) {
+  if (!text || !targetLanguage) {
+    return input.text;
+  }
+
+  if (!BACKEND_URL) {
+    console.warn('[translation] Missing EXPO_PUBLIC_BACKEND_URL, skipping translation');
     return input.text;
   }
 
@@ -32,6 +37,7 @@ export async function translateIncomingMessageText(input: {
     });
 
     if (!response.ok) {
+      console.warn('[translation] non-200 response', response.status);
       return input.text;
     }
 
@@ -42,7 +48,8 @@ export async function translateIncomingMessageText(input: {
 
     translationCache.set(cacheKey, translated);
     return translated;
-  } catch {
+  } catch (errorValue) {
+    console.warn('[translation] request failed', errorValue);
     return input.text;
   }
 }
