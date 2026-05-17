@@ -26,12 +26,16 @@ const RINGTONE_PREFS_KEY = 'smilers_ringtone_prefs';
 
 function resolveCallChannelSound(ringtoneId?: string | null) {
   switch (ringtoneId) {
+    case 'ringtone':
+      return 'ringtone';
     case 'smilers_never_cry_1':
       return 'smilers_never_cry_1';
     case 'smilers_never_cry_2':
       return 'smilers_never_cry_2';
     case 'smilers_never_cry_3':
       return 'smilers_never_cry_3';
+    case 'smilers_notification':
+      return 'smilers_notification';
     case 'silent':
       return undefined;
     case 'smilers_never_cry':

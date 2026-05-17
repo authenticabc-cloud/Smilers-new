@@ -23,7 +23,9 @@ import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
 import AttachmentSheet from '../../src/components/AttachmentSheet';
+import EmojiPickerSheet from '../../src/components/EmojiPickerSheet';
 import MediaBubble from '../../src/components/MediaBubble';
 import PollComposer from '../../src/components/PollComposer';
 import { api } from '../../src/convexApi';
@@ -58,11 +60,6 @@ const DISAPPEARING_OPTIONS = [
   { key: '24h', label: '24 hours', ms: 24 * 60 * 60 * 1000 },
   { key: '7d', label: '7 days', ms: 7 * 24 * 60 * 60 * 1000 },
   { key: '90d', label: '90 days', ms: 90 * 24 * 60 * 60 * 1000 },
-] as const;
-const EMOJI_SECTIONS = [
-  { key: 'smileys', title: 'Smileys', items: ['😀', '😁', '😂', '🤣', '😊', '😍', '😘', '😎', '🤗', '🥳', '🤔', '😭'] },
-  { key: 'gestures', title: 'Gestures', items: ['👍', '👏', '🙏', '👋', '🤝', '💪', '🙌', '👌', '🤍', '❤️', '💛', '🔥'] },
-  { key: 'fun', title: 'Fun', items: ['🎉', '✨', '🌟', '💯', '🎶', '🎵', '🌹', '🍾', '🥰', '😇', '🤩', '😴'] },
 ] as const;
 
 function formatChatDayChip(ts?: number) {
@@ -117,6 +114,7 @@ export default function ChatScreen() {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [translatedMessageMap, setTranslatedMessageMap] = useState<Record<string, string>>({});
+  const [recentEmojis, setRecentEmojis] = useState<string[]>(['😀', '😂', '😍', '🙏', '🔥', '🎉', '❤️', '👍']);
   const recRef = useRef<Audio.Recording | null>(null);
   const recTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const recCancelledRef = useRef(false);
@@ -453,6 +451,91 @@ export default function ChatScreen() {
     await sendImageFromUri(asset.uri, asset.mimeType || 'image/jpeg');
   }, [sendImageFromUri]);
 
+  const pickVideo = useCallback(async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Permission needed', 'Allow gallery access to share videos.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+      quality: 0.85,
+      allowsEditing: false,
+    });
+
+    if (result.canceled || !result.assets?.[0]?.uri || !conversationId) return;
+    const asset = result.assets[0];
+
+    setUploading(true);
+    try {
+      const mime = asset.mimeType || 'video/mp4';
+      const storageId = await uploadFile(convex, asset.uri, mime);
+      await sendMessage({ conversationId, type: 'video', storageId, mimeType: mime });
+      await refetchMessages();
+    } catch (errorValue: any) {
+      Alert.alert('Failed to send video', errorValue?.message || 'Unknown error');
+    } finally {
+      setUploading(false);
+    }
+  }, [conversationId, convex, refetchMessages, sendMessage]);
+
+  const recordVideo = useCallback(async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Permission needed', 'Allow camera access to record videos.');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+      quality: 0.85,
+      allowsEditing: false,
+    });
+
+    if (result.canceled || !result.assets?.[0]?.uri || !conversationId) return;
+    const asset = result.assets[0];
+
+    setUploading(true);
+    try {
+      const mime = asset.mimeType || 'video/mp4';
+      const storageId = await uploadFile(convex, asset.uri, mime);
+      await sendMessage({ conversationId, type: 'video', storageId, mimeType: mime });
+      await refetchMessages();
+    } catch (errorValue: any) {
+      Alert.alert('Failed to send video', errorValue?.message || 'Unknown error');
+    } finally {
+      setUploading(false);
+    }
+  }, [conversationId, convex, refetchMessages, sendMessage]);
+
+  const shareLocation = useCallback(async () => {
+    if (!conversationId || !isConversationAvailable) return;
+
+    const permission = await Location.requestForegroundPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Permission needed', 'Allow location access to share your location.');
+      return;
+    }
+
+    try {
+      const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const latitude = position.coords.latitude.toFixed(6);
+      const longitude = position.coords.longitude.toFixed(6);
+      const text = `Shared location: https://maps.google.com/?q=${latitude},${longitude}`;
+      await sendMessage({
+        conversationId,
+        type: 'text',
+        text,
+        ...(replyTo?._id ? { replyToMessageId: replyTo._id } : {}),
+      });
+      setReplyTo(null);
+      await refetchMessages();
+    } catch (errorValue: any) {
+      Alert.alert('Location failed', errorValue?.message || 'Could not fetch your location.');
+    }
+  }, [conversationId, isConversationAvailable, refetchMessages, replyTo, sendMessage]);
+
   const onPickDocument = useCallback(async () => {
     if (!conversationId || !isConversationAvailable) return;
 
@@ -526,16 +609,25 @@ export default function ChatScreen() {
       setRecDuration(0);
       recDurationMsRef.current = 0;
       recStartMsRef.current = Date.now();
-      setIsRecording(true);
-      setIsRecordingPaused(false);
-      const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      });
+      const recording = new Audio.Recording();
+      await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
       recording.setProgressUpdateInterval(200);
       recording.setOnRecordingStatusUpdate((status) => {
         if (!status.isLoaded) return;
         recDurationMsRef.current = status.durationMillis || 0;
         setRecDuration(Math.floor((status.durationMillis || 0) / 1000));
       });
+      await recording.startAsync();
       recRef.current = recording;
+      setIsRecording(true);
+      setIsRecordingPaused(false);
     } catch (errorValue: any) {
       setIsRecording(false);
       setIsRecordingPaused(false);
@@ -877,7 +969,7 @@ export default function ChatScreen() {
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={0}
       >
         {(messagesLoading || conversationLoading) && !fallbackReady ? (
@@ -1109,9 +1201,10 @@ export default function ChatScreen() {
         visible={showAttachSheet}
         onClose={() => setShowAttachSheet(false)}
         onPickPhoto={pickPhoto}
-        onTakePhoto={takePhoto}
+        onPickVideo={pickVideo}
+        onRecordVideo={recordVideo}
         onPickDocument={onPickDocument}
-        onCreatePoll={() => setShowPollComposer(true)}
+        onShareLocation={shareLocation}
       />
 
       <PollComposer
@@ -1120,38 +1213,16 @@ export default function ChatScreen() {
         onSubmit={onSubmitPoll}
       />
 
-      <Modal visible={showEmojiPicker} transparent animationType="slide" onRequestClose={() => setShowEmojiPicker(false)}>
-        <Pressable style={styles.emojiBackdrop} onPress={() => setShowEmojiPicker(false)}>
-          <Pressable style={styles.emojiSheet} onPress={() => {}} testID="emoji-picker-sheet">
-            <View style={styles.emojiSheetHeader}>
-              <Text style={styles.emojiSheetTitle}>Smileys & reactions</Text>
-              <TouchableOpacity onPress={() => setShowEmojiPicker(false)} testID="emoji-picker-close">
-                <Feather name="x" size={20} color={Colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
-            {EMOJI_SECTIONS.map((section) => (
-              <View key={section.key} style={styles.emojiSection}>
-                <Text style={styles.emojiSectionTitle}>{section.title}</Text>
-                <View style={styles.emojiGrid}>
-                  {section.items.map((emoji, index) => (
-                    <TouchableOpacity
-                      key={`${section.key}-${emoji}`}
-                      style={styles.emojiOption}
-                      onPress={() => {
-                        setText((current) => `${current}${current ? ' ' : ''}${emoji}`);
-                        setComposerFocused(true);
-                      }}
-                      testID={`emoji-option-${section.key}-${index}`}
-                    >
-                      <Text style={styles.emojiOptionText}>{emoji}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
-            ))}
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <EmojiPickerSheet
+        visible={showEmojiPicker}
+        onClose={() => setShowEmojiPicker(false)}
+        recentEmojis={recentEmojis}
+        onSelectEmoji={(emoji) => {
+          setText((current) => `${current}${current ? ' ' : ''}${emoji}`);
+          setComposerFocused(true);
+          setRecentEmojis((current) => [emoji, ...current.filter((item) => item !== emoji)].slice(0, 12));
+        }}
+      />
 
       <Modal visible={!!selectedMsg} transparent animationType="fade" onRequestClose={closeActionSheet}>
         <Pressable style={styles.sheetBackdrop} onPress={closeActionSheet}>

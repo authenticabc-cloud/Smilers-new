@@ -21,7 +21,7 @@ interface UseRingtonePlayerOptions {
 
 const DEFAULT_PREFS: RingPrefs = {
   ringtone: DEFAULT_RING_ID,
-  notificationSound: 'smilers_never_cry_2',
+  notificationSound: 'smilers_notification',
   vibrate: true,
 };
 

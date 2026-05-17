@@ -1,38 +1,37 @@
 import React from 'react';
 import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import { Colors, FontSize, FontWeight, Spacing, Shadow } from '../theme';
+import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Colors, FontSize, FontWeight, Radius, Spacing, Shadow } from '../theme';
 
 interface Props {
   visible: boolean;
   onClose: () => void;
   onPickPhoto: () => void;
-  onTakePhoto: () => void;
+  onPickVideo: () => void;
+  onRecordVideo: () => void;
   onPickDocument?: () => void;
-  onCreatePoll?: () => void;
+  onShareLocation?: () => void;
 }
 
 export default function AttachmentSheet({
   visible,
   onClose,
   onPickPhoto,
-  onTakePhoto,
+  onPickVideo,
+  onRecordVideo,
   onPickDocument,
-  onCreatePoll,
+  onShareLocation,
 }: Props) {
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={styles.sheet} onPress={() => {}} testID="attachment-sheet">
-          <View style={styles.grabber} />
-          <Text style={styles.title} testID="attachment-sheet-title">
-            Share
-          </Text>
-          <View style={styles.grid}>
-            <Tile
-              color="#3B82F6"
-              icon="image"
-              lib="feather"
+        <Pressable style={styles.sheetWrap} onPress={() => {}}>
+          <View style={styles.sheet} testID="attachment-sheet">
+            <ActionRow
+              color="#FCE7F3"
+              iconColor="#EC4899"
+              icon="image-outline"
+              lib="ion"
               label="Photo"
               onPress={() => {
                 onClose();
@@ -40,19 +39,33 @@ export default function AttachmentSheet({
               }}
               testID="attach-photo"
             />
-            <Tile
-              color="#EF4444"
-              icon="camera"
-              lib="feather"
-              label="Camera"
+            <ActionRow
+              color="#E9D5FF"
+              iconColor="#A855F7"
+              icon="video-library"
+              lib="mc"
+              label="Video from Gallery"
               onPress={() => {
                 onClose();
-                onTakePhoto();
+                onPickVideo();
               }}
-              testID="attach-camera"
+              testID="attach-video-gallery"
             />
-            <Tile
-              color="#8B5CF6"
+            <ActionRow
+              color="#FCE7E7"
+              iconColor="#EF4444"
+              icon="videocam-outline"
+              lib="ion"
+              label="Record Video"
+              onPress={() => {
+                onClose();
+                onRecordVideo();
+              }}
+              testID="attach-record-video"
+            />
+            <ActionRow
+              color="#DBEAFE"
+              iconColor="#3B82F6"
               icon="file-document-outline"
               lib="mc"
               label="Document"
@@ -63,17 +76,18 @@ export default function AttachmentSheet({
               disabled={!onPickDocument}
               testID="attach-document"
             />
-            <Tile
-              color="#10B981"
-              icon="bar-chart-2"
-              lib="feather"
-              label="Poll"
+            <ActionRow
+              color="#DCFCE7"
+              iconColor="#22C55E"
+              icon="location-outline"
+              lib="ion"
+              label="Location"
               onPress={() => {
                 onClose();
-                onCreatePoll?.();
+                onShareLocation?.();
               }}
-              disabled={!onCreatePoll}
-              testID="attach-poll"
+              disabled={!onShareLocation}
+              testID="attach-location"
             />
           </View>
         </Pressable>
@@ -82,16 +96,9 @@ export default function AttachmentSheet({
   );
 }
 
-function Tile({
-  color,
-  icon,
-  lib,
-  label,
-  onPress,
-  disabled,
-  testID,
-}: {
+function ActionRow({ color, iconColor, icon, lib, label, onPress, disabled, testID }: {
   color: string;
+  iconColor: string;
   icon: string;
   lib: 'feather' | 'ion' | 'mc';
   label: string;
@@ -103,50 +110,43 @@ function Tile({
 
   return (
     <TouchableOpacity
-      style={[styles.tile, disabled ? styles.tileDisabled : null]}
+      style={[styles.row, disabled ? styles.rowDisabled : null]}
       onPress={onPress}
       disabled={disabled}
       testID={testID}
     >
-      <View style={[styles.tileIcon, { backgroundColor: color }]}>
-        <Icon name={icon as any} size={26} color={Colors.white} />
+      <View style={[styles.rowIcon, { backgroundColor: color }]}> 
+        <Icon name={icon as any} size={24} color={iconColor} />
       </View>
-      <Text style={styles.tileLabel}>{label}</Text>
-      {disabled ? <Text style={styles.tileBadge}>Soon</Text> : null}
+      <Text style={styles.rowLabel}>{label}</Text>
     </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.1)', justifyContent: 'flex-end' },
+  sheetWrap: {
+    paddingHorizontal: 28,
+    paddingBottom: 92,
+    alignItems: 'flex-start',
+  },
   sheet: {
-    backgroundColor: Colors.surface,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingTop: Spacing.sm,
-    paddingHorizontal: Spacing.base,
-    paddingBottom: Spacing.xl,
+    width: 320,
+    backgroundColor: 'rgba(255,255,255,0.98)',
+    borderRadius: 26,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
     ...Shadow.lg,
   },
-  grabber: {
-    width: 40,
-    height: 4,
-    backgroundColor: Colors.border,
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginVertical: Spacing.sm,
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 18,
+    minHeight: 82,
+    paddingHorizontal: 10,
+    borderRadius: Radius.lg,
   },
-  title: {
-    fontSize: FontSize.lg,
-    fontWeight: FontWeight.bold,
-    color: Colors.textPrimary,
-    marginBottom: Spacing.base,
-    textAlign: 'center',
-  },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-around', gap: Spacing.base },
-  tile: { alignItems: 'center', gap: 8, width: '22%', minHeight: 96 },
-  tileDisabled: { opacity: 0.35 },
-  tileIcon: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center' },
-  tileLabel: { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium },
-  tileBadge: { fontSize: 9, color: Colors.textMuted, marginTop: -4 },
+  rowDisabled: { opacity: 0.35 },
+  rowIcon: { width: 50, height: 50, borderRadius: 25, alignItems: 'center', justifyContent: 'center' },
+  rowLabel: { fontSize: 19, color: Colors.textPrimary, fontWeight: FontWeight.medium, flex: 1 },
 });

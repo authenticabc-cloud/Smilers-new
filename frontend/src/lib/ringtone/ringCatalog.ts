@@ -6,10 +6,12 @@
 // Bundled MP3s live in /assets/sounds/. Add new files here as the user uploads them.
 
 export type RingId =
+  | 'ringtone'
   | 'smilers_never_cry'
   | 'smilers_never_cry_1'
   | 'smilers_never_cry_2'
   | 'smilers_never_cry_3'
+  | 'smilers_notification'
   | 'silent';
 
 export const DEFAULT_RING_ID: RingId = 'smilers_never_cry';
@@ -23,6 +25,13 @@ export interface RingDefinition {
 
 // require() must use literal paths so Metro can bundle the asset.
 export const RING_CATALOG: RingDefinition[] = [
+  {
+    id: 'ringtone',
+    name: 'Classic Ring',
+    description: 'The original call ringtone',
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    source: require('../../../assets/sounds/ringtone.mp3'),
+  },
   {
     id: 'smilers_never_cry',
     name: 'Smilers Never Cry',
@@ -50,6 +59,13 @@ export const RING_CATALOG: RingDefinition[] = [
     description: 'Bouncy alternate cut',
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     source: require('../../../assets/sounds/smilers_never_cry_3.mp3'),
+  },
+  {
+    id: 'smilers_notification',
+    name: 'Smilers Notification',
+    description: 'The dedicated message alert tone',
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    source: require('../../../assets/sounds/smilers_notification.mp3'),
   },
   {
     id: 'silent',

@@ -632,6 +632,48 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Added foreground/background heartbeat presence sync, periodic conversation refresh for fresher last-seen labels, Android call-channel ringtone syncing to the selected ringtone, and bundled the ringtone assets in app config for notification-channel use."
+##   - task: "Emoji categories and attachment-sheet web parity"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/src/components/EmojiPickerSheet.tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User requested more emoji categories like the screenshots and asked for the attachment popup to match the web layout exactly."
+##       - working: true
+##         agent: "main"
+##         comment: "Replaced the simple emoji modal with a fuller category-based emoji picker sheet and redesigned the attachment popup into a web-style floating action card with Photo, Video from Gallery, Record Video, Document, and Location actions."
+##   - task: "Composer typing visibility and voice-note start fix"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/chat/[conversationId].tsx"
+##     stuck_count: 0
+##     priority: "critical"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User reported the composer still hid while typing and voice-note recording only showed the UI without actually starting."
+##       - working: true
+##         agent: "main"
+##         comment: "Restored Android keyboard avoidance for the chat composer and replaced the voice-note start flow with a more reliable prepareToRecord/startAsync recording path so recording begins only after audio mode + recorder startup succeed."
+##   - task: "Message alert sound and extra ringtone catalog"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/src/lib/notification/useMessageNotificationSound.ts"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User reported the message ringtone was not rendering and the extra ringtones were still missing."
+##       - working: true
+##         agent: "main"
+##         comment: "Switched foreground message alerts to a two-step playback sequence (beep + selected notification tone), added `Classic Ring` and `Smilers Notification` to the shared ringtone catalog, and expanded bundled sound declarations so the extra ringtone options now appear in settings."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"
@@ -639,6 +681,9 @@
 ##   run_ui: true
 ## test_plan:
 ##   current_focus:
+##     - "Emoji categories and attachment-sheet web parity"
+##     - "Composer typing visibility and voice-note start fix"
+##     - "Message alert sound and extra ringtone catalog"
 ##     - "Display-name crash recursion fix"
 ##     - "Saved contact names from contacts fallback"
 ##     - "Composer dock gap removal and emoji expansion"
@@ -710,3 +755,5 @@
 ##     message: "New batch ready for validation: 1) circular-reference crash protection was added for the specific contact-open flow, 2) chat/call titles now try the saved Contacts data before falling back to conversation labels, 3) the composer now docks flush to the bottom with a richer emoji picker, 4) incoming text translation now goes through a new `/api/translate` backend endpoint using Gemini 3 Flash + the Emergent key and respects preferred/skip languages, and 5) presence + Android incoming-call notification channels now sync more aggressively for fresher last-seen and ringtone behavior. Authenticated device validation is still especially important for the real Asare Ben Chris contact, real saved-name parity, and native background/locked-call ringtone behavior." 
 ##   - agent: "main"
 ##     message: "Iteration 24's only concrete preview regression is fixed: the compact call-screen contact title is visible again after removing the problematic single-line auto-fit clamp and rechecking `/call/testconversation1?type=voice` at 375x667." 
+##   - agent: "main"
+##     message: "Latest user-requested chat polish is ready for validation: the emoji picker now has many more categories and a web-like category row, the attachment sheet now follows the floating web-card layout with the requested five actions, chat keyboard avoidance was restored to keep the composer visible while typing, voice-note startup now uses an explicit prepare/start recorder flow, and the ringtone catalog / message alert playback now include the extra sound options. Device validation is still especially important for actual recording, typing above the keyboard, and hearing the selected message/incoming-call sounds." 

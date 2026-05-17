@@ -4,6 +4,8 @@ import { Audio } from 'expo-av';
 import { useQuery } from 'convex/react';
 import { usePathname } from 'expo-router';
 import { api } from '../../convexApi';
+import { readStoredJson } from '../settingsStorage';
+import { getRingSource, type RingId } from '../ringtone/ringCatalog';
 import { useAuth } from '../../providers/AuthProvider';
 
 /**
@@ -28,57 +30,50 @@ export function useMessageNotificationSound() {
 
   const lastSeenMapRef = useRef<Map<string, number>>(new Map());
   const initializedRef = useRef(false);
-  const soundRef = useRef<Audio.Sound | null>(null);
   const playingRef = useRef(false);
 
-  // Preload the sound once
-  useEffect(() => {
-    if (Platform.OS === 'web') return;
-    let cancelled = false;
-    (async () => {
-      try {
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          playsInSilentModeIOS: false,
-          staysActiveInBackground: false,
-          shouldDuckAndroid: true,
-          playThroughEarpieceAndroid: false,
-        }).catch(() => {});
-        const { sound } = await Audio.Sound.createAsync(
-          require('../../../assets/sounds/message_notification.mp3'),
-          { volume: 1.0 }
-        );
-        if (cancelled) {
-          await sound.unloadAsync().catch(() => {});
-          return;
-        }
-        soundRef.current = sound;
-      } catch (e: any) {
-        console.warn('[msg-sound] preload failed:', e?.message);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      const s = soundRef.current;
-      soundRef.current = null;
-      if (s) void s.unloadAsync().catch(() => {});
-    };
-  }, []);
+  const playClip = async (source: number) => {
+    const { sound } = await Audio.Sound.createAsync(source as any, { volume: 1.0 });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        sound.setOnPlaybackStatusUpdate((status) => {
+          if (!status.isLoaded) {
+            reject(new Error('unloaded sound'));
+            return;
+          }
+          if (status.didJustFinish) {
+            resolve();
+          }
+        });
+        sound.playAsync().catch(reject);
+      });
+    } finally {
+      await sound.unloadAsync().catch(() => {});
+    }
+  };
 
   const playSound = async () => {
     if (Platform.OS === 'web') return;
     if (playingRef.current) return;
-    const s = soundRef.current;
-    if (!s) return;
     try {
       playingRef.current = true;
-      await s.setPositionAsync(0).catch(() => {});
-      await s.playAsync().catch(() => {});
-      // Reset after the clip length (~2.3s) so rapid arrivals re-trigger
-      setTimeout(() => {
-        playingRef.current = false;
-      }, 2500);
-    } catch {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      }).catch(() => {});
+      const stored = (await readStoredJson('smilers_ringtone_prefs', null)) as { notificationSound?: RingId } | null;
+      const followup = getRingSource(stored?.notificationSound || 'smilers_notification');
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      await playClip(require('../../../assets/sounds/message_notification_beep.mp3'));
+      if (followup) {
+        await playClip(followup);
+      }
+    } catch (errorValue: any) {
+      console.warn('[msg-sound] play failed:', errorValue?.message);
+    } finally {
       playingRef.current = false;
     }
   };

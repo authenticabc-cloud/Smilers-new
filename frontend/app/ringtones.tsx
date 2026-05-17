@@ -39,18 +39,22 @@ interface RingPrefs {
 
 const DEFAULT_PREFS: RingPrefs = {
   ringtone: DEFAULT_RING_ID,
-  notificationSound: 'smilers_never_cry_2',
+  notificationSound: 'smilers_notification',
   vibrate: true,
 };
 
 function resolveCallChannelSound(ringtoneId?: RingId | null) {
   switch (ringtoneId) {
+    case 'ringtone':
+      return 'ringtone';
     case 'smilers_never_cry_1':
       return 'smilers_never_cry_1';
     case 'smilers_never_cry_2':
       return 'smilers_never_cry_2';
     case 'smilers_never_cry_3':
       return 'smilers_never_cry_3';
+    case 'smilers_notification':
+      return 'smilers_notification';
     case 'silent':
       return undefined;
     case 'smilers_never_cry':
