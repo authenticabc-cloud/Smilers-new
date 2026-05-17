@@ -17,7 +17,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useMutation } from 'convex/react';
+import { useMutation, useQuery } from 'convex/react';
 import { Camera } from 'expo-camera';
 import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -32,7 +32,6 @@ import Animated, {
 } from 'react-native-reanimated';
 import { StatusBar } from 'expo-status-bar';
 import { api } from '../../src/convexApi';
-import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials, getDisplayNameFromUser } from '../../src/lib/displayName';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Shadow, Spacing } from '../../src/theme';
@@ -113,30 +112,20 @@ export default function CallScreen() {
   const hasValidConversationId = typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
   const canRunCallQueries = isAuthenticated && hasValidConversationId;
 
-  const { data: me, loading: meLoading } = useSafeConvexQuery<any | null>(
-    api.users.getCurrentUser,
-    {},
-    null,
-    canRunCallQueries,
-  );
-  const { data: conversation, loading: conversationLoading } = useSafeConvexQuery<any | null>(
+  const me = useQuery(api.users.getCurrentUser, canRunCallQueries ? {} : 'skip') as any | null | undefined;
+  const meLoading = canRunCallQueries && me === undefined;
+  const conversation = useQuery(
     api.conversations.getConversation,
-    conversationId ? { conversationId } : {},
-    null,
-    canRunCallQueries,
-  );
-  const { data: activeCall, loading: activeCallLoading } = useSafeConvexQuery<any | null>(
+    canRunCallQueries ? { conversationId } : 'skip'
+  ) as any | null | undefined;
+  const conversationLoading = canRunCallQueries && conversation === undefined;
+  const activeCall = useQuery(
     (api as any).calls.getActiveCall,
-    conversationId ? { conversationId } : {},
-    null,
-    canRunCallQueries,
-  );
-  const { data: contacts, loading: contactsLoading } = useSafeConvexQuery<any[]>(
-    api.contacts.getContacts,
-    {},
-    [],
-    isAuthenticated,
-  );
+    canRunCallQueries ? { conversationId } : 'skip'
+  ) as any | null | undefined;
+  const activeCallLoading = canRunCallQueries && activeCall === undefined;
+  const contacts = useQuery(api.contacts.getContacts, isAuthenticated ? {} : 'skip') as any[] | undefined;
+  const contactsLoading = isAuthenticated && contacts === undefined;
 
   const initiateCall = useMutation(api.calls.initiateCall);
   const answerCall = useMutation(api.calls.answerCall);
@@ -223,12 +212,7 @@ export default function CallScreen() {
   }, [screenReady]);
 
   // Subscribe to incoming signaling messages for this call
-  const { data: signals } = useSafeConvexQuery<any[]>(
-    (api as any).signaling.poll,
-    callId ? { callId } : {},
-    [],
-    !!callId && isAuthenticated,
-  );
+  const signals = useQuery((api as any).signaling.poll, callId && isAuthenticated ? { callId } : 'skip') as any[] | undefined;
 
   // Derived role: outgoing if I'm the caller, incoming otherwise
   const isCaller = activeCall && me ? activeCall.callerId === me._id : false;

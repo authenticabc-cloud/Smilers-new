@@ -106,7 +106,7 @@ export function usePushNotifications() {
   const router = useRouter();
   const { isAuthenticated } = useAuth();
   const convex = useConvex();
-  const registerDevice = useMutation(api.mobilePush.registerMobileDevice);
+  const registerDevice = useMutation(api.pushNotifications.registerMobileDevice);
   const declineCall = useMutation(api.calls.declineCall);
   const lastResponse = useRef<string | null>(null);
 
@@ -180,6 +180,9 @@ export function usePushNotifications() {
       const conversationId = (data as any).conversationId as string | undefined;
       const callId = (data as any).callId as string | undefined;
       const action = response.actionIdentifier;
+      const contentBody = typeof response?.notification?.request?.content?.body === 'string'
+        ? response.notification.request.content.body
+        : '';
 
       console.log('[push] Response:', { type, action, conversationId, callId });
 
@@ -195,7 +198,12 @@ export function usePushNotifications() {
 
       if (type === 'call' && conversationId) {
         // Answer button OR default tap → open call screen
-        router.push(`/call/${conversationId}` as any);
+        const displayName = contentBody.trim();
+        router.push(
+          displayName
+            ? (`/call/${conversationId}?displayName=${encodeURIComponent(displayName)}` as any)
+            : (`/call/${conversationId}` as any)
+        );
         return;
       }
 

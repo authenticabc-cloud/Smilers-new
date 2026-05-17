@@ -26,8 +26,19 @@ export function useIncomingCallListener() {
     handledCallId.current = incomingCall._id;
 
     const conversationId = incomingCall.conversationId;
+    const displayName = String(
+      incomingCall?.callerName ||
+      incomingCall?.caller?.displayName ||
+      incomingCall?.caller?.name ||
+      incomingCall?.caller?.fullName ||
+      ''
+    ).trim();
     if (conversationId) {
-      router.push(`/call/${conversationId}` as any);
+      router.push(
+        displayName
+          ? (`/call/${conversationId}?displayName=${encodeURIComponent(displayName)}` as any)
+          : (`/call/${conversationId}` as any)
+      );
     }
   }, [incomingCall, router]);
 }

@@ -18,7 +18,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useConvex, useMutation } from 'convex/react';
+import { useConvex, useMutation, useQuery } from 'convex/react';
 import { Audio } from 'expo-av';
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
@@ -123,6 +123,7 @@ export default function ChatScreen() {
   const [translatedMessageMap, setTranslatedMessageMap] = useState<Record<string, string>>({});
   const [recentEmojis, setRecentEmojis] = useState<string[]>(['😀', '😂', '😍', '🙏', '🔥', '🎉', '❤️', '👍']);
   const translatedIdsRef = useRef<Set<string>>(new Set());
+  const translatingIdsRef = useRef<Set<string>>(new Set());
   const messageInputRef = useRef<TextInput | null>(null);
   const recRef = useRef<Audio.Recording | null>(null);
   const recTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -134,22 +135,19 @@ export default function ChatScreen() {
     typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
   const canQueryConversation = !!conversationId && hasValidConversationId;
 
-  const { data: conversation, loading: conversationLoading, refetch: refetchConversation } = useSafeConvexQuery<any | null>(
+  const conversation = useQuery(
     api.conversations.getConversation,
-    conversationId ? { conversationId } : {},
-    null,
-    canQueryConversation
-  );
-  const { data: messagesPage, loading: messagesLoading, refetch: refetchMessages } = useSafeConvexQuery<any>(
+    canQueryConversation ? { conversationId } : 'skip'
+  ) as any | null | undefined;
+  const conversationLoading = canQueryConversation && conversation === undefined;
+  const messagesPage = useQuery(
     api.messages.list,
-    conversationId
-      ? { conversationId, paginationOpts: { numItems: 50, cursor: null } }
-      : {},
-    EMPTY_MESSAGES_PAGE,
-    canQueryConversation
-  );
-  const { data: me } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null);
-  const { data: contacts } = useSafeConvexQuery<any[]>(api.contacts.getContacts, {}, [], !!me);
+    canQueryConversation ? { conversationId, paginationOpts: { numItems: 50, cursor: null } } : 'skip'
+  ) as any;
+  const messagesLoading = canQueryConversation && messagesPage === undefined;
+  const me = useQuery(api.users.getCurrentUser, {}) as any | null | undefined;
+  const contacts = useQuery(api.contacts.getContacts, me ? {} : 'skip') as any[] | undefined;
+  const refetchMessages = useCallback(async () => {}, []);
   const { data: conversationsForForward } = useSafeConvexQuery<any[]>(
     api.conversations.listConversations,
     {},
@@ -243,20 +241,25 @@ export default function ChatScreen() {
   const preferredLanguageLabel = getLanguageByCode(preferredLanguage)?.name || preferredLanguage;
   const skipTranslationLanguages = useMemo(() => {
     const values = new Set<string>();
-    [me?.languages, me?.skipTranslationLanguages, me?.spokenLanguages].forEach((list) => {
-      if (Array.isArray(list)) {
-        list.forEach((code) => {
-          if (typeof code === 'string' && code.trim()) {
-            values.add(getLanguageByCode(code.trim())?.name || code.trim());
-          }
-        });
+    const sourceList = Array.isArray(me?.skipTranslationLanguages)
+      ? me.skipTranslationLanguages
+      : Array.isArray(me?.spokenLanguages)
+        ? me.spokenLanguages
+        : Array.isArray(me?.languages)
+          ? me.languages
+          : [];
+
+    sourceList.forEach((code) => {
+      if (typeof code === 'string' && code.trim()) {
+        values.add(getLanguageByCode(code.trim())?.name || code.trim());
       }
     });
-    if (preferredLanguageLabel) {
-      values.add(preferredLanguageLabel);
+
+    if (preferredLanguageLabel && values.has(preferredLanguageLabel)) {
+      values.delete(preferredLanguageLabel);
     }
     return Array.from(values);
-  }, [me?.languages, me?.preferredLanguage, me?.skipTranslationLanguages, me?.spokenLanguages, preferredLanguageLabel]);
+  }, [me?.languages, me?.skipTranslationLanguages, me?.spokenLanguages, preferredLanguageLabel]);
 
   useEffect(() => {
     if (!preferredLanguageLabel || visibleMessages.length === 0) {
@@ -267,7 +270,7 @@ export default function ChatScreen() {
       if (!message?._id || !message?.text || message?.senderId === me?._id) {
         return false;
       }
-      return !translatedIdsRef.current.has(message._id);
+      return !translatedIdsRef.current.has(message._id) && !translatingIdsRef.current.has(message._id);
     }).slice(-8);
 
     if (candidates.length === 0) {
@@ -278,7 +281,7 @@ export default function ChatScreen() {
 
     (async () => {
       const updates: Record<string, string> = {};
-      candidates.forEach((message) => translatedIdsRef.current.add(message._id));
+      candidates.forEach((message) => translatingIdsRef.current.add(message._id));
       const results = await Promise.all(
         candidates.map(async (message) => ({
           id: message._id,
@@ -291,8 +294,10 @@ export default function ChatScreen() {
       );
 
       results.forEach(({ id, translated }) => {
+        translatingIdsRef.current.delete(id);
         if (!cancelled && translated) {
           updates[id] = translated;
+          translatedIdsRef.current.add(id);
         }
       });
 
@@ -308,6 +313,7 @@ export default function ChatScreen() {
 
   useEffect(() => {
     translatedIdsRef.current.clear();
+    translatingIdsRef.current.clear();
     setTranslatedMessageMap({});
   }, [conversationId]);
 
@@ -349,16 +355,6 @@ export default function ChatScreen() {
     const timer = setTimeout(() => setFallbackReady(true), 2500);
     return () => clearTimeout(timer);
   }, [canQueryConversation, conversationId]);
-
-  useEffect(() => {
-    if (!canQueryConversation) {
-      return;
-    }
-    const timer = setInterval(() => {
-      refetchConversation().catch(() => {});
-    }, 45000);
-    return () => clearInterval(timer);
-  }, [canQueryConversation, refetchConversation]);
 
   const isConversationAvailable = !!conversation;
   const composerTextColor = resolveDraftColor(draftColor) || Colors.textPrimary;
