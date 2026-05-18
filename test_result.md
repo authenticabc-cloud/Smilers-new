@@ -965,4 +965,6 @@
 ##   - agent: "main"
 ##     message: "The next copied diagnostics proved the blocker was the native Android token step itself. After the user provided Firebase Android config, I added `frontend/google-services.json` for project `smilers-a4e07` / package `com.smilers.app` and wired `expo.android.googleServicesFile` in `app.json`. Testing agent iteration 37 verified the file exists, the package names match, and Expo resolves the config correctly."
 ##   - agent: "main"
+##     message: "After push registration started working (`Status: registered` with a real Expo token), I added two isolation tools to the Notifications diagnostics card: `Test local notification` and `Test remote self-push`. These help separate native rendering problems from backend delivery problems. Testing agent iteration 38 confirmed both buttons and their result rows render and update correctly." 
+##   - agent: "main"
 ##     message: "Deployment log analysis isolated the final Android build failure as a remote Gradle download 502 in the EAS worker, but the repo-side blockers before that were still worth fixing. Package manager state is now consistently npm-based, eslint tooling is in runtime dependencies, and auth web URL resolution is env-driven instead of hardcoded to smilers.online."

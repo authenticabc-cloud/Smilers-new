@@ -120,6 +120,7 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - ✅ Added a `Copy diagnostics` action on the Notifications diagnostics card so the full push state can be copied and shared instantly during Android/iOS debugging
 - ✅ Added staged Android push-token diagnostics: the app now separates native device-token fetch from Expo token fetch and times both out with clear actionable errors, instead of hanging forever at a generic `acquiring-token` state
 - ✅ Wired Android Firebase/FCM config for native push: added `frontend/google-services.json` for Firebase project `smilers-a4e07` and connected it through `expo.android.googleServicesFile` so Android builds can acquire the native device push token
+- ✅ Added notification self-test tools on `app/notifications.tsx`: a local notification test and a remote Expo self-push test, allowing real-device isolation of native rendering versus backend delivery
 - ✅ Added `/app/auth_testing.md` and `/app/auth-testing.md` to document current manual auth verification expectations for future testing runs
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_POLLS_FILES.md` because the Convex backend source is not present in this repo; it documents the required schema, `messages.send`, and `votePoll` backend changes
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_STATUS_STORIES.md` because the Convex backend source is not present in this repo; it documents the required `statuses` endpoints, story views, DM reply support, and direct-conversation mutation
