@@ -1,0 +1,58 @@
+{
+  "summary": "Frontend-only mobile-web validation completed for notifications diagnostics self-test additions. Both new buttons render, are tappable, and update their respective result rows without layout breakage.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Test local notification (web preview)",
+        "issue": "Clicking local self-test shows runtime unsupported message because Notifications.scheduleNotificationAsync is not available on web.",
+        "affected_testIDs": [
+          "push-diagnostics-local-test-button",
+          "push-diagnostics-local-test-result"
+        ]
+      },
+      {
+        "flow": "Test remote self-push (web preview)",
+        "issue": "Remote self-test remains unavailable in web preview due missing native Expo push token.",
+        "affected_testIDs": [
+          "push-diagnostics-remote-test-button",
+          "push-diagnostics-remote-test-result",
+          "push-diagnostics-token"
+        ]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/frontend/app/notifications.tsx",
+    "/app/test_reports/artifacts/iteration_38_notifications_diag/notifications_diag_after_tests.jpeg",
+    "/root/.emergent/automation_output/20260518_210523/console_20260518_210523.log"
+  ],
+  "action_items": [
+    "On native device builds, verify local test triggers an actual notification banner/background alert.",
+    "On native device builds, verify remote self-push obtains Expo token and reaches Expo receipt status=ok.",
+    "Optional UX hardening: show explicit 'Not supported on web preview' message before invoking local test API."
+  ],
+  "critical_code_review_comments": [
+    "Requested controls and result rows are implemented with stable testIDs and proper state wiring.",
+    "No regression seen in diagnostics card structure after adding self-test controls.",
+    "Current web behavior relies on thrown native API error text for local test failure; a platform guard would make diagnostics clearer."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_38.json"
+  ],
+  "success_rate": {
+    "backend": "NA",
+    "frontend": "92%"
+  },
+  "seed_data_creation": "None.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "This run validated only web-preview-safe UI/runtime behavior for diagnostics additions. Native push rendering and Expo delivery still require authenticated physical-device retest.",
+  "rca_of_issue": "Reproduction: open /notifications, tap local test then remote self-test. Local path throws web unsupported API message from expo-notifications; remote path exits early when expoPushToken is absent on web. This is environment/platform limitation, not selector or layout regression. MOCKED APIs: NONE."
+}

@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
+import * as Notifications from 'expo-notifications';
 import { useMutation } from 'convex/react';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
@@ -28,6 +29,10 @@ export default function NotificationsScreen() {
   const canEdit = !!me;
   const [retrying, setRetrying] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [runningLocalTest, setRunningLocalTest] = useState(false);
+  const [runningRemoteTest, setRunningRemoteTest] = useState(false);
+  const [localTestResult, setLocalTestResult] = useState('Not run yet');
+  const [remoteTestResult, setRemoteTestResult] = useState('Not run yet');
 
   const toggle = useCallback(
     async (key: string, value: boolean) => {
@@ -85,6 +90,92 @@ export default function NotificationsScreen() {
     setTimeout(() => setCopied(false), 1800);
   }, [pushDiagnostics]);
 
+  const runLocalNotificationTest = useCallback(async () => {
+    setRunningLocalTest(true);
+    try {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: 'Smilers local notification test',
+          body: 'If you can see this, native notification rendering works on this device.',
+          data: { type: 'diagnostic-local-test' },
+          sound: 'default',
+        },
+        trigger: null,
+      });
+      setLocalTestResult('Sent local test notification. If nothing appeared, rendering is the blocker.');
+    } catch (errorValue: any) {
+      setLocalTestResult(`Local test failed: ${errorValue?.message || 'Unknown error'}`);
+    } finally {
+      setRunningLocalTest(false);
+    }
+  }, []);
+
+  const runRemoteSelfTest = useCallback(async () => {
+    if (!pushDiagnostics.expoPushToken) {
+      setRemoteTestResult('Remote self-test unavailable: no Expo push token yet.');
+      return;
+    }
+
+    setRunningRemoteTest(true);
+    try {
+      const sendResponse = await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          to: pushDiagnostics.expoPushToken,
+          title: 'Smilers remote self-test',
+          body: 'If this arrives, Expo delivery works and the remaining issue is backend sending.',
+          data: { type: 'diagnostic-remote-test' },
+          sound: 'default',
+          channelId: 'messages',
+          priority: 'high',
+          ttl: 3600,
+          _displayInForeground: true,
+        }),
+      });
+
+      const sendPayload = await sendResponse.json();
+      const ticketId = sendPayload?.data?.id;
+      if (!ticketId) {
+        const errorMessage = sendPayload?.errors?.[0]?.message || sendPayload?.data?.message || 'Ticket was not created.';
+        setRemoteTestResult(`Remote self-test send failed: ${errorMessage}`);
+        return;
+      }
+
+      setRemoteTestResult(`Remote self-test ticket created: ${ticketId}. Checking Expo receipt…`);
+      await new Promise((resolve) => setTimeout(resolve, 4000));
+
+      const receiptResponse = await fetch('https://exp.host/--/api/v2/push/getReceipts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ ids: [ticketId] }),
+      });
+      const receiptPayload = await receiptResponse.json();
+      const receipt = receiptPayload?.data?.[ticketId];
+
+      if (!receipt) {
+        setRemoteTestResult(`Remote self-test ticket ${ticketId} created, but no receipt yet. Check whether the notification arrived.`);
+        return;
+      }
+
+      if (receipt.status === 'ok') {
+        setRemoteTestResult('Expo receipt is OK. If you still did not see the notification, rendering/display behavior is the blocker.');
+        return;
+      }
+
+      const detailText = receipt?.details ? JSON.stringify(receipt.details) : receipt?.message || 'Unknown Expo receipt error';
+      setRemoteTestResult(`Expo receipt error: ${detailText}`);
+    } catch (errorValue: any) {
+      setRemoteTestResult(`Remote self-test failed: ${errorValue?.message || 'Unknown error'}`);
+    } finally {
+      setRunningRemoteTest(false);
+    }
+  }, [pushDiagnostics.expoPushToken]);
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="notifications-screen">
       <View style={styles.header}>
@@ -135,6 +226,29 @@ export default function NotificationsScreen() {
           >
             <Text style={styles.copyButtonText}>{copied ? 'Copied' : 'Copy diagnostics'}</Text>
           </TouchableOpacity>
+
+          <View style={styles.testButtonsRow}>
+            <TouchableOpacity
+              style={styles.secondaryButton}
+              onPress={runLocalNotificationTest}
+              disabled={runningLocalTest}
+              testID="push-diagnostics-local-test-button"
+            >
+              {runningLocalTest ? <ActivityIndicator size="small" color={Colors.primary} /> : <Text style={styles.secondaryButtonText}>Test local notification</Text>}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.secondaryButton}
+              onPress={runRemoteSelfTest}
+              disabled={runningRemoteTest}
+              testID="push-diagnostics-remote-test-button"
+            >
+              {runningRemoteTest ? <ActivityIndicator size="small" color={Colors.primary} /> : <Text style={styles.secondaryButtonText}>Test remote self-push</Text>}
+            </TouchableOpacity>
+          </View>
+
+          <DiagnosticRow label="Local test" value={localTestResult} testID="push-diagnostics-local-test-result" multiline />
+          <DiagnosticRow label="Remote self-test" value={remoteTestResult} testID="push-diagnostics-remote-test-result" multiline />
 
           <DiagnosticRow label="Status" value={pushDiagnostics.registrationStatus} testID="push-diagnostics-status" />
           <DiagnosticRow label="Auth session" value={pushDiagnostics.authSessionReady ? 'ready' : 'missing'} testID="push-diagnostics-auth-session" />
@@ -237,6 +351,21 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.sm,
   },
   copyButtonText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.primary },
+  testButtonsRow: {
+    gap: Spacing.sm,
+    marginBottom: Spacing.sm,
+  },
+  secondaryButton: {
+    minHeight: 42,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: '#00000018',
+    backgroundColor: Colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.base,
+  },
+  secondaryButtonText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   diagnosticRow: {
     paddingVertical: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
