@@ -115,6 +115,7 @@ export default function ChatScreen() {
   const [recDuration, setRecDuration] = useState(0);
   const [disappearingMode, setDisappearingMode] = useState<(typeof DISAPPEARING_OPTIONS)[number]['key']>('off');
   const [composerFocused, setComposerFocused] = useState(false);
+  const [showComposerFormattingPinned, setShowComposerFormattingPinned] = useState(false);
   const [draftBold, setDraftBold] = useState(false);
   const [draftColor, setDraftColor] = useState<DraftTextColorKey | null>(null);
   const [showColorPicker, setShowColorPicker] = useState(false);
@@ -365,7 +366,7 @@ export default function ChatScreen() {
 
   const isConversationAvailable = !!conversation;
   const composerTextColor = resolveDraftColor(draftColor) || Colors.textPrimary;
-  const showComposerFormatting = composerFocused || text.trim().length > 0 || showColorPicker;
+  const showComposerFormatting = showComposerFormattingPinned || composerFocused || text.trim().length > 0 || showColorPicker;
 
   const resetComposerFormatting = useCallback(() => {
     setDraftBold(false);
@@ -1225,9 +1226,18 @@ export default function ChatScreen() {
               <TouchableOpacity
                 style={styles.webToolBtn}
                 onPress={() => {
-                  setShowComposerFormatting((current) => !current);
-                  InteractionManager.runAfterInteractions(() => {
-                    setTimeout(() => messageInputRef.current?.focus(), 80);
+                  setShowComposerFormattingPinned((current) => {
+                    const nextValue = !current;
+                    if (nextValue) {
+                      InteractionManager.runAfterInteractions(() => {
+                        setTimeout(() => messageInputRef.current?.focus(), 80);
+                      });
+                    } else {
+                      setShowColorPicker(false);
+                      messageInputRef.current?.blur();
+                      Keyboard.dismiss();
+                    }
+                    return nextValue;
                   });
                 }}
                 disabled={!isConversationAvailable || uploading}
