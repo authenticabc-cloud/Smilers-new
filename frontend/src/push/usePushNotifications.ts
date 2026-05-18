@@ -120,6 +120,22 @@ function getAppVersion() {
   return toNonEmptyString((Constants.expoConfig as any)?.version) || '2.0.0';
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string) {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race<T>([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 function buildNotificationKey(payload: NotificationPayload) {
   const type = toNonEmptyString(payload.type) || 'unknown';
   const primaryId =
@@ -434,11 +450,28 @@ export function usePushNotifications() {
     }
 
     const projectId = getProjectId();
-    setPushDiagnostics({ registrationStatus: 'acquiring-token', projectId: projectId || '' });
+    setPushDiagnostics({ registrationStatus: 'acquiring-device-token', projectId: projectId || '' });
     if (!projectId) {
       console.warn('[push] Missing EAS projectId while requesting Expo push token');
     }
-    const tokenResult = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
+
+    const nativeDeviceToken = await withTimeout(
+      Notifications.getDevicePushTokenAsync(),
+      12000,
+      Platform.OS === 'android'
+        ? 'Timed out while waiting for the native Android device push token (FCM). This usually points to Firebase/FCM configuration inside the app build.'
+        : 'Timed out while waiting for the native device push token.'
+    );
+
+    setPushDiagnostics({ registrationStatus: 'acquiring-expo-token' });
+    const tokenResult = await withTimeout(
+      Notifications.getExpoPushTokenAsync({
+        ...(projectId ? { projectId } : {}),
+        devicePushToken: nativeDeviceToken,
+      }),
+      12000,
+      'Timed out while requesting the Expo push token after the native device token was acquired.'
+    );
     const expoPushToken = tokenResult.data;
     if (!expoPushToken) {
       throw new Error('Expo push token request returned an empty token');

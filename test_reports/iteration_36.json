@@ -1,0 +1,63 @@
+{
+  "summary": "Frontend-only validation completed for push token timeout/diagnostics update via code-path review plus mobile web preview smoke checks. New staged statuses and timeout wrappers are implemented as requested; native token path behavior remains unvalidated at runtime due no authenticated physical device in this run.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Public preview route availability",
+        "issue": "Initial notifications route attempt timed out with preview tunnel message ('The preview environment is not responding'). Retry succeeded.",
+        "affected_testIDs": []
+      },
+      {
+        "flow": "Native push token acquisition runtime verification",
+        "issue": "Could not execute acquiring-device-token/acquiring-expo-token runtime transitions because testing context had no authenticated physical device session.",
+        "affected_testIDs": [
+          "push-diagnostics-status",
+          "push-diagnostics-last-error"
+        ]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/frontend/src/push/usePushNotifications.ts",
+    "/app/frontend/src/push/pushDiagnostics.ts",
+    "/app/frontend/src/push/usePushNotifications.web.ts",
+    "/app/frontend/app/notifications.tsx",
+    "/app/test_reports/artifacts/iteration_36_push_timeout_diag/notifications_diag_error.jpeg",
+    "/app/test_reports/artifacts/iteration_36_push_timeout_diag_retry/notifications_loaded.jpeg",
+    "/root/.emergent/automation_output/20260518_133101/console_20260518_133101.log",
+    "/root/.emergent/automation_output/20260518_133147/console_20260518_133147.log",
+    "/var/log/supervisor/expo.out.log",
+    "/var/log/supervisor/expo.err.log"
+  ],
+  "action_items": [
+    "Run authenticated Android physical-device test to confirm status transitions: requesting-permission -> acquiring-device-token -> acquiring-expo-token -> registering-backend/registered.",
+    "Force Android FCM/native token failure path and verify lastError surfaces the new actionable timeout message exactly as intended.",
+    "Recheck preview tunnel stability (intermittent ngrok/preview unavailability observed in logs)."
+  ],
+  "critical_code_review_comments": [
+    "usePushNotifications.ts now cleanly separates native and Expo token stages with explicit statuses ('acquiring-device-token' and 'acquiring-expo-token'), improving diagnosability.",
+    "withTimeout(...) is applied to both Notifications.getDevicePushTokenAsync() and Notifications.getExpoPushTokenAsync(...) with 12s limits, preventing indefinite hangs in registration flow.",
+    "Android-specific timeout text is actionable and points to Firebase/FCM configuration in app build, which matches the reported stall context.",
+    "pushDiagnostics.ts status union and notifications diagnostics screen bindings are updated consistently; no stale status-label mismatch found.",
+    "Web shim remains intentionally no-op (usePushNotifications.web.ts), so native push registration behavior cannot be validated in web preview runtime."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_36.json"
+  ],
+  "success_rate": {
+    "backend": "NA",
+    "frontend": "85%"
+  },
+  "seed_data_creation": "None.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "This run covered static verification of the timeout/stage-split patch and a mobile web smoke check of notifications diagnostics rendering. Native push runtime validation is pending and required for final confidence.",
+  "rca_of_issue": "Patch appears to correctly address prior blind stall by isolating native token acquisition from Expo token request and bounding each with timeout. Remaining unresolved runtime risk is environmental (native FCM/APNs/device/auth availability), not obvious code regression. MOCKED APIs: NONE. test_credentials: present at /app/memory/test_credentials.md, but not used because no authenticated native test session was available."
+}
