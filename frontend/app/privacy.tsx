@@ -11,6 +11,7 @@ import {
   Modal,
   Pressable,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -19,6 +20,7 @@ import { useMutation } from 'convex/react';
 import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+import { useAuth } from '../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/theme';
 
 type VisibilityKey = 'lastSeen' | 'profilePhoto' | 'about' | 'status' | 'calls';
@@ -64,17 +66,23 @@ const SECTIONS: Array<{ key: VisibilityKey | GroupsKey; label: string; sub: stri
 
 export default function PrivacyScreen() {
   const router = useRouter();
-  const { data: serverSettings, loading } = useSafeConvexQuery<PrivacySettings>(api.privacy.getSettings, {}, DEFAULTS);
+  const { isAuthenticated } = useAuth();
+  const cloudSyncEnabled = isAuthenticated && Platform.OS !== 'web';
+  const { data: serverSettings, loading } = useSafeConvexQuery<PrivacySettings>(api.privacy.getSettings, {}, DEFAULTS, cloudSyncEnabled);
   const updateSettings = useMutation(api.privacy.updateSettings);
   const [draft, setDraft] = useState<PrivacySettings>(DEFAULTS);
   const [saving, setSaving] = useState(false);
   const [pickerKey, setPickerKey] = useState<VisibilityKey | GroupsKey | null>(null);
+  const controlsDisabled = !cloudSyncEnabled || saving;
 
   useEffect(() => {
     if (serverSettings) setDraft({ ...DEFAULTS, ...serverSettings });
   }, [serverSettings]);
 
   const persist = useCallback(async (next: PrivacySettings) => {
+    if (!cloudSyncEnabled) {
+      return;
+    }
     setDraft(next);
     setSaving(true);
     try {
@@ -84,7 +92,15 @@ export default function PrivacyScreen() {
     } finally {
       setSaving(false);
     }
-  }, [updateSettings, serverSettings]);
+  }, [cloudSyncEnabled, updateSettings, serverSettings]);
+
+  const syncBannerText = Platform.OS === 'web'
+    ? 'Privacy sync is available in the native app'
+    : !isAuthenticated
+    ? 'Sign in to sync your privacy settings'
+    : saving
+      ? 'Saving…'
+      : 'Synced with Smilers cloud';
 
   const onPickVisibility = (key: VisibilityKey | GroupsKey, value: VisibilityValue | GroupsValue) => {
     setPickerKey(null);
@@ -117,7 +133,7 @@ export default function PrivacyScreen() {
       <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
         <View style={styles.heroBanner} testID="privacy-sync-banner">
           <MaterialCommunityIcons name="shield-account" size={20} color={Colors.primary} />
-          <Text style={styles.heroText} testID="privacy-saved-note">{saving ? 'Saving…' : 'Synced with Smilers cloud'}</Text>
+          <Text style={styles.heroText} testID="privacy-saved-note">{syncBannerText}</Text>
         </View>
 
         <Text style={styles.section}>WHO CAN SEE MY INFO</Text>
@@ -125,7 +141,7 @@ export default function PrivacyScreen() {
           const value = draft[section.key];
           const labelMap = section.groups ? GROUPS_LABEL : VISIBILITY_LABEL;
           return (
-            <TouchableOpacity key={section.key} style={styles.row} activeOpacity={0.7} onPress={() => setPickerKey(section.key)} testID={`privacy-${section.key}`}>
+            <TouchableOpacity key={section.key} style={styles.row} activeOpacity={0.7} onPress={() => setPickerKey(section.key)} disabled={controlsDisabled} testID={`privacy-${section.key}`}>
               <View style={styles.iconWrap}><Feather name={section.icon} size={20} color={Colors.primary} /></View>
               <View style={styles.flexOne}>
                 <Text style={styles.rowTitle}>{section.label}</Text>
@@ -144,7 +160,7 @@ export default function PrivacyScreen() {
             <Text style={styles.rowTitle}>Read receipts</Text>
             <Text style={styles.rowSub}>Let others see when you've read their messages.</Text>
           </View>
-          <Switch value={draft.readReceipts} onValueChange={(value) => onToggle('readReceipts', value)} trackColor={{ false: Colors.border, true: Colors.primary }} thumbColor={Colors.white} testID="toggle-read-receipts" />
+          <Switch value={draft.readReceipts} onValueChange={(value) => onToggle('readReceipts', value)} disabled={controlsDisabled} trackColor={{ false: Colors.border, true: Colors.primary }} thumbColor={Colors.white} testID="toggle-read-receipts" />
         </View>
         <View style={styles.row} testID="privacy-typing-row">
           <View style={styles.iconWrap}><MaterialCommunityIcons name="dots-horizontal" size={22} color={Colors.primary} /></View>
@@ -152,7 +168,7 @@ export default function PrivacyScreen() {
             <Text style={styles.rowTitle}>Typing indicators</Text>
             <Text style={styles.rowSub}>Let others see when you're typing.</Text>
           </View>
-          <Switch value={draft.typingIndicators} onValueChange={(value) => onToggle('typingIndicators', value)} trackColor={{ false: Colors.border, true: Colors.primary }} thumbColor={Colors.white} testID="toggle-typing" />
+          <Switch value={draft.typingIndicators} onValueChange={(value) => onToggle('typingIndicators', value)} disabled={controlsDisabled} trackColor={{ false: Colors.border, true: Colors.primary }} thumbColor={Colors.white} testID="toggle-typing" />
         </View>
 
         <Text style={styles.footnote}>Privacy settings apply across all your linked Smilers devices.</Text>
