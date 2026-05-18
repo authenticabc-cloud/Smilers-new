@@ -16,6 +16,7 @@ export interface PushDiagnosticsState {
   convexAuthReady: boolean;
   convexAuthLoading: boolean;
   canRegisterWithBackend: boolean;
+  retryAvailable: boolean;
   isPhysicalDevice: boolean | null;
   permissionStatus: string;
   projectId: string;
@@ -32,6 +33,7 @@ const defaultState: PushDiagnosticsState = {
   convexAuthReady: false,
   convexAuthLoading: true,
   canRegisterWithBackend: false,
+  retryAvailable: false,
   isPhysicalDevice: null,
   permissionStatus: 'unknown',
   projectId: '',
@@ -79,6 +81,7 @@ export function getPushDiagnosticsState() {
 
 export function setPushDiagnosticsRetryHandler(handler: null | (() => Promise<void>)) {
   retryHandler = handler;
+  setPushDiagnostics({ retryAvailable: !!handler });
 }
 
 export async function requestPushDiagnosticsRetry() {

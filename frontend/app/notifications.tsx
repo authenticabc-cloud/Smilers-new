@@ -86,7 +86,7 @@ export default function NotificationsScreen() {
 
         <View style={styles.diagnosticsCard} testID="push-diagnostics-card">
           <View style={styles.diagnosticsHeaderRow}>
-            <View>
+            <View style={styles.diagnosticsHeaderTextWrap}>
               <Text style={styles.diagnosticsTitle} testID="push-diagnostics-title">Push diagnostics</Text>
               <Text style={styles.diagnosticsSubtitle} testID="push-diagnostics-subtitle">
                 Helps confirm token registration on this device.
@@ -95,10 +95,14 @@ export default function NotificationsScreen() {
             <TouchableOpacity
               style={styles.retryButton}
               onPress={retryPushRegistration}
-              disabled={retrying}
+              disabled={retrying || !pushDiagnostics.retryAvailable}
               testID="push-diagnostics-retry-button"
             >
-              {retrying ? <ActivityIndicator size="small" color={Colors.headerBg} /> : <Text style={styles.retryButtonText}>Retry</Text>}
+              {retrying ? (
+                <ActivityIndicator size="small" color={Colors.headerBg} />
+              ) : (
+                <Text style={styles.retryButtonText}>{pushDiagnostics.retryAvailable ? 'Retry' : 'Native only'}</Text>
+              )}
             </TouchableOpacity>
           </View>
 
@@ -174,19 +178,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
     gap: Spacing.base,
     marginBottom: Spacing.sm,
   },
+  diagnosticsHeaderTextWrap: { flex: 1, minWidth: 180 },
   diagnosticsTitle: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textPrimary },
   diagnosticsSubtitle: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
   retryButton: {
-    minWidth: 74,
+    minWidth: 96,
     minHeight: 40,
     borderRadius: Radius.md,
     backgroundColor: Colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: Spacing.base,
+    alignSelf: 'flex-start',
   },
   retryButtonText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.headerBg },
   diagnosticRow: {
