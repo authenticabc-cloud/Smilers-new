@@ -6,10 +6,16 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AuthProvider } from '../src/providers/AuthProvider';
 import { ConvexClientProvider } from '../src/providers/ConvexClientProvider';
 import { useMessageNotificationSound } from '../src/lib/notification/useMessageNotificationSound';
+import { usePushNotifications } from '../src/push/usePushNotifications';
 import { Colors } from '../src/theme';
 
 function GlobalNotificationSound() {
   useMessageNotificationSound();
+  return null;
+}
+
+function GlobalNotificationServices() {
+  usePushNotifications();
   return null;
 }
 
@@ -20,6 +26,7 @@ export default function RootLayout() {
         <AuthProvider>
           <ConvexClientProvider>
             <GlobalNotificationSound />
+            <GlobalNotificationServices />
             <StatusBar style="light" backgroundColor={Colors.headerBg} />
             <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: Colors.background } }}>
               <Stack.Screen name="index" />

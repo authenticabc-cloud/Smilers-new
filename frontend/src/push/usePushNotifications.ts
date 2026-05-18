@@ -316,9 +316,12 @@ export function usePushNotifications() {
   const { isAuthenticated } = useAuth();
   const registerMobileDevice = useMutation((api as any).mobilePush.registerMobileDevice);
   const registerLegacyDevice = useMutation((api as any).pushNotifications.registerMobileDevice);
+  const unregisterMobileDevice = useMutation((api as any).mobilePush.unregisterMobileDevice);
+  const unregisterLegacyDevice = useMutation((api as any).pushNotifications.unregisterMobileDevice);
   const declineCall = useMutation(api.calls.declineCall);
   const markDelivered = useMutation((api as any).messages.markDelivered);
   const lastResponse = useRef<string | null>(null);
+  const lastKnownPushToken = useRef<string | null>(null);
 
   const registerDeviceWithBackend = useCallback(
     async (expoPushToken: string) => {
@@ -340,6 +343,21 @@ export function usePushNotifications() {
       console.log('[push] Registered mobile device with backend');
     },
     [registerLegacyDevice, registerMobileDevice]
+  );
+
+  const unregisterDeviceWithBackend = useCallback(
+    async (expoPushToken: string) => {
+      try {
+        await unregisterMobileDevice({ expoPushToken });
+      } catch (primaryError: any) {
+        await unregisterLegacyDevice({ expoPushToken }).catch((legacyError: any) => {
+          throw legacyError?.message ? legacyError : primaryError;
+        });
+      }
+
+      console.log('[push] Unregistered mobile device from backend');
+    },
+    [unregisterLegacyDevice, unregisterMobileDevice]
   );
 
   // 1) On login: request permission, register token with backend
@@ -375,6 +393,7 @@ export function usePushNotifications() {
           projectId ? { projectId } : undefined
         );
         const expoPushToken = tokenResult.data;
+        lastKnownPushToken.current = expoPushToken;
 
         if (cancelled) return;
 
@@ -388,6 +407,23 @@ export function usePushNotifications() {
       cancelled = true;
     };
   }, [isAuthenticated, registerDeviceWithBackend]);
+
+  useEffect(() => {
+    if (Platform.OS === 'web' || !isAuthenticated) {
+      const expoPushToken = lastKnownPushToken.current;
+      if (!expoPushToken) {
+        return;
+      }
+
+      unregisterDeviceWithBackend(expoPushToken)
+        .catch((errorValue: any) => {
+          console.warn('[push] Unregister failed:', errorValue?.message || errorValue);
+        })
+        .finally(() => {
+          lastKnownPushToken.current = null;
+        });
+    }
+  }, [isAuthenticated, unregisterDeviceWithBackend]);
 
   // 2) Handle notification tap (background → foreground) and action buttons
   const handleResponse = useCallback(
@@ -474,6 +510,16 @@ export function usePushNotifications() {
 
     const sub = Notifications.addNotificationResponseReceivedListener(handleResponse);
 
+    const tokenSub = Notifications.addPushTokenListener(({ data }) => {
+      if (!data || !isAuthenticated || lastKnownPushToken.current === data) {
+        return;
+      }
+      lastKnownPushToken.current = data;
+      registerDeviceWithBackend(data).catch((errorValue: any) => {
+        console.warn('[push] Token refresh registration failed:', errorValue?.message || errorValue);
+      });
+    });
+
     // Also handle the case where the app was launched by tapping a notification
     Notifications.getLastNotificationResponseAsync().then((resp) => {
       if (resp) handleResponse(resp);
@@ -483,6 +529,7 @@ export function usePushNotifications() {
       appStateSub.remove();
       receiveSub.remove();
       sub.remove();
+      tokenSub.remove();
     };
-  }, [handleResponse, markDelivered, registerDeviceWithBackend]);
+  }, [handleResponse, isAuthenticated, markDelivered, registerDeviceWithBackend]);
 }

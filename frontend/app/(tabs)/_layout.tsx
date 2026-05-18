@@ -6,7 +6,6 @@ import { useMutation, useQuery } from 'convex/react';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { api } from '../../src/convexApi';
 import { PHONE_VERIFIED_INSTALL_KEY, readStoredString } from '../../src/lib/settingsStorage';
-import { usePushNotifications } from '../../src/push/usePushNotifications';
 import { useIncomingCallListener } from '../../src/push/useIncomingCallListener';
 import { Colors, FontSize, FontWeight } from '../../src/theme';
 
@@ -24,8 +23,6 @@ export default function TabsLayout() {
   const [bootstrapAttempted, setBootstrapAttempted] = useState(false);
   const [meGateTimedOut, setMeGateTimedOut] = useState(false);
 
-  // Wire up native push notifications (registers token + handles taps/actions)
-  usePushNotifications();
   // Wire up real-time foreground incoming-call detector
   useIncomingCallListener();
 

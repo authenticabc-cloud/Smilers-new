@@ -773,6 +773,9 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Aligned the push hook with the latest native mobile push spec: added `expo-task-manager` background notification task wiring, stronger `data.type` parsing, exact mobile-device registration payload `{ expoPushToken, platform, deviceName, appVersion }` with backend fallback between `api.mobilePush.registerMobileDevice` and `api.pushNotifications.registerMobileDevice`, Android `calls`/`messages` channel refresh with DND bypass + vibration, and iOS/Android config updates (`remote-notification`, `FOREGROUND_SERVICE_PHONE_CALL`). Preview boot was rechecked successfully after the dependency/install restart."
+##       - working: true
+##         agent: "main"
+##         comment: "Backend confirmed the new `mobilePush` flow, so the hook is now mounted globally from `app/_layout.tsx` instead of the tabs layout, meaning native token registration starts as soon as an authenticated session exists — not only after the tabs screen mounts. Added best-effort unregister on logout plus native token-refresh re-registration, while keeping web preview isolated via `usePushNotifications.web.ts`."
 ##   - task: "Call name, hangup, and tools-button stability"
 ##     implemented: true
 ##     working: true
@@ -945,5 +948,7 @@
 ##     message: "Please validate the latest push-notification alignment work. Focus on `/app/frontend/src/push/usePushNotifications.ts` plus `app.json`: 1) app still boots without runtime regressions, 2) channels/categories/register payload logic match the new spec, 3) background task registration is safe, and 4) call/message notification routing still deep-links correctly from payload `data.type`. Real signed-in/native push delivery may still require physical-device validation because credentials are not available in this run." 
 ##   - agent: "main"
 ##     message: "Iteration 31 follow-up was fixed locally without a full retest: web preview had still been logging Expo push-token-listener warnings because web was bundling native notifications imports from non-hook files. Added a web stub for `usePushNotifications` and converted the call/ringtones notification imports to native-only lazy requires. Latest preview console no longer shows that warning." 
+##   - agent: "main"
+##     message: "After the backend mobile-push fix landed, the frontend was aligned again: `usePushNotifications` now runs from root layout, uses the `mobilePush` register/unregister lifecycle earlier in the auth flow, and no longer depends on the tabs route mounting before the device token reaches Convex. Web preview still boots successfully after this change." 
 ##   - agent: "main"
 ##     message: "Deployment log analysis isolated the final Android build failure as a remote Gradle download 502 in the EAS worker, but the repo-side blockers before that were still worth fixing. Package manager state is now consistently npm-based, eslint tooling is in runtime dependencies, and auth web URL resolution is env-driven instead of hardcoded to smilers.online."
