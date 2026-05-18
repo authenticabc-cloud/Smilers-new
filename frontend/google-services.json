@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "794776366616",
+    "project_id": "smilers-a4e07",
+    "storage_bucket": "smilers-a4e07.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:794776366616:android:e03a5eeb5cded11b621d6d",
+        "android_client_info": {
+          "package_name": "com.smilers.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDtDEtLu6R2lIilL4TN8fL1AXaEXGoNyFk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

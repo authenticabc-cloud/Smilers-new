@@ -26,6 +26,7 @@
     },
     "android": {
       "package": "com.smilers.app",
+      "googleServicesFile": "./google-services.json",
       "versionCode": 12,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
