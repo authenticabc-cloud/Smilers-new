@@ -3,6 +3,7 @@ import { ActivityIndicator, ScrollView, StyleSheet, Switch, Text, TouchableOpaci
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
 import { useMutation } from 'convex/react';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
@@ -26,6 +27,7 @@ export default function NotificationsScreen() {
   const notifications = (me?.notifications || {}) as Record<string, boolean | undefined>;
   const canEdit = !!me;
   const [retrying, setRetrying] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const toggle = useCallback(
     async (key: string, value: boolean) => {
@@ -62,6 +64,26 @@ export default function NotificationsScreen() {
       setRetrying(false);
     }
   }, []);
+
+  const copyDiagnostics = useCallback(async () => {
+    const diagnosticText = [
+      'Smilers Push Diagnostics',
+      `Status: ${pushDiagnostics.registrationStatus}`,
+      `Auth session: ${pushDiagnostics.authSessionReady ? 'ready' : 'missing'}`,
+      `Convex auth: ${pushDiagnostics.convexAuthReady ? 'ready' : pushDiagnostics.convexAuthLoading ? 'loading' : 'not ready'}`,
+      `projectId: ${pushDiagnostics.projectId || 'missing'}`,
+      `Permission: ${pushDiagnostics.permissionStatus}`,
+      `Physical device: ${pushDiagnostics.isPhysicalDevice === null ? 'unknown' : pushDiagnostics.isPhysicalDevice ? 'yes' : 'no'}`,
+      `Push token: ${pushDiagnostics.expoPushToken || 'Not available yet'}`,
+      `Last registered: ${pushDiagnostics.lastRegisteredAt || 'Not yet'}`,
+      `Last error: ${pushDiagnostics.lastError || 'None'}`,
+      `Updated at: ${pushDiagnostics.lastUpdatedAt || 'Unknown'}`,
+    ].join('\n');
+
+    await Clipboard.setStringAsync(diagnosticText);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1800);
+  }, [pushDiagnostics]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="notifications-screen">
@@ -105,6 +127,14 @@ export default function NotificationsScreen() {
               )}
             </TouchableOpacity>
           </View>
+
+          <TouchableOpacity
+            style={styles.copyButton}
+            onPress={copyDiagnostics}
+            testID="push-diagnostics-copy-button"
+          >
+            <Text style={styles.copyButtonText}>{copied ? 'Copied' : 'Copy diagnostics'}</Text>
+          </TouchableOpacity>
 
           <DiagnosticRow label="Status" value={pushDiagnostics.registrationStatus} testID="push-diagnostics-status" />
           <DiagnosticRow label="Auth session" value={pushDiagnostics.authSessionReady ? 'ready' : 'missing'} testID="push-diagnostics-auth-session" />
@@ -196,6 +226,17 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   retryButtonText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.headerBg },
+  copyButton: {
+    minHeight: 42,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.base,
+    marginBottom: Spacing.sm,
+  },
+  copyButtonText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.primary },
   diagnosticRow: {
     paddingVertical: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
