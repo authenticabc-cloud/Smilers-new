@@ -70,6 +70,7 @@ function toNonEmptyString(value: unknown) {
 type NotificationPayload = {
   type?: string;
   callId?: string;
+  messageId?: string;
   conversationId?: string;
   displayName?: string;
   callerName?: string;
@@ -120,7 +121,17 @@ function getAppVersion() {
 
 function buildNotificationKey(payload: NotificationPayload) {
   const type = toNonEmptyString(payload.type) || 'unknown';
-  const primaryId = toNonEmptyString(payload.callId) || toNonEmptyString(payload.conversationId) || toNonEmptyString(payload.title);
+  const primaryId =
+    type === 'message'
+      ? toNonEmptyString(payload.messageId) || [
+          toNonEmptyString(payload.conversationId),
+          toNonEmptyString(payload.title),
+          toNonEmptyString(payload.body),
+        ].filter(Boolean).join(':')
+      : toNonEmptyString(payload.callId) ||
+        toNonEmptyString(payload.conversationId) ||
+        toNonEmptyString(payload.displayName) ||
+        toNonEmptyString(payload.title);
   return `${type}:${primaryId}`;
 }
 
@@ -308,7 +319,6 @@ export function usePushNotifications() {
   const declineCall = useMutation(api.calls.declineCall);
   const markDelivered = useMutation((api as any).messages.markDelivered);
   const lastResponse = useRef<string | null>(null);
-  const lastRegisteredPushToken = useRef<string | null>(null);
 
   const registerDeviceWithBackend = useCallback(
     async (expoPushToken: string) => {
@@ -327,7 +337,6 @@ export function usePushNotifications() {
         });
       }
 
-      lastRegisteredPushToken.current = expoPushToken;
       console.log('[push] Registered mobile device with backend');
     },
     [registerLegacyDevice, registerMobileDevice]
@@ -470,20 +479,10 @@ export function usePushNotifications() {
       if (resp) handleResponse(resp);
     });
 
-    const tokenSub = Notifications.addPushTokenListener(({ data }) => {
-      if (!data || lastRegisteredPushToken.current === data) {
-        return;
-      }
-      registerDeviceWithBackend(data).catch((errorValue: any) => {
-        console.warn('[push] Token refresh registration failed:', errorValue?.message || errorValue);
-      });
-    });
-
     return () => {
       appStateSub.remove();
       receiveSub.remove();
       sub.remove();
-      tokenSub.remove();
     };
   }, [handleResponse, markDelivered, registerDeviceWithBackend]);
 }

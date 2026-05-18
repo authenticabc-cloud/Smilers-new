@@ -14,7 +14,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { Audio } from 'expo-av';
-import * as Notifications from 'expo-notifications';
 import { useMutation } from 'convex/react';
 import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
@@ -30,6 +29,7 @@ import {
 } from '../src/lib/ringtone/ringCatalog';
 
 const RINGTONE_PREFS_KEY = 'smilers_ringtone_prefs';
+const Notifications = Platform.OS === 'web' ? null : (require('expo-notifications') as typeof import('expo-notifications'));
 
 interface RingPrefs {
   ringtone: RingId;
@@ -205,7 +205,7 @@ export default function RingtonesScreen() {
       } catch (errorValue: any) {
         console.warn('updateProfile(ringtonePrefs) failed:', errorValue?.message);
       }
-      if (Platform.OS === 'android') {
+      if (Platform.OS === 'android' && Notifications) {
         try {
           await Notifications.setNotificationChannelAsync('calls', {
             name: 'Incoming Calls',

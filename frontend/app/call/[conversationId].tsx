@@ -21,7 +21,6 @@ import { useMutation, useQuery } from 'convex/react';
 import { Camera } from 'expo-camera';
 import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as Notifications from 'expo-notifications';
 import Animated, {
   Easing,
   cancelAnimation,
@@ -40,6 +39,8 @@ import { useRingtonePlayer } from '../../src/lib/ringtone/useRingtonePlayer';
 type CallType = 'voice' | 'video';
 type AudioOutputRoute = 'earpiece' | 'speaker' | 'bluetooth';
 type NumberPrivacyMode = 'hide' | 'show';
+
+const Notifications = Platform.OS === 'web' ? null : (require('expo-notifications') as typeof import('expo-notifications'));
 
 function alertScreenShareIOSError() {
   Alert.alert(

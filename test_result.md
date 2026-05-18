@@ -420,6 +420,9 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Added web guards to push APIs, switched tab auth gating to render-time Redirects, fixed App Lock icon, and self-verified /chats now redirects safely to sign-in with no red overlay."
+##       - working: true
+##         agent: "main"
+##         comment: "Follow-up hardening for iteration 31: added `usePushNotifications.web.ts` so web preview no longer bundles native push setup, and replaced top-level `expo-notifications` imports in `app/call/[conversationId].tsx` and `app/ringtones.tsx` with native-only lazy requires. Self-verified the previous web console warning about push-token listeners is now gone from the preview boot logs."
 ##   - task: "Phase 2A.1 chat actions"
 ##     implemented: true
 ##     working: true
@@ -940,5 +943,7 @@
 ##     message: "Iteration 30 validated the new receipt code paths: chat now separates delivered vs read logic, the app acknowledges deliveries when message pushes arrive while running, and the chat route still renders gracefully in preview. The remaining risk is backend/runtime availability of `messages.markDelivered`, which still needs a real two-device signed-in test to prove sender ticks advance before the receiver opens the conversation." 
 ##   - agent: "main"
 ##     message: "Please validate the latest push-notification alignment work. Focus on `/app/frontend/src/push/usePushNotifications.ts` plus `app.json`: 1) app still boots without runtime regressions, 2) channels/categories/register payload logic match the new spec, 3) background task registration is safe, and 4) call/message notification routing still deep-links correctly from payload `data.type`. Real signed-in/native push delivery may still require physical-device validation because credentials are not available in this run." 
+##   - agent: "main"
+##     message: "Iteration 31 follow-up was fixed locally without a full retest: web preview had still been logging Expo push-token-listener warnings because web was bundling native notifications imports from non-hook files. Added a web stub for `usePushNotifications` and converted the call/ringtones notification imports to native-only lazy requires. Latest preview console no longer shows that warning." 
 ##   - agent: "main"
 ##     message: "Deployment log analysis isolated the final Android build failure as a remote Gradle download 502 in the EAS worker, but the repo-side blockers before that were still worth fixing. Package manager state is now consistently npm-based, eslint tooling is in runtime dependencies, and auth web URL resolution is env-driven instead of hardcoded to smilers.online."
