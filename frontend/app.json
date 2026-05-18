@@ -19,7 +19,8 @@
         "NSFaceIDUsageDescription": "Unlock Smilers securely with Face ID",
         "NSContactsUsageDescription": "Find friends who use Smilers",
         "UIBackgroundModes": [
-          "audio"
+          "audio",
+          "remote-notification"
         ]
       }
     },
@@ -84,6 +85,8 @@
         "RECEIVE_BOOT_COMPLETED",
         "MODIFY_AUDIO_SETTINGS",
         "WAKE_LOCK",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_PHONE_CALL",
         "ACCESS_NETWORK_STATE",
         "CHANGE_NETWORK_STATE",
         "BLUETOOTH",

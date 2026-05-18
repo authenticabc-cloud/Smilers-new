@@ -1,10 +1,11 @@
 import { useEffect, useRef, useCallback } from 'react';
-import { Platform, Alert } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
+import * as TaskManager from 'expo-task-manager';
 import { useRouter } from 'expo-router';
-import { useMutation, useConvex } from 'convex/react';
+import { useMutation } from 'convex/react';
 import { api } from '../convexApi';
 import { readStoredJson } from '../lib/settingsStorage';
 import { useAuth } from '../providers/AuthProvider';
@@ -22,7 +23,191 @@ if (Platform.OS !== 'web') {
 }
 
 const CALL_CATEGORY = 'incoming-call';
+const BACKGROUND_NOTIFICATION_TASK = 'smilers-background-notification-task';
+const CALLS_CHANNEL = 'calls';
+const MESSAGES_CHANNEL = 'messages';
+const DEFAULT_CHANNEL = 'default';
 const RINGTONE_PREFS_KEY = 'smilers_ringtone_prefs';
+
+const backgroundNotificationKeys: Set<string> = new Set();
+const runtimeScope = globalThis as any as {
+  __smilersAppState?: string;
+  __smilersNotificationTaskDefined?: boolean;
+};
+
+if (!runtimeScope.__smilersAppState) {
+  runtimeScope.__smilersAppState = Platform.OS === 'web' ? 'active' : AppState.currentState;
+}
+
+function trimBackgroundNotificationCache() {
+  if (backgroundNotificationKeys.size <= 30) {
+    return;
+  }
+  const oldestKey = backgroundNotificationKeys.values().next().value;
+  if (oldestKey) {
+    backgroundNotificationKeys.delete(oldestKey);
+  }
+}
+
+function safeParseJson<T>(value: string | null | undefined): T | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
+function toNonEmptyString(value: unknown) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  return value.trim();
+}
+
+type NotificationPayload = {
+  type?: string;
+  callId?: string;
+  conversationId?: string;
+  displayName?: string;
+  callerName?: string;
+  callerDisplayName?: string;
+  senderName?: string;
+  title?: string;
+  body?: string;
+  sound?: string;
+  [key: string]: unknown;
+};
+
+function normalizeNotificationPayload(rawValue: unknown): NotificationPayload {
+  const baseObject = rawValue && typeof rawValue === 'object' ? (rawValue as Record<string, unknown>) : {};
+  const nestedData =
+    typeof baseObject.data === 'string'
+      ? safeParseJson<Record<string, unknown>>(baseObject.data)
+      : baseObject.data && typeof baseObject.data === 'object'
+        ? (baseObject.data as Record<string, unknown>)
+        : null;
+  const nestedBody =
+    typeof baseObject.body === 'string' ? safeParseJson<Record<string, unknown>>(baseObject.body) : null;
+
+  return {
+    ...(nestedData || {}),
+    ...(nestedBody || {}),
+    ...baseObject,
+  };
+}
+
+function getDisplayNameFromPayload(payload: NotificationPayload, fallbackBody?: string) {
+  return (
+    toNonEmptyString(payload.displayName) ||
+    toNonEmptyString(payload.callerDisplayName) ||
+    toNonEmptyString(payload.callerName) ||
+    toNonEmptyString(payload.senderName) ||
+    toNonEmptyString(payload.body) ||
+    toNonEmptyString(fallbackBody)
+  );
+}
+
+function getProjectId() {
+  return (Constants.expoConfig as any)?.extra?.eas?.projectId || (Constants.easConfig as any)?.projectId || undefined;
+}
+
+function getAppVersion() {
+  return toNonEmptyString((Constants.expoConfig as any)?.version) || '2.0.0';
+}
+
+function buildNotificationKey(payload: NotificationPayload) {
+  const type = toNonEmptyString(payload.type) || 'unknown';
+  const primaryId = toNonEmptyString(payload.callId) || toNonEmptyString(payload.conversationId) || toNonEmptyString(payload.title);
+  return `${type}:${primaryId}`;
+}
+
+function shouldScheduleLocalNotification(taskData: unknown) {
+  const taskObject = taskData && typeof taskData === 'object' ? (taskData as Record<string, unknown>) : {};
+  const topLevelTitle = toNonEmptyString(taskObject.title);
+  const topLevelBody = toNonEmptyString(taskObject.body);
+  const notificationContent =
+    taskObject.notification && typeof taskObject.notification === 'object'
+      ? ((taskObject.notification as any)?.request?.content as Record<string, unknown> | undefined)
+      : undefined;
+  const contentTitle = toNonEmptyString(notificationContent?.title);
+  const contentBody = toNonEmptyString(notificationContent?.body);
+  return !(topLevelTitle || topLevelBody || contentTitle || contentBody);
+}
+
+async function presentBackgroundLocalNotification(taskData: unknown) {
+  if (Platform.OS === 'web') {
+    return;
+  }
+
+  const taskObject = taskData && typeof taskData === 'object' ? (taskData as Record<string, unknown>) : {};
+  const rawPayload =
+    ((taskObject.notification as any)?.request?.content?.data as Record<string, unknown> | undefined) ||
+    (taskObject.data as Record<string, unknown> | undefined) ||
+    taskObject;
+  const payload = normalizeNotificationPayload(rawPayload);
+  const type = toNonEmptyString(payload.type);
+  if (type !== 'call' && type !== 'message') {
+    return;
+  }
+
+  const notificationKey = buildNotificationKey(payload);
+  if (!notificationKey || backgroundNotificationKeys.has(notificationKey)) {
+    return;
+  }
+
+  if (!shouldScheduleLocalNotification(taskObject)) {
+    return;
+  }
+
+  backgroundNotificationKeys.add(notificationKey);
+  trimBackgroundNotificationCache();
+
+  const title =
+    toNonEmptyString(payload.title) ||
+    (type === 'call' ? 'Incoming call' : 'New message');
+  const body =
+    getDisplayNameFromPayload(payload) ||
+    (type === 'call' ? 'Smilers caller' : 'Open Smilers to view the message');
+
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title,
+      body,
+      data: payload,
+      sound: type === 'call' ? resolveCallChannelSound(toNonEmptyString(payload.sound) || 'ringtone') : resolveMessageChannelSound('smilers_notification'),
+      categoryIdentifier: type === 'call' ? CALL_CATEGORY : undefined,
+      sticky: type === 'call',
+      autoDismiss: type !== 'call',
+      priority: type === 'call' ? Notifications.AndroidNotificationPriority.MAX : Notifications.AndroidNotificationPriority.HIGH,
+      vibrate: type === 'call' ? [0, 600, 300, 600, 300, 600] : [0, 250, 250, 250],
+      interruptionLevel: type === 'call' ? 'timeSensitive' : 'active',
+    },
+    trigger: Platform.OS === 'android' ? { channelId: type === 'call' ? CALLS_CHANNEL : MESSAGES_CHANNEL } : null,
+  });
+}
+
+if (Platform.OS !== 'web' && !runtimeScope.__smilersNotificationTaskDefined) {
+  runtimeScope.__smilersNotificationTaskDefined = true;
+  TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }: any) => {
+    if (error) {
+      console.warn('[push] Background notification task error:', error?.message || error);
+      return;
+    }
+
+    if (runtimeScope.__smilersAppState === 'active') {
+      return;
+    }
+
+    try {
+      await presentBackgroundLocalNotification(data);
+    } catch (taskError: any) {
+      console.warn('[push] Background notification scheduling failed:', taskError?.message || taskError);
+    }
+  });
+}
 
 function resolveMessageChannelSound(notificationSoundId?: string | null) {
   switch (notificationSoundId) {
@@ -74,26 +259,29 @@ async function setupCategoriesAndChannels(prefs?: { ringtone?: string | null; no
   ]);
 
   if (Platform.OS === 'android') {
-    // High-priority channel for incoming calls — full-screen heads-up + custom ringtone
-    await Notifications.setNotificationChannelAsync('calls', {
+    await Notifications.setNotificationChannelAsync(CALLS_CHANNEL, {
       name: 'Incoming Calls',
-      importance: Notifications.AndroidImportance.MAX,
+      importance: Notifications.AndroidImportance.HIGH,
       sound: resolveCallChannelSound(prefs?.ringtone),
-      vibrationPattern: [0, 1000, 500, 1000, 500, 1000],
+      vibrationPattern: [0, 600, 300, 600, 300, 900],
       lightColor: '#E4B53B',
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
       bypassDnd: true,
       enableVibrate: true,
+      enableLights: true,
+      showBadge: false,
     });
-    await Notifications.setNotificationChannelAsync('messages', {
+    await Notifications.setNotificationChannelAsync(MESSAGES_CHANNEL, {
       name: 'Messages',
       importance: Notifications.AndroidImportance.HIGH,
       sound: resolveMessageChannelSound(prefs?.notificationSound),
       vibrationPattern: [0, 250, 250, 250],
       lightColor: '#E4B53B',
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+      enableVibrate: true,
+      showBadge: true,
     });
-    await Notifications.setNotificationChannelAsync('default', {
+    await Notifications.setNotificationChannelAsync(DEFAULT_CHANNEL, {
       name: 'General',
       importance: Notifications.AndroidImportance.DEFAULT,
       sound: 'default',
@@ -102,13 +290,48 @@ async function setupCategoriesAndChannels(prefs?: { ringtone?: string | null; no
   }
 }
 
+async function hasGrantedNotificationPermissions() {
+  const settings = await Notifications.getPermissionsAsync();
+  return (
+    settings.granted ||
+    settings.ios?.status === Notifications.IosAuthorizationStatus.AUTHORIZED ||
+    settings.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL ||
+    settings.ios?.status === Notifications.IosAuthorizationStatus.EPHEMERAL
+  );
+}
+
 export function usePushNotifications() {
   const router = useRouter();
   const { isAuthenticated } = useAuth();
-  const registerDevice = useMutation(api.pushNotifications.registerMobileDevice);
+  const registerMobileDevice = useMutation((api as any).mobilePush.registerMobileDevice);
+  const registerLegacyDevice = useMutation((api as any).pushNotifications.registerMobileDevice);
   const declineCall = useMutation(api.calls.declineCall);
   const markDelivered = useMutation((api as any).messages.markDelivered);
   const lastResponse = useRef<string | null>(null);
+  const lastRegisteredPushToken = useRef<string | null>(null);
+
+  const registerDeviceWithBackend = useCallback(
+    async (expoPushToken: string) => {
+      const payload = {
+        expoPushToken,
+        platform: Platform.OS as 'ios' | 'android',
+        deviceName: Device.deviceName || 'Unknown device',
+        appVersion: getAppVersion(),
+      };
+
+      try {
+        await registerMobileDevice(payload);
+      } catch (primaryError: any) {
+        await registerLegacyDevice(payload).catch((legacyError: any) => {
+          throw legacyError?.message ? legacyError : primaryError;
+        });
+      }
+
+      lastRegisteredPushToken.current = expoPushToken;
+      console.log('[push] Registered mobile device with backend');
+    },
+    [registerLegacyDevice, registerMobileDevice]
+  );
 
   // 1) On login: request permission, register token with backend
   useEffect(() => {
@@ -125,23 +348,20 @@ export function usePushNotifications() {
           return;
         }
 
-        const { status: existing } = await Notifications.getPermissionsAsync();
-        let finalStatus = existing;
-        if (existing !== 'granted') {
-          const { status: requested } = await Notifications.requestPermissionsAsync({
+        const alreadyGranted = await hasGrantedNotificationPermissions();
+        if (!alreadyGranted) {
+          await Notifications.requestPermissionsAsync({
             ios: { allowAlert: true, allowBadge: true, allowSound: true },
           });
-          finalStatus = requested;
         }
-        if (finalStatus !== 'granted') {
+        const grantedAfterRequest = await hasGrantedNotificationPermissions();
+        if (!grantedAfterRequest) {
           console.log('[push] Permission denied');
           return;
         }
 
         // Get the Expo Push token (works for both APNs and FCM)
-        const projectId =
-          (Constants.expoConfig as any)?.extra?.eas?.projectId ||
-          (Constants.easConfig as any)?.projectId;
+        const projectId = getProjectId();
         const tokenResult = await Notifications.getExpoPushTokenAsync(
           projectId ? { projectId } : undefined
         );
@@ -149,14 +369,7 @@ export function usePushNotifications() {
 
         if (cancelled) return;
 
-        // Send to backend so it can push us notifications
-        await registerDevice({
-          expoPushToken,
-          platform: Platform.OS as 'ios' | 'android',
-          deviceName: Device.deviceName || 'Unknown',
-          appVersion: (Constants.expoConfig as any)?.version || '1.0.0',
-        });
-        console.log('[push] Registered with backend:', expoPushToken);
+        await registerDeviceWithBackend(expoPushToken);
       } catch (e: any) {
         console.warn('[push] Registration failed:', e?.message || e);
       }
@@ -165,7 +378,7 @@ export function usePushNotifications() {
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, registerDevice]);
+  }, [isAuthenticated, registerDeviceWithBackend]);
 
   // 2) Handle notification tap (background → foreground) and action buttons
   const handleResponse = useCallback(
@@ -176,12 +389,16 @@ export function usePushNotifications() {
       lastResponse.current = id;
 
       const data = response.notification.request.content.data || {};
-      const type = (data as any).type as string | undefined;
-      const conversationId = (data as any).conversationId as string | undefined;
-      const callId = (data as any).callId as string | undefined;
+      const payload = normalizeNotificationPayload(data);
+      const type = toNonEmptyString(payload.type) || undefined;
+      const conversationId = toNonEmptyString(payload.conversationId) || undefined;
+      const callId = toNonEmptyString(payload.callId) || undefined;
       const action = response.actionIdentifier;
       const contentBody = typeof response?.notification?.request?.content?.body === 'string'
         ? response.notification.request.content.body
+        : '';
+      const contentTitle = typeof response?.notification?.request?.content?.title === 'string'
+        ? response.notification.request.content.title
         : '';
 
       console.log('[push] Response:', { type, action, conversationId, callId });
@@ -197,8 +414,7 @@ export function usePushNotifications() {
       }
 
       if (type === 'call' && conversationId) {
-        // Answer button OR default tap → open call screen
-        const displayName = contentBody.trim();
+        const displayName = getDisplayNameFromPayload(payload, contentBody) || contentTitle.trim();
         router.push(
           displayName
             ? (`/call/${conversationId}?displayName=${encodeURIComponent(displayName)}` as any)
@@ -220,10 +436,26 @@ export function usePushNotifications() {
       return;
     }
 
+    runtimeScope.__smilersAppState = AppState.currentState;
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      runtimeScope.__smilersAppState = nextState;
+    });
+
+    TaskManager.isTaskRegisteredAsync(BACKGROUND_NOTIFICATION_TASK)
+      .then((isRegistered) => {
+        if (!isRegistered) {
+          return Notifications.registerTaskAsync(BACKGROUND_NOTIFICATION_TASK);
+        }
+        return null;
+      })
+      .catch((errorValue: any) => {
+        console.warn('[push] Background task registration failed:', errorValue?.message || errorValue);
+      });
+
     const receiveSub = Notifications.addNotificationReceivedListener((notification) => {
-      const data = notification.request.content.data || {};
-      const type = (data as any).type as string | undefined;
-      const conversationId = (data as any).conversationId as string | undefined;
+      const payload = normalizeNotificationPayload(notification.request.content.data || {});
+      const type = toNonEmptyString(payload.type) || undefined;
+      const conversationId = toNonEmptyString(payload.conversationId) || undefined;
       if (type === 'message' && conversationId) {
         markDelivered({ conversationId }).catch((errorValue: any) => {
           console.warn('[push] markDelivered failed:', errorValue?.message || errorValue);
@@ -238,9 +470,20 @@ export function usePushNotifications() {
       if (resp) handleResponse(resp);
     });
 
+    const tokenSub = Notifications.addPushTokenListener(({ data }) => {
+      if (!data || lastRegisteredPushToken.current === data) {
+        return;
+      }
+      registerDeviceWithBackend(data).catch((errorValue: any) => {
+        console.warn('[push] Token refresh registration failed:', errorValue?.message || errorValue);
+      });
+    });
+
     return () => {
+      appStateSub.remove();
       receiveSub.remove();
       sub.remove();
+      tokenSub.remove();
     };
-  }, [handleResponse, markDelivered]);
+  }, [handleResponse, markDelivered, registerDeviceWithBackend]);
 }
