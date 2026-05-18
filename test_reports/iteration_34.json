@@ -1,0 +1,61 @@
+{
+  "summary": "Frontend-only scoped testing completed for push token registration hardening via code-path review plus unauthenticated Expo web runtime checks. Auth-gated registration, retry safety, logout unregister path, and token-refresh guard are present in code; no new boot/sign-in regressions were observed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Privacy screen data query in unauthenticated web preview",
+        "issue": "Console shows repeated Convex server error for privacy:getSettings query while route still renders; likely missing graceful unauth fallback or backend-side guard handling for this query path.",
+        "affected_testIDs": []
+      },
+      {
+        "flow": "Native Expo push registration verification",
+        "issue": "Could not fully validate real mobilePushTokens persistence because this run had no authenticated native-device session; verification limited to static code-path review and web preview runtime.",
+        "affected_testIDs": []
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/frontend/src/push/usePushNotifications.ts",
+    "/app/frontend/src/push/usePushNotifications.web.ts",
+    "/app/frontend/src/providers/ConvexClientProvider.tsx",
+    "/app/frontend/src/providers/AuthProvider.tsx",
+    "/app/frontend/app/_layout.tsx",
+    "/app/test_reports/artifacts/iteration_34_push_auth_gate/iter34_root_boot.jpeg",
+    "/app/test_reports/artifacts/iteration_34_push_auth_gate/iter34_signin_tap.jpeg",
+    "/app/test_reports/artifacts/iteration_34_push_auth_gate/iter34_privacy_route.jpeg",
+    "/root/.emergent/automation_output/20260518_101247/console_20260518_101247.log",
+    "/var/log/supervisor/expo.err.log",
+    "/var/log/supervisor/expo.out.log"
+  ],
+  "action_items": [
+    "Run authenticated Android native-device test and confirm successful api.mobilePush.registerMobileDevice mutation followed by token presence in backend mobilePushTokens.",
+    "Force token rotation on Android (FCM refresh) and verify addPushTokenListener path re-registers only after Convex auth readiness.",
+    "Perform logout on native after successful registration and confirm unregister mutation actually removes token server-side.",
+    "Investigate/handle privacy:getSettings Convex server error observed in unauth web preview to reduce noisy failure logs."
+  ],
+  "critical_code_review_comments": [
+    "Push registration is now correctly gated by both app auth and Convex auth readiness: hasAuthSession && isConvexAuthenticated && !isConvexAuthLoading.",
+    "Registration retry logic is safe: retry timer is tracked/cleared via registrationRetryTimer ref and clearRegistrationRetry callback; no broken variable reference found in retry path.",
+    "Token refresh listener now uses canRegisterWithBackend guard and no stale isAuthenticated identifier usage was found.",
+    "Logout unregister path still exists: when auth session becomes false and cached token exists, unregisterDeviceWithBackend(...) is called best-effort then local token cache is cleared."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_34.json"
+  ],
+  "success_rate": {
+    "backend": "NA",
+    "frontend": "85%"
+  },
+  "seed_data_creation": "None.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Credentials file exists at /app/memory/test_credentials.md, but this run intentionally stayed unauthenticated/native-device-less per request constraints. Web shim usePushNotifications.web.ts remains no-op, so push token execution paths cannot be runtime-validated in web preview.",
+  "rca_of_issue": "Root-cause hypothesis from agent context is consistent with current code: prior early registration before Convex auth readiness could fail mutation and miss token persistence. Current hook introduces Convex auth gate + retry + active-state re-registration + guarded token refresh listener, which removes the prior obvious race path. Remaining gap is real-device authenticated confirmation. MOCKED APIs: NONE."
+}

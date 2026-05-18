@@ -5,7 +5,7 @@ import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import * as TaskManager from 'expo-task-manager';
 import { useRouter } from 'expo-router';
-import { useMutation } from 'convex/react';
+import { useConvexAuth, useMutation } from 'convex/react';
 import { api } from '../convexApi';
 import { readStoredJson } from '../lib/settingsStorage';
 import { useAuth } from '../providers/AuthProvider';
@@ -313,7 +313,8 @@ async function hasGrantedNotificationPermissions() {
 
 export function usePushNotifications() {
   const router = useRouter();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated: hasAuthSession } = useAuth();
+  const { isAuthenticated: isConvexAuthenticated, isLoading: isConvexAuthLoading } = useConvexAuth();
   const registerMobileDevice = useMutation((api as any).mobilePush.registerMobileDevice);
   const registerLegacyDevice = useMutation((api as any).pushNotifications.registerMobileDevice);
   const unregisterMobileDevice = useMutation((api as any).mobilePush.unregisterMobileDevice);
@@ -322,6 +323,16 @@ export function usePushNotifications() {
   const markDelivered = useMutation((api as any).messages.markDelivered);
   const lastResponse = useRef<string | null>(null);
   const lastKnownPushToken = useRef<string | null>(null);
+  const registrationRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const canRegisterWithBackend = hasAuthSession && isConvexAuthenticated && !isConvexAuthLoading;
+
+  const clearRegistrationRetry = useCallback(() => {
+    if (registrationRetryTimer.current) {
+      clearTimeout(registrationRetryTimer.current);
+      registrationRetryTimer.current = null;
+    }
+  }, []);
 
   const registerDeviceWithBackend = useCallback(
     async (expoPushToken: string) => {
@@ -362,10 +373,14 @@ export function usePushNotifications() {
 
   // 1) On login: request permission, register token with backend
   useEffect(() => {
-    if (Platform.OS === 'web' || !isAuthenticated) return;
+    if (Platform.OS === 'web' || !canRegisterWithBackend) {
+      clearRegistrationRetry();
+      return;
+    }
+
     let cancelled = false;
 
-    (async () => {
+    const registerCurrentDevice = async () => {
       try {
         const prefs = (await readStoredJson(RINGTONE_PREFS_KEY, null)) as any;
         await setupCategoriesAndChannels(prefs || null);
@@ -389,41 +404,111 @@ export function usePushNotifications() {
 
         // Get the Expo Push token (works for both APNs and FCM)
         const projectId = getProjectId();
+        if (!projectId) {
+          console.warn('[push] Missing EAS projectId while requesting Expo push token');
+        }
         const tokenResult = await Notifications.getExpoPushTokenAsync(
           projectId ? { projectId } : undefined
         );
         const expoPushToken = tokenResult.data;
+        if (!expoPushToken) {
+          throw new Error('Expo push token request returned an empty token');
+        }
+
+        console.log('[push] Expo token acquired', {
+          tokenPreview: expoPushToken.slice(0, 24),
+          hasProjectId: !!projectId,
+          platform: Platform.OS,
+        });
         lastKnownPushToken.current = expoPushToken;
 
         if (cancelled) return;
 
+        clearRegistrationRetry();
         await registerDeviceWithBackend(expoPushToken);
       } catch (e: any) {
         console.warn('[push] Registration failed:', e?.message || e);
+        if (!cancelled) {
+          clearRegistrationRetry();
+          registrationRetryTimer.current = setTimeout(() => {
+            if (!cancelled) {
+              void registerCurrentDevice();
+            }
+          }, 5000);
+        }
       }
-    })();
+    };
+
+    void registerCurrentDevice();
 
     return () => {
       cancelled = true;
+      clearRegistrationRetry();
     };
-  }, [isAuthenticated, registerDeviceWithBackend]);
+  }, [canRegisterWithBackend, clearRegistrationRetry, registerDeviceWithBackend]);
 
   useEffect(() => {
-    if (Platform.OS === 'web' || !isAuthenticated) {
-      const expoPushToken = lastKnownPushToken.current;
-      if (!expoPushToken) {
-        return;
-      }
-
-      unregisterDeviceWithBackend(expoPushToken)
-        .catch((errorValue: any) => {
-          console.warn('[push] Unregister failed:', errorValue?.message || errorValue);
-        })
-        .finally(() => {
-          lastKnownPushToken.current = null;
-        });
+    if (Platform.OS === 'web' || hasAuthSession) {
+      return;
     }
-  }, [isAuthenticated, unregisterDeviceWithBackend]);
+
+    const expoPushToken = lastKnownPushToken.current;
+    if (!expoPushToken) {
+      return;
+    }
+
+    unregisterDeviceWithBackend(expoPushToken)
+      .catch((errorValue: any) => {
+        console.warn('[push] Unregister failed:', errorValue?.message || errorValue);
+      })
+      .finally(() => {
+        lastKnownPushToken.current = null;
+      });
+  }, [hasAuthSession, unregisterDeviceWithBackend]);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      return;
+    }
+
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      runtimeScope.__smilersAppState = nextState;
+      if (nextState === 'active' && canRegisterWithBackend && lastKnownPushToken.current) {
+        clearRegistrationRetry();
+        registerDeviceWithBackend(lastKnownPushToken.current).catch((errorValue: any) => {
+          console.warn('[push] Active-state re-registration failed:', errorValue?.message || errorValue);
+        });
+      }
+    });
+
+    return () => {
+      appStateSub.remove();
+    };
+  }, [canRegisterWithBackend, clearRegistrationRetry, registerDeviceWithBackend]);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      return;
+    }
+
+    runtimeScope.__smilersAppState = AppState.currentState;
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      return;
+    }
+
+    if (!canRegisterWithBackend) {
+      const expoPushToken = lastKnownPushToken.current;
+      console.log('[push] Waiting for Convex auth before device registration', {
+        hasAuthSession,
+        isConvexAuthenticated,
+        isConvexAuthLoading,
+        hasCachedToken: !!expoPushToken,
+      });
+    }
+  }, [canRegisterWithBackend, hasAuthSession, isConvexAuthenticated, isConvexAuthLoading]);
 
   // 2) Handle notification tap (background → foreground) and action buttons
   const handleResponse = useCallback(
@@ -481,11 +566,6 @@ export function usePushNotifications() {
       return;
     }
 
-    runtimeScope.__smilersAppState = AppState.currentState;
-    const appStateSub = AppState.addEventListener('change', (nextState) => {
-      runtimeScope.__smilersAppState = nextState;
-    });
-
     TaskManager.isTaskRegisteredAsync(BACKGROUND_NOTIFICATION_TASK)
       .then((isRegistered) => {
         if (!isRegistered) {
@@ -511,7 +591,7 @@ export function usePushNotifications() {
     const sub = Notifications.addNotificationResponseReceivedListener(handleResponse);
 
     const tokenSub = Notifications.addPushTokenListener(({ data }) => {
-      if (!data || !isAuthenticated || lastKnownPushToken.current === data) {
+      if (!data || !canRegisterWithBackend || lastKnownPushToken.current === data) {
         return;
       }
       lastKnownPushToken.current = data;
@@ -526,10 +606,9 @@ export function usePushNotifications() {
     });
 
     return () => {
-      appStateSub.remove();
       receiveSub.remove();
       sub.remove();
       tokenSub.remove();
     };
-  }, [handleResponse, isAuthenticated, markDelivered, registerDeviceWithBackend]);
+  }, [canRegisterWithBackend, handleResponse, markDelivered, registerDeviceWithBackend]);
 }
