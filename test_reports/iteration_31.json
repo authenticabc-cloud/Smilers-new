@@ -1,0 +1,53 @@
+{
+  "summary": "Frontend-only push notification regression pass completed. Expo web preview boots in mobile viewport without red-screen/runtime crash after expo-task-manager integration; push payload/deep-link and app config updates were validated by code review plus config resolution checks.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Push response handling for data.type=call and data.type=message",
+        "issue": "Could not execute end-to-end notification-tap deep-link navigation in this run (web preview + no authenticated/native push context). Validation is code-level only.",
+        "affected_testIDs": []
+      },
+      {
+        "flow": "Background task + token-listener behavior on web preview",
+        "issue": "Console repeatedly logs '[expo-notifications] Listening to push token changes is not yet fully supported on web.' Needs verification that addPushTokenListener path is fully gated to native runtime only.",
+        "affected_testIDs": []
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/frontend/src/push/usePushNotifications.ts",
+    "/app/frontend/app.json",
+    "/app/test_reports/artifacts/iteration_31_push_preview_boot/boot_signin_state.jpg",
+    "/app/test_reports/artifacts/iteration_31_push_preview_interactions/signin_tap_state.jpg",
+    "/app/test_reports/iteration_31.json"
+  ],
+  "action_items": [
+    "Run native device validation (Android + iOS) with authenticated sessions and real push payloads for call/message taps, action buttons, and background task execution.",
+    "Confirm web runtime never registers push-token listeners; if warning persists, tighten guards around token-listener registration paths.",
+    "Add a focused unit/integration test around normalizeNotificationPayload + handleResponse route mapping to prevent regressions in call/message deep-link parsing."
+  ],
+  "critical_code_review_comments": [
+    "Device registration payload in usePushNotifications.ts matches requested schema exactly: { expoPushToken, platform, deviceName, appVersion } with backend fallback mutation path.",
+    "Deep-link handling logic is present for both notification types: type=call routes to /call/:conversationId (with displayName when available), type=message routes to /chat/:conversationId.",
+    "Potential functional risk: background dedupe key for messages uses type + conversationId/title, which may suppress multiple distinct message notifications from the same conversation while app is backgrounded."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_31.json"
+  ],
+  "success_rate": {
+    "backend": "NA",
+    "frontend": "80%"
+  },
+  "seed_data_creation": "None",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 31 confirms preview boot stability and config presence after expo-task-manager integration. Remaining high-value checks are native push E2E behaviors (tap actions, background task delivery, token refresh, channel behavior) which are not reproducible in signed-out web preview.",
+  "rca_of_issue": "Observed warning suggests a web runtime path still touching push token listener APIs. Repro in this run: load root preview and observe repeated console warning from expo-notifications. Mitigation: verify all addPushTokenListener registration code executes only when Platform.OS !== 'web' and only after native notification subsystem setup. MOCKED APIs: NONE."
+}

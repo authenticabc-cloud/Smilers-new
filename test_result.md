@@ -767,6 +767,9 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "After iteration 27, fixed two follow-up regressions: foreground message alerts now stay fully silent when Silent is selected (no forced beep first), and missed-call local notifications no longer fire after an answered call because incoming answered state is tracked separately from merely seeing the ringing state."
+##       - working: true
+##         agent: "main"
+##         comment: "Aligned the push hook with the latest native mobile push spec: added `expo-task-manager` background notification task wiring, stronger `data.type` parsing, exact mobile-device registration payload `{ expoPushToken, platform, deviceName, appVersion }` with backend fallback between `api.mobilePush.registerMobileDevice` and `api.pushNotifications.registerMobileDevice`, Android `calls`/`messages` channel refresh with DND bypass + vibration, and iOS/Android config updates (`remote-notification`, `FOREGROUND_SERVICE_PHONE_CALL`). Preview boot was rechecked successfully after the dependency/install restart."
 ##   - task: "Call name, hangup, and tools-button stability"
 ##     implemented: true
 ##     working: true
@@ -935,5 +938,7 @@
 ##     message: "Iteration 28 validated the latest call/chat fixes: the call route now displays the passed saved contact name locally, the compact call layout kept the name and controls visible, the tools button no longer broke preview after the InteractionManager focus change, and translation API remained fast. One follow-up presence merge issue was fixed immediately after the report so saved contact names no longer mask online/last-seen fields." 
 ##   - agent: "main"
 ##     message: "Iteration 30 validated the new receipt code paths: chat now separates delivered vs read logic, the app acknowledges deliveries when message pushes arrive while running, and the chat route still renders gracefully in preview. The remaining risk is backend/runtime availability of `messages.markDelivered`, which still needs a real two-device signed-in test to prove sender ticks advance before the receiver opens the conversation." 
+##   - agent: "main"
+##     message: "Please validate the latest push-notification alignment work. Focus on `/app/frontend/src/push/usePushNotifications.ts` plus `app.json`: 1) app still boots without runtime regressions, 2) channels/categories/register payload logic match the new spec, 3) background task registration is safe, and 4) call/message notification routing still deep-links correctly from payload `data.type`. Real signed-in/native push delivery may still require physical-device validation because credentials are not available in this run." 
 ##   - agent: "main"
 ##     message: "Deployment log analysis isolated the final Android build failure as a remote Gradle download 502 in the EAS worker, but the repo-side blockers before that were still worth fixing. Package manager state is now consistently npm-based, eslint tooling is in runtime dependencies, and auth web URL resolution is env-driven instead of hardcoded to smilers.online."
