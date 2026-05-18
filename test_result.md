@@ -961,4 +961,6 @@
 ##   - agent: "main"
 ##     message: "Added a one-tap `Copy diagnostics` button to the Notifications diagnostics card. It copies the full push-debug state (status, auth, Convex auth, projectId, permission, physical-device flag, full token, last registration time, last error, updated timestamp) so the user can paste it directly into chat without screenshots." 
 ##   - agent: "main"
+##     message: "Used the copied diagnostics to pinpoint the remaining stall: the app was hanging indefinitely at Expo token acquisition. `usePushNotifications.ts` now splits that into two explicit stages — `acquiring-device-token` and `acquiring-expo-token` — and both are wrapped with 12-second timeouts. If Android stalls on native FCM token fetch, `Last error` will now say so directly instead of sitting forever on `acquiring-token`. Testing agent iteration 36 confirmed the staged statuses and timeout path are wired correctly." 
+##   - agent: "main"
 ##     message: "Deployment log analysis isolated the final Android build failure as a remote Gradle download 502 in the EAS worker, but the repo-side blockers before that were still worth fixing. Package manager state is now consistently npm-based, eslint tooling is in runtime dependencies, and auth web URL resolution is env-driven instead of hardcoded to smilers.online."
