@@ -1,12 +1,13 @@
-import React, { useCallback } from 'react';
-import { ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useMemo, useState } from 'react';
+import { ActivityIndicator, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation } from 'convex/react';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
-import { Colors, FontSize, FontWeight, Spacing } from '../src/theme';
+import { requestPushDiagnosticsRetry, usePushDiagnostics } from '../src/push/pushDiagnostics';
+import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/theme';
 
 const ITEMS = [
   { key: 'messages', title: 'Messages', subtitle: 'New chat messages' },
@@ -21,8 +22,10 @@ export default function NotificationsScreen() {
   const router = useRouter();
   const { data: me, refetch } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null);
   const updateProfile = useMutation(api.users.updateProfile);
+  const pushDiagnostics = usePushDiagnostics();
   const notifications = (me?.notifications || {}) as Record<string, boolean | undefined>;
   const canEdit = !!me;
+  const [retrying, setRetrying] = useState(false);
 
   const toggle = useCallback(
     async (key: string, value: boolean) => {
@@ -38,6 +41,27 @@ export default function NotificationsScreen() {
     },
     [me, notifications, refetch, updateProfile]
   );
+
+  const tokenPreview = useMemo(() => {
+    if (!pushDiagnostics.expoPushToken) {
+      return 'Not available yet';
+    }
+    if (pushDiagnostics.expoPushToken.length <= 34) {
+      return pushDiagnostics.expoPushToken;
+    }
+    return `${pushDiagnostics.expoPushToken.slice(0, 24)}…${pushDiagnostics.expoPushToken.slice(-8)}`;
+  }, [pushDiagnostics.expoPushToken]);
+
+  const retryPushRegistration = useCallback(async () => {
+    setRetrying(true);
+    try {
+      await requestPushDiagnosticsRetry();
+    } catch (errorValue: any) {
+      console.warn('Push retry failed', errorValue);
+    } finally {
+      setRetrying(false);
+    }
+  }, []);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="notifications-screen">
@@ -59,6 +83,36 @@ export default function NotificationsScreen() {
             Sign in to change notification preferences.
           </Text>
         ) : null}
+
+        <View style={styles.diagnosticsCard} testID="push-diagnostics-card">
+          <View style={styles.diagnosticsHeaderRow}>
+            <View>
+              <Text style={styles.diagnosticsTitle} testID="push-diagnostics-title">Push diagnostics</Text>
+              <Text style={styles.diagnosticsSubtitle} testID="push-diagnostics-subtitle">
+                Helps confirm token registration on this device.
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.retryButton}
+              onPress={retryPushRegistration}
+              disabled={retrying}
+              testID="push-diagnostics-retry-button"
+            >
+              {retrying ? <ActivityIndicator size="small" color={Colors.headerBg} /> : <Text style={styles.retryButtonText}>Retry</Text>}
+            </TouchableOpacity>
+          </View>
+
+          <DiagnosticRow label="Status" value={pushDiagnostics.registrationStatus} testID="push-diagnostics-status" />
+          <DiagnosticRow label="Auth session" value={pushDiagnostics.authSessionReady ? 'ready' : 'missing'} testID="push-diagnostics-auth-session" />
+          <DiagnosticRow label="Convex auth" value={pushDiagnostics.convexAuthReady ? 'ready' : pushDiagnostics.convexAuthLoading ? 'loading' : 'not ready'} testID="push-diagnostics-convex-auth" />
+          <DiagnosticRow label="projectId" value={pushDiagnostics.projectId || 'missing'} testID="push-diagnostics-project-id" />
+          <DiagnosticRow label="Permission" value={pushDiagnostics.permissionStatus} testID="push-diagnostics-permission" />
+          <DiagnosticRow label="Physical device" value={pushDiagnostics.isPhysicalDevice === null ? 'unknown' : pushDiagnostics.isPhysicalDevice ? 'yes' : 'no'} testID="push-diagnostics-physical-device" />
+          <DiagnosticRow label="Push token" value={tokenPreview} testID="push-diagnostics-token" multiline />
+          <DiagnosticRow label="Last registered" value={pushDiagnostics.lastRegisteredAt || 'Not yet'} testID="push-diagnostics-last-registered" multiline />
+          <DiagnosticRow label="Last error" value={pushDiagnostics.lastError || 'None'} testID="push-diagnostics-last-error" multiline />
+        </View>
+
         {ITEMS.map((item) => (
           <View key={item.key} style={styles.row} testID={`notifications-row-${item.key}`}>
             <View style={styles.flexOne}>
@@ -83,6 +137,17 @@ export default function NotificationsScreen() {
   );
 }
 
+function DiagnosticRow({ label, value, testID, multiline = false }: { label: string; value: string; testID: string; multiline?: boolean }) {
+  return (
+    <View style={styles.diagnosticRow} testID={testID}>
+      <Text style={styles.diagnosticLabel}>{label}</Text>
+      <Text style={styles.diagnosticValue} numberOfLines={multiline ? undefined : 1}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   header: {
@@ -98,6 +163,39 @@ const styles = StyleSheet.create({
   headerSpacer: { width: 26 },
   note: { fontSize: FontSize.sm, color: Colors.textSecondary, marginBottom: Spacing.base, lineHeight: 18 },
   helper: { fontSize: FontSize.sm, color: Colors.textMuted, marginBottom: Spacing.base },
+  diagnosticsCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.base,
+    marginBottom: Spacing.lg,
+    ...Shadow.sm,
+  },
+  diagnosticsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: Spacing.base,
+    marginBottom: Spacing.sm,
+  },
+  diagnosticsTitle: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  diagnosticsSubtitle: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
+  retryButton: {
+    minWidth: 74,
+    minHeight: 40,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.base,
+  },
+  retryButtonText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.headerBg },
+  diagnosticRow: {
+    paddingVertical: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#00000011',
+  },
+  diagnosticLabel: { fontSize: FontSize.sm, color: Colors.textMuted, marginBottom: 4 },
+  diagnosticValue: { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

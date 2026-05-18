@@ -8,6 +8,7 @@ import { useRouter } from 'expo-router';
 import { useConvexAuth, useMutation } from 'convex/react';
 import { api } from '../convexApi';
 import { readStoredJson } from '../lib/settingsStorage';
+import { getPushDiagnosticsState, setPushDiagnostics, setPushDiagnosticsRetryHandler } from './pushDiagnostics';
 import { useAuth } from '../providers/AuthProvider';
 
 // Foreground display behavior — show banner + sound for incoming pushes
@@ -334,8 +335,25 @@ export function usePushNotifications() {
     }
   }, []);
 
+  useEffect(() => {
+    setPushDiagnostics({
+      authSessionReady: hasAuthSession,
+      convexAuthReady: isConvexAuthenticated,
+      convexAuthLoading: isConvexAuthLoading,
+      canRegisterWithBackend,
+      isPhysicalDevice: Platform.OS === 'web' ? null : Device.isDevice,
+      projectId: getProjectId() || '',
+      registrationStatus: canRegisterWithBackend ? getPushDiagnosticsState().registrationStatus : 'waiting-auth',
+    });
+  }, [canRegisterWithBackend, hasAuthSession, isConvexAuthenticated, isConvexAuthLoading]);
+
   const registerDeviceWithBackend = useCallback(
     async (expoPushToken: string) => {
+      setPushDiagnostics({
+        expoPushToken,
+        registrationStatus: 'registering-backend',
+        lastError: '',
+      });
       const payload = {
         expoPushToken,
         platform: Platform.OS as 'ios' | 'android',
@@ -351,6 +369,12 @@ export function usePushNotifications() {
         });
       }
 
+      setPushDiagnostics({
+        expoPushToken,
+        registrationStatus: 'registered',
+        lastError: '',
+        lastRegisteredAt: new Date().toISOString(),
+      });
       console.log('[push] Registered mobile device with backend');
     },
     [registerLegacyDevice, registerMobileDevice]
@@ -366,10 +390,85 @@ export function usePushNotifications() {
         });
       }
 
+      setPushDiagnostics({
+        registrationStatus: 'unregistered',
+        lastError: '',
+        lastUnregisteredAt: new Date().toISOString(),
+      });
       console.log('[push] Unregistered mobile device from backend');
     },
     [unregisterLegacyDevice, unregisterMobileDevice]
   );
+
+  const attemptDeviceRegistration = useCallback(async () => {
+    const prefs = (await readStoredJson(RINGTONE_PREFS_KEY, null)) as any;
+    await setupCategoriesAndChannels(prefs || null);
+
+    if (!Device.isDevice) {
+      setPushDiagnostics({
+        isPhysicalDevice: false,
+        registrationStatus: 'error',
+        lastError: 'Push registration requires a physical device.',
+      });
+      console.log('[push] Skipping registration: not a physical device');
+      return;
+    }
+
+    setPushDiagnostics({ isPhysicalDevice: true, registrationStatus: 'requesting-permission', lastError: '' });
+    const alreadyGranted = await hasGrantedNotificationPermissions();
+    if (!alreadyGranted) {
+      await Notifications.requestPermissionsAsync({
+        ios: { allowAlert: true, allowBadge: true, allowSound: true },
+      });
+    }
+    const grantedAfterRequest = await hasGrantedNotificationPermissions();
+    const permissionStatus = grantedAfterRequest ? 'granted' : 'denied';
+    setPushDiagnostics({ permissionStatus });
+    if (!grantedAfterRequest) {
+      setPushDiagnostics({
+        registrationStatus: 'error',
+        lastError: 'Notification permission was denied on this device.',
+      });
+      console.log('[push] Permission denied');
+      return;
+    }
+
+    const projectId = getProjectId();
+    setPushDiagnostics({ registrationStatus: 'acquiring-token', projectId: projectId || '' });
+    if (!projectId) {
+      console.warn('[push] Missing EAS projectId while requesting Expo push token');
+    }
+    const tokenResult = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
+    const expoPushToken = tokenResult.data;
+    if (!expoPushToken) {
+      throw new Error('Expo push token request returned an empty token');
+    }
+
+    console.log('[push] Expo token acquired', {
+      tokenPreview: expoPushToken.slice(0, 24),
+      hasProjectId: !!projectId,
+      platform: Platform.OS,
+    });
+    lastKnownPushToken.current = expoPushToken;
+    clearRegistrationRetry();
+    await registerDeviceWithBackend(expoPushToken);
+  }, [clearRegistrationRetry, registerDeviceWithBackend]);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      setPushDiagnosticsRetryHandler(null);
+      return;
+    }
+
+    setPushDiagnosticsRetryHandler(async () => {
+      clearRegistrationRetry();
+      await attemptDeviceRegistration();
+    });
+
+    return () => {
+      setPushDiagnosticsRetryHandler(null);
+    };
+  }, [attemptDeviceRegistration, clearRegistrationRetry]);
 
   // 1) On login: request permission, register token with backend
   useEffect(() => {
@@ -382,51 +481,13 @@ export function usePushNotifications() {
 
     const registerCurrentDevice = async () => {
       try {
-        const prefs = (await readStoredJson(RINGTONE_PREFS_KEY, null)) as any;
-        await setupCategoriesAndChannels(prefs || null);
-
-        if (!Device.isDevice) {
-          console.log('[push] Skipping registration: not a physical device');
-          return;
-        }
-
-        const alreadyGranted = await hasGrantedNotificationPermissions();
-        if (!alreadyGranted) {
-          await Notifications.requestPermissionsAsync({
-            ios: { allowAlert: true, allowBadge: true, allowSound: true },
-          });
-        }
-        const grantedAfterRequest = await hasGrantedNotificationPermissions();
-        if (!grantedAfterRequest) {
-          console.log('[push] Permission denied');
-          return;
-        }
-
-        // Get the Expo Push token (works for both APNs and FCM)
-        const projectId = getProjectId();
-        if (!projectId) {
-          console.warn('[push] Missing EAS projectId while requesting Expo push token');
-        }
-        const tokenResult = await Notifications.getExpoPushTokenAsync(
-          projectId ? { projectId } : undefined
-        );
-        const expoPushToken = tokenResult.data;
-        if (!expoPushToken) {
-          throw new Error('Expo push token request returned an empty token');
-        }
-
-        console.log('[push] Expo token acquired', {
-          tokenPreview: expoPushToken.slice(0, 24),
-          hasProjectId: !!projectId,
-          platform: Platform.OS,
-        });
-        lastKnownPushToken.current = expoPushToken;
-
-        if (cancelled) return;
-
-        clearRegistrationRetry();
-        await registerDeviceWithBackend(expoPushToken);
+        await attemptDeviceRegistration();
       } catch (e: any) {
+        const message = e?.message || 'Push registration failed.';
+        setPushDiagnostics({
+          registrationStatus: 'retry-scheduled',
+          lastError: message,
+        });
         console.warn('[push] Registration failed:', e?.message || e);
         if (!cancelled) {
           clearRegistrationRetry();
@@ -475,7 +536,12 @@ export function usePushNotifications() {
       runtimeScope.__smilersAppState = nextState;
       if (nextState === 'active' && canRegisterWithBackend && lastKnownPushToken.current) {
         clearRegistrationRetry();
+        setPushDiagnostics({ registrationStatus: 'registering-backend', lastError: '' });
         registerDeviceWithBackend(lastKnownPushToken.current).catch((errorValue: any) => {
+          setPushDiagnostics({
+            registrationStatus: 'error',
+            lastError: errorValue?.message || 'Active-state re-registration failed.',
+          });
           console.warn('[push] Active-state re-registration failed:', errorValue?.message || errorValue);
         });
       }
@@ -501,6 +567,10 @@ export function usePushNotifications() {
 
     if (!canRegisterWithBackend) {
       const expoPushToken = lastKnownPushToken.current;
+      setPushDiagnostics({
+        expoPushToken: expoPushToken || '',
+        registrationStatus: 'waiting-auth',
+      });
       console.log('[push] Waiting for Convex auth before device registration', {
         hasAuthSession,
         isConvexAuthenticated,
@@ -595,7 +665,12 @@ export function usePushNotifications() {
         return;
       }
       lastKnownPushToken.current = data;
+      setPushDiagnostics({ expoPushToken: data, registrationStatus: 'registering-backend', lastError: '' });
       registerDeviceWithBackend(data).catch((errorValue: any) => {
+        setPushDiagnostics({
+          registrationStatus: 'error',
+          lastError: errorValue?.message || 'Token refresh registration failed.',
+        });
         console.warn('[push] Token refresh registration failed:', errorValue?.message || errorValue);
       });
     });
