@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Smilers",
-    "slug": "smilers-new",
+    "slug": "smilers",
     "owner": "abcsimplesend",
     "version": "2.0.0",
     "orientation": "portrait",
@@ -150,7 +150,7 @@
     },
     "extra": {
       "eas": {
-        "projectId": "a81bd592-d234-4453-8a31-67575d837df6"
+        "projectId": "aff3eee0-0f42-475a-bd4c-a6d39d9b2f7b"
       }
     }
   }
