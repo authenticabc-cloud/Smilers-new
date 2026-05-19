@@ -19,9 +19,9 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useConvex, useMutation, useQuery } from 'convex/react';
-import { Audio } from 'expo-av';
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
+import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
@@ -132,12 +132,13 @@ export default function ChatScreen() {
   const translatedIdsRef = useRef<Set<string>>(new Set());
   const translatingIdsRef = useRef<Set<string>>(new Set());
   const messageInputRef = useRef<TextInput | null>(null);
-  const recRef = useRef<Audio.Recording | null>(null);
   const recTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const recCancelledRef = useRef(false);
   const recStartMsRef = useRef(0);
   const recDurationMsRef = useRef(0);
   const listRef = useRef<FlatList<any>>(null);
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(audioRecorder, 200);
   const hasValidConversationId =
     typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
   const canQueryConversation = !!conversationId && hasValidConversationId && isAuthenticated;
@@ -163,12 +164,22 @@ export default function ChatScreen() {
   );
 
   useEffect(() => {
-    Audio.setAudioModeAsync({
-      allowsRecordingIOS: true,
-      playsInSilentModeIOS: true,
-      shouldDuckAndroid: true,
+    setAudioModeAsync({
+      allowsRecording: false,
+      playsInSilentMode: true,
+      interruptionMode: 'duckOthers',
+      shouldRouteThroughEarpiece: false,
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!isRecording) {
+      return;
+    }
+    const nextDuration = recorderState.durationMillis || 0;
+    recDurationMsRef.current = nextDuration;
+    setRecDuration(Math.floor(nextDuration / 1000));
+  }, [isRecording, recorderState.durationMillis]);
 
   useEffect(() => {
     const showSub = Keyboard.addListener('keyboardDidShow', () => setIsKeyboardVisible(true));
@@ -674,7 +685,7 @@ export default function ChatScreen() {
   const startRecording = useCallback(async () => {
     if (isRecording) return;
     try {
-      const permission = await Audio.requestPermissionsAsync();
+      const permission = await requestRecordingPermissionsAsync();
       if (!permission.granted) {
         Alert.alert('Permission required', 'Please allow microphone access to record voice notes.');
         return;
@@ -686,23 +697,15 @@ export default function ChatScreen() {
       setRecDuration(0);
       recDurationMsRef.current = 0;
       recStartMsRef.current = Date.now();
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        shouldPlayInBackground: false,
+        interruptionMode: 'duckOthers',
+        shouldRouteThroughEarpiece: false,
       });
-      const recording = new Audio.Recording();
-      await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      recording.setProgressUpdateInterval(200);
-      recording.setOnRecordingStatusUpdate((status) => {
-        if (!status.isLoaded) return;
-        recDurationMsRef.current = status.durationMillis || 0;
-        setRecDuration(Math.floor((status.durationMillis || 0) / 1000));
-      });
-      await recording.startAsync();
-      recRef.current = recording;
+      await audioRecorder.prepareToRecordAsync();
+      audioRecorder.record();
       setIsRecording(true);
       setIsRecordingPaused(false);
     } catch (errorValue: any) {
@@ -710,7 +713,7 @@ export default function ChatScreen() {
       setIsRecordingPaused(false);
       Alert.alert('Recording failed', errorValue?.message || 'Could not start recording');
     }
-  }, [isRecording]);
+  }, [audioRecorder, isRecording]);
 
   const finishRecording = useCallback(
     async (action: 'send' | 'cancel') => {
@@ -718,19 +721,16 @@ export default function ChatScreen() {
         clearInterval(recTimer.current);
         recTimer.current = null;
       }
-      const recording = recRef.current;
-      recRef.current = null;
-      const totalMs = recDurationMsRef.current;
+      const totalMs = Math.max(recDurationMsRef.current, recorderState.durationMillis || 0);
       const totalSec = Math.max(1, Math.round(totalMs / 1000));
       const replyToMessageId = replyTo?._id;
       setIsRecording(false);
       setIsRecordingPaused(false);
       setRecDuration(0);
       recDurationMsRef.current = 0;
-      if (!recording) return;
       try {
-        await recording.stopAndUnloadAsync();
-        const uri = recording.getURI();
+        await audioRecorder.stop();
+        const uri = audioRecorder.uri;
         if (action === 'cancel' || recCancelledRef.current) return;
         if (!uri) return;
         if (totalMs < 800) {
@@ -754,10 +754,16 @@ export default function ChatScreen() {
       } catch (errorValue: any) {
         Alert.alert('Failed to send voice note', errorValue?.message || 'Unknown error');
       } finally {
+        setAudioModeAsync({
+          allowsRecording: false,
+          playsInSilentMode: true,
+          interruptionMode: 'duckOthers',
+          shouldRouteThroughEarpiece: false,
+        }).catch(() => {});
         setUploading(false);
       }
     },
-    [conversationId, convex, refetchMessages, replyTo, sendMessage]
+    [audioRecorder, conversationId, convex, recorderState.durationMillis, refetchMessages, replyTo, sendMessage]
   );
 
   const cancelRecording = useCallback(() => {
@@ -766,35 +772,31 @@ export default function ChatScreen() {
   }, [finishRecording]);
 
   const pauseRecording = useCallback(async () => {
-    if (!recRef.current || isRecordingPaused) return;
+    if (!isRecording || isRecordingPaused) return;
     try {
-      await recRef.current.pauseAsync();
+      audioRecorder.pause();
       setIsRecordingPaused(true);
     } catch (errorValue: any) {
       Alert.alert('Pause failed', errorValue?.message || 'Could not pause recording');
     }
-  }, [isRecordingPaused]);
+  }, [audioRecorder, isRecording, isRecordingPaused]);
 
   const resumeRecording = useCallback(async () => {
-    if (!recRef.current || !isRecordingPaused) return;
+    if (!isRecording || !isRecordingPaused) return;
     try {
-      await recRef.current.startAsync();
+      audioRecorder.record();
       setIsRecordingPaused(false);
     } catch (errorValue: any) {
       Alert.alert('Resume failed', errorValue?.message || 'Could not resume recording');
     }
-  }, [isRecordingPaused]);
+  }, [audioRecorder, isRecording, isRecordingPaused]);
 
   useEffect(() => {
     return () => {
       if (recTimer.current) clearInterval(recTimer.current);
-      const recording = recRef.current;
-      recRef.current = null;
-      if (recording) {
-        recording.stopAndUnloadAsync().catch(() => {});
-      }
+      audioRecorder.stop().catch(() => {});
     };
-  }, []);
+  }, [audioRecorder]);
 
   const onLongPressMessage = useCallback(async (msg: any) => {
     try {

@@ -135,6 +135,12 @@
           "cameraPermission": "Take photos to send in chats and status"
         }
       ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Record voice notes and make voice calls"
+        }
+      ],
       "expo-secure-store",
       [
         "expo-contacts",

@@ -29,6 +29,7 @@
     "eslint": "^9.39.4",
     "eslint-config-expo": "~10.0.0",
     "expo": "~54.0.34",
+    "expo-audio": "~1.1.1",
     "expo-auth-session": "~7.0.11",
     "expo-av": "^16.0.8",
     "expo-blur": "~15.0.8",
