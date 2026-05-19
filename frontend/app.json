@@ -1,7 +1,8 @@
 {
   "expo": {
     "name": "Smilers",
-    "slug": "smilers",
+    "slug": "smilers-new",
+    "owner": "abcsimplesend",
     "version": "2.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -146,6 +147,11 @@
     ],
     "experiments": {
       "typedRoutes": false
+    },
+    "extra": {
+      "eas": {
+        "projectId": "a81bd592-d234-4453-8a31-67575d837df6"
+      }
     }
   }
 }
