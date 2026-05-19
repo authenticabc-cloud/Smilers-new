@@ -76,6 +76,12 @@ function isSameCalendarDay(a?: number, b?: number) {
   return da.getFullYear() === db.getFullYear() && da.getMonth() === db.getMonth() && da.getDate() === db.getDate();
 }
 
+function isGifAsset(file?: { mimeType?: string | null; name?: string | null }) {
+  const mime = (file?.mimeType || '').toLowerCase();
+  const name = (file?.name || '').toLowerCase();
+  return mime === 'image/gif' || name.endsWith('.gif');
+}
+
 function formatPresenceSubtitle(conversation: any) {
   if (!conversation) return 'tap for info';
   if (conversation.type === 'group') {
@@ -597,6 +603,51 @@ export default function ChatScreen() {
       setUploading(false);
     }
   }, [conversationId, convex, isConversationAvailable, refetchMessages, replyTo, sendMessage]);
+
+  const onPickGif = useCallback(async () => {
+    if (!conversationId || !isConversationAvailable) return;
+
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['image/gif'],
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (result.canceled) return;
+
+      const file = result.assets?.[0];
+      if (!file) return;
+      if (!isGifAsset(file)) {
+        Alert.alert('GIF only', 'Please choose a GIF file to send from this button.');
+        return;
+      }
+
+      setUploading(true);
+      const caption = text.trim();
+      const formattedCaption = caption
+        ? applyDraftFormatting(caption, { bold: draftBold, color: draftColor })
+        : '';
+      const replyToMessageId = replyTo?._id;
+      const storageId = await uploadFile(convex, file.uri, 'image/gif');
+      await sendMessage({
+        conversationId,
+        type: 'image',
+        text: formattedCaption,
+        storageId,
+        mimeType: 'image/gif',
+        fileName: file.name || 'gif-message.gif',
+        ...(replyToMessageId ? { replyToMessageId } : {}),
+      });
+      setText('');
+      setReplyTo(null);
+      resetComposerFormatting();
+      await refetchMessages();
+    } catch (errorValue: any) {
+      Alert.alert('Failed to send GIF', errorValue?.message || 'Unknown error');
+    } finally {
+      setUploading(false);
+    }
+  }, [conversationId, convex, draftBold, draftColor, isConversationAvailable, refetchMessages, replyTo, resetComposerFormatting, sendMessage, text]);
 
   const onSubmitPoll = useCallback(
     async (poll: { question: string; options: { id: string; text: string }[] }) => {
@@ -1212,7 +1263,12 @@ export default function ChatScreen() {
               >
                 <Ionicons name="apps-outline" size={20} color={Colors.textSecondary} />
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.webToolBtn, styles.webToolBtnDisabled]} disabled testID="composer-toolbar-gif">
+              <TouchableOpacity
+                style={styles.webToolBtn}
+                onPress={onPickGif}
+                disabled={!isConversationAvailable || uploading}
+                testID="composer-toolbar-gif"
+              >
                 <Text style={styles.webToolGifLabel}>GIF</Text>
               </TouchableOpacity>
               <TouchableOpacity
