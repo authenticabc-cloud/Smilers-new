@@ -122,6 +122,7 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - ✅ Wired Android Firebase/FCM config for native push: added `frontend/google-services.json` for Firebase project `smilers-a4e07` and connected it through `expo.android.googleServicesFile` so Android builds can acquire the native device push token
 - ✅ Added notification self-test tools on `app/notifications.tsx`: a local notification test and a remote Expo self-push test, allowing real-device isolation of native rendering versus backend delivery
 - ✅ Switched Expo/EAS linkage to the actual project chosen by the user: `slug=smilers`, `owner=abcsimplesend`, `projectId=aff3eee0-0f42-475a-bd4c-a6d39d9b2f7b`
+- ✅ Fixed the chat GIF button so it is no longer a dead disabled control; it now launches a GIF-only picker and sends selected GIF files through the existing media upload/message flow
 - ✅ Added `/app/auth_testing.md` and `/app/auth-testing.md` to document current manual auth verification expectations for future testing runs
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_POLLS_FILES.md` because the Convex backend source is not present in this repo; it documents the required schema, `messages.send`, and `votePoll` backend changes
 - ✅ Added `/app/CONVEX_BACKEND_INSTRUCTIONS_STATUS_STORIES.md` because the Convex backend source is not present in this repo; it documents the required `statuses` endpoints, story views, DM reply support, and direct-conversation mutation

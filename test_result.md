@@ -969,4 +969,6 @@
 ##   - agent: "main"
 ##     message: "Switched the app from the temporary Expo project link to the actual Expo project the user chose: `slug=smilers`, `owner=abcsimplesend`, `projectId=aff3eee0-0f42-475a-bd4c-a6d39d9b2f7b`. Testing agent iteration 40 confirmed both `app.json` and resolved Expo config now point to that project cleanly." 
 ##   - agent: "main"
+##     message: "Fixed the chat GIF button doing nothing on Android. Root cause: `composer-toolbar-gif` in `app/chat/[conversationId].tsx` was intentionally rendered as a disabled button with no handler. It now opens a GIF-only picker using the existing document upload flow, validates `.gif` / `image/gif`, uploads as `image/gif`, and sends through the existing image message path. Testing agent iteration 41 confirmed the code path is wired correctly; authenticated on-device chat validation is still needed." 
+##   - agent: "main"
 ##     message: "Deployment log analysis isolated the final Android build failure as a remote Gradle download 502 in the EAS worker, but the repo-side blockers before that were still worth fixing. Package manager state is now consistently npm-based, eslint tooling is in runtime dependencies, and auth web URL resolution is env-driven instead of hardcoded to smilers.online."
