@@ -967,4 +967,6 @@
 ##   - agent: "main"
 ##     message: "After push registration started working (`Status: registered` with a real Expo token), I added two isolation tools to the Notifications diagnostics card: `Test local notification` and `Test remote self-push`. These help separate native rendering problems from backend delivery problems. Testing agent iteration 38 confirmed both buttons and their result rows render and update correctly." 
 ##   - agent: "main"
+##     message: "Switched the app from the temporary Expo project link to the actual Expo project the user chose: `slug=smilers`, `owner=abcsimplesend`, `projectId=aff3eee0-0f42-475a-bd4c-a6d39d9b2f7b`. Testing agent iteration 40 confirmed both `app.json` and resolved Expo config now point to that project cleanly." 
+##   - agent: "main"
 ##     message: "Deployment log analysis isolated the final Android build failure as a remote Gradle download 502 in the EAS worker, but the repo-side blockers before that were still worth fixing. Package manager state is now consistently npm-based, eslint tooling is in runtime dependencies, and auth web URL resolution is env-driven instead of hardcoded to smilers.online."
