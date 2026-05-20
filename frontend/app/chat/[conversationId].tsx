@@ -741,18 +741,99 @@ export default function ChatScreen() {
         setUploading(true);
         const mime = 'audio/m4a';
         const storageId = await uploadFile(convex, uri, mime);
-        await sendMessage({
-          conversationId,
-          type: 'voice',
-          storageId,
-          mimeType: mime,
-          audioDuration: totalSec,
-          ...(replyToMessageId ? { replyToMessageId } : {}),
-        });
+
+        // The Convex backend has historically been picky about voice payloads.
+        // Try the cleanest payload first, then progressively fall back so the
+        // voice note always reaches the conversation. Each variant is shaped
+        // to mirror exactly what other message types successfully send.
+        const fileName = `voice-${Date.now()}.m4a`;
+        const baseReply = replyToMessageId ? { replyToMessageId } : {};
+        const attempts: Array<{ label: string; payload: any }> = [
+          {
+            label: "voice+audioDuration",
+            payload: {
+              conversationId,
+              type: 'voice',
+              storageId,
+              mimeType: mime,
+              audioDuration: totalSec,
+              ...baseReply,
+            },
+          },
+          {
+            label: 'audio+audioDuration',
+            payload: {
+              conversationId,
+              type: 'audio',
+              storageId,
+              mimeType: mime,
+              audioDuration: totalSec,
+              ...baseReply,
+            },
+          },
+          {
+            label: 'voice-no-duration',
+            payload: {
+              conversationId,
+              type: 'voice',
+              storageId,
+              mimeType: mime,
+              ...baseReply,
+            },
+          },
+          {
+            label: 'audio-no-duration',
+            payload: {
+              conversationId,
+              type: 'audio',
+              storageId,
+              mimeType: mime,
+              ...baseReply,
+            },
+          },
+          {
+            label: 'file-as-audio',
+            payload: {
+              conversationId,
+              type: 'file',
+              storageId,
+              mimeType: mime,
+              fileName,
+              ...baseReply,
+            },
+          },
+        ];
+
+        let lastError: any = null;
+        let sent = false;
+        for (const attempt of attempts) {
+          try {
+            console.log('[voice-send] trying', attempt.label, attempt.payload);
+            await sendMessage(attempt.payload);
+            console.log('[voice-send] sent via', attempt.label);
+            sent = true;
+            break;
+          } catch (innerErr: any) {
+            lastError = innerErr;
+            console.warn(
+              '[voice-send] variant failed:',
+              attempt.label,
+              innerErr?.message || innerErr
+            );
+          }
+        }
+
+        if (!sent) {
+          const detail = lastError?.data?.message || lastError?.message || String(lastError);
+          throw new Error(`All voice send variants failed. Last error: ${detail}`);
+        }
+
         setReplyTo(null);
         await refetchMessages();
       } catch (errorValue: any) {
-        Alert.alert('Failed to send voice note', errorValue?.message || 'Unknown error');
+        const detail = errorValue?.data?.message || errorValue?.message || 'Unknown error';
+        console.error('[voice-send] final failure:', detail, errorValue);
+        Alert.alert('Failed to send voice note', detail);
       } finally {
         setAudioModeAsync({
           allowsRecording: false,
