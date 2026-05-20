@@ -398,7 +398,9 @@ function LockOverlay({ biometric, onUnlock }: LockOverlayProps) {
           <View style={styles.errorSpacer} />
         )}
 
-        <View style={styles.keypad} pointerEvents={busy || isLockedOut ? 'none' : 'auto'}>
+        <View
+          style={[styles.keypad, busy || isLockedOut ? styles.disabledPointer : null]}
+        >
           {KEYPAD_ROWS.map((row, ri) => (
             <View key={`row-${ri}`} style={styles.keypadRow}>
               {row.map((key) => {
@@ -449,7 +451,7 @@ function LockOverlay({ biometric, onUnlock }: LockOverlayProps) {
         </TouchableOpacity>
 
         {busy ? (
-          <View style={styles.busyOverlay} pointerEvents="none">
+          <View style={[styles.busyOverlay, styles.disabledPointer]}>
             <ActivityIndicator size="large" color={Colors.primary} />
           </View>
         ) : null}
@@ -559,6 +561,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.15)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  disabledPointer: {
+    pointerEvents: 'none',
   },
 });
 

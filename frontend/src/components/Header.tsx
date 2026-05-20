@@ -64,11 +64,11 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   title: {
-    fontSize: FontSize.xxl,
+    fontSize: 18,
     fontWeight: FontWeight.bold,
   },
   subtitle: {
-    fontSize: FontSize.xs,
+    fontSize: 12,
     marginTop: 2,
   },
   right: {

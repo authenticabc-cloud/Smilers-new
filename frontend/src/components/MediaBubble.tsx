@@ -27,6 +27,7 @@ import {
   getTextSize,
 } from '../lib/chatAppearance';
 import { Colors, FontSize, FontWeight, Radius } from '../theme';
+import BubbleErrorBoundary from './BubbleErrorBoundary';
 
 let CURRENT_SOUND: Audio.Sound | null = null;
 let CURRENT_STOP: (() => void) | null = null;
@@ -167,6 +168,14 @@ export default function MediaBubble({
 }
 
 function BubbleBody({ msg, timeStr, textStyle, isMine }: { msg: any; timeStr: string; textStyle?: any; isMine: boolean }) {
+  return (
+    <BubbleErrorBoundary fallbackLabel="Message couldn't load">
+      <BubbleBodyInner msg={msg} timeStr={timeStr} textStyle={textStyle} isMine={isMine} />
+    </BubbleErrorBoundary>
+  );
+}
+
+function BubbleBodyInner({ msg, timeStr, textStyle, isMine }: { msg: any; timeStr: string; textStyle?: any; isMine: boolean }) {
   switch (msg.type) {
     case 'image':
       return <ImageMessage msg={msg} timeStr={timeStr} textStyle={textStyle} />;
