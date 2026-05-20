@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
   InteractionManager,
   Keyboard,
   KeyboardAvoidingView,
@@ -53,6 +54,7 @@ import { formatLastSeenLabel } from '../../src/lib/presence';
 import { translateIncomingMessageText } from '../../src/lib/translation';
 import { uploadFile } from '../../src/lib/uploadFile';
 import { useAuth } from '../../src/providers/AuthProvider';
+import { useConversationOtherUser } from '../../src/hooks/useConversationOtherUser';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
@@ -947,11 +949,32 @@ export default function ChatScreen() {
     () => getSavedContactRecord(contacts, conversation, me?._id ? String(me._id) : undefined),
     [contacts, conversation, me?._id],
   );
+
+  // The Convex backend's `api.conversations.getConversation` does not embed
+  // the otherUser object — only `listConversations` does. Hydrate it ourselves
+  // by fetching the other participant via `api.users.getUserById`.
+  const fetchedOtherUser = useConversationOtherUser(conversation, me?._id ? String(me._id) : undefined);
+  const hydratedConversation = useMemo(() => {
+    if (!conversation) return conversation;
+    if (conversation.otherUser && typeof conversation.otherUser === 'object') return conversation;
+    if (!fetchedOtherUser) return conversation;
+    return { ...conversation, otherUser: fetchedOtherUser };
+  }, [conversation, fetchedOtherUser]);
+
   const mergedPresenceSource = useMemo(
-    () => ({ ...(conversation || {}), ...(savedContactRecord || {}), otherUser: { ...(conversation?.otherUser || {}), ...(savedContactRecord || {}) } }),
-    [conversation, savedContactRecord],
+    () => ({
+      ...(hydratedConversation || {}),
+      ...(savedContactRecord || {}),
+      otherUser: {
+        ...(hydratedConversation?.otherUser || {}),
+        ...(savedContactRecord || {}),
+      },
+    }),
+    [hydratedConversation, savedContactRecord],
   );
-  const title = savedContactTitle || getConversationDisplayName(conversation, me?._id ? String(me._id) : undefined, 'Chat');
+  const title =
+    savedContactTitle ||
+    getConversationDisplayName(hydratedConversation, me?._id ? String(me._id) : undefined, 'Chat');
   const isMineSelected = selectedMsg && me && selectedMsg.senderId === me._id;
   const subtitle = formatPresenceSubtitle(mergedPresenceSource);
   const avatarInitial = getDisplayInitials(title);
@@ -1037,7 +1060,23 @@ export default function ChatScreen() {
             <Ionicons name="arrow-back" size={24} color={Colors.white} />
           </TouchableOpacity>
           <View style={styles.headerAvatar} testID="chat-header-avatar">
-            <Text style={styles.headerAvatarText}>{avatarInitial}</Text>
+            {(() => {
+              const headerAvatarUri =
+                (hydratedConversation?.otherUser as any)?.avatar ||
+                (hydratedConversation?.otherUser as any)?.avatarUrl ||
+                (hydratedConversation as any)?.avatar ||
+                null;
+              if (headerAvatarUri && /^https?:/i.test(headerAvatarUri)) {
+                return (
+                  <Image
+                    source={{ uri: headerAvatarUri }}
+                    style={styles.headerAvatarImage}
+                    resizeMode="cover"
+                  />
+                );
+              }
+              return <Text style={styles.headerAvatarText}>{avatarInitial}</Text>;
+            })()}
           </View>
           <View style={styles.headerTextWrap}>
             <Text style={styles.chatHeaderTitle} numberOfLines={1} testID="chat-header-title">{title}</Text>
@@ -1730,6 +1769,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginHorizontal: 8,
+    overflow: 'hidden',
+  },
+  headerAvatarImage: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
   },
   headerAvatarText: {
     fontSize: 18,

@@ -67,7 +67,12 @@ export default function ProfileScreen() {
   const email = me?.email || userInfo?.email || '';
   const about = me?.about || 'Hey there! I am using Smilers.';
   const language = getLanguageByCode(me?.preferredLanguage || '')?.name || 'No preference — show original';
-  const avatarUri = (me as any)?.avatarUrl || (me as any)?.photoUrl || undefined;
+  // Per backend spec: getCurrentUser auto-resolves storageId → URL on `avatar`.
+  const avatarUri =
+    (me as any)?.avatar ||
+    (me as any)?.avatarUrl ||
+    (me as any)?.photoUrl ||
+    undefined;
 
   const openEditor = useCallback(
     (field: EditableField) => {

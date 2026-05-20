@@ -33,6 +33,7 @@ import { StatusBar } from 'expo-status-bar';
 import { api } from '../../src/convexApi';
 import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials, getDisplayNameFromUser } from '../../src/lib/displayName';
 import { useAuth } from '../../src/providers/AuthProvider';
+import { useConversationOtherUser } from '../../src/hooks/useConversationOtherUser';
 import { Colors, FontSize, FontWeight, Shadow, Spacing } from '../../src/theme';
 import { useRingtonePlayer } from '../../src/lib/ringtone/useRingtonePlayer';
 
@@ -127,6 +128,14 @@ export default function CallScreen() {
   const activeCallLoading = canRunCallQueries && activeCall === undefined;
   const contacts = useQuery(api.contacts.getContacts, isAuthenticated ? {} : 'skip') as any[] | undefined;
   const contactsLoading = isAuthenticated && contacts === undefined;
+
+  // `api.conversations.getConversation` (singular) does NOT embed otherUser
+  // the way `listConversations` does. Hydrate it via `api.users.getUserById`
+  // so the contact name + isOnline + lastSeen are available.
+  const fetchedOtherUser = useConversationOtherUser(
+    conversation,
+    me?._id ? String(me._id) : undefined
+  );
 
   const initiateCall = useMutation(api.calls.initiateCall);
   const answerCall = useMutation(api.calls.answerCall);
@@ -597,16 +606,16 @@ export default function CallScreen() {
       const candidate = isGenericRouteName ? '' : routeName;
 
       // Per Smilers Convex backend contract:
-      //   conversation.otherUser = { _id, name?, email?, phone?, ... }
-      // The `name` field is the contact's display name (may be empty if the
-      // other user hasn't set one). Fall back to phone, then email.
-      const otherUser: any = conversation?.otherUser || {};
+      //   `getConversation` does NOT include otherUser — we hydrate it via
+      //   `useConversationOtherUser` (api.users.getUserById).
+      const hydratedOther: any = fetchedOtherUser || conversation?.otherUser || {};
       const fromOtherUser =
-        otherUser.name || otherUser.displayName || otherUser.fullName || '';
-      const phone = otherUser.phone || otherUser.phoneNumber || conversation?.phoneNumber || '';
-      const email = otherUser.email || '';
+        hydratedOther.name || hydratedOther.displayName || hydratedOther.fullName || '';
+      const phone =
+        hydratedOther.phone || hydratedOther.phoneNumber || conversation?.phoneNumber || '';
+      const email = hydratedOther.email || '';
       const convexDerived = getConversationDisplayName(
-        conversation,
+        { ...(conversation || {}), otherUser: hydratedOther },
         me?._id ? String(me._id) : undefined,
         ''
       );
@@ -621,7 +630,7 @@ export default function CallScreen() {
         'Unknown'
       );
     },
-    [conversation, me?._id, routeDisplayName, savedContactName],
+    [conversation, fetchedOtherUser, me?._id, routeDisplayName, savedContactName],
   );
 
   const existingParticipantIds = useMemo(
