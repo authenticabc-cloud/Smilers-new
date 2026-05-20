@@ -28,7 +28,7 @@ import {
 } from '../lib/chatAppearance';
 import { Colors, FontSize, FontWeight, Radius } from '../theme';
 import BubbleErrorBoundary from './BubbleErrorBoundary';
-import { useResolvedStorageUrl } from '../hooks/useResolvedStorageUrl';
+import { getMessageDurationSec, getMessageMediaUrl } from '../hooks/useResolvedStorageUrl';
 
 let CURRENT_SOUND: Audio.Sound | null = null;
 let CURRENT_STOP: (() => void) | null = null;
@@ -249,8 +249,7 @@ function LinkPreviewMessage({ msg, textStyle, isMine }: { msg: any; textStyle?: 
 
 function ImageMessage({ msg, timeStr, textStyle }: { msg: any; timeStr: string; textStyle?: any }) {
   const [open, setOpen] = useState(false);
-  const convex = useConvex();
-  const src = useResolvedStorageUrl(convex, msg.storageId, api.files.getUrl, msg.fileUrl || null);
+  const src = getMessageMediaUrl(msg);
 
   if (!src) {
     return (
@@ -292,9 +291,8 @@ function ImageViewer({ visible, onClose, uri }: { visible: boolean; onClose: () 
 }
 
 function VoiceMessage({ msg }: { msg: any }) {
-  const totalSec = msg.audioDuration || 0;
-  const convex = useConvex();
-  const src = useResolvedStorageUrl(convex, msg.storageId, api.files.getUrl, msg.fileUrl || null);
+  const totalSec = getMessageDurationSec(msg);
+  const src = getMessageMediaUrl(msg);
 
   const soundRef = useRef<Audio.Sound | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -473,8 +471,7 @@ function PollMessage({ msg }: { msg: any }) {
 }
 
 function FileMessage({ msg, isMine }: { msg: any; isMine: boolean }) {
-  const convex = useConvex();
-  const src = useResolvedStorageUrl(convex, msg.storageId, api.files.getUrl, msg.fileUrl || null);
+  const src = getMessageMediaUrl(msg);
 
   const onOpen = async () => {
     if (!src) return;

@@ -592,34 +592,33 @@ export default function CallScreen() {
   const otherName = useMemo(
     () => {
       const routeName = typeof routeDisplayName === 'string' ? routeDisplayName.trim() : '';
-      // Only filter out the literal placeholder "Chat" that the chat screen falls
-      // back to when no name is known. Pass through any other route name (including
-      // "Smilers" if that happens to be the legitimate contact name).
+      // Only the literal chat-screen fallback "Chat" is treated as generic.
       const isGenericRouteName = !routeName || /^chat$/i.test(routeName);
       const candidate = isGenericRouteName ? '' : routeName;
 
-      // Try, in order: route name → saved device contact → convex-derived name
-      // → conversation other-user fields → phone number → empty (so the UI
-      // can show the avatar initial / "Voice Call" subtitle without lying
-      // with the literal app name "Smilers" as a contact name).
+      // Per Smilers Convex backend contract:
+      //   conversation.otherUser = { _id, name?, email?, phone?, ... }
+      // The `name` field is the contact's display name (may be empty if the
+      // other user hasn't set one). Fall back to phone, then email.
+      const otherUser: any = conversation?.otherUser || {};
+      const fromOtherUser =
+        otherUser.name || otherUser.displayName || otherUser.fullName || '';
+      const phone = otherUser.phone || otherUser.phoneNumber || conversation?.phoneNumber || '';
+      const email = otherUser.email || '';
       const convexDerived = getConversationDisplayName(
         conversation,
         me?._id ? String(me._id) : undefined,
         ''
       );
-      const otherUser: any = conversation?.otherUser || {};
-      const phoneNumber =
-        otherUser.phoneNumber || otherUser.phone || conversation?.phoneNumber || '';
-      const fromOtherUser =
-        otherUser.displayName || otherUser.name || otherUser.fullName || '';
 
       return (
         candidate ||
         savedContactName ||
-        convexDerived ||
         fromOtherUser ||
-        phoneNumber ||
-        'Voice Call'
+        convexDerived ||
+        phone ||
+        email ||
+        'Unknown'
       );
     },
     [conversation, me?._id, routeDisplayName, savedContactName],

@@ -1,57 +1,46 @@
-import { useEffect, useState } from 'react';
-import type { ConvexReactClient } from 'convex/react';
+/**
+ * Returns the playable/displayable URL for a Smilers chat message.
+ *
+ * The Convex backend's `messages.list` query auto-resolves a message's
+ * `storageId` to a signed download URL and surfaces it as the `mediaUrl`
+ * field on each message. The native app must read THAT field directly —
+ * it must NOT try to resolve storageId via `api.files.getUrl` (which does
+ * not exist on the deployment and was the cause of "stuck loading" /
+ * "Message couldn't load" symptoms).
+ *
+ * For backwards compatibility with any messages that pre-date the
+ * server-side resolution change, we also accept the legacy `fileUrl`
+ * field as a fallback.
+ */
+export function getMessageMediaUrl(msg: any): string | null {
+  if (!msg || typeof msg !== 'object') return null;
+  if (typeof msg.mediaUrl === 'string' && msg.mediaUrl.length > 0) {
+    return msg.mediaUrl;
+  }
+  if (typeof msg.fileUrl === 'string' && msg.fileUrl.length > 0) {
+    return msg.fileUrl;
+  }
+  // Nested attachment patterns occasionally seen in older payloads
+  const attachment = msg.attachment || msg.media;
+  if (attachment && typeof attachment === 'object') {
+    for (const field of ['mediaUrl', 'url', 'fileUrl', 'downloadUrl']) {
+      const value = attachment[field];
+      if (typeof value === 'string' && value.length > 0) {
+        return value;
+      }
+    }
+  }
+  return null;
+}
 
 /**
- * Safely resolves a Convex storage URL without throwing during render.
- *
- * The standard `useQuery(api.files.getUrl, ...)` hook propagates any backend
- * error to the rendering component (which crashes the message list). The
- * Smilers Convex deployment has been observed to throw "Server Error" for
- * specific storageIds left over from previous botched uploads, so we resolve
- * the URL imperatively via `convex.query(...)` inside a useEffect with a
- * try/catch and surface the result as plain React state. The component
- * receives `null` while loading or on error, and the bubble can render a
- * sensible fallback instead of crashing.
+ * Returns the duration of a voice / audio message in seconds.
+ * The backend field is `duration`; older mobile builds used the
+ * client-side name `audioDuration` so we accept that for backcompat too.
  */
-export function useResolvedStorageUrl(
-  convex: ConvexReactClient,
-  storageId: string | null | undefined,
-  filesGetUrl: any,
-  directUrl?: string | null
-): string | null {
-  const [url, setUrl] = useState<string | null>(directUrl || null);
-
-  useEffect(() => {
-    if (directUrl) {
-      setUrl(directUrl);
-      return;
-    }
-    if (!storageId) {
-      setUrl(null);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const next = await convex.query(filesGetUrl, { storageId });
-        if (!cancelled) {
-          setUrl(typeof next === 'string' ? next : null);
-        }
-      } catch (errorValue: any) {
-        if (!cancelled) {
-          console.warn(
-            '[useResolvedStorageUrl] files.getUrl failed for',
-            String(storageId).slice(0, 8) + '…',
-            errorValue?.message || errorValue
-          );
-          setUrl(null);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [convex, directUrl, filesGetUrl, storageId]);
-
-  return url;
+export function getMessageDurationSec(msg: any): number {
+  if (!msg) return 0;
+  if (typeof msg.duration === 'number' && msg.duration > 0) return msg.duration;
+  if (typeof msg.audioDuration === 'number' && msg.audioDuration > 0) return msg.audioDuration;
+  return 0;
 }

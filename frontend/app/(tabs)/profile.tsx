@@ -113,69 +113,9 @@ export default function ProfileScreen() {
       setUploading(true);
       try {
         const storageId = await uploadFile(convex, uri, mime);
-
-        // Resolve the storage ID to an actual URL so we can also try
-        // backends that expect the URL string directly rather than the ID.
-        let resolvedUrl: string | null = null;
-        try {
-          const next = await convex.query(api.files.getUrl, { storageId });
-          if (typeof next === 'string') {
-            resolvedUrl = next;
-          }
-        } catch (queryErr) {
-          // If URL resolution itself fails we still try the storage-ID
-          // variants below — they may be all that the backend supports.
-        }
-
-        // Try a wide range of field name conventions the Convex backend
-        // might use for profile photo. The web app accepts one of these.
-        const candidates: Array<{ label: string; payload: Record<string, any> }> = [];
-        if (resolvedUrl) {
-          candidates.push(
-            { label: 'image=url', payload: { image: resolvedUrl } },
-            { label: 'profileImage=url', payload: { profileImage: resolvedUrl } },
-            { label: 'avatar=url', payload: { avatar: resolvedUrl } },
-            { label: 'avatarUrl', payload: { avatarUrl: resolvedUrl } },
-            { label: 'photoUrl', payload: { photoUrl: resolvedUrl } },
-            { label: 'profilePhoto=url', payload: { profilePhoto: resolvedUrl } },
-            { label: 'profileImageUrl', payload: { profileImageUrl: resolvedUrl } }
-          );
-        }
-        candidates.push(
-          { label: 'image=storageId', payload: { image: storageId } },
-          { label: 'avatarStorageId', payload: { avatarStorageId: storageId } },
-          { label: 'profileImageStorageId', payload: { profileImageStorageId: storageId } },
-          { label: 'photoStorageId', payload: { photoStorageId: storageId } },
-          { label: 'profilePhotoStorageId', payload: { profilePhotoStorageId: storageId } },
-          { label: 'avatar=storageId', payload: { avatar: storageId } },
-          { label: 'profilePhoto=storageId', payload: { profilePhoto: storageId } },
-          { label: 'profileImage=storageId', payload: { profileImage: storageId } },
-          { label: 'imageStorageId', payload: { imageStorageId: storageId } }
-        );
-
-        let lastError: any = null;
-        let succeededLabel: string | null = null;
-        for (const attempt of candidates) {
-          try {
-            await updateProfile(attempt.payload);
-            succeededLabel = attempt.label;
-            lastError = null;
-            break;
-          } catch (errorValue: any) {
-            lastError = errorValue;
-            // Log every failure so we can identify which field the backend wants
-            console.warn(
-              '[profile-upload] candidate failed:',
-              attempt.label,
-              errorValue?.data?.message || errorValue?.message
-            );
-          }
-        }
-        if (succeededLabel) {
-          console.log('[profile-upload] succeeded via', succeededLabel);
-          return;
-        }
-        if (lastError) throw lastError;
+        // Per Smilers backend contract: `avatar` field accepts a storageId
+        // string and `getCurrentUser` auto-resolves it to a URL.
+        await updateProfile({ avatar: storageId });
       } catch (errorValue: any) {
         const detail =
           errorValue?.data?.message ||
