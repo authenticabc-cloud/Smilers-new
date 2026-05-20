@@ -13,7 +13,7 @@ import {
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import * as Linking from 'expo-linking';
-import { useMutation, useQuery } from 'convex/react';
+import { useConvex, useMutation, useQuery } from 'convex/react';
 import { api } from '../convexApi';
 import {
   parseRichTextSegments,
@@ -28,6 +28,7 @@ import {
 } from '../lib/chatAppearance';
 import { Colors, FontSize, FontWeight, Radius } from '../theme';
 import BubbleErrorBoundary from './BubbleErrorBoundary';
+import { useResolvedStorageUrl } from '../hooks/useResolvedStorageUrl';
 
 let CURRENT_SOUND: Audio.Sound | null = null;
 let CURRENT_STOP: (() => void) | null = null;
@@ -248,11 +249,8 @@ function LinkPreviewMessage({ msg, textStyle, isMine }: { msg: any; textStyle?: 
 
 function ImageMessage({ msg, timeStr, textStyle }: { msg: any; timeStr: string; textStyle?: any }) {
   const [open, setOpen] = useState(false);
-  const resolvedUrl = useQuery(
-    api.files.getUrl,
-    msg.fileUrl ? 'skip' : msg.storageId ? { storageId: msg.storageId } : 'skip'
-  ) as string | null | undefined;
-  const src = msg.fileUrl || resolvedUrl;
+  const convex = useConvex();
+  const src = useResolvedStorageUrl(convex, msg.storageId, api.files.getUrl, msg.fileUrl || null);
 
   if (!src) {
     return (
@@ -295,11 +293,8 @@ function ImageViewer({ visible, onClose, uri }: { visible: boolean; onClose: () 
 
 function VoiceMessage({ msg }: { msg: any }) {
   const totalSec = msg.audioDuration || 0;
-  const resolvedUrl = useQuery(
-    api.files.getUrl,
-    msg.fileUrl ? 'skip' : msg.storageId ? { storageId: msg.storageId } : 'skip'
-  ) as string | null | undefined;
-  const src = msg.fileUrl || resolvedUrl;
+  const convex = useConvex();
+  const src = useResolvedStorageUrl(convex, msg.storageId, api.files.getUrl, msg.fileUrl || null);
 
   const soundRef = useRef<Audio.Sound | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -478,11 +473,8 @@ function PollMessage({ msg }: { msg: any }) {
 }
 
 function FileMessage({ msg, isMine }: { msg: any; isMine: boolean }) {
-  const url = useQuery(
-    api.files.getUrl,
-    msg.fileUrl ? 'skip' : msg.storageId ? { storageId: msg.storageId } : 'skip'
-  ) as string | null | undefined;
-  const src = msg.fileUrl || url;
+  const convex = useConvex();
+  const src = useResolvedStorageUrl(convex, msg.storageId, api.files.getUrl, msg.fileUrl || null);
 
   const onOpen = async () => {
     if (!src) return;

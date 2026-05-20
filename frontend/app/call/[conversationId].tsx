@@ -592,13 +592,34 @@ export default function CallScreen() {
   const otherName = useMemo(
     () => {
       const routeName = typeof routeDisplayName === 'string' ? routeDisplayName.trim() : '';
-      // Ignore generic chat-screen fallbacks like "Chat" / "Smilers" that aren't actual names
-      const isGenericRouteName = !routeName || /^(chat|smilers)$/i.test(routeName);
+      // Only filter out the literal placeholder "Chat" that the chat screen falls
+      // back to when no name is known. Pass through any other route name (including
+      // "Smilers" if that happens to be the legitimate contact name).
+      const isGenericRouteName = !routeName || /^chat$/i.test(routeName);
       const candidate = isGenericRouteName ? '' : routeName;
+
+      // Try, in order: route name → saved device contact → convex-derived name
+      // → conversation other-user fields → phone number → empty (so the UI
+      // can show the avatar initial / "Voice Call" subtitle without lying
+      // with the literal app name "Smilers" as a contact name).
+      const convexDerived = getConversationDisplayName(
+        conversation,
+        me?._id ? String(me._id) : undefined,
+        ''
+      );
+      const otherUser: any = conversation?.otherUser || {};
+      const phoneNumber =
+        otherUser.phoneNumber || otherUser.phone || conversation?.phoneNumber || '';
+      const fromOtherUser =
+        otherUser.displayName || otherUser.name || otherUser.fullName || '';
+
       return (
         candidate ||
         savedContactName ||
-        getConversationDisplayName(conversation, me?._id ? String(me._id) : undefined, 'Smilers')
+        convexDerived ||
+        fromOtherUser ||
+        phoneNumber ||
+        'Voice Call'
       );
     },
     [conversation, me?._id, routeDisplayName, savedContactName],
