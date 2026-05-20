@@ -55,6 +55,8 @@ import { translateIncomingMessageText } from '../../src/lib/translation';
 import { uploadFile } from '../../src/lib/uploadFile';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { useConversationOtherUser } from '../../src/hooks/useConversationOtherUser';
+import { useConversationE2EE } from '../../src/hooks/useConversationE2EE';
+import { decryptText } from '../../src/lib/e2eeCrypto';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
@@ -253,12 +255,47 @@ export default function ChatScreen() {
     return Array.isArray(arr) ? [...arr].reverse() : [];
   }, [messagesPage]);
 
+  // E2EE decryption — text messages with `encrypted: true` carry base64
+  // ciphertext in `text` and a base64 `iv` field. Derive the conversation's
+  // key (PBKDF2-SHA256 ▶ AES-GCM-256) once, then decrypt each message text.
+  const e2eeStatus = useConversationE2EE(conversationId || null);
+  const decryptedMessages = useMemo(() => {
+    if (!messages.length) return messages;
+    if (!e2eeStatus.enabled || !e2eeStatus.passphrase || !e2eeStatus.salt) {
+      // E2EE not active for this conversation OR key not yet fetched.
+      // Returning the raw messages means encrypted ones will still show as
+      // base64 until the key arrives (next render).
+      return messages;
+    }
+    return messages.map((msg: any) => {
+      if (!msg?.encrypted) return msg;
+      try {
+        // Only decrypt plain text fields. Media URLs are streamed as bytes
+        // and decrypted separately at playback time (see MediaBubble).
+        if (typeof msg.text === 'string' && msg.text.length > 0 && msg.iv) {
+          const plain = decryptText(
+            msg.text,
+            msg.iv,
+            e2eeStatus.passphrase as string,
+            e2eeStatus.salt as string
+          );
+          return { ...msg, text: plain, _wasEncrypted: true };
+        }
+      } catch (errorValue: any) {
+        // Decryption failed (wrong key, tampered ciphertext, missing iv).
+        // Surface a readable indicator instead of base64 garbage.
+        return { ...msg, text: '🔒 Could not decrypt', _wasEncrypted: true, _decryptError: true };
+      }
+      return msg;
+    });
+  }, [e2eeStatus.enabled, e2eeStatus.passphrase, e2eeStatus.salt, messages]);
+
   const visibleMessages = useMemo(() => {
     const ttlMs = DISAPPEARING_OPTIONS.find((item) => item.key === disappearingMode)?.ms || 0;
-    if (!ttlMs) return messages;
+    if (!ttlMs) return decryptedMessages;
     const cutoff = Date.now() - ttlMs;
-    return messages.filter((message) => Number(message?._creationTime || 0) >= cutoff);
-  }, [disappearingMode, messages]);
+    return decryptedMessages.filter((message) => Number(message?._creationTime || 0) >= cutoff);
+  }, [disappearingMode, decryptedMessages]);
 
   const preferredLanguage = typeof me?.preferredLanguage === 'string' ? me.preferredLanguage : '';
   const preferredLanguageLabel = getLanguageByCode(preferredLanguage)?.name || preferredLanguage;
