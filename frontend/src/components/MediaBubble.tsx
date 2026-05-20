@@ -26,7 +26,6 @@ import {
   getOutgoingBubbleColor,
   getTextSize,
 } from '../lib/chatAppearance';
-import { useSafeConvexQuery } from '../hooks/useSafeConvexQuery';
 import { Colors, FontSize, FontWeight, Radius } from '../theme';
 
 let CURRENT_SOUND: Audio.Sound | null = null;
@@ -240,12 +239,10 @@ function LinkPreviewMessage({ msg, textStyle, isMine }: { msg: any; textStyle?: 
 
 function ImageMessage({ msg, timeStr, textStyle }: { msg: any; timeStr: string; textStyle?: any }) {
   const [open, setOpen] = useState(false);
-  const { data: resolvedUrl } = useSafeConvexQuery<string | null>(
+  const resolvedUrl = useQuery(
     api.files.getUrl,
-    msg.storageId ? { storageId: msg.storageId } : {},
-    null,
-    !msg.fileUrl && !!msg.storageId
-  );
+    msg.fileUrl ? 'skip' : msg.storageId ? { storageId: msg.storageId } : 'skip'
+  ) as string | null | undefined;
   const src = msg.fileUrl || resolvedUrl;
 
   if (!src) {
@@ -289,12 +286,10 @@ function ImageViewer({ visible, onClose, uri }: { visible: boolean; onClose: () 
 
 function VoiceMessage({ msg }: { msg: any }) {
   const totalSec = msg.audioDuration || 0;
-  const { data: resolvedUrl } = useSafeConvexQuery<string | null>(
+  const resolvedUrl = useQuery(
     api.files.getUrl,
-    msg.storageId ? { storageId: msg.storageId } : {},
-    null,
-    !msg.fileUrl && !!msg.storageId
-  );
+    msg.fileUrl ? 'skip' : msg.storageId ? { storageId: msg.storageId } : 'skip'
+  ) as string | null | undefined;
   const src = msg.fileUrl || resolvedUrl;
 
   const soundRef = useRef<Audio.Sound | null>(null);
@@ -371,27 +366,39 @@ function VoiceMessage({ msg }: { msg: any }) {
 
   if (!src) {
     return (
-      <View style={styles.voiceBody} testID="voice-loading-state">
-        <View style={styles.voicePlayBtnLoading}>
-          <ActivityIndicator size="small" color={Colors.primary} />
+      <View style={styles.voiceWrap} testID="voice-loading-state">
+        <View style={styles.voiceHeaderRow}>
+          <Feather name="mic" size={12} color={Colors.primary} />
+          <Text style={styles.voiceHeaderLabel}>Voice Message</Text>
         </View>
-        <View style={styles.voiceBar}>
-          <View style={styles.voiceProgress} />
+        <View style={styles.voiceBody}>
+          <View style={styles.voicePlayBtnLoading}>
+            <ActivityIndicator size="small" color={Colors.primary} />
+          </View>
+          <View style={styles.voiceBar}>
+            <View style={styles.voiceProgress} />
+          </View>
+          <Text style={styles.voiceDuration}>{fmtDur(totalSec)}</Text>
         </View>
-        <Text style={styles.voiceDuration}>{fmtDur(totalSec)}</Text>
       </View>
     );
   }
 
   return (
-    <View style={styles.voiceBody} testID="voice-message-body">
-      <TouchableOpacity onPress={toggle} style={styles.voicePlayBtn} testID="voice-play">
-        <Feather name={isPlaying ? 'pause' : 'play'} size={18} color={Colors.white} />
-      </TouchableOpacity>
-      <View style={styles.voiceBar}>
-        <View style={[styles.voiceProgress, { width: `${progress * 100}%` }]} />
+    <View style={styles.voiceWrap} testID="voice-message-body">
+      <View style={styles.voiceHeaderRow}>
+        <Feather name="mic" size={12} color={Colors.primary} />
+        <Text style={styles.voiceHeaderLabel}>Voice Message</Text>
       </View>
-      <Text style={styles.voiceDuration}>{fmtDur(remaining)}</Text>
+      <View style={styles.voiceBody}>
+        <TouchableOpacity onPress={toggle} style={styles.voicePlayBtn} testID="voice-play">
+          <Feather name={isPlaying ? 'pause' : 'play'} size={16} color={Colors.white} />
+        </TouchableOpacity>
+        <View style={styles.voiceBar}>
+          <View style={[styles.voiceProgress, { width: `${progress * 100}%` }]} />
+        </View>
+        <Text style={styles.voiceDuration}>{fmtDur(remaining)}</Text>
+      </View>
     </View>
   );
 }
@@ -529,7 +536,7 @@ function formatBytes(bytes?: number): string | undefined {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-const IMG_W = Math.min(260, Dimensions.get('window').width * 0.65);
+const IMG_W = Math.min(220, Dimensions.get('window').width * 0.6);
 
 const styles = StyleSheet.create({
   bubbleRow: { marginVertical: 5, flexDirection: 'row', position: 'relative' },
@@ -594,12 +601,15 @@ const styles = StyleSheet.create({
   placeholderIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
   placeholderTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   placeholderSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
-  voiceBody: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4, minWidth: 180 },
-  voicePlayBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
-  voicePlayBtnLoading: { width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
-  voiceBar: { flex: 1, height: 5, borderRadius: 3, backgroundColor: 'rgba(0,0,0,0.12)', overflow: 'hidden' },
+  voiceWrap: { paddingVertical: 4, minWidth: 200 },
+  voiceHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4 },
+  voiceHeaderLabel: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.primary, letterSpacing: 0.5 },
+  voiceBody: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  voicePlayBtn: { width: 30, height: 30, borderRadius: 15, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
+  voicePlayBtnLoading: { width: 30, height: 30, borderRadius: 15, backgroundColor: Colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
+  voiceBar: { flex: 1, height: 4, borderRadius: 2, backgroundColor: 'rgba(0,0,0,0.12)', overflow: 'hidden' },
   voiceProgress: { height: '100%', backgroundColor: Colors.primary },
-  voiceDuration: { fontSize: 11, color: Colors.textSecondary, fontVariant: ['tabular-nums'], minWidth: 32 },
+  voiceDuration: { fontSize: 11, color: Colors.textSecondary, fontVariant: ['tabular-nums'], minWidth: 30 },
   pollBody: { paddingVertical: 2, minWidth: 220, gap: 6 },
   pollHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   pollLabel: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.primary, letterSpacing: 1 },

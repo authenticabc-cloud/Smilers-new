@@ -206,7 +206,7 @@ export function getBubbleTailRadius(key?: string) {
 }
 
 export function getTextSize(key?: string) {
-  if (key === 'sm') return 13;
-  if (key === 'lg') return 17;
-  return 15;
+  if (key === 'sm') return 12;
+  if (key === 'lg') return 15;
+  return 13;
 }

@@ -109,7 +109,7 @@ export default function CallScreen() {
   const requestedType: CallType = typeParam === 'video' || typeParam === 'screen' ? 'video' : 'voice';
   const startInScreenShare = typeParam === 'screen';
   const compactCallLayout = windowHeight < 720;
-  const heroAvatarSize = compactCallLayout ? 132 : 158;
+  const heroAvatarSize = compactCallLayout ? 110 : 132;
   const hasValidConversationId = typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
   const canRunCallQueries = isAuthenticated && hasValidConversationId;
 
@@ -592,7 +592,14 @@ export default function CallScreen() {
   const otherName = useMemo(
     () => {
       const routeName = typeof routeDisplayName === 'string' ? routeDisplayName.trim() : '';
-      return routeName || savedContactName || getConversationDisplayName(conversation, me?._id ? String(me._id) : undefined, 'Smilers');
+      // Ignore generic chat-screen fallbacks like "Chat" / "Smilers" that aren't actual names
+      const isGenericRouteName = !routeName || /^(chat|smilers)$/i.test(routeName);
+      const candidate = isGenericRouteName ? '' : routeName;
+      return (
+        candidate ||
+        savedContactName ||
+        getConversationDisplayName(conversation, me?._id ? String(me._id) : undefined, 'Smilers')
+      );
     },
     [conversation, me?._id, routeDisplayName, savedContactName],
   );
@@ -1004,7 +1011,7 @@ export default function CallScreen() {
             icon={
               <Ionicons
                 name="call"
-                size={32}
+                size={24}
                 color={Colors.white}
                 style={{ transform: [{ rotate: '135deg' }] }}
               />
@@ -1475,23 +1482,24 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
   },
   name: {
-    fontSize: 31,
-    lineHeight: 37,
+    fontSize: 24,
+    lineHeight: 30,
     fontWeight: FontWeight.bold,
     color: Colors.white,
-    marginTop: Spacing.xl,
+    marginTop: Spacing.lg,
     textAlign: 'center',
     maxWidth: '90%',
   },
   nameCompact: {
-    fontSize: 24,
-    lineHeight: 29,
+    fontSize: 20,
+    lineHeight: 26,
     marginTop: Spacing.md,
   },
   status: {
-    fontSize: FontSize.lg,
+    fontSize: FontSize.base,
     color: 'rgba(255,255,255,0.62)',
     fontWeight: FontWeight.regular,
+    marginTop: 4,
   },
   statusCompact: {
     fontSize: FontSize.base,
@@ -1538,17 +1546,17 @@ const styles = StyleSheet.create({
     gap: Spacing.lg,
   },
   bigBtn: {
-    width: 106,
-    height: 106,
-    borderRadius: 53,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
     alignItems: 'center',
     justifyContent: 'center',
     ...Shadow.lg,
   },
   bigBtnXL: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
     alignItems: 'center',
     justifyContent: 'center',
     ...Shadow.lg,
@@ -1560,9 +1568,9 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   smallBtn: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.12)',
@@ -1572,15 +1580,15 @@ const styles = StyleSheet.create({
   },
   smallControlWrap: {
     alignItems: 'center',
-    width: 74,
-    gap: 8,
+    width: 64,
+    gap: 6,
   },
   smallBtnLabel: {
     color: 'rgba(255,255,255,0.72)',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: FontWeight.medium,
     textAlign: 'center',
-    maxWidth: 74,
+    maxWidth: 64,
   },
   audioMenuCard: {
     backgroundColor: 'rgba(28,22,4,0.92)',
