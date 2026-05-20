@@ -841,52 +841,42 @@
 ##       - working: true
 ##         agent: "main"
 ##         comment: "Switched the frontend package manager state fully to npm, removed yarn.lock, generated a consistent package-lock, moved `eslint` + `eslint-config-expo` into dependencies, verified `require('eslint-config-expo/flat')` works locally, and added `EXPO_PUBLIC_WEB_APP_URL` while removing the hardcoded `https://smilers.online` fallback from auth-webview/AuthProvider."
+##   - task: "Voice note send multi-variant fallback + upload cleanup"
+##     implemented: true
+##     working: "NA"
+##     file: "/app/frontend/app/chat/[conversationId].tsx"
+##     stuck_count: 2
+##     priority: "critical"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User reported voice notes still fail to send. Alert shows '[CONVEX M(messages:send)] Server Error - Called by client'. Previous agent's fallback to api.ads.generateUploadUrl in uploadFile.ts was patching the wrong layer — the upload succeeds but messages:send mutation crashes on voice payload."
+##       - working: "NA"
+##         agent: "main"
+##         comment: "Rewrote the voice note send flow with a 5-variant fallback: tries type='voice'+audioDuration first, then type='audio'+audioDuration, then voice without duration, then audio without duration, then finally type='file' with audio/m4a mime as last resort. Each attempt logs its label and payload, and the alert surfaces the actual server error (errorValue.data.message || .message) instead of generic 'Server Error'. Also reverted uploadFile.ts to only use api.files.generateUploadUrl (removed the bogus api.ads.generateUploadUrl fallback that was producing incompatible storageIds). Added clearer error capture at the upload-URL step too."
+##   - task: "Expo projectId sync to installed APK"
+##     implemented: true
+##     working: "NA"
+##     file: "/app/frontend/app.json"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: "NA"
+##         agent: "main"
+##         comment: "User's installed APK push diagnostics report projectId 8b742de6-a156-453c-8e54-16070577d2b7 but app.json had aff3eee0-0f42-475a-bd4c-a6d39d9b2f7b. Synced app.json to 8b742de6-... so future rebuilds stay consistent with the Emergent build pipeline's project. FCM credentials need to be uploaded to that project in expo.dev — this is a dashboard step, not code. Push code itself is correct; status is 'registered' with a valid Expo token."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"
-##   test_sequence: 2
-##   run_ui: true
+##   test_sequence: 3
+##   run_ui: false
 ## test_plan:
 ##   current_focus:
-##     - "Deployment package/env stabilization"
-##     - "Delivery vs read tick separation"
-##     - "Call name, hangup, and tools-button stability"
-##     - "Presence subtitle source merge"
-##     - "Notification sound simplification and faster translation"
-##     - "Voice-note audio-mode conflict fix"
-##     - "Incoming notification channel hardening"
-##     - "Asare Ben Chris crash fix via translation-loop RCA"
-##     - "Split message-language vs languages-tab flows"
-##     - "Expanded official language catalog"
-##     - "Emoji categories and attachment-sheet web parity"
-##     - "Composer typing visibility and voice-note start fix"
-##     - "Message alert sound and extra ringtone catalog"
-##     - "Display-name crash recursion fix"
-##     - "Saved contact names from contacts fallback"
-##     - "Composer dock gap removal and emoji expansion"
-##     - "Automatic incoming-message translation"
-##     - "Presence freshness and ringtone channel sync"
-##     - "Contact crash fallback hardening"
-##     - "Conversation display names show saved contact names"
-##     - "Call screen overlap and outgoing ringtone polish"
-##     - "Chat composer web-parity restyle"
-##     - "Phase 1 utility screens and settings navigation"
-##     - "Chat appearance screenshot redesign"
-##     - "Android EAS WebRTC bundle fix"
-##     - "Android EAS tarball corruption cleanup"
-##     - "Groups tab native crash fix"
-##     - "Groups plus / conferences plus / call route crash fixes"
-##     - "Trustees page screenshot redesign"
-##     - "Message language screenshot redesign"
-##     - "Chat screen screenshot restyle"
-##     - "Chat voice-note controls + disappearing messages + send money redesign"
-##     - "Android production call crash RCA and WebRTC import refactor"
-##     - "EAS update export syntax fix for RTCView wrapper"
-##     - "Web-safe tabs and push notification hooks"
-##     - "Phase 2A.1 chat actions"
-##     - "Phase 2A.2a image attachments"
-##     - "Ads module MVP"
-##   stuck_tasks: []
+##     - "Voice note send multi-variant fallback + upload cleanup"
+##     - "Expo projectId sync to installed APK"
+##   stuck_tasks:
+##     - "Voice note send multi-variant fallback + upload cleanup"
 ##   test_all: false
 ##   test_priority: "high_first"
 ## agent_communication:
@@ -973,4 +963,55 @@
 ##   - agent: "main"
 ##     message: "Investigated the 'old build' confusion: the evidence points to the phone still being tested with a binary produced before the later Expo project-link switch / credential alignment. Uninstalling the app only removes that binary from the device; it does not change what build artifact was originally generated by the deployment snapshot. Separately, I fixed the voice-note recorder path by migrating chat recording from deprecated `expo-av` recording APIs to `expo-audio`, adding the `expo-audio` plugin in `app.json`, and rewiring start/pause/resume/finish/cancel handlers. Testing agent iteration 42 validated the new code path and config; authenticated device recording/upload playback still needs real chat testing." 
 ##   - agent: "main"
+##   - agent: "main"
+##     message: "Iteration 43: Reverted previous agent's misdiagnosed uploadFile fallback (api.ads.generateUploadUrl was producing incompatible storageIds). Rewrote voice note send in app/chat/[conversationId].tsx with a 5-variant fallback chain (voice+dur, audio+dur, voice no-dur, audio no-dur, file) so the voice note gets through regardless of which exact payload shape the external Convex `messages:send` mutation accepts. Each attempt is logged with its label/payload and the alert now surfaces the actual server error string. Also synced app.json projectId to 8b742de6-a156-453c-8e54-16070577d2b7 to match the user's installed APK reported via Push Diagnostics. Please verify the FastAPI backend (/api/translate, /api/status, /api/) is healthy and that no regression was introduced in /app/backend/server.py. The Convex backend (messages:send, files.generateUploadUrl) is EXTERNAL (aware-newt-456.convex.cloud) and cannot be tested from this repo — only the FastAPI service in /app/backend can be tested here."
+##   - agent: "testing"
+##     message: "Iteration 43 FastAPI backend health check: ALL 8 backend tests PASSED against the public preview URL (https://smilers-chat-mobile.preview.emergentagent.com/api). Results: (1) GET /api/ returned 200 {\"message\":\"Hello World\"}. (2) POST /api/status created entry with id/client_name/timestamp and persisted to MongoDB. (3) GET /api/status returned the freshly created entry. (4A) POST /api/translate Spanish translation returned 'Hola, ¿cómo estás?' in ~1.5s. (4B) Empty text short-circuited to '' with no LLM call. (4C) Skip-language case preserved 'Hola amigo' unchanged when Spanish was in skip_languages. (4D) Cache hit returned identical translation in ~0.11s (vs 1.5s cold), confirming the in-memory TRANSLATION_CACHE works. (4E) Rich-text tags [b][/b] and [color=red][/color] were preserved while only translatable text was converted to French ('[b]Gras[/b] [color=red]Rouge[/color]'). Supervisor status: backend RUNNING (pid 201), mongodb RUNNING. No 5xx errors or stack traces in /var/log/supervisor/backend.err.log — only the normal uvicorn startup banners. Env loaded cleanly: MONGO_URL, DB_NAME, and EMERGENT_LLM_KEY are all present and functional (Gemini 3 Flash via EMERGENT_LLM_KEY is responding correctly). The two current_focus tasks (voice note send + Expo projectId sync) are FRONTEND-only and correctly marked NA for backend testing — no /app/backend changes were involved. Overall FastAPI backend verdict: HEALTHY, no regressions introduced."
+##
+## backend:
+##   - task: "FastAPI health endpoints (GET /api/, /api/status CRUD)"
+##     implemented: true
+##     working: true
+##     file: "/app/backend/server.py"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "testing"
+##         comment: "Iteration 43 verification: GET /api/ returns 200 {\"message\":\"Hello World\"}. POST /api/status with {\"client_name\":\"test-iter-43\"} returns 200 with id (uuid), client_name, timestamp; entry persists in MongoDB and is returned by GET /api/status. Supervisor backend RUNNING, no errors in backend.err.log."
+##   - task: "FastAPI /api/translate (Gemini 3 Flash via EMERGENT_LLM_KEY)"
+##     implemented: true
+##     working: true
+##     file: "/app/backend/server.py"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "testing"
+##         comment: "Iteration 43 verification of /api/translate covered all 5 sub-cases: (A) Spanish normal → 'Hola, ¿cómo estás?' in ~1.5s. (B) Empty text short-circuits to '' without an LLM call. (C) Skip-language preserved 'Hola amigo' unchanged when Spanish was in skip_languages. (D) Cache hit returned identical result in ~0.11s vs ~1.5s cold — TRANSLATION_CACHE works. (E) Rich-text tags [b][/b] and [color=red][/color] preserved while body translated to French ('[b]Gras[/b] [color=red]Rouge[/color]'). EMERGENT_LLM_KEY is loaded from /app/backend/.env, Gemini model 'gemini-3-flash-preview' responds correctly."
+##   - task: "Voice note send multi-variant fallback + upload cleanup (FastAPI backend impact)"
+##     implemented: true
+##     working: "NA"
+##     file: "/app/frontend/app/chat/[conversationId].tsx"
+##     stuck_count: 2
+##     priority: "critical"
+##     needs_retesting: false
+##     status_history:
+##       - working: "NA"
+##         agent: "testing"
+##         comment: "NA for backend testing — this task only modifies frontend code in /app/frontend. The voice-note send flow targets the EXTERNAL Convex backend (aware-newt-456.convex.cloud, messages:send mutation), which is out of scope for this repo. FastAPI backend at /app/backend/server.py is unaffected and confirmed healthy."
+##   - task: "Expo projectId sync to installed APK (FastAPI backend impact)"
+##     implemented: true
+##     working: "NA"
+##     file: "/app/frontend/app.json"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: "NA"
+##         agent: "testing"
+##         comment: "NA for backend testing — projectId change in app.json is a frontend-only config switch for the Expo push pipeline and does not touch /app/backend/server.py. FastAPI backend remains healthy."
+
 ##     message: "Deployment log analysis isolated the final Android build failure as a remote Gradle download 502 in the EAS worker, but the repo-side blockers before that were still worth fixing. Package manager state is now consistently npm-based, eslint tooling is in runtime dependencies, and auth web URL resolution is env-driven instead of hardcoded to smilers.online."
