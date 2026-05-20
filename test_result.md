@@ -866,6 +866,17 @@
 ##       - working: "NA"
 ##         agent: "main"
 ##         comment: "User's installed APK push diagnostics report projectId 8b742de6-a156-453c-8e54-16070577d2b7 but app.json had aff3eee0-0f42-475a-bd4c-a6d39d9b2f7b. Synced app.json to 8b742de6-... so future rebuilds stay consistent with the Emergent build pipeline's project. FCM credentials need to be uploaded to that project in expo.dev — this is a dashboard step, not code. Push code itself is correct; status is 'registered' with a valid Expo token."
+##   - task: "Online Giphy GIF browser integration"
+##     implemented: true
+##     working: "NA"
+##     file: "/app/frontend/src/components/GiphyPicker.tsx"
+##     stuck_count: 0
+##     priority: "medium"
+##     needs_retesting: true
+##     status_history:
+##       - working: "NA"
+##         agent: "main"
+##         comment: "User requested online GIF browser instead of local file picker. Added EXPO_PUBLIC_GIPHY_API_KEY to .env (user-provided key lIaB3OeAE2dKS9nWkihAPKY2tDukoQ2a) and built /app/frontend/src/components/GiphyPicker.tsx — a bottom-sheet modal with: pull-to-dismiss handle, search bar with 350ms debounce, GIFs/Stickers tab toggle, popular-tag chips when no search, 2-column responsive grid with preview thumbnails, individual tile loading spinner, error/empty states with retry, Giphy attribution. Endpoints: /v1/gifs/trending, /v1/gifs/search, /v1/stickers/trending, /v1/stickers/search. Rewired /app/frontend/app/chat/[conversationId].tsx onPickGif to open the sheet and added sendGiphyAsset callback that uploads the chosen .gif URL via uploadFile + sends as type: 'image' with mimeType image/gif (same as the previous local picker flow). The chat route still bundles and renders correctly in preview at /chat/test-conversation."
 ## metadata:
 ##   created_by: "main_agent"
 ##   version: "1.0"

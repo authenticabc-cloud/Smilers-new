@@ -27,6 +27,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import AttachmentSheet from '../../src/components/AttachmentSheet';
 import EmojiPickerSheet from '../../src/components/EmojiPickerSheet';
+import GiphyPicker, { GiphyAsset } from '../../src/components/GiphyPicker';
 import MediaBubble from '../../src/components/MediaBubble';
 import PollComposer from '../../src/components/PollComposer';
 import { api } from '../../src/convexApi';
@@ -108,6 +109,7 @@ export default function ChatScreen() {
   const [selectedMsg, setSelectedMsg] = useState<any | null>(null);
   const [showAttachSheet, setShowAttachSheet] = useState(false);
   const [showPollComposer, setShowPollComposer] = useState(false);
+  const [showGiphyPicker, setShowGiphyPicker] = useState(false);
   const [showForwardPicker, setShowForwardPicker] = useState(false);
   const [showTemplatePicker, setShowTemplatePicker] = useState(false);
   const [showOptionsMenu, setShowOptionsMenu] = useState(false);
@@ -615,50 +617,57 @@ export default function ChatScreen() {
     }
   }, [conversationId, convex, isConversationAvailable, refetchMessages, replyTo, sendMessage]);
 
-  const onPickGif = useCallback(async () => {
+  const onPickGif = useCallback(() => {
     if (!conversationId || !isConversationAvailable) return;
+    setShowGiphyPicker(true);
+  }, [conversationId, isConversationAvailable]);
 
-    try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: ['image/gif'],
-        copyToCacheDirectory: true,
-        multiple: false,
-      });
-      if (result.canceled) return;
+  const sendGiphyAsset = useCallback(
+    async (asset: GiphyAsset) => {
+      if (!conversationId || !isConversationAvailable) return;
 
-      const file = result.assets?.[0];
-      if (!file) return;
-      if (!isGifAsset(file)) {
-        Alert.alert('GIF only', 'Please choose a GIF file to send from this button.');
-        return;
+      try {
+        setShowGiphyPicker(false);
+        setUploading(true);
+        const caption = text.trim();
+        const formattedCaption = caption
+          ? applyDraftFormatting(caption, { bold: draftBold, color: draftColor })
+          : '';
+        const replyToMessageId = replyTo?._id;
+        const storageId = await uploadFile(convex, asset.gifUrl, 'image/gif');
+        await sendMessage({
+          conversationId,
+          type: 'image',
+          text: formattedCaption,
+          storageId,
+          mimeType: 'image/gif',
+          fileName: `giphy-${asset.id}.gif`,
+          ...(replyToMessageId ? { replyToMessageId } : {}),
+        });
+        setText('');
+        setReplyTo(null);
+        resetComposerFormatting();
+        await refetchMessages();
+      } catch (errorValue: any) {
+        const detail = errorValue?.data?.message || errorValue?.message || 'Unknown error';
+        Alert.alert('Failed to send GIF', detail);
+      } finally {
+        setUploading(false);
       }
-
-      setUploading(true);
-      const caption = text.trim();
-      const formattedCaption = caption
-        ? applyDraftFormatting(caption, { bold: draftBold, color: draftColor })
-        : '';
-      const replyToMessageId = replyTo?._id;
-      const storageId = await uploadFile(convex, file.uri, 'image/gif');
-      await sendMessage({
-        conversationId,
-        type: 'image',
-        text: formattedCaption,
-        storageId,
-        mimeType: 'image/gif',
-        fileName: file.name || 'gif-message.gif',
-        ...(replyToMessageId ? { replyToMessageId } : {}),
-      });
-      setText('');
-      setReplyTo(null);
-      resetComposerFormatting();
-      await refetchMessages();
-    } catch (errorValue: any) {
-      Alert.alert('Failed to send GIF', errorValue?.message || 'Unknown error');
-    } finally {
-      setUploading(false);
-    }
-  }, [conversationId, convex, draftBold, draftColor, isConversationAvailable, refetchMessages, replyTo, resetComposerFormatting, sendMessage, text]);
+    },
+    [
+      conversationId,
+      convex,
+      draftBold,
+      draftColor,
+      isConversationAvailable,
+      refetchMessages,
+      replyTo,
+      resetComposerFormatting,
+      sendMessage,
+      text,
+    ]
+  );
 
   const onSubmitPoll = useCallback(
     async (poll: { question: string; options: { id: string; text: string }[] }) => {
@@ -1419,6 +1428,12 @@ export default function ChatScreen() {
         visible={showPollComposer}
         onClose={() => setShowPollComposer(false)}
         onSubmit={onSubmitPoll}
+      />
+
+      <GiphyPicker
+        visible={showGiphyPicker}
+        onClose={() => setShowGiphyPicker(false)}
+        onSelect={sendGiphyAsset}
       />
 
       <EmojiPickerSheet
