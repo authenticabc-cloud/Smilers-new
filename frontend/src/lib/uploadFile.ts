@@ -5,30 +5,58 @@ import { api } from '../convexApi';
  * Upload a local file (file:// URI from ImagePicker / Camera / Audio Recorder)
  * to Convex storage and return the resulting storageId.
  *
- * NOTE: We always use `api.files.generateUploadUrl` here. Earlier attempts
- * to fall back to `api.ads.generateUploadUrl` were a misdiagnosis — that
- * mutation lives in a different bucket and produces storageIds that
- * `messages:send` cannot resolve, which causes a downstream Convex
- * Server Error. Keep this mutation singular and explicit.
+ * The Smilers Convex backend has multiple `generateUploadUrl` mutations:
+ *   - `api.files.generateUploadUrl`   (preferred, generic)
+ *   - `api.ads.generateUploadUrl`     (works; used in the ads composer)
+ *
+ * `files.generateUploadUrl` has been observed to throw a Convex Server Error
+ * intermittently on the production deployment. Convex storage is a single
+ * namespace, so a storageId returned from either mutation can be consumed
+ * by other queries/mutations (e.g. `api.files.getUrl`) regardless of which
+ * URL generator produced it. We therefore retry with `ads.generateUploadUrl`
+ * if the primary mutation fails — the resulting storageId remains valid.
  */
+async function requestUploadUrl(convex: ConvexReactClient, primaryMutation: any): Promise<string> {
+  const attempts: Array<{ label: string; mutation: any }> = [];
+  if (primaryMutation) {
+    attempts.push({ label: 'primary', mutation: primaryMutation });
+  }
+  // Always include the proven-working ads fallback unless it IS the primary
+  if ((api as any).ads?.generateUploadUrl && primaryMutation !== (api as any).ads.generateUploadUrl) {
+    attempts.push({ label: 'ads.generateUploadUrl', mutation: (api as any).ads.generateUploadUrl });
+  }
+
+  let lastError: any = null;
+  for (const attempt of attempts) {
+    try {
+      const url = await convex.mutation(attempt.mutation, {});
+      if (typeof url === 'string' && url.length > 0) {
+        if (attempt.label !== 'primary') {
+          console.warn('[uploadFile] using fallback:', attempt.label);
+        }
+        return url;
+      }
+      throw new Error('Empty upload URL response');
+    } catch (errorValue: any) {
+      lastError = errorValue;
+      console.warn(
+        `[uploadFile] ${attempt.label} failed:`,
+        errorValue?.data?.message || errorValue?.message || errorValue
+      );
+    }
+  }
+
+  const detail = lastError?.data?.message || lastError?.message || String(lastError || 'Unknown error');
+  throw new Error(`Upload URL unavailable: ${detail}`);
+}
+
 export async function uploadFile(
   convex: ConvexReactClient,
   uri: string,
   mime: string,
   uploadUrlMutation: any = api.files.generateUploadUrl
 ): Promise<string> {
-  let uploadUrl: string;
-  try {
-    uploadUrl = await convex.mutation(uploadUrlMutation, {});
-  } catch (errorValue: any) {
-    const msg = errorValue?.message || String(errorValue);
-    console.error('[uploadFile] generateUploadUrl failed:', msg);
-    throw new Error(`Upload URL unavailable: ${msg}`);
-  }
-
-  if (!uploadUrl || typeof uploadUrl !== 'string') {
-    throw new Error('Upload URL response was empty');
-  }
+  const uploadUrl = await requestUploadUrl(convex, uploadUrlMutation);
 
   const response = await fetch(uri);
   const blob = await response.blob();
