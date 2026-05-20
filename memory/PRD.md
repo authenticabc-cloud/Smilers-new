@@ -121,7 +121,7 @@ Native iOS + Android port of **smilers.online** (a Convex-backed real-time messa
 - ✅ Added staged Android push-token diagnostics: the app now separates native device-token fetch from Expo token fetch and times both out with clear actionable errors, instead of hanging forever at a generic `acquiring-token` state
 - ✅ Wired Android Firebase/FCM config for native push: added `frontend/google-services.json` for Firebase project `smilers-a4e07` and connected it through `expo.android.googleServicesFile` so Android builds can acquire the native device push token
 - ✅ Added notification self-test tools on `app/notifications.tsx`: a local notification test and a remote Expo self-push test, allowing real-device isolation of native rendering versus backend delivery
-- ✅ Switched Expo/EAS linkage to the actual project chosen by the user: `slug=smilers`, `owner=abcsimplesend`, `projectId=aff3eee0-0f42-475a-bd4c-a6d39d9b2f7b`
+- ✅ Switched Expo/EAS linkage to the actual project chosen by the user: `slug=smilers`, `owner=abcsimplesend`, `projectId=smilers-chat-mobile`
 - ✅ Fixed the chat GIF button so it is no longer a dead disabled control; it now launches a GIF-only picker and sends selected GIF files through the existing media upload/message flow
 - ✅ Migrated chat voice-note recording from deprecated `expo-av` recorder APIs to `expo-audio`, including microphone permission request, audio mode handling, recorder lifecycle, and the `expo-audio` app config plugin
 - ✅ Added `/app/auth_testing.md` and `/app/auth-testing.md` to document current manual auth verification expectations for future testing runs

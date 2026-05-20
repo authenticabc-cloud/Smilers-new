@@ -54,5 +54,5 @@
   "retest_needed": true,
   "should_main_agent_self_test": false,
   "context_for_next_testing_agent": "Read /app/memory/test_credentials.md first. Verified in this run: root sign-in UI stable, /status-compose stable, /status-view/me empty-state stable. Unverified due auth/deeplink limitations: full in-app status tab flow under authenticated session.",
-  "rca_of_issue": "Repro for route issue: open https://smilers-mobile-1.preview.emergentagent.com/status directly in mobile web preview; screen shows plain 'packager-status:running' instead of app route. Repro for auth gate: click [data-testid='sign-in-btn'] on root; popup page count increases (external OIDC opens), but deterministic scripted completion not guaranteed due third-party flow."
+  "rca_of_issue": "Repro for route issue: open https://smilers-chat-mobile.preview.emergentagent.com/status directly in mobile web preview; screen shows plain 'packager-status:running' instead of app route. Repro for auth gate: click [data-testid='sign-in-btn'] on root; popup page count increases (external OIDC opens), but deterministic scripted completion not guaranteed due third-party flow."
 }

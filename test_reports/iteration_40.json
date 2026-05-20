@@ -1,5 +1,5 @@
 {
-  "summary": "Frontend-only Expo project config validation passed. app.json and resolved Expo config point to slug=smilers, owner=abcsimplesend, projectId=aff3eee0-0f42-475a-bd4c-a6d39d9b2f7b. Mobile web preview loads successfully.",
+  "summary": "Frontend-only Expo project config validation passed. app.json and resolved Expo config point to slug=smilers, owner=abcsimplesend, projectId=smilers-chat-mobile. Mobile web preview loads successfully.",
   "backend_issues": {
     "critical": [],
     "minor": []
