@@ -104,14 +104,14 @@ const styles = StyleSheet.create({
   },
   rowMid: { flex: 1 },
   rowTitle: {
-    fontSize: FontSize.base,
-    fontWeight: FontWeight.semibold,
+    fontSize: 16,
+    fontWeight: FontWeight.bold,
     color: Colors.textPrimary,
   },
   rowSub: {
-    fontSize: FontSize.sm,
+    fontSize: 13,
     color: Colors.textSecondary,
-    marginTop: 2,
+    marginTop: 3,
   },
   footer: { alignItems: 'center', paddingVertical: Spacing.xl, gap: 4 },
   footerVersion: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.semibold },

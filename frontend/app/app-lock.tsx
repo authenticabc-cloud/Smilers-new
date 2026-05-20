@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as LocalAuthentication from 'expo-local-authentication';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import Header from '../src/components/Header';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
@@ -28,315 +28,473 @@ import {
   writeStoredJson,
   writeStoredString,
 } from '../src/lib/settingsStorage';
+import {
+  notifyAppLockSettingsChanged,
+  triggerLockNow,
+} from '../src/lib/appLockController';
 
-const AUTO_LOCK_OPTIONS = [
-  { key: 'immediately', label: 'Immediately' },
-  { key: '1-minute', label: 'After 1 minute' },
-  { key: '15-minutes', label: 'After 15 minutes' },
-  { key: '1-hour', label: 'After 1 hour' },
+const AUTO_LOCK_OPTIONS: Array<{ minutes: number; label: string }> = [
+  { minutes: 1, label: '1 min' },
+  { minutes: 5, label: '5 min' },
+  { minutes: 15, label: '15 min' },
+  { minutes: 30, label: '30 min' },
 ];
+
+interface SettingsShape {
+  enabled: boolean;
+  biometric: boolean;
+  lockOnLeaving: boolean;
+  autoLockMinutes: number;
+  // kept for backwards-compat persistence
+  previewContent: boolean;
+}
+
+const INITIAL_SETTINGS: SettingsShape = {
+  enabled: false,
+  biometric: false,
+  lockOnLeaving: false,
+  autoLockMinutes: 15,
+  previewContent: false,
+};
 
 export default function AppLockScreen() {
   const router = useRouter();
-  const [settings, setSettings] = useState(DEFAULT_APP_LOCK_SETTINGS);
+  const [settings, setSettings] = useState<SettingsShape>(INITIAL_SETTINGS);
   const [hasPin, setHasPin] = useState(false);
   const [pinModalVisible, setPinModalVisible] = useState(false);
-  const [pinMode, setPinMode] = useState<'create' | 'change' | 'verify'>('create');
+  const [pinMode, setPinMode] = useState<'create' | 'change' | 'verify-old'>('create');
   const [pinInput, setPinInput] = useState('');
   const [confirmPinInput, setConfirmPinInput] = useState('');
-  const [supportState, setSupportState] = useState({ available: false, label: 'Biometric unlock' });
-  const [statusNote, setStatusNote] = useState('Checking device security…');
+  const [oldPinInput, setOldPinInput] = useState('');
+  const [bioSupported, setBioSupported] = useState(false);
+  const [bioLabel, setBioLabel] = useState('Fingerprint Unlock');
+  const [bioSubtitle, setBioSubtitle] = useState('Use fingerprint to unlock');
+
+  const persistSettings = useCallback(
+    async (next: SettingsShape) => {
+      setSettings(next);
+      // Persist with all keys (including legacy ones for backwards compat)
+      await writeStoredJson(APP_LOCK_SETTINGS_KEY, {
+        ...DEFAULT_APP_LOCK_SETTINGS,
+        enabled: next.enabled,
+        biometric: next.biometric,
+        lockOnLeaving: next.lockOnLeaving,
+        autoLockMinutes: next.autoLockMinutes,
+        previewContent: next.previewContent,
+      });
+      notifyAppLockSettingsChanged();
+    },
+    []
+  );
 
   useEffect(() => {
     let mounted = true;
-    const load = async () => {
-      const storedSettings = await readStoredJson(APP_LOCK_SETTINGS_KEY, DEFAULT_APP_LOCK_SETTINGS);
-      const storedPin = await readStoredString(APP_LOCK_PIN_KEY);
-      const available = Platform.OS !== 'web' && (await LocalAuthentication.hasHardwareAsync()) && (await LocalAuthentication.isEnrolledAsync());
-      const supportedTypes = available ? await LocalAuthentication.supportedAuthenticationTypesAsync() : [];
-      const label = supportedTypes.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)
-        ? 'Face ID'
-        : supportedTypes.includes(LocalAuthentication.AuthenticationType.FINGERPRINT)
-          ? 'Fingerprint'
-          : 'Biometric unlock';
+    (async () => {
+      const stored = await readStoredJson(APP_LOCK_SETTINGS_KEY, DEFAULT_APP_LOCK_SETTINGS);
+      const merged = { ...DEFAULT_APP_LOCK_SETTINGS, ...(stored || {}) };
+      const pin = await readStoredString(APP_LOCK_PIN_KEY);
+
+      let supported = false;
+      let lbl = 'Fingerprint Unlock';
+      let sub = 'Use fingerprint to unlock';
+      if (Platform.OS !== 'web') {
+        try {
+          const hw = await LocalAuthentication.hasHardwareAsync();
+          const enrolled = await LocalAuthentication.isEnrolledAsync();
+          supported = hw && enrolled;
+          if (supported) {
+            const types = await LocalAuthentication.supportedAuthenticationTypesAsync();
+            if (types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) {
+              lbl = 'Face ID Unlock';
+              sub = 'Use Face ID to unlock';
+            } else if (types.includes(LocalAuthentication.AuthenticationType.FINGERPRINT)) {
+              lbl = 'Fingerprint Unlock';
+              sub = 'Use fingerprint to unlock';
+            } else {
+              lbl = 'Biometric Unlock';
+              sub = 'Use biometrics to unlock';
+            }
+          }
+        } catch {
+          supported = false;
+        }
+      }
 
       if (mounted) {
-        setSettings({ ...DEFAULT_APP_LOCK_SETTINGS, ...(storedSettings || {}) });
-        setHasPin(!!storedPin);
-        setSupportState({ available, label });
-        setStatusNote(storedPin ? 'PIN saved on this device' : 'Add a PIN to protect Smilers');
+        setSettings({
+          enabled: !!merged.enabled,
+          biometric: !!merged.biometric,
+          lockOnLeaving: !!merged.lockOnLeaving,
+          autoLockMinutes:
+            typeof merged.autoLockMinutes === 'number' ? merged.autoLockMinutes : 15,
+          previewContent: !!merged.previewContent,
+        });
+        setHasPin(!!pin);
+        setBioSupported(supported);
+        setBioLabel(lbl);
+        setBioSubtitle(sub);
       }
-    };
-    void load();
+    })();
     return () => {
       mounted = false;
     };
   }, []);
 
-  const statusText = useMemo(() => {
-    if (!settings.enabled) {
-      return 'App Lock is off';
-    }
-    return settings.biometric && supportState.available ? `App Lock is on · ${supportState.label} + PIN` : 'App Lock is on · PIN required';
-  }, [settings, supportState]);
-
-  const saveSettings = async (next: typeof DEFAULT_APP_LOCK_SETTINGS) => {
-    setSettings(next);
-    await writeStoredJson(APP_LOCK_SETTINGS_KEY, next);
-  };
-
-  const openPinModal = (mode: 'create' | 'change' | 'verify') => {
+  const openPinModal = useCallback((mode: 'create' | 'change') => {
     setPinMode(mode);
     setPinInput('');
     setConfirmPinInput('');
+    setOldPinInput('');
     setPinModalVisible(true);
-  };
+  }, []);
 
-  const onToggleEnabled = async (value: boolean) => {
-    if (value && !hasPin) {
-      openPinModal('create');
-      return;
-    }
-    const next = { ...settings, enabled: value };
-    await saveSettings(next);
-    setStatusNote(value ? 'App Lock enabled on this device' : 'App Lock turned off');
-  };
-
-  const onToggleBiometric = async (value: boolean) => {
-    if (!value) {
-      await saveSettings({ ...settings, biometric: false });
-      setStatusNote('Biometric unlock turned off');
-      return;
-    }
-    if (!supportState.available) {
-      Alert.alert('Not available', 'Biometric unlock is not set up on this device yet.');
-      return;
-    }
-    const result = await LocalAuthentication.authenticateAsync({
-      promptMessage: `Enable ${supportState.label}`,
-      fallbackLabel: 'Use PIN',
-      cancelLabel: 'Cancel',
-    });
-    if (result.success) {
-      await saveSettings({ ...settings, biometric: true, enabled: true });
-      setStatusNote(`${supportState.label} enabled`);
-      return;
-    }
-    setStatusNote(`${supportState.label} was not enabled`);
-  };
-
-  const savePin = async () => {
-    const cleanPin = pinInput.trim();
-    const cleanConfirm = confirmPinInput.trim();
-    if (!/^\d{4,6}$/.test(cleanPin)) {
-      Alert.alert('Use 4 to 6 digits', 'Choose a numeric PIN between 4 and 6 digits.');
-      return;
-    }
-    if (pinMode !== 'verify' && cleanPin !== cleanConfirm) {
-      Alert.alert('PIN mismatch', 'Make sure both PIN entries match.');
-      return;
-    }
-
-    if (pinMode === 'verify') {
-      const storedPin = await readStoredString(APP_LOCK_PIN_KEY);
-      if (storedPin !== cleanPin) {
-        Alert.alert('Wrong PIN', 'That PIN does not match the one saved on this device.');
+  const onTogglePinLock = useCallback(
+    async (value: boolean) => {
+      if (value) {
+        if (hasPin) {
+          await persistSettings({ ...settings, enabled: true });
+        } else {
+          openPinModal('create');
+        }
         return;
       }
-      setPinModalVisible(false);
-      setStatusNote('Unlock test successful');
-      return;
-    }
+      // Turning off App Lock — confirm and remove stored PIN
+      Alert.alert(
+        'Turn off PIN Lock?',
+        'This removes the saved PIN from this device. You can set a new PIN any time.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Turn Off',
+            style: 'destructive',
+            onPress: async () => {
+              await removeStoredValue(APP_LOCK_PIN_KEY);
+              setHasPin(false);
+              await persistSettings({
+                ...settings,
+                enabled: false,
+                biometric: false,
+              });
+            },
+          },
+        ]
+      );
+    },
+    [hasPin, openPinModal, persistSettings, settings]
+  );
 
-    await writeStoredString(APP_LOCK_PIN_KEY, cleanPin);
-    const next = { ...settings, enabled: true };
-    await saveSettings(next);
-    setHasPin(true);
-    setPinModalVisible(false);
-    setStatusNote(pinMode === 'change' ? 'PIN updated successfully' : 'App Lock enabled with a new PIN');
-  };
-
-  const removePin = () => {
-    Alert.alert('Turn off App Lock?', 'This removes the PIN from this device.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Turn Off',
-        style: 'destructive',
-        onPress: async () => {
-          await removeStoredValue(APP_LOCK_PIN_KEY);
-          await saveSettings({ ...DEFAULT_APP_LOCK_SETTINGS });
-          setHasPin(false);
-          setStatusNote('PIN removed from this device');
-        },
-      },
-    ]);
-  };
-
-  const testUnlock = async () => {
-    if (settings.biometric && supportState.available) {
+  const onToggleBiometric = useCallback(
+    async (value: boolean) => {
+      if (!value) {
+        await persistSettings({ ...settings, biometric: false });
+        return;
+      }
+      if (!bioSupported) {
+        Alert.alert(
+          'Not available',
+          `${bioLabel.replace(' Unlock', '')} is not set up on this device. Add it in your phone’s security settings first.`
+        );
+        return;
+      }
+      if (!hasPin) {
+        Alert.alert('Set a PIN first', 'Create a PIN before enabling biometric unlock.');
+        return;
+      }
       const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Unlock Smilers',
+        promptMessage: `Enable ${bioLabel}`,
         fallbackLabel: 'Use PIN',
         cancelLabel: 'Cancel',
       });
       if (result.success) {
-        setStatusNote('Biometric unlock successful');
+        await persistSettings({ ...settings, biometric: true });
+      }
+    },
+    [bioLabel, bioSupported, hasPin, persistSettings, settings]
+  );
+
+  const onToggleLockOnLeaving = useCallback(
+    async (value: boolean) => {
+      await persistSettings({ ...settings, lockOnLeaving: value });
+    },
+    [persistSettings, settings]
+  );
+
+  const onSelectAutoLock = useCallback(
+    async (minutes: number) => {
+      await persistSettings({ ...settings, autoLockMinutes: minutes });
+    },
+    [persistSettings, settings]
+  );
+
+  const onLockNow = useCallback(() => {
+    if (!hasPin || !settings.enabled) {
+      Alert.alert(
+        'Enable PIN Lock first',
+        'Turn on PIN Lock and set a PIN to use Lock Now.'
+      );
+      return;
+    }
+    triggerLockNow();
+    // Pop back so the user is not still sitting on this screen behind the overlay
+    router.back();
+  }, [hasPin, router, settings.enabled]);
+
+  const onChangePinPressed = useCallback(() => {
+    if (!hasPin) {
+      openPinModal('create');
+    } else {
+      openPinModal('change');
+    }
+  }, [hasPin, openPinModal]);
+
+  const submitPinModal = useCallback(async () => {
+    const newPin = pinInput.trim();
+    const confirmPin = confirmPinInput.trim();
+
+    if (!/^\d{4,6}$/.test(newPin)) {
+      Alert.alert('Use 4 to 6 digits', 'Choose a numeric PIN between 4 and 6 digits.');
+      return;
+    }
+    if (newPin !== confirmPin) {
+      Alert.alert('PIN mismatch', 'Make sure both PIN entries match.');
+      return;
+    }
+
+    if (pinMode === 'change') {
+      const stored = await readStoredString(APP_LOCK_PIN_KEY);
+      if (stored && stored !== oldPinInput.trim()) {
+        Alert.alert('Wrong current PIN', 'Enter your existing PIN to change it.');
         return;
       }
     }
-    openPinModal('verify');
-  };
+
+    await writeStoredString(APP_LOCK_PIN_KEY, newPin);
+    setHasPin(true);
+    setPinModalVisible(false);
+    await persistSettings({
+      ...settings,
+      enabled: true,
+    });
+    Alert.alert(
+      pinMode === 'change' ? 'PIN updated' : 'PIN Lock enabled',
+      pinMode === 'change'
+        ? 'Your PIN has been changed.'
+        : 'App Lock is now active. The app will lock when you leave it.'
+    );
+  }, [confirmPinInput, oldPinInput, persistSettings, pinInput, pinMode, settings]);
+
+  const autoLockChips = useMemo(() => {
+    return AUTO_LOCK_OPTIONS.map((option) => {
+      const selected = settings.autoLockMinutes === option.minutes;
+      const disabled = !settings.enabled;
+      return (
+        <TouchableOpacity
+          key={option.minutes}
+          onPress={() => onSelectAutoLock(option.minutes)}
+          disabled={disabled}
+          style={[
+            styles.autoLockChip,
+            selected ? styles.autoLockChipActive : null,
+            disabled && !selected ? styles.autoLockChipDisabled : null,
+          ]}
+          testID={`auto-lock-${option.minutes}`}
+          activeOpacity={0.85}
+        >
+          <Text
+            style={[
+              styles.autoLockChipText,
+              selected ? styles.autoLockChipTextActive : null,
+            ]}
+          >
+            {option.label}
+          </Text>
+        </TouchableOpacity>
+      );
+    });
+  }, [onSelectAutoLock, settings.autoLockMinutes, settings.enabled]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="app-lock-screen">
-      <Header title="App Lock" showBack onBack={() => router.back()} variant="dark" subtitle="PIN code and biometric unlock" />
-      <ScrollView contentContainerStyle={styles.content} testID="app-lock-scroll-view">
-        <View style={styles.heroCard} testID="app-lock-hero-card">
-          <View style={styles.heroIconWrap} testID="app-lock-hero-icon-wrap">
-            <Ionicons name="lock-closed-outline" size={24} color={Colors.primary} />
-          </View>
-          <View style={styles.flexOne}>
-            <Text style={styles.heroTitle} testID="app-lock-hero-title">Protect Smilers</Text>
-            <Text style={styles.heroSub} testID="app-lock-hero-subtitle">
-              Lock the app with a device PIN, and optionally use {supportState.label.toLowerCase()} when available.
+      <Header title="App Lock" showBack onBack={() => router.back()} variant="dark" />
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        {/* PIN Lock */}
+        <View style={styles.row} testID="app-lock-pin-row">
+          <RowIcon name="lock" lib="feather" />
+          <View style={styles.rowMid}>
+            <Text style={styles.rowTitle}>PIN Lock</Text>
+            <Text style={styles.rowSubtitle}>
+              {settings.enabled ? 'App is protected with a PIN' : 'Tap to set up a PIN'}
             </Text>
           </View>
+          <Switch
+            value={settings.enabled}
+            onValueChange={onTogglePinLock}
+            trackColor={{ true: Colors.primary, false: '#d1d5db' }}
+            thumbColor={Colors.white}
+            testID="app-lock-pin-switch"
+          />
         </View>
 
-        <Text style={styles.statusText} testID="app-lock-status-text">{statusText}</Text>
-        <Text style={styles.noteText} testID="app-lock-note-text">{statusNote}</Text>
-
-        <View style={styles.card} testID="app-lock-main-card">
-          <SettingRow
-            title="Require App Lock"
-            subtitle={hasPin ? 'Ask for your PIN before opening protected content.' : 'Create a PIN to turn on App Lock.'}
-            value={settings.enabled}
-            onValueChange={onToggleEnabled}
-            testID="app-lock-enable"
-          />
-          <SettingRow
-            title={supportState.label}
-            subtitle={supportState.available ? 'Use biometrics after you confirm once on this device.' : 'Set up biometrics on your device to enable this.'}
+        {/* Fingerprint */}
+        <View style={styles.row} testID="app-lock-biometric-row">
+          <RowIcon name="fingerprint" lib="mc" />
+          <View style={styles.rowMid}>
+            <Text style={styles.rowTitle}>{bioLabel}</Text>
+            <Text style={styles.rowSubtitle}>
+              {bioSupported ? bioSubtitle : 'Not set up on this device'}
+            </Text>
+          </View>
+          <Switch
             value={settings.biometric}
             onValueChange={onToggleBiometric}
-            disabled={!supportState.available || !hasPin}
-            testID="app-lock-biometric"
-          />
-          <SettingRow
-            title="Hide Message Preview"
-            subtitle="Blur message content when the app is locked."
-            value={settings.previewContent}
-            onValueChange={(value) => saveSettings({ ...settings, previewContent: value })}
-            disabled={!settings.enabled}
-            testID="app-lock-preview"
-          />
-          <SettingRow
-            title="Lock When App Goes to Background"
-            subtitle="Require unlock again after switching away from Smilers."
-            value={settings.lockOnBackground}
-            onValueChange={(value) => saveSettings({ ...settings, lockOnBackground: value })}
-            disabled={!settings.enabled}
-            testID="app-lock-background"
+            disabled={!bioSupported || !hasPin || !settings.enabled}
+            trackColor={{ true: Colors.primary, false: '#d1d5db' }}
+            thumbColor={Colors.white}
+            testID="app-lock-biometric-switch"
           />
         </View>
 
-        <View style={styles.card} testID="app-lock-auto-lock-card">
-          <Text style={styles.sectionTitle} testID="app-lock-auto-lock-title">Auto-lock timer</Text>
-          <Text style={styles.sectionSub} testID="app-lock-auto-lock-subtitle">
-            Choose how quickly Smilers asks for your PIN again.
-          </Text>
-          <View style={styles.optionGrid} testID="app-lock-auto-lock-options">
-            {AUTO_LOCK_OPTIONS.map((option) => {
-              const selected = settings.autoLock === option.key;
-              return (
-                <TouchableOpacity
-                  key={option.key}
-                  style={[styles.optionChip, selected ? styles.optionChipActive : null, !settings.enabled ? styles.optionChipDisabled : null]}
-                  disabled={!settings.enabled}
-                  onPress={() => saveSettings({ ...settings, autoLock: option.key })}
-                  testID={`app-lock-auto-lock-${option.key}`}
-                >
-                  <Text style={[styles.optionChipText, selected ? styles.optionChipTextActive : null]}>{option.label}</Text>
-                </TouchableOpacity>
-              );
-            })}
+        {/* Lock When Leaving */}
+        <View style={styles.row} testID="app-lock-leaving-row">
+          <RowIcon name="shield-checkmark-outline" lib="ion" />
+          <View style={styles.rowMid}>
+            <Text style={styles.rowTitle}>Lock When Leaving</Text>
+            <Text style={styles.rowSubtitle}>Lock immediately when you switch apps</Text>
           </View>
+          <Switch
+            value={settings.lockOnLeaving}
+            onValueChange={onToggleLockOnLeaving}
+            disabled={!settings.enabled}
+            trackColor={{ true: Colors.primary, false: '#d1d5db' }}
+            thumbColor={Colors.white}
+            testID="app-lock-leaving-switch"
+          />
         </View>
 
-        <View style={styles.buttonGroup} testID="app-lock-actions-group">
-          <TouchableOpacity
-            style={[styles.primaryButton, !hasPin ? styles.primaryButtonDisabled : null]}
-            disabled={!hasPin}
-            onPress={() => openPinModal('change')}
-            testID="app-lock-change-pin-button"
-          >
-            <Text style={styles.primaryButtonText}>Change PIN</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.secondaryButton, !hasPin ? styles.secondaryButtonDisabled : null]}
-            disabled={!hasPin}
-            onPress={testUnlock}
-            testID="app-lock-test-unlock-button"
-          >
-            <MaterialCommunityIcons name="shield-check-outline" size={18} color={Colors.primary} />
-            <Text style={styles.secondaryButtonText}>Test Unlock</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.secondaryButton, !hasPin ? styles.secondaryButtonDisabled : null]}
-            disabled={!hasPin}
-            onPress={removePin}
-            testID="app-lock-turn-off-button"
-          >
-            <Ionicons name="trash-outline" size={18} color={Colors.danger} />
-            <Text style={styles.turnOffText}>Turn Off App Lock</Text>
-          </TouchableOpacity>
+        {/* Auto-Lock After */}
+        <View style={styles.rowTall} testID="app-lock-auto-row">
+          <View style={styles.rowTop}>
+            <RowIcon name="timer-outline" lib="ion" />
+            <View style={styles.rowMid}>
+              <Text style={styles.rowTitle}>Auto-Lock After</Text>
+              <Text style={styles.rowSubtitle}>Lock the app after inactivity</Text>
+            </View>
+          </View>
+          <View style={styles.autoLockChipsRow}>{autoLockChips}</View>
         </View>
+
+        {/* Spacer */}
+        <View style={styles.sectionSpacer} />
+
+        {/* Lock Now */}
+        <TouchableOpacity
+          style={styles.row}
+          onPress={onLockNow}
+          activeOpacity={0.7}
+          testID="app-lock-lock-now"
+        >
+          <RowIcon name="shield-off" lib="feather" tint="danger" />
+          <View style={styles.rowMid}>
+            <Text style={styles.rowTitle}>Lock Now</Text>
+            <Text style={styles.rowSubtitle}>Immediately lock the app</Text>
+          </View>
+        </TouchableOpacity>
+
+        {/* Change PIN */}
+        <TouchableOpacity
+          style={styles.row}
+          onPress={onChangePinPressed}
+          activeOpacity={0.7}
+          testID="app-lock-change-pin"
+        >
+          <RowIcon name="lock" lib="feather" />
+          <View style={styles.rowMid}>
+            <Text style={styles.rowTitle}>{hasPin ? 'Change PIN' : 'Set a PIN'}</Text>
+            <Text style={styles.rowSubtitle}>
+              {hasPin ? 'Set a new PIN code' : 'Choose a 4 to 6 digit code'}
+            </Text>
+          </View>
+        </TouchableOpacity>
+
+        {/* Footer text */}
+        <Text style={styles.footerText}>
+          App lock keeps your conversations private. When enabled, you'll need to enter your PIN or
+          use biometric authentication to access Smilers after the timeout period expires or when
+          switching back to the app. After 5 failed attempts, the app will be temporarily locked for
+          30 seconds.
+        </Text>
       </ScrollView>
 
-      <Modal visible={pinModalVisible} transparent animationType="slide" onRequestClose={() => setPinModalVisible(false)}>
-        <View style={styles.modalBackdrop} testID="app-lock-pin-modal-backdrop">
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalKeyboardWrap}>
-            <View style={styles.modalCard} testID="app-lock-pin-modal">
-              <Text style={styles.modalTitle} testID="app-lock-pin-modal-title">
-                {pinMode === 'create' ? 'Create PIN' : pinMode === 'change' ? 'Change PIN' : 'Enter PIN'}
+      {/* PIN entry / change modal */}
+      <Modal
+        visible={pinModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setPinModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.modalKeyboard}
+          >
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>
+                {pinMode === 'change' ? 'Change PIN' : 'Create PIN'}
               </Text>
-              <Text style={styles.modalSub} testID="app-lock-pin-modal-subtitle">
-                {pinMode === 'verify'
-                  ? 'Enter your saved PIN to unlock Smilers.'
-                  : 'Choose a 4 to 6 digit PIN for this device.'}
+              <Text style={styles.modalSubtitle}>
+                Choose a 4 to 6 digit PIN. You will be asked for it every time you open Smilers.
               </Text>
-              <TextInput
-                value={pinInput}
-                onChangeText={setPinInput}
-                placeholder="PIN"
-                placeholderTextColor={Colors.textMuted}
-                keyboardType="number-pad"
-                secureTextEntry
-                maxLength={6}
-                style={styles.input}
-                testID="app-lock-pin-input"
-              />
-              {pinMode !== 'verify' ? (
+              {pinMode === 'change' ? (
                 <TextInput
-                  value={confirmPinInput}
-                  onChangeText={setConfirmPinInput}
-                  placeholder="Confirm PIN"
+                  value={oldPinInput}
+                  onChangeText={setOldPinInput}
+                  placeholder="Current PIN"
                   placeholderTextColor={Colors.textMuted}
                   keyboardType="number-pad"
                   secureTextEntry
                   maxLength={6}
                   style={styles.input}
-                  testID="app-lock-confirm-pin-input"
+                  testID="app-lock-old-pin-input"
                 />
               ) : null}
-              <View style={styles.modalActions} testID="app-lock-pin-modal-actions">
-                <TouchableOpacity style={styles.modalSecondaryButton} onPress={() => setPinModalVisible(false)} testID="app-lock-pin-cancel-button">
+              <TextInput
+                value={pinInput}
+                onChangeText={setPinInput}
+                placeholder="New PIN"
+                placeholderTextColor={Colors.textMuted}
+                keyboardType="number-pad"
+                secureTextEntry
+                maxLength={6}
+                style={styles.input}
+                testID="app-lock-new-pin-input"
+              />
+              <TextInput
+                value={confirmPinInput}
+                onChangeText={setConfirmPinInput}
+                placeholder="Confirm new PIN"
+                placeholderTextColor={Colors.textMuted}
+                keyboardType="number-pad"
+                secureTextEntry
+                maxLength={6}
+                style={styles.input}
+                testID="app-lock-confirm-pin-input"
+              />
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={styles.modalSecondaryButton}
+                  onPress={() => setPinModalVisible(false)}
+                  testID="app-lock-modal-cancel"
+                >
                   <Text style={styles.modalSecondaryButtonText}>Cancel</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.modalPrimaryButton} onPress={savePin} testID="app-lock-pin-save-button">
-                  <Text style={styles.modalPrimaryButtonText}>{pinMode === 'verify' ? 'Unlock' : 'Save PIN'}</Text>
+                <TouchableOpacity
+                  style={styles.modalPrimaryButton}
+                  onPress={submitPinModal}
+                  testID="app-lock-modal-save"
+                >
+                  <Text style={styles.modalPrimaryButtonText}>
+                    {pinMode === 'change' ? 'Update PIN' : 'Save PIN'}
+                  </Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -347,123 +505,116 @@ export default function AppLockScreen() {
   );
 }
 
-function SettingRow({
-  title,
-  subtitle,
-  value,
-  onValueChange,
-  disabled,
-  testID,
-}: {
-  title: string;
-  subtitle: string;
-  value: boolean;
-  onValueChange: (value: boolean) => void;
-  disabled?: boolean;
-  testID: string;
-}) {
+interface RowIconProps {
+  name: string;
+  lib: 'feather' | 'ion' | 'mc';
+  tint?: 'primary' | 'danger';
+}
+
+function RowIcon({ name, lib, tint = 'primary' }: RowIconProps) {
+  const color = tint === 'danger' ? Colors.danger : Colors.primary;
+  const bg = tint === 'danger' ? 'rgba(220,38,38,0.10)' : Colors.primaryLight;
+  let Icon: any;
+  if (lib === 'ion') Icon = Ionicons;
+  else if (lib === 'mc') Icon = MaterialCommunityIcons;
+  else Icon = Feather;
   return (
-    <View style={styles.row} testID={`${testID}-row`}>
-      <View style={styles.flexOne}>
-        <Text style={styles.rowTitle} testID={`${testID}-title`}>{title}</Text>
-        <Text style={styles.rowSub} testID={`${testID}-subtitle`}>{subtitle}</Text>
-      </View>
-      <Switch
-        value={value}
-        onValueChange={onValueChange}
-        disabled={disabled}
-        trackColor={{ true: Colors.primary, false: '#d1d5db' }}
-        testID={`${testID}-switch`}
-      />
+    <View style={[styles.iconWrap, { backgroundColor: bg }]}>
+      <Icon name={name} size={20} color={color} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  content: { padding: Spacing.base, paddingBottom: 56, gap: Spacing.base },
-  heroCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.base,
-  },
-  heroIconWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.primaryLight,
-  },
-  heroTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  heroSub: { marginTop: 4, fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
-  statusText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  noteText: { fontSize: FontSize.sm, color: Colors.textSecondary },
-  card: {
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: Spacing.base,
-  },
+  scrollContent: { paddingBottom: 40 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingVertical: 12,
+    paddingHorizontal: Spacing.base,
+    paddingVertical: 14,
+    gap: Spacing.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
-  },
-  rowTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
-  rowSub: { marginTop: 4, fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 18 },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  sectionSub: { marginTop: 6, marginBottom: Spacing.base, fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
-  optionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  optionChip: {
-    minHeight: 44,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: Radius.pill,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.background,
-    justifyContent: 'center',
-  },
-  optionChipActive: { borderColor: Colors.primary, backgroundColor: Colors.primaryLight },
-  optionChipDisabled: { opacity: 0.45 },
-  optionChipText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.textSecondary },
-  optionChipTextActive: { color: Colors.primaryDark },
-  buttonGroup: { gap: 12 },
-  primaryButton: {
-    minHeight: 48,
-    borderRadius: Radius.pill,
-    backgroundColor: Colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  primaryButtonDisabled: { opacity: 0.5 },
-  primaryButtonText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.headerBg },
-  secondaryButton: {
-    minHeight: 48,
-    borderRadius: Radius.pill,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    borderBottomColor: Colors.borderLight,
     backgroundColor: Colors.surface,
+  },
+  rowTall: {
+    paddingHorizontal: Spacing.base,
+    paddingVertical: 14,
+    gap: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.borderLight,
+    backgroundColor: Colors.surface,
+  },
+  rowTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  rowMid: { flex: 1 },
+  rowTitle: {
+    fontSize: 15,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+  },
+  rowSubtitle: {
+    marginTop: 2,
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  iconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 8,
   },
-  secondaryButtonDisabled: { opacity: 0.5 },
-  secondaryButtonText: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
-  turnOffText: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.danger },
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
-  modalKeyboardWrap: { width: '100%' },
+  autoLockChipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    paddingLeft: 40 + Spacing.md, // align with text
+  },
+  autoLockChip: {
+    minHeight: 36,
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.borderLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  autoLockChipActive: {
+    backgroundColor: Colors.primary,
+  },
+  autoLockChipDisabled: {
+    opacity: 0.45,
+  },
+  autoLockChipText: {
+    fontSize: 13,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textPrimary,
+  },
+  autoLockChipTextActive: {
+    color: Colors.white,
+  },
+  sectionSpacer: {
+    height: Spacing.sm,
+  },
+  footerText: {
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+    fontSize: 13,
+    color: Colors.textSecondary,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  modalKeyboard: { width: '100%' },
   modalCard: {
     backgroundColor: Colors.surface,
     borderTopLeftRadius: 24,
@@ -471,8 +622,18 @@ const styles = StyleSheet.create({
     padding: Spacing.base,
     gap: 12,
   },
-  modalTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary, textAlign: 'center' },
-  modalSub: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center', lineHeight: 20 },
+  modalTitle: {
+    fontSize: FontSize.xl,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+    textAlign: 'center',
+  },
+  modalSubtitle: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
   input: {
     minHeight: 48,
     borderRadius: Radius.md,
@@ -492,7 +653,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modalPrimaryButtonText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.headerBg },
+  modalPrimaryButtonText: {
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.bold,
+    color: Colors.headerBg,
+  },
   modalSecondaryButton: {
     flex: 1,
     minHeight: 48,
@@ -502,6 +667,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modalSecondaryButtonText: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
-  flexOne: { flex: 1 },
+  modalSecondaryButtonText: {
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textPrimary,
+  },
 });

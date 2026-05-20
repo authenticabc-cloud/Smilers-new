@@ -24,6 +24,18 @@ export const DEFAULT_APP_LOCK_SETTINGS = {
   enabled: false,
   biometric: false,
   previewContent: false,
+  /**
+   * Inactivity timer (minutes) before App Lock re-engages once the app
+   * is returned to from background. Accepts 1 | 5 | 15 | 30.
+   */
+  autoLockMinutes: 15,
+  /**
+   * If true, lock immediately whenever the app leaves the foreground.
+   */
+  lockOnLeaving: false,
+  /**
+   * @deprecated kept for backwards-compatibility with older installs.
+   */
   autoLock: 'immediately',
   lockOnBackground: true,
 };

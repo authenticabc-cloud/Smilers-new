@@ -7,6 +7,7 @@ import { AuthProvider } from '../src/providers/AuthProvider';
 import { ConvexClientProvider } from '../src/providers/ConvexClientProvider';
 import { useMessageNotificationSound } from '../src/lib/notification/useMessageNotificationSound';
 import { usePushNotifications } from '../src/push/usePushNotifications';
+import AppLockGate from '../src/components/AppLockGate';
 import { Colors } from '../src/theme';
 
 function GlobalNotificationSound() {
@@ -28,7 +29,8 @@ export default function RootLayout() {
             <GlobalNotificationSound />
             <GlobalNotificationServices />
             <StatusBar style="light" backgroundColor={Colors.headerBg} />
-            <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: Colors.background } }}>
+            <AppLockGate>
+              <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: Colors.background } }}>
               <Stack.Screen name="index" />
               <Stack.Screen name="(tabs)" />
               <Stack.Screen name="phone-verify" />
@@ -65,6 +67,7 @@ export default function RootLayout() {
               <Stack.Screen name="status-view/[userId]" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
               <Stack.Screen name="contact-qr" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
             </Stack>
+            </AppLockGate>
           </ConvexClientProvider>
         </AuthProvider>
       </SafeAreaProvider>
