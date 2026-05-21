@@ -31,6 +31,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { StatusBar } from 'expo-status-bar';
 import { api } from '../../src/convexApi';
+import ConferenceHUD from '../../src/components/ConferenceHUD';
 import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials, getDisplayNameFromUser } from '../../src/lib/displayName';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { useConversationOtherUser } from '../../src/hooks/useConversationOtherUser';
@@ -99,14 +100,17 @@ export default function CallScreen() {
   const router = useRouter();
   const { height: windowHeight } = useWindowDimensions();
   const { isAuthenticated } = useAuth();
-  const { conversationId: rawConversationId, type: rawTypeParam, displayName: rawDisplayName } = useLocalSearchParams<{
+  const { conversationId: rawConversationId, type: rawTypeParam, displayName: rawDisplayName, conferenceMode: rawConfMode } = useLocalSearchParams<{
     conversationId?: string | string[];
     type?: string | string[];
     displayName?: string | string[];
+    conferenceMode?: string | string[];
   }>();
   const conversationId = Array.isArray(rawConversationId) ? rawConversationId[0] : rawConversationId;
   const typeParam = Array.isArray(rawTypeParam) ? rawTypeParam[0] : rawTypeParam;
   const routeDisplayName = Array.isArray(rawDisplayName) ? rawDisplayName[0] : rawDisplayName;
+  const confModeParam = Array.isArray(rawConfMode) ? rawConfMode[0] : rawConfMode;
+  const isConferenceMode = confModeParam === '1' || confModeParam === 'true';
   const requestedType: CallType = typeParam === 'video' || typeParam === 'screen' ? 'video' : 'voice';
   const startInScreenShare = typeParam === 'screen';
   const compactCallLayout = windowHeight < 720;
@@ -948,6 +952,15 @@ export default function CallScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* Conference HUD overlay (Slice C) — opt-in via ?conferenceMode=1 */}
+      {isConferenceMode && conversationId ? (
+        <ConferenceHUD
+          conferenceId={conversationId}
+          myUserId={me?._id ? String(me._id) : null}
+          onLeave={() => router.back()}
+        />
+      ) : null}
     </View>
   );
 

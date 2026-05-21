@@ -91,3 +91,65 @@ authorization must be enforced server-side per the spec:
   from that user in this group + hide reactions/composer
 * Message approval: when toggled on, route new messages to a pending queue
   the admin can approve/reject (mobile UI for the queue is in Slice B)
+
+---
+
+# Conferences contract — Slice C
+
+The mobile ConferenceHUD (`/app/src/components/ConferenceHUD.tsx`) and the
+Conference Create screen (`/app/app/conference-create.tsx`) call these
+endpoints. All wrapped in `safeCall` — mobile renders cleanly when missing.
+
+## Query
+
+### `conferences.getConferenceState({ conferenceId })`
+
+Returns the current conference snapshot:
+
+```ts
+{
+  _id: Id<"conferences">,
+  title: string,
+  mode: "video" | "audio",
+  entryMode: "open" | "invite",
+  viewerRole: "chair" | "clerk" | "protocol" | "participant",
+  allMuted: boolean,
+  pendingUnmuteRequests?: Array<{ userId: string; requestedAt: number }>,
+  pendingUnmuteCount?: number,         // server-computed convenience
+  timerEndsAt?: number,                // ms-since-epoch; null when no timer
+  notice?: string,                     // notice board content (Clerk-edited)
+  minutesTranscript?: string,          // pre-joined plain text (Clerk-only)
+  minutes?: Array<{ text: string; at?: number; speaker?: string }>,
+  participants?: Array<{ userId, name, role, micMuted, cameraOff, raisedHand }>,
+  lobby?: Array<{ userId, name, requestedAt }>,
+}
+```
+
+## Mutations
+
+| Name | Args | Notes |
+|------|------|-------|
+| `conferences.startConference` | `{ title, mode, entryMode, groupId?, clerkUserId?, protocolUserId? }` → `{ conferenceId }` | Chair = caller. Returns the new id used for routing. |
+| `conferences.muteAll` | `{ conferenceId, enabled }` | Chair only — gates incoming audio at media SFU layer. |
+| `conferences.requestUnmute` | `{ conferenceId }` | Participant signals they want to talk. Spec: voice + pop-up notify the chair. |
+| `conferences.approveAllUnmute` | `{ conferenceId }` | Chair-batch approve. |
+| `conferences.approveUnmute` / `declineUnmute` | `{ conferenceId, userId }` | per-user, with the spec's confirm/decline pop-up on the participant side. |
+| `conferences.sendReaction` | `{ conferenceId, kind: "raise_hand" \| "question" \| "motion" \| "second_motion" }` | broadcast to all. |
+| `conferences.setNotice` | `{ conferenceId, text }` | Clerk only. |
+| `conferences.appendMinutes` | `{ conferenceId, text }` | Clerk only; private. |
+| `conferences.exportMinutes` | `{ conferenceId }` | Clerk only → emails PDF. |
+| `conferences.startTimer` | `{ conferenceId, durationMs, withBell }` | Protocol only. |
+| `conferences.endTimer` | `{ conferenceId }` | Chair or Protocol. |
+| `conferences.forceVideoOff` | `{ conferenceId, userId }` | Protocol only. |
+| `conferences.admit` | `{ conferenceId, userId }` | Protocol only. |
+| `conferences.endMeeting` | `{ conferenceId }` | Chair only — closes the call. |
+| `conferences.adjourn` | `{ conferenceId }` | Chair only — adjournment per Robert's Rules; broadcast voice + sound + end. |
+| `conferences.passRole` | `{ conferenceId, role, toUserId }` | Chair → Chair, Chair → Clerk, Chair → Protocol assignments; per spec, leaving Chair auto-promotes next-in-line. |
+
+## Routing contract
+
+Mobile routes into `/call/<conferenceId>?type=video&conferenceMode=1`
+(or `type=voice` for audio). The `conferenceMode=1` query opts the call
+screen into mounting the `ConferenceHUD` overlay. Convex `Id<"conferences">`
+strings must be compatible with the existing call screen's
+`conversationId` validation regex (`/^[a-z0-9]+$/i`).
