@@ -28,7 +28,9 @@ import {
 } from '../lib/chatAppearance';
 import { Colors, FontSize, FontWeight, Radius } from '../theme';
 import BubbleErrorBoundary from './BubbleErrorBoundary';
-import { getMessageDurationSec, getMessageMediaUrl } from '../hooks/useResolvedStorageUrl';
+import { getMessageDurationSec } from '../hooks/useResolvedStorageUrl';
+import { useDecryptedMediaUrl } from '../hooks/useDecryptedMediaUrl';
+import type { E2EEStatus } from '../hooks/useConversationE2EE';
 
 let CURRENT_SOUND: Audio.Sound | null = null;
 let CURRENT_STOP: (() => void) | null = null;
@@ -51,6 +53,7 @@ interface BubbleProps {
   myUserId?: string;
   parentMsg?: any;
   appearance?: any;
+  e2eeStatus?: E2EEStatus | null;
   onLongPress: () => void;
   onToggleReaction: (emoji: string) => void;
 }
@@ -61,6 +64,7 @@ export default function MediaBubble({
   myUserId,
   parentMsg,
   appearance,
+  e2eeStatus,
   onLongPress,
   onToggleReaction,
 }: BubbleProps) {
@@ -140,7 +144,7 @@ export default function MediaBubble({
           </View>
         ) : null}
 
-        <BubbleBody msg={msg} timeStr={timeStr} textStyle={[bubbleTextStyle, { color: messageTextColor }]} isMine={isMine} />
+        <BubbleBody msg={msg} timeStr={timeStr} textStyle={[bubbleTextStyle, { color: messageTextColor }]} isMine={isMine} e2eeStatus={e2eeStatus || null} />
 
         <View style={styles.bubbleMeta}>
           {msg.starred ? <Feather name="star" size={11} color={Colors.tickYellow} style={styles.starIcon} /> : null}
@@ -168,26 +172,26 @@ export default function MediaBubble({
   );
 }
 
-function BubbleBody({ msg, timeStr, textStyle, isMine }: { msg: any; timeStr: string; textStyle?: any; isMine: boolean }) {
+function BubbleBody({ msg, timeStr, textStyle, isMine, e2eeStatus }: { msg: any; timeStr: string; textStyle?: any; isMine: boolean; e2eeStatus: E2EEStatus | null }) {
   return (
     <BubbleErrorBoundary fallbackLabel="Message couldn't load">
-      <BubbleBodyInner msg={msg} timeStr={timeStr} textStyle={textStyle} isMine={isMine} />
+      <BubbleBodyInner msg={msg} timeStr={timeStr} textStyle={textStyle} isMine={isMine} e2eeStatus={e2eeStatus} />
     </BubbleErrorBoundary>
   );
 }
 
-function BubbleBodyInner({ msg, timeStr, textStyle, isMine }: { msg: any; timeStr: string; textStyle?: any; isMine: boolean }) {
+function BubbleBodyInner({ msg, timeStr, textStyle, isMine, e2eeStatus }: { msg: any; timeStr: string; textStyle?: any; isMine: boolean; e2eeStatus: E2EEStatus | null }) {
   switch (msg.type) {
     case 'image':
-      return <ImageMessage msg={msg} timeStr={timeStr} textStyle={textStyle} />;
+      return <ImageMessage msg={msg} timeStr={timeStr} textStyle={textStyle} e2eeStatus={e2eeStatus} />;
     case 'voice':
     case 'audio':
-      return <VoiceMessage msg={msg} />;
+      return <VoiceMessage msg={msg} e2eeStatus={e2eeStatus} />;
     case 'poll':
       return <PollMessage msg={msg} />;
     case 'file':
     case 'document':
-      return <FileMessage msg={msg} isMine={isMine} />;
+      return <FileMessage msg={msg} isMine={isMine} e2eeStatus={e2eeStatus} />;
     case 'text':
     default:
       if (extractFirstUrl(msg.text || '')) {
@@ -247,21 +251,25 @@ function LinkPreviewMessage({ msg, textStyle, isMine }: { msg: any; textStyle?: 
   );
 }
 
-function ImageMessage({ msg, timeStr, textStyle }: { msg: any; timeStr: string; textStyle?: any }) {
+function ImageMessage({ msg, timeStr, textStyle, e2eeStatus }: { msg: any; timeStr: string; textStyle?: any; e2eeStatus: E2EEStatus | null }) {
   const [open, setOpen] = useState(false);
-  const src = getMessageMediaUrl(msg);
+  const { url: src, loading, error } = useDecryptedMediaUrl(msg, e2eeStatus);
 
   if (!src) {
     return (
       <View style={styles.imagePlaceholder} testID="image-bubble-loading">
-        <ActivityIndicator color={Colors.primary} />
+        {error ? (
+          <Feather name="lock" size={20} color={Colors.danger} />
+        ) : (
+          <ActivityIndicator color={Colors.primary} />
+        )}
       </View>
     );
   }
 
   return (
     <>
-      <TouchableOpacity activeOpacity={0.9} onPress={() => setOpen(true)} testID="image-bubble">
+      <TouchableOpacity activeOpacity={0.9} onPress={() => setOpen(true)} testID="image-bubble" disabled={loading}>
         <View style={styles.imageWrap}>
           <Image source={{ uri: src }} style={styles.image} resizeMode="cover" />
           <View style={styles.imageTimeOverlay}>
@@ -290,9 +298,9 @@ function ImageViewer({ visible, onClose, uri }: { visible: boolean; onClose: () 
   );
 }
 
-function VoiceMessage({ msg }: { msg: any }) {
+function VoiceMessage({ msg, e2eeStatus }: { msg: any; e2eeStatus: E2EEStatus | null }) {
   const totalSec = getMessageDurationSec(msg);
-  const src = getMessageMediaUrl(msg);
+  const { url: src, error: srcError } = useDecryptedMediaUrl(msg, e2eeStatus);
 
   const soundRef = useRef<Audio.Sound | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -375,7 +383,11 @@ function VoiceMessage({ msg }: { msg: any }) {
         </View>
         <View style={styles.voiceBody}>
           <View style={styles.voicePlayBtnLoading}>
-            <ActivityIndicator size="small" color={Colors.primary} />
+            {srcError ? (
+              <Feather name="lock" size={14} color={Colors.danger} />
+            ) : (
+              <ActivityIndicator size="small" color={Colors.primary} />
+            )}
           </View>
           <View style={styles.voiceBar}>
             <View style={styles.voiceProgress} />
@@ -470,8 +482,8 @@ function PollMessage({ msg }: { msg: any }) {
   );
 }
 
-function FileMessage({ msg, isMine }: { msg: any; isMine: boolean }) {
-  const src = getMessageMediaUrl(msg);
+function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e2eeStatus: E2EEStatus | null }) {
+  const { url: src, error: srcError } = useDecryptedMediaUrl(msg, e2eeStatus);
 
   const onOpen = async () => {
     if (!src) return;
@@ -497,7 +509,11 @@ function FileMessage({ msg, isMine }: { msg: any; isMine: boolean }) {
           {[formatBytes(msg.fileSize), msg.mimeType?.split('/')?.pop()?.toUpperCase()].filter(Boolean).join(' · ') || 'File'}
         </Text>
       </View>
-      <Feather name={src ? 'download' : 'loader'} size={20} color={isMine ? '#F6FFF9' : Colors.primary} />
+      <Feather
+        name={srcError ? 'lock' : src ? 'download' : 'loader'}
+        size={20}
+        color={srcError ? Colors.danger : isMine ? '#F6FFF9' : Colors.primary}
+      />
     </TouchableOpacity>
   );
 }

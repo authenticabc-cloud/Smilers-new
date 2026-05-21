@@ -499,8 +499,7 @@ export default function VoiceCommandLauncher() {
   return (
     <>
       <Animated.View
-        style={[styles.fabWrap, { opacity: fabOpacity }]}
-        pointerEvents={fabVisible ? 'box-none' : 'none'}
+        style={[styles.fabWrap, { opacity: fabOpacity, pointerEvents: fabVisible ? 'box-none' : 'none' }]}
       >
         <TouchableOpacity
           style={styles.fab}

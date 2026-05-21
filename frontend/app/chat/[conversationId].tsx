@@ -1192,6 +1192,7 @@ export default function ChatScreen() {
                     myUserId={me?._id}
                     parentMsg={item.replyToMessageId ? msgById.get(item.replyToMessageId) : undefined}
                     appearance={chatAppearance}
+                    e2eeStatus={e2eeStatus}
                     onLongPress={() => onLongPressMessage(item)}
                     onToggleReaction={(emoji) => onToggleMyReaction(item._id, emoji)}
                   />
