@@ -3,7 +3,11 @@ import {
   Alert,
   FlatList,
   Image,
+  KeyboardAvoidingView,
   Linking,
+  Modal,
+  Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -32,6 +36,7 @@ export default function AdsScreen() {
   const [showCountryModal, setShowCountryModal] = useState(false);
   const [redeemCodeInput, setRedeemCodeInput] = useState('');
   const [redeeming, setRedeeming] = useState(false);
+  const [redeemModalVisible, setRedeemModalVisible] = useState(false);
   const debouncedSearch = useDebouncedValue(search.trim(), 350);
 
   const { data: me } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null);
@@ -93,6 +98,7 @@ export default function AdsScreen() {
     try {
       const result: any = await redeemCode({ code });
       setRedeemCodeInput('');
+      setRedeemModalVisible(false);
       if (result?.type === 'lifetime') {
         Alert.alert('Code redeemed', 'Lifetime license activated successfully.');
       } else {
@@ -207,20 +213,17 @@ export default function AdsScreen() {
         testID="ads-list"
         ListHeaderComponent={
           viewMode === 'mine' ? (
-            <MyCreditsCard
-              credits={myCredits}
-              redeemCodeInput={redeemCodeInput}
-              onChangeRedeemCode={onChangeRedeemCode}
-              onRedeemCode={onRedeemCode}
-              redeeming={redeeming}
-            />
+            <View style={styles.myAdsHeader}>
+              <LifetimeLicenseCard credits={myCredits} />
+              <RedeemAdCodeButton onPress={() => setRedeemModalVisible(true)} />
+            </View>
           ) : null
         }
         renderItem={({ item, index }) =>
           viewMode === 'browse' ? (
             <BrowseAdCard ad={item} index={index} onPress={() => onVisitAd(item)} />
           ) : (
-            <MyAdCard ad={item} index={index} />
+            <MyAdCard ad={item} index={index} onBuyClicks={() => setRedeemModalVisible(true)} />
           )
         }
         ListEmptyComponent={
@@ -247,81 +250,122 @@ export default function AdsScreen() {
         onApply={setFilterCountries}
         onClose={() => setShowCountryModal(false)}
       />
+
+      <RedeemCodeModal
+        visible={redeemModalVisible}
+        value={redeemCodeInput}
+        onChange={onChangeRedeemCode}
+        onSubmit={onRedeemCode}
+        onClose={() => setRedeemModalVisible(false)}
+        submitting={redeeming}
+      />
     </SafeAreaView>
   );
 }
 
-function MyCreditsCard({
-  credits,
-  redeemCodeInput,
-  onChangeRedeemCode,
-  onRedeemCode,
-  redeeming,
-}: {
-  credits: any;
-  redeemCodeInput: string;
-  onChangeRedeemCode: (value: string) => void;
-  onRedeemCode: () => void;
-  redeeming: boolean;
-}) {
+function LifetimeLicenseCard({ credits }: { credits: any }) {
   const hasLifetime = !!credits?.hasLifetime;
   const totalRemaining = Number(credits?.totalRemainingEur || 0);
-  const codeCount = Array.isArray(credits?.codes) ? credits.codes.length : 0;
   const clickEstimate = estimateClicks(totalRemaining);
 
+  // Always show a top-level status banner (web mirrors this even when no
+  // lifetime license is active — it just toggles content).
   return (
-    <View style={styles.creditsWrap} testID="ad-credits-card">
-      <View style={[styles.creditsCard, hasLifetime ? styles.creditsCardLifetime : null]}>
-        <View style={styles.creditsCardRow}>
-          <View style={[styles.creditsIconWrap, hasLifetime ? styles.creditsIconLifetime : null]}>
-            <MaterialCommunityIcons
-              name={hasLifetime ? 'infinity' : 'wallet-outline'}
-              size={22}
-              color={hasLifetime ? '#92400e' : Colors.primary}
-            />
-          </View>
-          <View style={styles.flexOne}>
-            <Text style={styles.creditsTitle} testID="ad-credits-title">
-              {hasLifetime ? 'Lifetime License' : totalRemaining > 0 ? 'Ad Credits Available' : 'No Active Credits'}
-            </Text>
-            <Text style={styles.creditsSub} testID="ad-credits-subtitle">
-              {hasLifetime
-                ? 'Your ads can receive unlimited clicks.'
-                : totalRemaining > 0
-                  ? `€${totalRemaining.toFixed(2)} remaining · about ${clickEstimate} clicks`
-                  : 'Redeem a code to cover future ad clicks.'}
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.redeemWrap}>
-          <Text style={styles.redeemLabel}>Redeem Code</Text>
-          <TextInput
-            value={redeemCodeInput}
-            onChangeText={onChangeRedeemCode}
-            placeholder="XXX-XXX-XXX"
-            placeholderTextColor={Colors.textMuted}
-            style={styles.redeemInput}
-            autoCapitalize="characters"
-            autoCorrect={false}
-            maxLength={11}
-            testID="ad-redeem-code-input"
-          />
-          <TouchableOpacity
-            style={[styles.redeemBtn, (!redeemCodeInput || redeeming) && styles.redeemBtnDisabled]}
-            onPress={onRedeemCode}
-            disabled={!redeemCodeInput || redeeming}
-            testID="ad-redeem-code-button"
-          >
-            <Text style={styles.redeemBtnText}>{redeeming ? 'Redeeming…' : 'Redeem Code'}</Text>
-          </TouchableOpacity>
-        </View>
-
-        <Text style={styles.creditsFootnote} testID="ad-credits-footnote">
-          {codeCount > 0 ? `${codeCount} redeemed code${codeCount === 1 ? '' : 's'} on this account` : 'No redeemed codes yet'}
+    <View style={[styles.lifetimeCard, hasLifetime ? styles.lifetimeCardActive : null]} testID="ad-credits-card">
+      <View style={[styles.lifetimeIconWrap, hasLifetime ? styles.lifetimeIconActive : null]}>
+        <MaterialCommunityIcons
+          name={hasLifetime ? 'infinity' : 'wallet-outline'}
+          size={22}
+          color={hasLifetime ? '#92400e' : Colors.primary}
+        />
+      </View>
+      <View style={styles.flexOne}>
+        <Text style={[styles.lifetimeTitle, hasLifetime ? styles.lifetimeTitleActive : null]} testID="ad-credits-title">
+          {hasLifetime ? 'Lifetime License' : totalRemaining > 0 ? 'Ad Credits Available' : 'No Active Credits'}
+        </Text>
+        <Text style={styles.lifetimeSub} testID="ad-credits-subtitle">
+          {hasLifetime
+            ? 'Unlimited ad clicks at no cost'
+            : totalRemaining > 0
+              ? `€${totalRemaining.toFixed(2)} remaining · about ${clickEstimate} clicks`
+              : 'Redeem a code to cover future ad clicks.'}
         </Text>
       </View>
     </View>
+  );
+}
+
+function RedeemAdCodeButton({ onPress }: { onPress: () => void }) {
+  return (
+    <TouchableOpacity
+      style={styles.redeemAdCodeBtn}
+      onPress={onPress}
+      activeOpacity={0.7}
+      testID="ad-redeem-code-button"
+    >
+      <Feather name="tag" size={18} color={Colors.textPrimary} />
+      <Text style={styles.redeemAdCodeText}>Redeem Ad Code</Text>
+    </TouchableOpacity>
+  );
+}
+
+function RedeemCodeModal({
+  visible,
+  value,
+  onChange,
+  onSubmit,
+  onClose,
+  submitting,
+}: {
+  visible: boolean;
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+  onClose: () => void;
+  submitting: boolean;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        style={styles.modalBackdrop}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} testID="redeem-modal-backdrop" />
+        <View style={styles.modalCard} testID="redeem-modal">
+          <View style={styles.modalHeaderRow}>
+            <Feather name="tag" size={20} color={Colors.primary} />
+            <Text style={styles.modalTitle}>Redeem Ad Code</Text>
+            <View style={styles.flexOne} />
+            <TouchableOpacity onPress={onClose} hitSlop={10} testID="redeem-modal-close">
+              <Feather name="x" size={22} color={Colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.modalSubtitle}>
+            Enter the 9-character code you received. Lifetime codes unlock unlimited clicks; credit codes top up your balance.
+          </Text>
+          <TextInput
+            value={value}
+            onChangeText={onChange}
+            placeholder="XXX-XXX-XXX"
+            placeholderTextColor={Colors.textMuted}
+            style={styles.modalInput}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            maxLength={11}
+            autoFocus
+            testID="ad-redeem-code-input"
+          />
+          <TouchableOpacity
+            style={[styles.modalSubmitBtn, (!value || submitting) && styles.modalSubmitBtnDisabled]}
+            onPress={onSubmit}
+            disabled={!value || submitting}
+            testID="ad-redeem-modal-submit"
+          >
+            <Text style={styles.modalSubmitText}>{submitting ? 'Redeeming…' : 'Redeem Code'}</Text>
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
   );
 }
 
@@ -422,49 +466,98 @@ function BrowseAdCard({ ad, index, onPress }: { ad: any; index: number; onPress:
   );
 }
 
-function MyAdCard({ ad, index }: { ad: any; index: number }) {
+function MyAdCard({ ad, index, onBuyClicks }: { ad: any; index: number; onBuyClicks: () => void }) {
   const countries = Array.isArray(ad.targetCountries) ? ad.targetCountries : [];
   const visibleCountries = countries.slice(0, 3);
   const hiddenCount = Math.max(countries.length - visibleCountries.length, 0);
+
   const statusColor =
     ad.status === 'approved' ? '#16a34a' : ad.status === 'rejected' ? '#dc2626' : '#d97706';
-  const imageUri =
-    typeof ad.imageUrl === 'string'
-      ? ad.imageUrl
-      : Array.isArray(ad.images) && ad.images[0]
-        ? typeof ad.images[0] === 'string'
-          ? ad.images[0]
-          : ad.images[0]?.url
-        : '';
+  const statusBg =
+    ad.status === 'approved' ? '#dcfce7' : ad.status === 'rejected' ? '#fee2e2' : '#fef3c7';
+  const statusLabel =
+    ad.status === 'approved'
+      ? 'Approved'
+      : ad.status === 'rejected'
+        ? 'Rejected'
+        : 'Pending';
+
+  // Support the same gallery shape as BrowseAdCard for visual parity.
+  const galleryRaw: any[] = Array.isArray(ad.images) && ad.images.length > 0
+    ? ad.images
+    : ad.imageUrl
+      ? [ad.imageUrl]
+      : [];
+  const gallery: string[] = galleryRaw
+    .map((g: any) => (typeof g === 'string' ? g : g?.url || g?.uri || ''))
+    .filter(Boolean);
+  const isGallery = gallery.length > 1;
+
+  const clickCount = Number(ad.clickCount || 0);
+  const totalCost = Number(ad.totalCostEur || 0);
 
   return (
     <View style={styles.card} testID={`my-ad-card-${index}`}>
-      {imageUri ? <Image source={{ uri: imageUri }} style={styles.cardImage} resizeMode="cover" /> : null}
       <View style={styles.cardInner}>
-        <View style={styles.myCardHeader}>
-          <Text style={styles.cardTitle}>{ad.productName}</Text>
-          <View style={[styles.statusBadge, { backgroundColor: `${statusColor}20` }]}>
-            <Text style={[styles.statusText, { color: statusColor }]}>{ad.status}</Text>
-          </View>
-        </View>
-        {ad.businessName ? (
-          <View style={styles.cardMetaInline}>
-            <MaterialCommunityIcons name="bullhorn-outline" size={15} color={Colors.textSecondary} />
-            <Text style={styles.cardBusiness}>{ad.businessName}</Text>
+        {ad.category ? (
+          <View style={styles.categoryChipWrap}>
+            <View style={styles.categoryChip}>
+              <Text style={styles.categoryChipText}>{ad.category}</Text>
+            </View>
           </View>
         ) : null}
+
+        {gallery.length > 0 ? (
+          isGallery ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.galleryRow}
+            >
+              {gallery.map((uri, idx) => (
+                <Image key={idx} source={{ uri }} style={styles.galleryImage} resizeMode="cover" />
+              ))}
+            </ScrollView>
+          ) : (
+            <Image source={{ uri: gallery[0] }} style={styles.cardImageSolo} resizeMode="cover" />
+          )
+        ) : null}
+
+        <View style={styles.myCardHeader}>
+          <Text style={styles.cardTitle} numberOfLines={2}>{ad.productName}</Text>
+          <View style={[styles.statusBadge, { backgroundColor: statusBg }]}>
+            <Text style={[styles.statusText, { color: statusColor }]}>{statusLabel}</Text>
+          </View>
+        </View>
+
+        {ad.businessName ? (
+          <Text style={styles.myCardBusiness}>{ad.businessName}</Text>
+        ) : null}
+
         {ad.status === 'rejected' && ad.rejectedReason ? (
           <Text style={styles.rejectionText}>Reason: {ad.rejectedReason}</Text>
         ) : null}
+
         <View style={styles.statsRow}>
-          <Text style={styles.statsText}>{ad.clickCount || 0} clicks</Text>
-          <Text style={styles.statsText}>€{Number(ad.totalCostEur || 0).toFixed(2)}</Text>
+          <Text style={styles.statsText}>{clickCount} clicks</Text>
+          <Text style={styles.statsTextRight}>€{totalCost.toFixed(2)} charged</Text>
         </View>
-        <Text style={styles.countryListText}>
-          {countries.length
-            ? `${visibleCountries.join(', ')}${hiddenCount ? ` +${hiddenCount} more` : ''}`
-            : 'Worldwide'}
-        </Text>
+
+        {countries.length ? (
+          <Text style={styles.countryListText}>
+            {visibleCountries.join(', ')}{hiddenCount ? ` +${hiddenCount} more` : ''}
+          </Text>
+        ) : null}
+
+        <TouchableOpacity
+          style={styles.buyClicksBtn}
+          onPress={onBuyClicks}
+          activeOpacity={0.7}
+          testID={`my-ad-buy-clicks-${index}`}
+        >
+          <MaterialCommunityIcons name="cursor-default-click-outline" size={18} color={Colors.textPrimary} />
+          <Text style={styles.buyClicksText}>Buy Clicks</Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -569,55 +662,93 @@ const styles = StyleSheet.create({
 
   /* List */
   listContent: { padding: Spacing.base, paddingBottom: 140, gap: Spacing.base },
+  myAdsHeader: { gap: Spacing.sm, marginBottom: 4 },
 
-  /* Credits / Redeem */
-  creditsWrap: { marginBottom: Spacing.base },
-  creditsCard: {
-    backgroundColor: Colors.surface,
+  /* My Ads: Lifetime License banner card */
+  lifetimeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    padding: Spacing.base,
     borderRadius: Radius.lg,
     borderWidth: 1,
-    borderColor: Colors.borderLight,
-    padding: Spacing.base,
-    ...Shadow.sm,
+    borderColor: '#fcd34d',
+    backgroundColor: '#fef3c7',
   },
-  creditsCardLifetime: { backgroundColor: '#fef3c7', borderColor: '#fcd34d' },
-  creditsCardRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
-  creditsIconWrap: {
+  lifetimeCardActive: { backgroundColor: '#fef3c7', borderColor: '#fcd34d' },
+  lifetimeIconWrap: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: Colors.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: '#fde68a',
   },
-  creditsIconLifetime: { backgroundColor: '#fde68a' },
-  flexOne: { flex: 1 },
-  creditsTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  creditsSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 4, lineHeight: 20 },
-  redeemWrap: { marginTop: Spacing.base },
-  redeemLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textPrimary, marginBottom: 8 },
-  redeemInput: {
+  lifetimeIconActive: { backgroundColor: '#fde68a' },
+  lifetimeTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: '#92400e' },
+  lifetimeTitleActive: { color: '#92400e' },
+  lifetimeSub: { fontSize: FontSize.sm, color: '#92400e', marginTop: 2, opacity: 0.9 },
+
+  /* My Ads: Redeem Ad Code button (separate from license card) */
+  redeemAdCodeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: Radius.md,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+  },
+  redeemAdCodeText: {
+    fontSize: FontSize.base,
+    color: Colors.textPrimary,
+    fontWeight: FontWeight.semibold,
+  },
+
+  /* Redeem code modal */
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.lg,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 460,
     backgroundColor: Colors.background,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.md,
+    ...Shadow.lg,
+  },
+  modalHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  modalTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  modalSubtitle: { fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
+  modalInput: {
+    backgroundColor: Colors.surface,
     borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.border,
     paddingHorizontal: Spacing.base,
-    paddingVertical: 12,
-    fontSize: FontSize.base,
+    paddingVertical: 14,
+    fontSize: FontSize.lg,
     color: Colors.textPrimary,
-    letterSpacing: 2,
+    letterSpacing: 4,
+    textAlign: 'center',
   },
-  redeemBtn: {
-    minHeight: 44,
-    marginTop: Spacing.sm,
+  modalSubmitBtn: {
+    minHeight: 48,
     borderRadius: Radius.md,
     backgroundColor: Colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  redeemBtnDisabled: { opacity: 0.6 },
-  redeemBtnText: { fontSize: FontSize.sm, color: Colors.headerBg, fontWeight: FontWeight.bold },
-  creditsFootnote: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: Spacing.sm },
+  modalSubmitBtnDisabled: { opacity: 0.55 },
+  modalSubmitText: { fontSize: FontSize.base, color: Colors.headerBg, fontWeight: FontWeight.bold },
 
   /* Ad Card */
   card: {
@@ -688,13 +819,29 @@ const styles = StyleSheet.create({
   visitLink: { fontSize: FontSize.base, color: Colors.primary, fontWeight: FontWeight.bold },
 
   /* My Ads */
-  myCardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.sm },
-  statusBadge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: Radius.pill },
-  statusText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold, textTransform: 'uppercase' },
+  myCardHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: Spacing.sm, marginTop: 4 },
+  myCardBusiness: { fontSize: FontSize.base, color: Colors.textSecondary, marginTop: -4 },
+  statusBadge: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: Radius.pill, alignSelf: 'flex-start' },
+  statusText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   rejectionText: { fontSize: FontSize.sm, color: Colors.danger, marginTop: 4 },
-  statsRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
-  statsText: { fontSize: FontSize.sm, color: Colors.textSecondary },
+  statsRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
+  statsText: { fontSize: FontSize.base, color: Colors.textSecondary },
+  statsTextRight: { fontSize: FontSize.base, color: Colors.textSecondary },
   countryListText: { fontSize: FontSize.sm, color: Colors.textPrimary, marginTop: 4 },
+  buyClicksBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: Spacing.sm,
+    paddingVertical: 12,
+    borderRadius: Radius.md,
+    backgroundColor: '#f5e9d3',
+  },
+  buyClicksText: { fontSize: FontSize.base, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
+
+  /* Flex helper used in modal/lifetime cards */
+  flexOne: { flex: 1 },
 
   /* Empty */
   empty: { alignItems: 'center', paddingTop: Spacing.xxl * 2, paddingHorizontal: Spacing.lg, gap: Spacing.md },

@@ -109,8 +109,39 @@ export default function CreateAdScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="create-ad-screen">
-      <Header title="Post Ad" showBack onBack={() => router.back()} variant="dark" />
+      <Header title="Create Ad" showBack onBack={() => router.back()} variant="dark" />
       <ScrollView contentContainerStyle={styles.content}>
+        <Field label="Business Name*" value={businessName} onChangeText={setBusinessName} testID="ad-business-name" />
+        <Field label="Business Location*" value={location} onChangeText={setLocation} testID="ad-business-location" />
+        <Field label="Product Name*" value={productName} onChangeText={setProductName} testID="ad-product-name" />
+        <Field label="Contact Info" value={contactInfo} onChangeText={setContactInfo} testID="ad-contact-info" />
+        <Field label="Product Description*" value={description} onChangeText={setDescription} multiline testID="ad-description" />
+        <Field label="Link to Your Page*" value={externalLink} onChangeText={setExternalLink} autoCapitalize="none" keyboardType="url" testID="ad-link" />
+
+        <View style={styles.section}>
+          <Text style={styles.label}>Product Image (optional)</Text>
+          {imageAsset?.uri ? (
+            <Image source={{ uri: imageAsset.uri }} style={styles.previewImage} resizeMode="cover" />
+          ) : null}
+          <TouchableOpacity style={styles.uploadZone} onPress={pickImage} activeOpacity={0.7} testID="ad-pick-image">
+            <Feather name="upload" size={28} color={Colors.textMuted} />
+            <Text style={styles.uploadZoneText}>{imageAsset ? 'Change image' : 'Tap to upload image'}</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.label}>Preferred Locations</Text>
+          <Text style={styles.helperText}>
+            Select countries where your ad should appear. Leave empty for worldwide visibility.
+          </Text>
+          <TouchableOpacity style={styles.selectorBtn} onPress={() => setShowCountryModal(true)} testID="ad-country-picker">
+            <Feather name="map-pin" size={18} color={Colors.primary} />
+            <Text style={styles.selectorText}>{targetSummary}</Text>
+            <View style={styles.flexOne} />
+            <Feather name="chevron-right" size={18} color={Colors.textMuted} />
+          </TouchableOpacity>
+        </View>
+
         <View style={styles.banner} testID="create-ad-info-banner">
           <Text style={styles.bannerText}>
             Your ad will be reviewed by our team before it goes live. This may take up to 24 hours. Businesses are charged 0.06 per click.
@@ -122,32 +153,8 @@ export default function CreateAdScreen() {
           ) : null}
         </View>
 
-        <Field label="Business Name*" value={businessName} onChangeText={setBusinessName} testID="ad-business-name" />
-        <Field label="Business Location*" value={location} onChangeText={setLocation} testID="ad-business-location" />
-        <Field label="Product Name*" value={productName} onChangeText={setProductName} testID="ad-product-name" />
-        <Field label="Contact Info" value={contactInfo} onChangeText={setContactInfo} testID="ad-contact-info" />
-        <Field label="Product Description*" value={description} onChangeText={setDescription} multiline testID="ad-description" />
-        <Field label="Link to Your Page*" value={externalLink} onChangeText={setExternalLink} autoCapitalize="none" keyboardType="url" testID="ad-link" />
-
-        <View style={styles.section}>
-          <Text style={styles.label}>Product Image</Text>
-          {imageAsset?.uri ? <Image source={{ uri: imageAsset.uri }} style={styles.previewImage} resizeMode="cover" /> : null}
-          <TouchableOpacity style={styles.selectorBtn} onPress={pickImage} testID="ad-pick-image">
-            <Feather name="image" size={18} color={Colors.primary} />
-            <Text style={styles.selectorText}>{imageAsset ? 'Change image' : 'Choose image'}</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.label}>Preferred Locations</Text>
-          <TouchableOpacity style={styles.selectorBtn} onPress={() => setShowCountryModal(true)} testID="ad-country-picker">
-            <Feather name="map-pin" size={18} color={Colors.primary} />
-            <Text style={styles.selectorText}>{targetSummary}</Text>
-          </TouchableOpacity>
-        </View>
-
         <TouchableOpacity style={[styles.submitBtn, (!me || submitting) && styles.submitBtnDisabled]} onPress={onSubmit} disabled={!me || submitting} testID="ad-submit-button">
-          <Text style={styles.submitText}>{!me ? 'Sign in to submit' : submitting ? 'Submitting…' : 'Submit Ad'}</Text>
+          <Text style={styles.submitText}>{!me ? 'Sign in to submit' : submitting ? 'Submitting…' : 'Submit Ad for Review'}</Text>
         </TouchableOpacity>
       </ScrollView>
 
@@ -210,6 +217,31 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
   },
   selectorText: { fontSize: FontSize.base, color: Colors.textPrimary },
+  helperText: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    lineHeight: 20,
+    marginBottom: Spacing.sm,
+    marginTop: -2,
+  },
+  uploadZone: {
+    minHeight: 160,
+    borderRadius: Radius.lg,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    padding: Spacing.lg,
+  },
+  uploadZoneText: {
+    fontSize: FontSize.base,
+    color: Colors.textSecondary,
+    fontWeight: FontWeight.medium,
+  },
+  flexOne: { flex: 1 },
   previewImage: { width: '100%', height: 200, borderRadius: Radius.lg, marginBottom: Spacing.sm },
   submitBtn: {
     minHeight: 48,
