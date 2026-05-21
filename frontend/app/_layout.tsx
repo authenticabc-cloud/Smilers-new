@@ -1,9 +1,17 @@
-import React from 'react';
-import { View } from 'react-native';
+import React, { useEffect } from 'react';
+import { Platform, View } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import * as SplashScreen from 'expo-splash-screen';
+import {
+  useFonts,
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+  Inter_700Bold,
+} from '@expo-google-fonts/inter';
 import { AuthProvider } from '../src/providers/AuthProvider';
 import { ConvexClientProvider } from '../src/providers/ConvexClientProvider';
 import { useMessageNotificationSound } from '../src/lib/notification/useMessageNotificationSound';
@@ -11,7 +19,16 @@ import { usePushNotifications } from '../src/push/usePushNotifications';
 import AppLockGate from '../src/components/AppLockGate';
 import VoiceCommandLauncher from '../src/components/VoiceCommandLauncher';
 import { recordTouchActivity } from '../src/lib/touchActivity';
+import { applyInterFontPatch } from '../src/lib/fontPatch';
 import { Colors } from '../src/theme';
+
+// Apply the global Inter font patch eagerly (before any <Text> renders) so the
+// very first paint already uses Inter weights once the .ttf files are loaded.
+applyInterFontPatch();
+
+// Keep the native splash visible until our Inter weights finish loading — this
+// avoids a flash of the system font before Inter kicks in.
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 function GlobalNotificationSound() {
   useMessageNotificationSound();
@@ -24,6 +41,27 @@ function GlobalNotificationServices() {
 }
 
 export default function RootLayout() {
+  const [fontsLoaded, fontError] = useFonts({
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
+  });
+
+  useEffect(() => {
+    if (fontsLoaded || fontError) {
+      SplashScreen.hideAsync().catch(() => {});
+    }
+  }, [fontsLoaded, fontError]);
+
+  // On native we wait for Inter weights to load (the patched Text would
+  // otherwise reference a font that doesn't exist yet, causing a fallback
+  // flash). On web/preview the splash isn't shown and the system fallback
+  // renders fine while fonts download, so don't block.
+  if (!fontsLoaded && !fontError && Platform.OS !== 'web') {
+    return null;
+  }
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
