@@ -110,7 +110,13 @@ export default function CallScreen() {
   const requestedType: CallType = typeParam === 'video' || typeParam === 'screen' ? 'video' : 'voice';
   const startInScreenShare = typeParam === 'screen';
   const compactCallLayout = windowHeight < 720;
-  const heroAvatarSize = compactCallLayout ? 110 : 132;
+  const isVideoCall = callType === 'video';
+  // Video calls need to leave room for an extra row of Camera/Flip controls,
+  // so we shrink the hero avatar (and its pulsing ring wrap) to prevent the
+  // contact name from being pushed down onto the buttons.
+  const heroAvatarSize = isVideoCall
+    ? compactCallLayout ? 72 : 92
+    : compactCallLayout ? 110 : 132;
   const hasValidConversationId = typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
   const canRunCallQueries = isAuthenticated && hasValidConversationId;
 
@@ -1144,9 +1150,12 @@ function RingingAvatar({
 
   const ringSize = size + 24;
   const initials = getDisplayInitials(name, 2);
+  // Tighter wrap (was ringSize * 1.8 which forced massive vertical padding
+  // and pushed the contact name down onto the action buttons on video calls).
+  const wrapDim = animate ? ringSize * 1.55 : size + 16;
 
   return (
-    <View style={[styles.ringingWrap, { width: ringSize * 1.8, height: ringSize * 1.8 }]}>
+    <View style={[styles.ringingWrap, { width: wrapDim, height: wrapDim }]}>
       {animate ? (
         <>
           <Animated.View
