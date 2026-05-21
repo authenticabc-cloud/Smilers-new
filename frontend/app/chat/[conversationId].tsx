@@ -56,6 +56,7 @@ import { uploadFile } from '../../src/lib/uploadFile';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { useConversationOtherUser } from '../../src/hooks/useConversationOtherUser';
 import { useConversationE2EE } from '../../src/hooks/useConversationE2EE';
+import { useViewerSuspension } from '../../src/hooks/useViewerSuspension';
 import { decryptText } from '../../src/lib/e2eeCrypto';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 
@@ -1016,6 +1017,10 @@ export default function ChatScreen() {
   const subtitle = formatPresenceSubtitle(mergedPresenceSource);
   const avatarInitial = getDisplayInitials(title);
 
+  // Slice B of Groups spec — when the current user is suspended in this
+  // group, switch into spectator mode (composer hidden, reactions disabled).
+  const viewerSuspension = useViewerSuspension(hydratedConversation, me?._id ? String(me._id) : null);
+
   const handleMenuAction = useCallback(
     (key: string) => {
       switch (key) {
@@ -1205,8 +1210,8 @@ export default function ChatScreen() {
                     parentMsg={item.replyToMessageId ? msgById.get(item.replyToMessageId) : undefined}
                     appearance={chatAppearance}
                     e2eeStatus={e2eeStatus}
-                    onLongPress={() => onLongPressMessage(item)}
-                    onToggleReaction={(emoji) => onToggleMyReaction(item._id, emoji)}
+                    onLongPress={viewerSuspension ? () => {} : () => onLongPressMessage(item)}
+                    onToggleReaction={viewerSuspension ? () => {} : (emoji) => onToggleMyReaction(item._id, emoji)}
                   />
                 </>
               );
@@ -1227,6 +1232,15 @@ export default function ChatScreen() {
           ]}
           testID="composer-dock"
         >
+          {viewerSuspension ? (
+            <View style={styles.suspensionBanner} testID="suspension-banner">
+              <Feather name="alert-octagon" size={18} color="#7f1d1d" />
+              <Text style={styles.suspensionBannerText} testID="suspension-banner-text">
+                {viewerSuspension.label}
+              </Text>
+            </View>
+          ) : (
+            <>
           {replyTo && isConversationAvailable ? (
             <View style={styles.replyPill} testID="reply-preview-pill">
               <View style={styles.replyAccent} />
@@ -1425,6 +1439,8 @@ export default function ChatScreen() {
               </TouchableOpacity>
             </View>
           ) : null}
+            </>
+          )}
         </View>
       </KeyboardAvoidingView>
 
@@ -2012,6 +2028,23 @@ const styles = StyleSheet.create({
   },
   composerDock: {
     backgroundColor: '#EFE3CF',
+  },
+  suspensionBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 14,
+    paddingHorizontal: Spacing.base,
+    backgroundColor: '#fee2e2',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#fca5a5',
+  },
+  suspensionBannerText: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    color: '#7f1d1d',
+    fontWeight: FontWeight.medium,
+    lineHeight: 20,
   },
   composerToolbarRow: {
     minHeight: 48,

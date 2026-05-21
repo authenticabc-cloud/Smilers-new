@@ -25,6 +25,9 @@ Should return a single group conversation object the screen consumes:
   memberCount?: number,       // optional, fallback to memberRecords.length
   messageApprovalRequired?: boolean,
   viewerUserId?: string,      // current authed user's id; used to gate admin UI
+  viewerSuspendedUntil?: number,  // ms-since-epoch — when set, mobile shows
+                                  // a red "Suspended · spectator mode" banner
+                                  // and hides the composer + reactions
   memberRecords: Array<{      // OR `members` / `participants` (any accepted)
     userId: string,
     name?: string,            // display name; resolved server-side preferred
