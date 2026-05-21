@@ -31,6 +31,7 @@
     "eslint": "^9.39.4",
     "eslint-config-expo": "~10.0.0",
     "expo": "~54.0.34",
+    "expo-asset": "~12.0.13",
     "expo-audio": "~1.1.1",
     "expo-auth-session": "~7.0.11",
     "expo-av": "^16.0.8",
@@ -94,10 +95,12 @@
       }
     }
   },
-  "packageManager": "yarn@1.22.22",
   "overrides": {
     "react-native-webrtc": {
       "event-target-shim": "5.0.1"
     }
+  },
+  "resolutions": {
+    "react-native-webrtc/event-target-shim": "5.0.1"
   }
 }
