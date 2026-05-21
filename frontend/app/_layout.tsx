@@ -1,4 +1,5 @@
 import React from 'react';
+import { View } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -9,6 +10,7 @@ import { useMessageNotificationSound } from '../src/lib/notification/useMessageN
 import { usePushNotifications } from '../src/push/usePushNotifications';
 import AppLockGate from '../src/components/AppLockGate';
 import VoiceCommandLauncher from '../src/components/VoiceCommandLauncher';
+import { recordTouchActivity } from '../src/lib/touchActivity';
 import { Colors } from '../src/theme';
 
 function GlobalNotificationSound() {
@@ -31,7 +33,17 @@ export default function RootLayout() {
             <GlobalNotificationServices />
             <StatusBar style="light" backgroundColor={Colors.headerBg} />
             <AppLockGate>
-              <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: Colors.background } }}>
+              <View
+                style={{ flex: 1 }}
+                onStartShouldSetResponderCapture={() => {
+                  // Detect any touch anywhere on screen so floating UI like the
+                  // Voice Command FAB can pop back in. We never actually claim
+                  // the responder, so child touch handlers still work normally.
+                  recordTouchActivity();
+                  return false;
+                }}
+              >
+                <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: Colors.background } }}>
               <Stack.Screen name="index" />
               <Stack.Screen name="(tabs)" />
               <Stack.Screen name="phone-verify" />
@@ -69,6 +81,7 @@ export default function RootLayout() {
               <Stack.Screen name="contact-qr" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
             </Stack>
             <VoiceCommandLauncher />
+              </View>
             </AppLockGate>
           </ConvexClientProvider>
         </AuthProvider>

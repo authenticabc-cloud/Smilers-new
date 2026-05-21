@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
+  AppState,
   Easing,
   Modal,
   Platform,
@@ -16,6 +17,7 @@ import { useRouter } from 'expo-router';
 import { useAuth } from '../providers/AuthProvider';
 import { readStoredJson } from '../lib/settingsStorage';
 import { parseVoiceCommand, ParsedVoiceCommand } from '../lib/voiceCommandParser';
+import { subscribeTouchActivity } from '../lib/touchActivity';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../theme';
 
 // Lazy/web-safe load of the speech-recognition native module. On web the
@@ -399,25 +401,117 @@ function commandPreview(cmd: ParsedVoiceCommand, assignments: AssignmentMap): st
 }
 
 /**
- * Floating mic button that's visible across authenticated screens. Tap to
- * launch the voice command sheet.
+ * Floating mic button that's visible across authenticated screens. Mirrors the
+ * web app's behavior: shows a muted-mic icon in a white circle by default,
+ * auto-hides after a short period of inactivity, and pops back in on the
+ * next screen touch. Tap to open the voice command sheet.
  */
+const IDLE_FADE_MS = 2800;
+const FADE_DURATION_MS = 280;
+
 export default function VoiceCommandLauncher() {
   const { isAuthenticated } = useAuth();
   const [sheetVisible, setSheetVisible] = useState(false);
+  const [fabVisible, setFabVisible] = useState(true);
+  const fabOpacity = useRef(new Animated.Value(1)).current;
+  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const fadeIn = useCallback(() => {
+    setFabVisible((current) => {
+      if (current) return current;
+      Animated.timing(fabOpacity, {
+        toValue: 1,
+        duration: FADE_DURATION_MS,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+      return true;
+    });
+  }, [fabOpacity]);
+
+  const fadeOut = useCallback(() => {
+    setFabVisible((current) => {
+      if (!current) return current;
+      Animated.timing(fabOpacity, {
+        toValue: 0,
+        duration: FADE_DURATION_MS,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+      return false;
+    });
+  }, [fabOpacity]);
+
+  const scheduleHide = useCallback(() => {
+    if (hideTimeoutRef.current) {
+      clearTimeout(hideTimeoutRef.current);
+    }
+    hideTimeoutRef.current = setTimeout(() => {
+      fadeOut();
+    }, IDLE_FADE_MS);
+  }, [fadeOut]);
+
+  const handleActivity = useCallback(() => {
+    fadeIn();
+    scheduleHide();
+  }, [fadeIn, scheduleHide]);
+
+  // Subscribe to global touch activity so any tap anywhere on screen
+  // reappears the FAB and resets the auto-hide timer.
+  useEffect(() => {
+    if (!isAuthenticated) return undefined;
+    const unsubscribe = subscribeTouchActivity(handleActivity);
+    // Show on mount, then schedule the first hide.
+    handleActivity();
+    return () => {
+      unsubscribe();
+      if (hideTimeoutRef.current) clearTimeout(hideTimeoutRef.current);
+    };
+  }, [handleActivity, isAuthenticated]);
+
+  // When the app comes back to foreground, make sure the FAB shows again.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') {
+        handleActivity();
+      }
+    });
+    return () => sub.remove();
+  }, [handleActivity]);
+
+  // While the voice sheet is open we don't want the FAB hiding underneath it.
+  useEffect(() => {
+    if (sheetVisible) {
+      if (hideTimeoutRef.current) clearTimeout(hideTimeoutRef.current);
+      fadeIn();
+    } else if (isAuthenticated) {
+      handleActivity();
+    }
+  }, [fadeIn, handleActivity, isAuthenticated, sheetVisible]);
 
   if (!isAuthenticated) return null;
 
+  const handlePress = () => {
+    fadeIn();
+    setSheetVisible(true);
+  };
+
   return (
     <>
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => setSheetVisible(true)}
-        testID="voice-command-fab"
-        activeOpacity={0.85}
+      <Animated.View
+        style={[styles.fabWrap, { opacity: fabOpacity }]}
+        pointerEvents={fabVisible ? 'box-none' : 'none'}
       >
-        <Feather name="mic" size={22} color={Colors.headerBg} />
-      </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={handlePress}
+          testID="voice-command-fab"
+          activeOpacity={0.85}
+          accessibilityLabel="Voice command (muted, tap to listen)"
+        >
+          <Feather name="mic-off" size={22} color={Colors.textPrimary} />
+        </TouchableOpacity>
+      </Animated.View>
       <VoiceCommandSheet
         visible={sheetVisible}
         onClose={() => setSheetVisible(false)}
@@ -427,18 +521,24 @@ export default function VoiceCommandLauncher() {
 }
 
 const styles = StyleSheet.create({
-  fab: {
+  fabWrap: {
     position: 'absolute',
     right: 18,
     bottom: 92,
     width: 52,
     height: 52,
+    zIndex: 50,
+  },
+  fab: {
+    width: 52,
+    height: 52,
     borderRadius: 26,
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.white,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.08)',
     ...Shadow.lg,
-    zIndex: 50,
   },
   backdropWrap: {
     flex: 1,

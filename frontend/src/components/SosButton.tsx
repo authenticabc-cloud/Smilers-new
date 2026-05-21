@@ -25,11 +25,13 @@ const styles = StyleSheet.create({
   sos: {
     position: 'absolute',
     bottom: Spacing.base,
-    left: -8,
+    // Push the button further off-screen on the left so only the "SOS" label
+    // peeks out — mirrors the web app's chat list peeking-pill look.
+    left: -32,
     backgroundColor: Colors.danger,
     paddingVertical: 10,
-    paddingHorizontal: 20,
-    paddingLeft: 24,
+    paddingRight: 18,
+    paddingLeft: 40,
     borderTopRightRadius: Radius.pill,
     borderBottomRightRadius: Radius.pill,
     flexDirection: 'row',
