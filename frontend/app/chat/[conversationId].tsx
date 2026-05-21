@@ -1096,29 +1096,41 @@ export default function ChatScreen() {
           <TouchableOpacity testID="chat-back-btn" onPress={() => router.back()} style={styles.headerIconButton}>
             <Ionicons name="arrow-back" size={24} color={Colors.white} />
           </TouchableOpacity>
-          <View style={styles.headerAvatar} testID="chat-header-avatar">
-            {(() => {
-              const headerAvatarUri =
-                (hydratedConversation?.otherUser as any)?.avatar ||
-                (hydratedConversation?.otherUser as any)?.avatarUrl ||
-                (hydratedConversation as any)?.avatar ||
-                null;
-              if (headerAvatarUri && /^https?:/i.test(headerAvatarUri)) {
-                return (
-                  <Image
-                    source={{ uri: headerAvatarUri }}
-                    style={styles.headerAvatarImage}
-                    resizeMode="cover"
-                  />
-                );
+          <TouchableOpacity
+            style={styles.chatHeaderIdentity}
+            activeOpacity={hydratedConversation?.type === 'group' ? 0.7 : 1}
+            disabled={hydratedConversation?.type !== 'group'}
+            onPress={() => {
+              if (hydratedConversation?.type === 'group') {
+                router.push(`/group/${conversationId}` as any);
               }
-              return <Text style={styles.headerAvatarText}>{avatarInitial}</Text>;
-            })()}
-          </View>
-          <View style={styles.headerTextWrap}>
-            <Text style={styles.chatHeaderTitle} numberOfLines={1} testID="chat-header-title">{title}</Text>
-            <Text style={styles.chatHeaderSubtitle} numberOfLines={1} testID="chat-header-subtitle">{subtitle}</Text>
-          </View>
+            }}
+            testID="chat-header-identity"
+          >
+            <View style={styles.headerAvatar} testID="chat-header-avatar">
+              {(() => {
+                const headerAvatarUri =
+                  (hydratedConversation?.otherUser as any)?.avatar ||
+                  (hydratedConversation?.otherUser as any)?.avatarUrl ||
+                  (hydratedConversation as any)?.avatar ||
+                  null;
+                if (headerAvatarUri && /^https?:/i.test(headerAvatarUri)) {
+                  return (
+                    <Image
+                      source={{ uri: headerAvatarUri }}
+                      style={styles.headerAvatarImage}
+                      resizeMode="cover"
+                    />
+                  );
+                }
+                return <Text style={styles.headerAvatarText}>{avatarInitial}</Text>;
+              })()}
+            </View>
+            <View style={styles.headerTextWrap}>
+              <Text style={styles.chatHeaderTitle} numberOfLines={1} testID="chat-header-title">{title}</Text>
+              <Text style={styles.chatHeaderSubtitle} numberOfLines={1} testID="chat-header-subtitle">{subtitle}</Text>
+            </View>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.chatHeaderActions}>
@@ -1784,6 +1796,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   chatHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  chatHeaderIdentity: {
     flexDirection: 'row',
     alignItems: 'center',
     flex: 1,
