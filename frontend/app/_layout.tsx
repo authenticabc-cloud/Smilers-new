@@ -8,6 +8,7 @@ import { ConvexClientProvider } from '../src/providers/ConvexClientProvider';
 import { useMessageNotificationSound } from '../src/lib/notification/useMessageNotificationSound';
 import { usePushNotifications } from '../src/push/usePushNotifications';
 import AppLockGate from '../src/components/AppLockGate';
+import VoiceCommandLauncher from '../src/components/VoiceCommandLauncher';
 import { Colors } from '../src/theme';
 
 function GlobalNotificationSound() {
@@ -67,6 +68,7 @@ export default function RootLayout() {
               <Stack.Screen name="status-view/[userId]" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
               <Stack.Screen name="contact-qr" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
             </Stack>
+            <VoiceCommandLauncher />
             </AppLockGate>
           </ConvexClientProvider>
         </AuthProvider>

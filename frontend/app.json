@@ -16,6 +16,7 @@
         "NSCameraUsageDescription": "Take photos to send in chats and status",
         "NSPhotoLibraryUsageDescription": "Share photos from your gallery in chats",
         "NSMicrophoneUsageDescription": "Record voice notes and make voice calls",
+        "NSSpeechRecognitionUsageDescription": "Recognize voice commands to call or message your contacts hands-free",
         "NSLocationWhenInUseUsageDescription": "Share your location in chats",
         "NSFaceIDUsageDescription": "Unlock Smilers securely with Face ID",
         "NSContactsUsageDescription": "Find friends who use Smilers",
@@ -146,6 +147,13 @@
         "expo-contacts",
         {
           "contactsPermission": "Find your friends already on Smilers"
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Recognize voice commands to call or message your contacts hands-free",
+          "speechRecognitionPermission": "Recognize voice commands to call or message your contacts hands-free"
         }
       ],
       "@react-native-community/datetimepicker",
