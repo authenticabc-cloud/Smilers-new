@@ -1,733 +1,704 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Linking,
-  Platform,
+  FlatList,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { Audio } from 'expo-av';
-import * as Haptics from 'expo-haptics';
-import { useMutation } from 'convex/react';
-import Header from '../src/components/Header';
+import { useConvex, useQuery } from 'convex/react';
 import { api } from '../src/convexApi';
 import { useAuth } from '../src/providers/AuthProvider';
-import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
-import { readStoredJson, writeStoredJson } from '../src/lib/settingsStorage';
+import {
+  readStoredJson,
+  writeStoredJson,
+} from '../src/lib/settingsStorage';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
-const VOICE_PREFS_KEY = 'smilers_voice_tasks_prefs';
+const POSITIONS: number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+const VOICE_TASKS_STORAGE_KEY = 'smilers_voice_task_contacts_v1';
+const TRIGGER_WORD = 'Smiley';
 
-type WakeWord = 'hey_smilers' | 'smilers' | 'off';
-type Activation = 'wake' | 'button' | 'both';
-type ConfirmLevel = 'always' | 'critical' | 'never';
-
-interface CommandFlags {
-  call: boolean;
-  message: boolean;
-  schedule: boolean;
-  money: boolean;
-  sos: boolean;
-  status: boolean;
-  read: boolean;
+interface VoiceTaskAssignment {
+  position: number;
+  contactId: string;
+  name: string;
+  avatar?: string | null;
+  phone?: string | null;
 }
 
-interface VoicePrefs {
-  enabled: boolean;
-  wakeWord: WakeWord;
-  activation: Activation;
-  confirm: ConfirmLevel;
-  voiceFeedback: boolean;
-  haptics: boolean;
-  commands: CommandFlags;
+type AssignmentMap = Record<number, VoiceTaskAssignment>;
+
+/**
+ * Tries multiple Convex query paths for fetching the current user's voice
+ * task assignments. The spec says the backend table is `voiceTaskContacts`
+ * but the exact API function names weren't part of the spec we received,
+ * so we try a few conventional names and fall back to local storage if
+ * none work.
+ */
+async function loadFromConvex(convex: any): Promise<AssignmentMap | null> {
+  const candidates: Array<{ label: string; query: any }> = [];
+  const ns: any = (api as any).voiceTaskContacts;
+  const altNs: any = (api as any).voiceTasks;
+  if (ns?.list) candidates.push({ label: 'voiceTaskContacts.list', query: ns.list });
+  if (ns?.getMine) candidates.push({ label: 'voiceTaskContacts.getMine', query: ns.getMine });
+  if (ns?.get) candidates.push({ label: 'voiceTaskContacts.get', query: ns.get });
+  if (altNs?.listContacts) candidates.push({ label: 'voiceTasks.listContacts', query: altNs.listContacts });
+  if (altNs?.list) candidates.push({ label: 'voiceTasks.list', query: altNs.list });
+
+  for (const candidate of candidates) {
+    try {
+      const result = await convex.query(candidate.query, {});
+      if (Array.isArray(result)) {
+        const map: AssignmentMap = {};
+        for (const item of result) {
+          const position = Number(item?.position);
+          if (!position || position < 1 || position > 10) continue;
+          map[position] = {
+            position,
+            contactId: String(item?.contactId || item?.userId || item?._id || ''),
+            name: String(item?.name || item?.preferredName || item?.displayName || 'Contact'),
+            avatar: item?.avatar || null,
+            phone: item?.phone || null,
+          };
+        }
+        console.log('[voice-tasks] loaded via', candidate.label, Object.keys(map).length, 'rows');
+        return map;
+      }
+    } catch (errorValue: any) {
+      console.warn('[voice-tasks] load', candidate.label, 'failed:', errorValue?.message);
+    }
+  }
+  return null;
 }
 
-const DEFAULT_PREFS: VoicePrefs = {
-  enabled: false,
-  wakeWord: 'hey_smilers',
-  activation: 'both',
-  confirm: 'critical',
-  voiceFeedback: true,
-  haptics: true,
-  commands: {
-    call: true,
-    message: true,
-    schedule: true,
-    money: false,
-    sos: true,
-    status: false,
-    read: true,
-  },
-};
+async function saveToConvex(
+  convex: any,
+  position: number,
+  contact: VoiceTaskAssignment | null
+): Promise<boolean> {
+  const ns: any = (api as any).voiceTaskContacts;
+  const altNs: any = (api as any).voiceTasks;
+  const candidates: Array<{ label: string; mutation: any; argsForSet: any; argsForRemove: any }> = [];
+  if (ns?.assign && ns?.unassign) {
+    candidates.push({
+      label: 'voiceTaskContacts.assign/unassign',
+      mutation: contact ? ns.assign : ns.unassign,
+      argsForSet: {
+        position,
+        contactId: contact?.contactId,
+        name: contact?.name,
+        avatar: contact?.avatar || null,
+      },
+      argsForRemove: { position },
+    });
+  }
+  if (ns?.upsert) {
+    candidates.push({
+      label: 'voiceTaskContacts.upsert',
+      mutation: ns.upsert,
+      argsForSet: {
+        position,
+        contactId: contact?.contactId,
+        name: contact?.name,
+        avatar: contact?.avatar || null,
+      },
+      argsForRemove: { position, contactId: null },
+    });
+  }
+  if (ns?.set) {
+    candidates.push({
+      label: 'voiceTaskContacts.set',
+      mutation: ns.set,
+      argsForSet: {
+        position,
+        contactId: contact?.contactId,
+        name: contact?.name,
+      },
+      argsForRemove: { position, contactId: null },
+    });
+  }
+  if (altNs?.assignContact) {
+    candidates.push({
+      label: 'voiceTasks.assignContact',
+      mutation: altNs.assignContact,
+      argsForSet: { position, contactId: contact?.contactId, name: contact?.name },
+      argsForRemove: { position },
+    });
+  }
 
-const WAKE_LABEL: Record<WakeWord, string> = {
-  hey_smilers: '“Hey Smilers”',
-  smilers: '“Smilers”',
-  off: 'Off',
-};
-
-const ACTIVATION_LABEL: Record<Activation, string> = {
-  wake: 'Wake word',
-  button: 'Long-press',
-  both: 'Both',
-};
-
-const CONFIRM_LABEL: Record<ConfirmLevel, string> = {
-  always: 'Always',
-  critical: 'Money & SOS only',
-  never: 'Never',
-};
-
-const COMMAND_LIST: { key: keyof CommandFlags; title: string; sub: string; icon: string; tone: string }[] = [
-  { key: 'call', title: 'Call a contact', sub: '“Call Jane”', icon: 'call-outline', tone: Colors.primary },
-  { key: 'message', title: 'Send a message', sub: '“Tell Bob I’m on my way”', icon: 'send-outline', tone: '#0EA5E9' },
-  { key: 'schedule', title: 'Schedule a message', sub: '“Remind Mom tomorrow at 9am”', icon: 'time-outline', tone: '#8B5CF6' },
-  { key: 'money', title: 'Send money', sub: '“Send $20 to Alex”', icon: 'cash-outline', tone: '#10B981' },
-  { key: 'sos', title: 'Trigger SOS', sub: '“Help me”', icon: 'alert-circle-outline', tone: Colors.danger },
-  { key: 'status', title: 'Update status', sub: '“Set status to busy”', icon: 'happy-outline', tone: '#F59E0B' },
-  { key: 'read', title: 'Read messages', sub: '“What did I miss?”', icon: 'book-outline', tone: '#6366F1' },
-];
-
-interface MicPermission {
-  granted: boolean;
-  canAskAgain: boolean;
-  status: 'unknown' | 'granted' | 'denied' | 'undetermined';
+  for (const candidate of candidates) {
+    try {
+      const args = contact ? candidate.argsForSet : candidate.argsForRemove;
+      await convex.mutation(candidate.mutation, args);
+      console.log('[voice-tasks] saved via', candidate.label);
+      return true;
+    } catch (errorValue: any) {
+      console.warn('[voice-tasks] save', candidate.label, 'failed:', errorValue?.message);
+    }
+  }
+  return false;
 }
 
 export default function VoiceTasksScreen() {
   const router = useRouter();
+  const convex = useConvex();
   const { isAuthenticated } = useAuth();
-  const { data: me, refetch } = useSafeConvexQuery<any | null>(
-    api.users.getCurrentUser,
-    {},
-    null,
-    isAuthenticated,
-  );
-  const updateProfile = useMutation(api.users.updateProfile);
 
-  const [prefs, setPrefs] = useState<VoicePrefs>(DEFAULT_PREFS);
-  const [hydrated, setHydrated] = useState(false);
-  const [mic, setMic] = useState<MicPermission>({ granted: false, canAskAgain: true, status: 'unknown' });
-  const [demoTranscript, setDemoTranscript] = useState<string | null>(null);
-  const [demoRunning, setDemoRunning] = useState(false);
+  const contacts = useQuery(
+    api.contacts.getContacts,
+    isAuthenticated ? {} : 'skip'
+  ) as any[] | undefined;
 
-  // Hydrate prefs (Convex first, then local).
+  const [assignments, setAssignments] = useState<AssignmentMap>({});
+  const [loaded, setLoaded] = useState(false);
+  const [pickerVisible, setPickerVisible] = useState(false);
+  const [pickerPosition, setPickerPosition] = useState<number | null>(null);
+  const [pickerQuery, setPickerQuery] = useState('');
+  const [pendingPos, setPendingPos] = useState<number | null>(null);
+
+  // Initial load — try Convex first, fall back to local persisted copy.
   useEffect(() => {
+    if (!isAuthenticated) return;
     let cancelled = false;
     (async () => {
-      let initial: VoicePrefs | null = null;
-      if (me?.voiceTasks && typeof me.voiceTasks === 'object') {
-        initial = {
-          ...DEFAULT_PREFS,
-          ...me.voiceTasks,
-          commands: { ...DEFAULT_PREFS.commands, ...(me.voiceTasks.commands || {}) },
-        };
-      } else {
-        const local = (await readStoredJson(VOICE_PREFS_KEY, null)) as VoicePrefs | null;
-        if (local) {
-          initial = {
-            ...DEFAULT_PREFS,
-            ...local,
-            commands: { ...DEFAULT_PREFS.commands, ...(local.commands || {}) },
-          };
-        }
+      const fromConvex = await loadFromConvex(convex);
+      if (cancelled) return;
+      if (fromConvex && Object.keys(fromConvex).length > 0) {
+        setAssignments(fromConvex);
+        setLoaded(true);
+        return;
       }
-      if (!cancelled) {
-        setPrefs(initial || DEFAULT_PREFS);
-        setHydrated(true);
-      }
+      const local = (await readStoredJson(VOICE_TASKS_STORAGE_KEY, null)) as AssignmentMap | null;
+      if (cancelled) return;
+      setAssignments(local || {});
+      setLoaded(true);
     })();
     return () => {
       cancelled = true;
     };
-  }, [me]);
+  }, [convex, isAuthenticated]);
 
-  // Check mic permission on mount.
-  const refreshMic = useCallback(async () => {
+  const persistAll = useCallback(async (next: AssignmentMap) => {
+    setAssignments(next);
     try {
-      const perm = await Audio.getPermissionsAsync();
-      setMic({
-        granted: !!perm.granted,
-        canAskAgain: !!perm.canAskAgain,
-        status: (perm.granted ? 'granted' : perm.canAskAgain ? 'undetermined' : 'denied') as MicPermission['status'],
-      });
-    } catch {
-      setMic({ granted: false, canAskAgain: true, status: 'unknown' });
+      await writeStoredJson(VOICE_TASKS_STORAGE_KEY, next);
+    } catch (errorValue) {
+      // ignore — we already updated UI state
     }
   }, []);
 
-  useEffect(() => {
-    void refreshMic();
-  }, [refreshMic]);
-
-  const requestMic = useCallback(async () => {
-    try {
-      const perm = await Audio.requestPermissionsAsync();
-      setMic({
-        granted: !!perm.granted,
-        canAskAgain: !!perm.canAskAgain,
-        status: perm.granted ? 'granted' : 'denied',
-      });
-      if (!perm.granted && !perm.canAskAgain) {
-        Alert.alert(
-          'Microphone access denied',
-          'Open Settings to allow Smilers to use your microphone for voice commands.',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Open settings', onPress: () => Linking.openSettings() },
-          ],
-        );
-      }
-    } catch {
-      Alert.alert('Could not request mic permission', 'Please try again.');
-    }
+  const openPicker = useCallback((position: number) => {
+    setPickerPosition(position);
+    setPickerQuery('');
+    setPickerVisible(true);
   }, []);
 
-  const persist = useCallback(
-    async (next: VoicePrefs) => {
-      setPrefs(next);
-      try {
-        await writeStoredJson(VOICE_PREFS_KEY, next);
-      } catch {}
-      try {
-        await updateProfile({ voiceTasks: next });
-        try {
-          await refetch();
-        } catch {}
-      } catch (errorValue: any) {
-        console.warn('updateProfile(voiceTasks) failed:', errorValue?.message);
-      }
+  const closePicker = useCallback(() => {
+    setPickerVisible(false);
+    setPickerPosition(null);
+    setPickerQuery('');
+  }, []);
+
+  const handleAssign = useCallback(
+    async (position: number, contact: any) => {
+      if (!contact) return;
+      const next: VoiceTaskAssignment = {
+        position,
+        contactId: String(contact._id || contact.id || ''),
+        name: contact.name || contact.displayName || contact.email || contact.phone || 'Contact',
+        avatar: contact.avatar || null,
+        phone: contact.phone || null,
+      };
+      setPendingPos(position);
+      const merged: AssignmentMap = { ...assignments, [position]: next };
+      await persistAll(merged);
+      await saveToConvex(convex, position, next);
+      setPendingPos(null);
+      closePicker();
     },
-    [refetch, updateProfile],
+    [assignments, closePicker, convex, persistAll]
   );
 
-  const setEnabled = useCallback(
-    async (v: boolean) => {
-      // If enabling, ensure mic permission first.
-      if (v && !mic.granted) {
-        await requestMic();
-      }
-      void persist({ ...prefs, enabled: v });
+  const handleUnassign = useCallback(
+    async (position: number) => {
+      const merged = { ...assignments };
+      delete merged[position];
+      setPendingPos(position);
+      await persistAll(merged);
+      await saveToConvex(convex, position, null);
+      setPendingPos(null);
     },
-    [mic.granted, persist, prefs, requestMic],
+    [assignments, convex, persistAll]
   );
 
-  const setWakeWord = (w: WakeWord) => void persist({ ...prefs, wakeWord: w });
-  const setActivation = (a: Activation) => void persist({ ...prefs, activation: a });
-  const setConfirm = (c: ConfirmLevel) => void persist({ ...prefs, confirm: c });
-  const setVoiceFeedback = (v: boolean) => void persist({ ...prefs, voiceFeedback: v });
-  const setHapticsPref = (v: boolean) => void persist({ ...prefs, haptics: v });
-  const toggleCommand = (key: keyof CommandFlags) => (v: boolean) =>
-    void persist({ ...prefs, commands: { ...prefs.commands, [key]: v } });
-
-  // Demo: play a short scripted transcript. Uses haptic taps as the only "audio"
-  // since we don't have an offline TTS dependency installed.
-  const runDemo = useCallback(async () => {
-    if (demoRunning) return;
-    const steps = [
-      { text: prefs.wakeWord === 'off' ? '(long-press detected)' : `Hearing: ${WAKE_LABEL[prefs.wakeWord]}…`, delay: 600 },
-      { text: 'Listening…', delay: 900 },
-      { text: '“Call Jane”', delay: 1100 },
-      { text: 'Got it — calling Jane.', delay: 1200 },
-    ];
-    setDemoRunning(true);
-    for (const step of steps) {
-      setDemoTranscript(step.text);
-      if (prefs.haptics) {
-        try {
-          await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        } catch {}
-      }
-      await new Promise((r) => setTimeout(r, step.delay));
+  const handleAddPress = useCallback(() => {
+    const firstEmpty = POSITIONS.find((p) => !assignments[p]);
+    if (firstEmpty) {
+      openPicker(firstEmpty);
+    } else {
+      Alert.alert('All slots used', 'All 10 positions are already assigned. Tap a row to change or remove it.');
     }
-    setDemoTranscript('Ready.');
-    setDemoRunning(false);
-  }, [demoRunning, prefs.haptics, prefs.wakeWord]);
+  }, [assignments, openPicker]);
 
-  const wakes: WakeWord[] = ['hey_smilers', 'smilers', 'off'];
-  const activations: Activation[] = ['wake', 'button', 'both'];
-  const confirms: ConfirmLevel[] = ['always', 'critical', 'never'];
+  const filteredContacts = useMemo(() => {
+    const list = Array.isArray(contacts) ? contacts : [];
+    const trimmed = pickerQuery.trim().toLowerCase();
+    if (!trimmed) return list;
+    return list.filter((c: any) => {
+      const name = String(c?.name || c?.displayName || '').toLowerCase();
+      const phone = String(c?.phone || '').toLowerCase();
+      const email = String(c?.email || '').toLowerCase();
+      return name.includes(trimmed) || phone.includes(trimmed) || email.includes(trimmed);
+    });
+  }, [contacts, pickerQuery]);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']} testID="voice-tasks-screen">
-      <Header title="Voice Tasks" showBack onBack={() => router.back()} variant="dark" />
-      <ScrollView contentContainerStyle={{ paddingBottom: 48 }}>
-        {/* Hero card */}
-        <View style={styles.heroCard}>
-          <View style={styles.heroIconWrap}>
-            <Ionicons name="mic" size={36} color={Colors.primary} />
+    <View style={styles.container} testID="voice-tasks-screen">
+      {/* Yellow gold header per web app */}
+      <SafeAreaView edges={['top']} style={styles.headerSafe}>
+        <View style={styles.headerRow}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            hitSlop={12}
+            style={styles.headerIconBtn}
+            testID="voice-tasks-back"
+          >
+            <Ionicons name="arrow-back" size={24} color={Colors.headerBg} />
+          </TouchableOpacity>
+          <View style={styles.headerCenter}>
+            <Text style={styles.headerTitle}>Voice Tasks</Text>
+            <Text style={styles.headerSubtitle}>Assign contacts for hands-free commands</Text>
           </View>
-          <Text style={styles.heroTitle}>
-            {prefs.enabled ? 'Voice Tasks is on' : 'Hands-free Smilers'}
-          </Text>
-          <Text style={styles.heroSub}>
-            {prefs.enabled
-              ? `Say ${WAKE_LABEL[prefs.wakeWord]} or long-press to start a command.`
-              : 'Send messages, place calls, and trigger SOS with just your voice.'}
-          </Text>
+          <TouchableOpacity
+            onPress={handleAddPress}
+            hitSlop={12}
+            style={styles.headerIconBtn}
+            testID="voice-tasks-add"
+          >
+            <Ionicons name="add" size={28} color={Colors.headerBg} />
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
 
-          {/* Mic permission status */}
-          {!mic.granted ? (
-            <View style={styles.permCard}>
-              <Ionicons name="warning-outline" size={18} color="#B45309" />
-              <View style={styles.flexOne}>
-                <Text style={styles.permTitle}>Microphone access needed</Text>
-                <Text style={styles.permSub}>
-                  {mic.canAskAgain
-                    ? 'Smilers needs the mic to hear your commands.'
-                    : 'Mic access is blocked. Open Settings to allow it.'}
-                </Text>
+      <ScrollView contentContainerStyle={styles.scrollContent} testID="voice-tasks-scroll">
+        {/* Instructions block (off-white card) */}
+        <View style={styles.instructionsBlock}>
+          <Text style={styles.instructionsText}>
+            Assign up to 10 contacts to numbers 1-10. Use voice commands like:{' '}
+            <Text style={styles.instructionsBold}>{'"Call 1"'}</Text>,{' '}
+            <Text style={styles.instructionsBold}>{'"Video call 3"'}</Text>,{' '}
+            <Text style={styles.instructionsBold}>{'"Voice note to 2"'}</Text>, or{' '}
+            <Text style={styles.instructionsBold}>{'"Share location with 5"'}</Text>. Say{' '}
+            <Text style={styles.instructionsTrigger}>{`"${TRIGGER_WORD}"`}</Text> to end and send
+            voice/video messages.
+          </Text>
+        </View>
+
+        {/* Position rows */}
+        {!loaded ? (
+          <View style={styles.loadingRow}>
+            <ActivityIndicator color={Colors.primary} />
+          </View>
+        ) : (
+          POSITIONS.map((position) => {
+            const a = assignments[position];
+            const initial = a ? (a.name.charAt(0) || '?').toUpperCase() : '+';
+            return (
+              <Pressable
+                key={position}
+                onPress={() => openPicker(position)}
+                onLongPress={() => {
+                  if (a) {
+                    Alert.alert(
+                      `Position ${position}`,
+                      `Remove ${a.name}?`,
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Remove',
+                          style: 'destructive',
+                          onPress: () => handleUnassign(position),
+                        },
+                      ]
+                    );
+                  }
+                }}
+                android_ripple={{ color: Colors.borderLight }}
+                style={({ pressed }) => [styles.row, pressed ? styles.rowPressed : null]}
+                testID={`voice-tasks-row-${position}`}
+              >
+                <View style={styles.positionCircle}>
+                  <Text style={styles.positionNumber}>{position}</Text>
+                </View>
+                {a ? (
+                  <View style={styles.contactAvatarFilled}>
+                    <Text style={styles.contactAvatarInitial}>{initial}</Text>
+                  </View>
+                ) : (
+                  <View style={styles.contactAvatarEmpty}>
+                    <Ionicons name="add" size={18} color={Colors.textMuted} />
+                  </View>
+                )}
+                <View style={styles.rowMid}>
+                  <Text
+                    style={a ? styles.rowAssignedName : styles.rowPlaceholderText}
+                    numberOfLines={1}
+                  >
+                    {a ? a.name : `Tap to assign position #${position}`}
+                  </Text>
+                  {a?.phone ? (
+                    <Text style={styles.rowAssignedPhone} numberOfLines={1}>
+                      {a.phone}
+                    </Text>
+                  ) : null}
+                </View>
+                {pendingPos === position ? (
+                  <ActivityIndicator size="small" color={Colors.primary} />
+                ) : a ? (
+                  <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+                ) : null}
+              </Pressable>
+            );
+          })
+        )}
+      </ScrollView>
+
+      {/* Contact picker modal */}
+      <Modal
+        visible={pickerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closePicker}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={closePicker}>
+          <Pressable
+            style={styles.modalCard}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={styles.modalHeader}>
+              <View style={styles.modalTitleRow}>
+                <Feather name="hash" size={18} color={Colors.textPrimary} />
+                <Text style={styles.modalTitle}>Assign to position {pickerPosition ?? ''}</Text>
               </View>
               <TouchableOpacity
-                style={styles.permBtn}
-                onPress={mic.canAskAgain ? requestMic : () => Linking.openSettings()}
-                testID="voice-tasks-mic-allow"
+                onPress={closePicker}
+                hitSlop={12}
+                testID="voice-tasks-picker-close"
               >
-                <Text style={styles.permBtnText}>{mic.canAskAgain ? 'Allow' : 'Settings'}</Text>
+                <Ionicons name="close" size={24} color={Colors.textPrimary} />
               </TouchableOpacity>
             </View>
-          ) : null}
 
-          <View style={styles.heroRow}>
-            <Text style={styles.heroRowLabel}>Enable Voice Tasks</Text>
-            <Switch
-              value={prefs.enabled}
-              onValueChange={setEnabled}
-              trackColor={{ true: Colors.primary, false: Colors.border }}
-              thumbColor={Colors.white}
-              testID="voice-tasks-master-toggle"
-              disabled={!hydrated}
-            />
-          </View>
-        </View>
-
-        {/* Demo */}
-        <View style={[styles.card, { marginTop: Spacing.base }]}>
-          <View style={styles.demoHeader}>
-            <View style={styles.flexOne}>
-              <Text style={styles.cardTitle}>Try a command</Text>
-              <Text style={styles.cardSub}>See what Voice Tasks looks like before going live.</Text>
-            </View>
-            <TouchableOpacity
-              style={[styles.demoBtn, demoRunning ? { opacity: 0.7 } : null]}
-              onPress={runDemo}
-              disabled={demoRunning}
-              testID="voice-tasks-demo"
-            >
-              {demoRunning ? (
-                <ActivityIndicator size="small" color={Colors.headerBg} />
-              ) : (
-                <>
-                  <Ionicons name="sparkles-outline" size={16} color={Colors.headerBg} />
-                  <Text style={styles.demoBtnText}>Demo</Text>
-                </>
-              )}
-            </TouchableOpacity>
-          </View>
-          {demoTranscript ? (
-            <View style={styles.demoBox}>
-              <Ionicons name={demoRunning ? 'mic' : 'checkmark-circle'} size={16} color={Colors.primary} />
-              <Text style={styles.demoText}>{demoTranscript}</Text>
-            </View>
-          ) : null}
-        </View>
-
-        {/* Activation */}
-        <Text style={styles.sectionLabel}>Activation</Text>
-        <View style={styles.card}>
-          <View style={styles.cardSection}>
-            <Text style={styles.fieldLabel}>Wake word</Text>
-            <View style={styles.segment}>
-              {wakes.map((w) => (
-                <Pressable
-                  key={w}
-                  style={[styles.segmentBtn, prefs.wakeWord === w ? styles.segmentBtnActive : null]}
-                  onPress={() => setWakeWord(w)}
-                  testID={`voice-tasks-wake-${w}`}
-                >
-                  <Text
-                    style={[styles.segmentText, prefs.wakeWord === w ? styles.segmentTextActive : null]}
-                    numberOfLines={1}
-                  >
-                    {WAKE_LABEL[w]}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
-          <View style={styles.divider} />
-          <View style={styles.cardSection}>
-            <Text style={styles.fieldLabel}>How to start a command</Text>
-            <View style={styles.segment}>
-              {activations.map((a) => (
-                <Pressable
-                  key={a}
-                  style={[styles.segmentBtn, prefs.activation === a ? styles.segmentBtnActive : null]}
-                  onPress={() => setActivation(a)}
-                  testID={`voice-tasks-activation-${a}`}
-                >
-                  <Text
-                    style={[styles.segmentText, prefs.activation === a ? styles.segmentTextActive : null]}
-                    numberOfLines={1}
-                  >
-                    {ACTIVATION_LABEL[a]}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-            <Text style={styles.helper}>
-              {prefs.activation === 'wake'
-                ? 'Speak the wake word at any time.'
-                : prefs.activation === 'button'
-                  ? 'Long-press the floating Voice Tasks button to start.'
-                  : 'Use whichever feels more natural in the moment.'}
-            </Text>
-          </View>
-        </View>
-
-        {/* Commands */}
-        <Text style={styles.sectionLabel}>Commands</Text>
-        <View style={styles.card}>
-          {COMMAND_LIST.map((cmd, index) => (
-            <View
-              key={cmd.key}
-              style={[styles.row, index === COMMAND_LIST.length - 1 ? styles.rowLast : null]}
-              testID={`voice-tasks-cmd-${cmd.key}`}
-            >
-              <View style={[styles.iconWrap, { backgroundColor: `${cmd.tone}22` }]}>
-                <Ionicons name={cmd.icon as any} size={20} color={cmd.tone} />
-              </View>
-              <View style={styles.rowMid}>
-                <Text style={styles.rowTitle}>{cmd.title}</Text>
-                <Text style={styles.rowSub}>{cmd.sub}</Text>
-              </View>
-              <Switch
-                value={prefs.commands[cmd.key]}
-                onValueChange={toggleCommand(cmd.key)}
-                trackColor={{ true: Colors.primary, false: Colors.border }}
-                thumbColor={Colors.white}
-                disabled={!prefs.enabled}
-                testID={`voice-tasks-cmd-toggle-${cmd.key}`}
+            <View style={styles.searchRow}>
+              <Feather name="search" size={16} color={Colors.textMuted} />
+              <TextInput
+                style={styles.searchInput}
+                value={pickerQuery}
+                onChangeText={setPickerQuery}
+                placeholder="Search contacts"
+                placeholderTextColor={Colors.textMuted}
+                autoCorrect={false}
+                autoCapitalize="none"
+                testID="voice-tasks-search"
               />
+              {pickerQuery.length > 0 ? (
+                <TouchableOpacity onPress={() => setPickerQuery('')} hitSlop={8}>
+                  <Feather name="x" size={16} color={Colors.textMuted} />
+                </TouchableOpacity>
+              ) : null}
             </View>
-          ))}
-        </View>
 
-        {/* Confirmation & feedback */}
-        <Text style={styles.sectionLabel}>Confirmation & feedback</Text>
-        <View style={styles.card}>
-          <View style={styles.cardSection}>
-            <Text style={styles.fieldLabel}>Confirm before acting</Text>
-            <View style={styles.segment}>
-              {confirms.map((c) => (
-                <Pressable
-                  key={c}
-                  style={[styles.segmentBtn, prefs.confirm === c ? styles.segmentBtnActive : null]}
-                  onPress={() => setConfirm(c)}
-                  testID={`voice-tasks-confirm-${c}`}
-                >
-                  <Text
-                    style={[styles.segmentText, prefs.confirm === c ? styles.segmentTextActive : null]}
-                    numberOfLines={1}
-                  >
-                    {CONFIRM_LABEL[c]}
+            <FlatList
+              data={filteredContacts}
+              keyExtractor={(item) => String(item._id || item.id || item.tokenIdentifier || Math.random())}
+              keyboardShouldPersistTaps="handled"
+              ListEmptyComponent={
+                <View style={styles.emptyState}>
+                  <Ionicons name="people-outline" size={28} color={Colors.textMuted} />
+                  <Text style={styles.emptyTitle}>
+                    {contacts === undefined ? 'Loading contacts…' : 'No contacts found'}
                   </Text>
-                </Pressable>
-              ))}
-            </View>
-            <Text style={styles.helper}>
-              {prefs.confirm === 'always'
-                ? 'You’ll be asked to confirm every command.'
-                : prefs.confirm === 'critical'
-                  ? 'Only money transfers and SOS need confirmation.'
-                  : 'Commands run immediately. Use with care.'}
-            </Text>
-          </View>
-          <View style={styles.divider} />
-          <View style={styles.row}>
-            <Ionicons name="volume-medium-outline" size={22} color={Colors.primary} />
-            <View style={styles.rowMid}>
-              <Text style={styles.rowTitle}>Voice feedback</Text>
-              <Text style={styles.rowSub}>Smilers speaks confirmations aloud</Text>
-            </View>
-            <Switch
-              value={prefs.voiceFeedback}
-              onValueChange={setVoiceFeedback}
-              trackColor={{ true: Colors.primary, false: Colors.border }}
-              thumbColor={Colors.white}
-              testID="voice-tasks-voice-feedback"
+                  {contacts !== undefined && contacts.length === 0 ? (
+                    <Text style={styles.emptySub}>Add contacts in Smilers first.</Text>
+                  ) : null}
+                </View>
+              }
+              renderItem={({ item }) => {
+                const name = item.name || item.displayName || 'Unknown';
+                const subtitle = item.phone || item.email || '';
+                const init = (name.charAt(0) || '?').toUpperCase();
+                return (
+                  <TouchableOpacity
+                    style={styles.contactRow}
+                    onPress={() => handleAssign(pickerPosition!, item)}
+                    testID={`voice-tasks-contact-${String(item._id)}`}
+                  >
+                    <View style={styles.contactAvatarSmall}>
+                      <Text style={styles.contactAvatarSmallText}>{init}</Text>
+                    </View>
+                    <View style={styles.flexOne}>
+                      <Text style={styles.contactName} numberOfLines={1}>
+                        {name}
+                      </Text>
+                      {subtitle ? (
+                        <Text style={styles.contactSubtitle} numberOfLines={1}>
+                          {subtitle}
+                        </Text>
+                      ) : null}
+                    </View>
+                  </TouchableOpacity>
+                );
+              }}
+              ItemSeparatorComponent={() => <View style={styles.contactDivider} />}
             />
-          </View>
-          <View style={styles.divider} />
-          <View style={[styles.row, styles.rowLast]}>
-            <Ionicons name="pulse-outline" size={22} color={Colors.primary} />
-            <View style={styles.rowMid}>
-              <Text style={styles.rowTitle}>Haptic feedback</Text>
-              <Text style={styles.rowSub}>Vibrate when a command is recognized</Text>
-            </View>
-            <Switch
-              value={prefs.haptics}
-              onValueChange={setHapticsPref}
-              trackColor={{ true: Colors.primary, false: Colors.border }}
-              thumbColor={Colors.white}
-              testID="voice-tasks-haptics"
-            />
-          </View>
-        </View>
-
-        {/* Privacy note */}
-        <View style={styles.tipCard}>
-          <Ionicons name="lock-closed-outline" size={18} color={Colors.textSecondary} />
-          <Text style={styles.tipText}>
-            Voice is processed on-device wherever possible. Audio is never stored after a command is handled, and Smilers
-            cannot access your microphone unless Voice Tasks is on.
-          </Text>
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
 
-  heroCard: {
-    margin: Spacing.base,
-    padding: Spacing.lg,
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.borderLight,
+  // Yellow header
+  headerSafe: { backgroundColor: Colors.primary },
+  headerRow: {
+    flexDirection: 'row',
     alignItems: 'center',
+    paddingHorizontal: Spacing.base,
+    paddingVertical: Spacing.md,
+    minHeight: 76,
+    backgroundColor: Colors.primary,
   },
-  heroIconWrap: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: Colors.primaryLight,
+  headerIconBtn: {
+    width: 40,
+    height: 40,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: Spacing.sm,
   },
-  heroTitle: {
-    fontSize: FontSize.xl,
-    fontWeight: FontWeight.bold,
-    color: Colors.textPrimary,
-    marginBottom: 2,
-    textAlign: 'center',
-  },
-  heroSub: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-    lineHeight: 20,
+  headerCenter: {
+    flex: 1,
     paddingHorizontal: Spacing.sm,
   },
-  permCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    backgroundColor: '#FFFBEB',
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-    padding: Spacing.md,
-    marginTop: Spacing.md,
-    alignSelf: 'stretch',
+  headerTitle: {
+    fontSize: 22,
+    fontWeight: FontWeight.bold,
+    color: Colors.headerBg,
   },
-  permTitle: {
+  headerSubtitle: {
     fontSize: FontSize.sm,
-    fontWeight: FontWeight.bold,
-    color: '#92400E',
-  },
-  permSub: { fontSize: FontSize.xs, color: '#78350F', marginTop: 2, lineHeight: 16 },
-  permBtn: {
-    backgroundColor: '#B45309',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: Radius.md,
-  },
-  permBtnText: {
-    color: Colors.white,
-    fontWeight: FontWeight.bold,
-    fontSize: FontSize.xs,
-  },
-  heroRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: Spacing.lg,
-    alignSelf: 'stretch',
-  },
-  heroRowLabel: {
-    fontSize: FontSize.base,
-    fontWeight: FontWeight.semibold,
-    color: Colors.textPrimary,
-  },
-
-  card: {
-    marginHorizontal: Spacing.base,
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.borderLight,
-    overflow: 'hidden',
-  },
-  cardTitle: {
-    fontSize: FontSize.base,
-    fontWeight: FontWeight.bold,
-    color: Colors.textPrimary,
-  },
-  cardSub: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+    color: Colors.headerBg,
+    opacity: 0.8,
     marginTop: 2,
   },
-  cardSection: {
-    paddingHorizontal: Spacing.base,
-    paddingVertical: Spacing.md,
-    gap: 8,
-  },
-  fieldLabel: {
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.bold,
-    color: Colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginBottom: 4,
+
+  scrollContent: {
+    paddingBottom: 48,
   },
 
-  demoHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  // Instructions block
+  instructionsBlock: {
     paddingHorizontal: Spacing.base,
-    paddingVertical: Spacing.md,
-    gap: Spacing.sm,
+    paddingVertical: Spacing.lg,
+    backgroundColor: Colors.surface,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.borderLight,
   },
-  demoBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: Colors.primary,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: Radius.pill,
-  },
-  demoBtnText: {
-    color: Colors.headerBg,
-    fontWeight: FontWeight.bold,
-    fontSize: FontSize.sm,
-  },
-  demoBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    margin: Spacing.base,
-    marginTop: 0,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 10,
-    backgroundColor: Colors.primaryLight,
-    borderRadius: Radius.md,
-  },
-  demoText: {
-    flex: 1,
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    color: Colors.primaryDark,
-  },
-
-  segment: {
-    flexDirection: 'row',
-    backgroundColor: Colors.background,
-    borderRadius: Radius.md,
-    padding: 4,
-    gap: 4,
-  },
-  segmentBtn: {
-    flex: 1,
-    paddingVertical: 9,
-    borderRadius: Radius.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  segmentBtnActive: { backgroundColor: Colors.primary },
-  segmentText: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
+  instructionsText: {
+    fontSize: 14,
+    lineHeight: 22,
     color: Colors.textSecondary,
   },
-  segmentTextActive: { color: Colors.headerBg },
-
-  helper: {
-    fontSize: FontSize.xs,
-    color: Colors.textMuted,
-    marginTop: 6,
-    lineHeight: 16,
-  },
-
-  sectionLabel: {
-    fontSize: FontSize.xs,
+  instructionsBold: {
     fontWeight: FontWeight.bold,
-    color: Colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    paddingHorizontal: Spacing.base,
-    paddingTop: Spacing.md,
-    paddingBottom: Spacing.sm,
+    color: Colors.textPrimary,
   },
-  divider: {
-    height: 1,
-    backgroundColor: Colors.borderLight,
-    marginLeft: Spacing.base,
+  instructionsTrigger: {
+    fontWeight: FontWeight.bold,
+    color: Colors.primary,
+  },
+
+  // Row list
+  loadingRow: {
+    paddingVertical: 40,
+    alignItems: 'center',
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: Spacing.base,
-    paddingVertical: 12,
-    gap: Spacing.md,
-    borderBottomWidth: 1,
+    paddingVertical: 14,
+    gap: Spacing.sm,
+    backgroundColor: Colors.surface,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Colors.borderLight,
   },
-  rowLast: { borderBottomWidth: 0 },
-  iconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  rowPressed: {
+    backgroundColor: Colors.borderLight,
+  },
+  positionCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.borderLight,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  positionNumber: {
+    fontSize: 16,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textPrimary,
+  },
+  contactAvatarEmpty: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: Colors.textMuted,
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+  },
+  contactAvatarFilled: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  contactAvatarInitial: {
+    fontSize: 15,
+    fontWeight: FontWeight.bold,
+    color: Colors.headerBg,
+  },
   rowMid: { flex: 1 },
-  rowTitle: {
+  rowPlaceholderText: {
+    fontSize: 15,
+    color: Colors.textSecondary,
+  },
+  rowAssignedName: {
+    fontSize: 15,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textPrimary,
+  },
+  rowAssignedPhone: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+
+  // Modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  modalCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    paddingTop: Spacing.lg,
+    maxHeight: '75%',
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.lg,
+    paddingBottom: Spacing.base,
+  },
+  modalTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+  },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    marginHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.background,
+    borderWidth: 1,
+    borderColor: Colors.borderLight,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    color: Colors.textPrimary,
+    paddingVertical: 0,
+  },
+  contactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 12,
+  },
+  contactAvatarSmall: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  contactAvatarSmallText: {
+    fontSize: 16,
+    fontWeight: FontWeight.bold,
+    color: Colors.headerBg,
+  },
+  contactName: {
     fontSize: FontSize.base,
     fontWeight: FontWeight.semibold,
     color: Colors.textPrimary,
   },
-  rowSub: {
-    fontSize: FontSize.sm,
+  contactSubtitle: {
+    fontSize: FontSize.xs,
     color: Colors.textSecondary,
     marginTop: 2,
   },
-
-  tipCard: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-    margin: Spacing.base,
-    padding: Spacing.md,
-    backgroundColor: '#FFFBEB',
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: '#FDE68A',
+  contactDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: Colors.borderLight,
+    marginLeft: Spacing.lg + 40 + Spacing.md,
   },
-  tipText: { flex: 1, fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 40,
+    gap: 8,
+  },
+  emptyTitle: {
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textPrimary,
+  },
+  emptySub: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+  },
   flexOne: { flex: 1 },
 });
