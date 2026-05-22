@@ -2040,10 +2040,10 @@ function MessageBubble({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   chatHeader: {
-    minHeight: 88,
+    minHeight: 110,
     backgroundColor: '#3D2A00',
     paddingHorizontal: 12,
-    paddingVertical: 14,
+    paddingVertical: 18,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',

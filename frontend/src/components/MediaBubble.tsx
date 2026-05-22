@@ -31,6 +31,7 @@ import BubbleErrorBoundary from './BubbleErrorBoundary';
 import { getMessageDurationSec } from '../hooks/useResolvedStorageUrl';
 import { useDecryptedMediaUrl } from '../hooks/useDecryptedMediaUrl';
 import type { E2EEStatus } from '../hooks/useConversationE2EE';
+import { getCachedTranscription, type CachedTranscription } from '../lib/triggerTranscription';
 
 let CURRENT_SOUND: Audio.Sound | null = null;
 let CURRENT_STOP: (() => void) | null = null;
@@ -454,16 +455,46 @@ function VoiceMessage({ msg, e2eeStatus }: { msg: any; e2eeStatus: E2EEStatus | 
  * a small language tag on top, then the transcribed text in a light card.
  */
 function TranscriptionPill({ msg }: { msg: any }) {
+  // Local AsyncStorage cache fallback — keyed by storageId — guarantees the
+  // pill renders even when the Convex `messages.setTranscription` mutation
+  // hasn't been deployed yet (the mobile transcription pipeline still writes
+  // the result to disk on this device).
+  const storageId: string | null =
+    (typeof msg?.storageId === 'string' && msg.storageId) ||
+    (typeof msg?.audioStorageId === 'string' && msg.audioStorageId) ||
+    null;
+  const [cached, setCached] = useState<CachedTranscription | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      if (!storageId) return;
+      const value = await getCachedTranscription(storageId);
+      if (!cancelled) setCached(value);
+    };
+    void load();
+    // Re-poll briefly while Whisper is running so the pill flips from
+    // 'Transcribing…' to the actual text without needing a screen re-mount.
+    const interval = setInterval(() => {
+      if (cached?.status === 'ready' || cached?.status === 'error') return;
+      void load();
+    }, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [storageId, cached?.status]);
+
   const transcription: string =
-    typeof msg?.transcription === 'string' && msg.transcription.trim().length > 0
-      ? msg.transcription.trim()
-      : '';
+    (typeof msg?.transcription === 'string' && msg.transcription.trim()) ||
+    (cached?.text || '');
   const language: string =
-    typeof msg?.transcriptionLanguage === 'string' && msg.transcriptionLanguage.length > 0
-      ? msg.transcriptionLanguage
-      : '';
-  const isPending = msg?.transcriptionStatus === 'pending';
-  const isError = msg?.transcriptionStatus === 'error';
+    (typeof msg?.transcriptionLanguage === 'string' && msg.transcriptionLanguage) ||
+    (cached?.language || '');
+  const messageStatus: string | undefined =
+    typeof msg?.transcriptionStatus === 'string' ? msg.transcriptionStatus : undefined;
+  const isPending = messageStatus === 'pending' || (!transcription && cached?.status === 'pending');
+  const isError = messageStatus === 'error' || (!transcription && cached?.status === 'error');
 
   if (!transcription && !isPending && !isError) return null;
 
