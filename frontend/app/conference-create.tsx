@@ -39,13 +39,13 @@ import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
 type ConferenceType = 'video' | 'audio';
 type AccessControl = 'open' | 'invite';
-type Frequency = 'daily' | 'weekly' | 'biweekly' | 'monthly';
+type Frequency = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 const FREQUENCY_OPTIONS: { key: Frequency; label: string }[] = [
   { key: 'daily', label: 'Daily' },
   { key: 'weekly', label: 'Weekly' },
-  { key: 'biweekly', label: 'Bi-weekly' },
   { key: 'monthly', label: 'Monthly' },
+  { key: 'yearly', label: 'Yearly' },
 ];
 
 function pad(n: number): string {

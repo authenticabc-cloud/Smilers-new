@@ -207,7 +207,7 @@ export default function GroupsScreen() {
               <View style={styles.conferenceEmpty} testID="conference-empty-state">
                 <Ionicons name="videocam-outline" size={40} color={Colors.textMuted} />
                 <Text style={styles.emptyTitle}>No conferences yet</Text>
-                <Text style={styles.emptySub}>Create a group first, then start a conference from it.</Text>
+                <Text style={styles.emptySub}>Tap the + button above to create your first conference.</Text>
               </View>
             )
           }
@@ -349,8 +349,8 @@ export default function GroupsScreen() {
               </Text>
               <Text style={styles.emptySub}>
                 {tab === 'groups'
-                  ? 'Create a group to chat with multiple people'
-                  : 'Create a group first, then start a conference from it'}
+                  ? 'Tap + to start a new group conversation'
+                  : 'Tap + to create your first conference'}
               </Text>
             </View>
           )
