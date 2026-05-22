@@ -19,6 +19,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -239,7 +240,17 @@ export default function ConferenceCreateScreen() {
         <View style={{ width: 32 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          showsVerticalScrollIndicator={false}
+        >
         {/* Title */}
         <View style={styles.fieldGroup}>
           <Text style={styles.label}>Title</Text>
@@ -369,20 +380,21 @@ export default function ConferenceCreateScreen() {
             </Text>
           ) : null}
         </View>
-      </ScrollView>
+        </ScrollView>
 
-      <View style={styles.footer}>
-        <TouchableOpacity
-          style={[styles.createBtn, !canSubmit && styles.createBtnDisabled]}
-          onPress={handleCreate}
-          disabled={!canSubmit}
-          testID="conf-create-button"
-        >
-          <Text style={styles.createBtnText}>
-            {submitting ? 'Creating…' : 'Create Conference'}
-          </Text>
-        </TouchableOpacity>
-      </View>
+        <View style={styles.footer}>
+          <TouchableOpacity
+            style={[styles.createBtn, !canSubmit && styles.createBtnDisabled]}
+            onPress={handleCreate}
+            disabled={!canSubmit}
+            testID="conf-create-button"
+          >
+            <Text style={styles.createBtnText}>
+              {submitting ? 'Creating…' : 'Create Conference'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
 
       <ScheduleSheet
         visible={showSchedule}

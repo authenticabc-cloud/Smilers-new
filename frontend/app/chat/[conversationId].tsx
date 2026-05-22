@@ -1242,23 +1242,23 @@ export default function ChatScreen() {
             onPress={() => router.push(`/call/${conversationId}?type=voice&displayName=${encodeURIComponent(title)}` as any)}
             style={styles.headerIconButton}
           >
-            <Ionicons name="call-outline" size={21} color={Colors.white} />
+            <Ionicons name="call-outline" size={18} color={Colors.white} />
           </TouchableOpacity>
           <TouchableOpacity
             testID="video-btn"
             onPress={() => router.push(`/call/${conversationId}?type=video&displayName=${encodeURIComponent(title)}` as any)}
             style={styles.headerIconButton}
           >
-            <Ionicons name="videocam-outline" size={22} color={Colors.white} />
+            <Ionicons name="videocam-outline" size={19} color={Colors.white} />
           </TouchableOpacity>
           <TouchableOpacity testID="chat-disappearing-btn" onPress={() => setShowDisappearingSheet(true)} style={styles.headerIconButton}>
-            <Ionicons name="time-outline" size={21} color={Colors.white} />
+            <Ionicons name="time-outline" size={18} color={Colors.white} />
           </TouchableOpacity>
           <TouchableOpacity testID="chat-encryption-btn" onPress={() => router.push('/encryption' as any)} style={styles.headerIconButton}>
-            <Ionicons name="shield-checkmark-outline" size={21} color={Colors.white} />
+            <Ionicons name="shield-checkmark-outline" size={18} color={Colors.white} />
           </TouchableOpacity>
           <TouchableOpacity testID="chat-menu-btn" onPress={() => setShowOptionsMenu(true)} style={styles.headerIconButton}>
-            <Feather name="more-vertical" size={20} color={Colors.white} />
+            <Feather name="more-vertical" size={18} color={Colors.white} />
           </TouchableOpacity>
         </View>
       </View>
@@ -2023,31 +2023,31 @@ const styles = StyleSheet.create({
   chatHeaderActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginLeft: 8,
+    marginLeft: 4,
   },
   headerIconButton: {
-    width: 44,
-    height: 44,
+    width: 36,
+    height: 36,
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerAvatar: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     backgroundColor: '#E4B53B',
     alignItems: 'center',
     justifyContent: 'center',
-    marginHorizontal: 8,
+    marginHorizontal: 6,
     overflow: 'hidden',
   },
   headerAvatarImage: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
   },
   headerAvatarText: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: FontWeight.bold,
     color: '#3D2A00',
   },
