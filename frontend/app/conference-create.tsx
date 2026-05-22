@@ -39,6 +39,14 @@ import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
 type ConferenceType = 'video' | 'audio';
 type AccessControl = 'open' | 'invite';
+type Frequency = 'daily' | 'weekly' | 'biweekly' | 'monthly';
+
+const FREQUENCY_OPTIONS: { key: Frequency; label: string }[] = [
+  { key: 'daily', label: 'Daily' },
+  { key: 'weekly', label: 'Weekly' },
+  { key: 'biweekly', label: 'Bi-weekly' },
+  { key: 'monthly', label: 'Monthly' },
+];
 
 function pad(n: number): string {
   return n < 10 ? `0${n}` : String(n);
@@ -170,8 +178,10 @@ export default function ConferenceCreateScreen() {
   const [type, setType] = useState<ConferenceType>('video');
   const [scheduledAt, setScheduledAt] = useState<number | null>(null);
   const [recurring, setRecurring] = useState(false);
+  const [frequency, setFrequency] = useState<Frequency>('weekly');
   const [accessControl, setAccessControl] = useState<AccessControl>('open');
   const [showSchedule, setShowSchedule] = useState(false);
+  const [showFrequency, setShowFrequency] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const startConferenceM = useMutation((api as any).conferences.startConference);
@@ -189,6 +199,7 @@ export default function ConferenceCreateScreen() {
         entryMode: accessControl,
         scheduledAt: scheduledAt || undefined,
         recurring,
+        frequency: recurring ? frequency : undefined,
       });
       const conferenceId = String(result?.conferenceId || result?._id || result?.id || '');
       if (!conferenceId) {
@@ -314,6 +325,24 @@ export default function ConferenceCreateScreen() {
           />
         </View>
 
+        {/* Frequency picker — only when recurring is on */}
+        {recurring ? (
+          <View style={styles.fieldGroup}>
+            <Text style={styles.label}>Frequency</Text>
+            <TouchableOpacity
+              style={styles.scheduleField}
+              onPress={() => setShowFrequency(true)}
+              activeOpacity={0.7}
+              testID="conf-frequency-trigger"
+            >
+              <Text style={styles.scheduleFieldText}>
+                {FREQUENCY_OPTIONS.find((o) => o.key === frequency)?.label || 'Weekly'}
+              </Text>
+              <Feather name="chevron-down" size={20} color={Colors.textMuted} />
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
         {/* Access Control */}
         <View style={styles.accessCard}>
           <View style={styles.iconLabelRow}>
@@ -334,6 +363,11 @@ export default function ConferenceCreateScreen() {
               testID="conf-access-invite"
             />
           </View>
+          {accessControl === 'invite' ? (
+            <Text style={styles.accessHelper} testID="conf-access-helper">
+              Participants will wait until admitted by the Protocol. If not admitted within 30 minutes, they are dropped.
+            </Text>
+          ) : null}
         </View>
       </ScrollView>
 
@@ -359,6 +393,36 @@ export default function ConferenceCreateScreen() {
         }}
         onClose={() => setShowSchedule(false)}
       />
+
+      <Modal
+        visible={showFrequency}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowFrequency(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setShowFrequency(false)}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <Text style={styles.modalTitle}>How often?</Text>
+            <Text style={styles.modalSubtitle}>
+              The conference will repeat at this cadence from the scheduled date.
+            </Text>
+            {FREQUENCY_OPTIONS.map((opt) => (
+              <TouchableOpacity
+                key={opt.key}
+                style={styles.modalRow}
+                onPress={() => {
+                  setFrequency(opt.key);
+                  setShowFrequency(false);
+                }}
+                testID={`conf-frequency-${opt.key}`}
+              >
+                <Text style={styles.modalRowText}>{opt.label}</Text>
+                {frequency === opt.key ? <Feather name="check" size={18} color={Colors.primary} /> : null}
+              </TouchableOpacity>
+            ))}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -521,6 +585,12 @@ const styles = StyleSheet.create({
   },
   accessBtnText: { fontSize: FontSize.base, color: Colors.textPrimary, textAlign: 'center', fontWeight: FontWeight.medium },
   accessBtnTextActive: { color: Colors.primary, fontWeight: FontWeight.bold },
+  accessHelper: {
+    marginTop: 4,
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    lineHeight: 18,
+  },
 
   footer: {
     paddingHorizontal: Spacing.base,

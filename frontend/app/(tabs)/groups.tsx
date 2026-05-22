@@ -64,23 +64,30 @@ export default function GroupsScreen() {
     true,
   );
 
-  const conferenceCandidates = useMemo(() => {
-    const raw = Array.isArray(groups) ? groups : [];
-    return raw.filter((item: any) => (item?.type || 'group') === 'group');
-  }, [groups]);
+  // Conferences come from a dedicated backend list — NOT from filtering the
+  // groups list (which only ever contains groups). When the backend hasn't
+  // shipped `conferences.listConferences` yet this safely returns [], so the
+  // Conferences tab simply shows the empty state instead of falsely listing
+  // groups as conferences.
+  const { data: conferences, loading: conferencesLoading } = useSafeConvexQuery<any[]>(
+    (api as any).conferences.listConferences,
+    {},
+    [],
+    tab === 'conferences',
+  );
 
-  const activeLoading = groupsLoading;
+  const activeLoading = tab === 'conferences' ? conferencesLoading : groupsLoading;
 
   const list = useMemo(() => {
     const raw: any[] = tab === 'groups'
       ? (Array.isArray(groups) ? groups : [])
-      : conferenceCandidates;
+      : (Array.isArray(conferences) ? conferences : []);
     const q = search.trim().toLowerCase();
     if (!q) return raw;
     return raw.filter((g: any) =>
       `${g.name || ''} ${g.description || ''} ${g.lastMessageText || ''}`.toLowerCase().includes(q),
     );
-  }, [conferenceCandidates, groups, search, tab]);
+  }, [conferences, groups, search, tab]);
 
   const onAdd = () => {
     if (tab === 'groups') {
