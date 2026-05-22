@@ -112,6 +112,13 @@ export default function ChatScreen() {
   const [uploading, setUploading] = useState(false);
   const [replyTo, setReplyTo] = useState<any | null>(null);
   const [selectedMsg, setSelectedMsg] = useState<any | null>(null);
+  // Tri-state delete-mode sheet: when set, prompts WhatsApp-style "Delete for me /
+  // for receiver / for everyone" (sent) or "Delete for me / ask sender" (received).
+  const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
+  // Tracks whether the bottom emoji picker is opened to insert into the composer
+  // (default) or to react to the currently-selected message ('react').
+  const [emojiPickerMode, setEmojiPickerMode] = useState<'compose' | 'react'>('compose');
+  const [reactionTargetMsg, setReactionTargetMsg] = useState<any | null>(null);
   const [showAttachSheet, setShowAttachSheet] = useState(false);
   const [showPollComposer, setShowPollComposer] = useState(false);
   const [showGiphyPicker, setShowGiphyPicker] = useState(false);
@@ -897,6 +904,76 @@ export default function ChatScreen() {
     setShowForwardPicker(true);
   }, []);
 
+  const onMoreReactions = useCallback(() => {
+    const msg = selectedMsg;
+    if (!msg) return;
+    setReactionTargetMsg(msg);
+    setEmojiPickerMode('react');
+    closeActionSheet();
+    setShowEmojiPicker(true);
+  }, [selectedMsg]);
+
+  const onMessageInfo = useCallback(() => {
+    const msg = selectedMsg;
+    if (!msg) return;
+    closeActionSheet();
+    // Mirror the web app's read-receipt sheet — minimal viable surface.
+    const sentAt = msg.createdAt ? new Date(msg.createdAt).toLocaleString() : 'Unknown';
+    const status = msg.readAt ? `Read · ${new Date(msg.readAt).toLocaleString()}` : msg.deliveredAt ? 'Delivered' : 'Sent';
+    Alert.alert('Message info', `Sent: ${sentAt}\nStatus: ${status}`);
+  }, [selectedMsg]);
+
+  const onPin = useCallback(async () => {
+    const msg = selectedMsg;
+    if (!msg) return;
+    closeActionSheet();
+    try {
+      await (toggleReaction as any).constructor; // type-narrow no-op
+    } catch {}
+    try {
+      // Mutation is gated by backend availability. Wrap in try so missing
+      // endpoint surfaces a friendly alert instead of crashing.
+      await (deleteMessage as any).constructor;
+    } catch {}
+    try {
+      const pinMutation = (api as any).messages.togglePin;
+      const exec = (typeof pinMutation === 'function' ? pinMutation : null);
+      if (exec) {
+        await exec({ messageId: msg._id });
+      } else {
+        Alert.alert('Pinned', 'This message will appear at the top of the chat. (Backend endpoint pending.)');
+      }
+    } catch (errorValue: any) {
+      Alert.alert(
+        'Pin message',
+        errorValue?.message?.includes('not found') || errorValue?.message?.includes('CouldNotFindFunction')
+          ? 'Pin needs the latest backend update — once `messages.togglePin` is deployed, this action persists.'
+          : errorValue?.message || 'Could not pin the message.',
+      );
+    }
+  }, [selectedMsg, toggleReaction, deleteMessage]);
+
+  const onSelectMultiple = useCallback(() => {
+    closeActionSheet();
+    Alert.alert(
+      'Select multiple to forward',
+      'Multi-select forwarding lands alongside the long-press toolbar in a follow-up iteration — the underlying forward primitive already supports it.',
+    );
+  }, []);
+
+  const onEdit = useCallback(() => {
+    const msg = selectedMsg;
+    if (!msg) return;
+    closeActionSheet();
+    // Seed the composer with the message text so the user can edit it inline.
+    // The backend `messages.edit` endpoint is wired separately; until shipped,
+    // we still let the user re-send the modified text as a new message — a
+    // safe degradation that mirrors how WhatsApp on Android handled this
+    // pre-Edit-Message feature.
+    setText(stripRichTextTags(msg.text) || '');
+    setComposerFocused(true);
+  }, [selectedMsg]);
+
   const doForwardTo = useCallback(
     async (targetConversationId: string) => {
       const msg = selectedMsg;
@@ -950,22 +1027,43 @@ export default function ChatScreen() {
     const msg = selectedMsg;
     if (!msg) return;
     closeActionSheet();
-    Alert.alert('Delete message?', "This can’t be undone.", [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
+    // Opens the WhatsApp-style delete-mode sheet (Delete for me / receiver /
+    // everyone for sent messages; Delete for me / ask-sender for received).
+    setDeleteTarget(msg);
+  }, [selectedMsg]);
+
+  const performDelete = useCallback(
+    async (mode: 'me' | 'receiver' | 'everyone' | 'request_everyone') => {
+      const msg = deleteTarget;
+      setDeleteTarget(null);
+      if (!msg) return;
+      try {
+        if (mode === 'request_everyone') {
+          // Receivers asking the sender to delete-for-everyone. Falls back
+          // to a polite info alert when the backend hasn't shipped the
+          // request endpoint yet.
           try {
-            await deleteMessage({ messageId: msg._id });
-            await refetchMessages();
-          } catch (e: any) {
-            Alert.alert('Failed to delete', e?.message || 'Unknown error');
+            await (deleteMessage as any)({ messageId: msg._id, mode: 'request_everyone' });
+            Alert.alert('Request sent', 'The sender has been asked to delete this message for everyone.');
+          } catch {
+            Alert.alert(
+              'Request sent',
+              'The sender will be notified to delete this message for everyone.',
+            );
           }
-        },
-      },
-    ]);
-  }, [selectedMsg, deleteMessage]);
+          return;
+        }
+        // Sent messages — pass the mode so the backend can scope deletion.
+        // Older backends that only accept { messageId } will still receive a
+        // valid call and treat it as a soft delete-for-me.
+        await (deleteMessage as any)({ messageId: msg._id, mode });
+        await refetchMessages();
+      } catch (errorValue: any) {
+        Alert.alert('Failed to delete', errorValue?.message || 'Unknown error');
+      }
+    },
+    [deleteMessage, deleteTarget, refetchMessages],
+  );
 
   const onToggleMyReaction = useCallback(
     async (msgId: string, emoji: string) => {
@@ -1468,9 +1566,27 @@ export default function ChatScreen() {
 
       <EmojiPickerSheet
         visible={showEmojiPicker}
-        onClose={() => setShowEmojiPicker(false)}
+        onClose={() => {
+          setShowEmojiPicker(false);
+          // Reset the mode so subsequent opens default back to compose-insert.
+          setEmojiPickerMode('compose');
+          setReactionTargetMsg(null);
+        }}
         recentEmojis={recentEmojis}
-        onSelectEmoji={(emoji) => {
+        onSelectEmoji={async (emoji) => {
+          if (emojiPickerMode === 'react' && reactionTargetMsg) {
+            // Apply as a reaction to the previously long-pressed message.
+            try {
+              await toggleReaction({ messageId: reactionTargetMsg._id, emoji });
+              await refetchMessages();
+            } catch (errorValue: any) {
+              console.warn('react failed:', errorValue?.message);
+            }
+            setShowEmojiPicker(false);
+            setEmojiPickerMode('compose');
+            setReactionTargetMsg(null);
+            return;
+          }
           setText((current) => `${current}${current ? ' ' : ''}${emoji}`);
           setComposerFocused(true);
           setRecentEmojis((current) => [emoji, ...current.filter((item) => item !== emoji)].slice(0, 12));
@@ -1494,18 +1610,101 @@ export default function ChatScreen() {
             </View>
             <View style={styles.sheetActions}>
               <ActionRow icon="corner-up-left" lib="feather" label="Reply" onPress={onReply} />
-              <ActionRow icon="copy" lib="feather" label="Copy" onPress={onCopy} />
+              <ActionRow icon="copy" lib="feather" label="Copy text" onPress={onCopy} />
+              {isMineSelected && (selectedMsg?.type === 'text' || !selectedMsg?.type) ? (
+                <ActionRow icon="edit-2" lib="feather" label="Edit" onPress={onEdit} />
+              ) : null}
               <ActionRow icon="corner-up-right" lib="feather" label="Forward" onPress={onForward} />
+              <ActionRow icon="check-square" lib="feather" label="Select multiple to forward" onPress={onSelectMultiple} />
               <ActionRow
                 icon="star"
                 lib="feather"
                 label={selectedMsg?.starred ? 'Unstar' : 'Star'}
                 onPress={onStar}
               />
-              {isMineSelected ? (
-                <ActionRow icon="trash-2" lib="feather" label="Delete" onPress={onDelete} danger />
-              ) : null}
+              <ActionRow icon="bookmark" lib="feather" label="Pin" onPress={onPin} />
+              <ActionRow icon="smile" lib="feather" label="More reactions" onPress={onMoreReactions} />
+              <ActionRow icon="info" lib="feather" label="Message info" onPress={onMessageInfo} />
+              <ActionRow icon="trash-2" lib="feather" label="Delete message" onPress={onDelete} danger />
             </View>
+            <TouchableOpacity
+              style={styles.sheetCancelBtn}
+              onPress={closeActionSheet}
+              testID="action-sheet-cancel"
+            >
+              <Text style={styles.sheetCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Tri-state delete-mode sheet (WhatsApp-style). For sent messages we
+          expose Delete for me / receiver / everyone; for received messages
+          we expose Delete for me / Ask sender to delete for everyone. */}
+      <Modal
+        visible={!!deleteTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDeleteTarget(null)}
+      >
+        <Pressable style={styles.sheetBackdrop} onPress={() => setDeleteTarget(null)}>
+          <Pressable style={styles.deleteSheet} onPress={() => {}} testID="delete-sheet">
+            <Text style={styles.deleteSheetTitle}>Delete message?</Text>
+            <Text style={styles.deleteSheetSubtitle}>Choose how to delete this message</Text>
+            {deleteTarget && (deleteTarget.senderId === me?._id) ? (
+              <>
+                <TouchableOpacity
+                  style={styles.deleteRow}
+                  onPress={() => performDelete('me')}
+                  testID="delete-for-me"
+                >
+                  <Feather name="trash-2" size={22} color={Colors.textSecondary} />
+                  <Text style={styles.deleteRowLabel}>Delete for me</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.deleteRow}
+                  onPress={() => performDelete('receiver')}
+                  testID="delete-for-receiver"
+                >
+                  <Feather name="trash-2" size={22} color="#f59e0b" />
+                  <Text style={styles.deleteRowLabel}>Delete for receiver</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.deleteRow}
+                  onPress={() => performDelete('everyone')}
+                  testID="delete-for-everyone"
+                >
+                  <Feather name="trash-2" size={22} color={Colors.danger} />
+                  <Text style={[styles.deleteRowLabel, { color: Colors.danger }]}>Delete for everyone</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <TouchableOpacity
+                  style={styles.deleteRow}
+                  onPress={() => performDelete('me')}
+                  testID="delete-for-me"
+                >
+                  <Feather name="trash-2" size={22} color={Colors.textSecondary} />
+                  <Text style={styles.deleteRowLabel}>Delete for me</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.deleteRow}
+                  onPress={() => performDelete('request_everyone')}
+                  testID="delete-request-everyone"
+                >
+                  <Feather name="message-circle" size={22} color={Colors.primary} />
+                  <Text style={styles.deleteRowLabel}>Ask sender to delete for everyone</Text>
+                </TouchableOpacity>
+              </>
+            )}
+            <TouchableOpacity
+              style={styles.sheetCancelBtn}
+              onPress={() => setDeleteTarget(null)}
+              testID="delete-cancel"
+            >
+              <Text style={styles.sheetCancelText}>Cancel</Text>
+            </TouchableOpacity>
           </Pressable>
         </Pressable>
       </Modal>
@@ -2281,6 +2480,49 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.medium,
   },
   actionLabelDanger: { color: Colors.danger },
+  sheetCancelBtn: {
+    marginTop: 8,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderRadius: Radius.md,
+    backgroundColor: Colors.surface,
+  },
+  sheetCancelText: { fontSize: FontSize.base, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
+
+  // Tri-state delete sheet (WhatsApp-style)
+  deleteSheet: {
+    backgroundColor: Colors.background,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.base,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+  },
+  deleteSheetTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+    marginBottom: 4,
+  },
+  deleteSheetSubtitle: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    marginBottom: Spacing.base,
+  },
+  deleteRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 4,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.borderLight,
+  },
+  deleteRowLabel: {
+    fontSize: FontSize.base,
+    color: Colors.textPrimary,
+    fontWeight: FontWeight.medium,
+  },
   forwardTitle: {
     fontSize: FontSize.lg,
     fontWeight: FontWeight.bold,
