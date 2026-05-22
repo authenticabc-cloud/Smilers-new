@@ -16,6 +16,7 @@ import { api } from '../convexApi';
 import { readStoredJson, writeStoredJson } from './settingsStorage';
 
 const TRANSCRIBE_ENDPOINT = `${process.env.EXPO_PUBLIC_BACKEND_URL || ''}/api/transcribe`;
+const TRANSCRIBE_UPLOAD_ENDPOINT = `${process.env.EXPO_PUBLIC_BACKEND_URL || ''}/api/transcribe/upload`;
 
 /** SecureStore (native) / localStorage (web) cache key prefix for
  *  transcription results. Keyed by storageId so the cache hits regardless
@@ -65,7 +66,15 @@ interface TriggerArgs {
   mediaUrl?: string | null;
   storageId?: string | null;
   conversationId?: string | null;
-  // Optional ISO-639-1 hint sent to Whisper (improves accuracy if known).
+  /** Local file URI (file://...) of the PLAINTEXT audio/video BEFORE upload
+   *  + encryption. When provided we POST it directly to /api/transcribe/upload
+   *  so Whisper sees the actual media instead of the AES-GCM ciphertext that
+   *  E2EE-encrypted messages have at their `mediaUrl`. */
+  localFileUri?: string | null;
+  /** Filename hint (e.g. 'voice-1234.m4a') used by the multipart endpoint to
+   *  infer the codec extension. Defaults to .m4a for voice notes. */
+  fileName?: string | null;
+  /** Optional ISO-639-1 hint sent to Whisper to improve accuracy. */
   languageHint?: string | null;
 }
 
@@ -114,7 +123,7 @@ async function resolveMediaUrl(
 }
 
 export async function triggerTranscription(args: TriggerArgs): Promise<void> {
-  const { convex, messageId, languageHint, storageId } = args;
+  const { convex, messageId, languageHint, storageId, localFileUri, fileName } = args;
   // Even if Convex's sendMessage didn't return a messageId, we still want to
   // run Whisper and cache the result locally so the UI can show the pill.
   if (!TRANSCRIBE_ENDPOINT.startsWith('http')) {
@@ -128,37 +137,59 @@ export async function triggerTranscription(args: TriggerArgs): Promise<void> {
     await setCachedTranscription(storageId, { text: '', language: '', status: 'pending' });
   }
 
-  // Up to 4 short attempts (every 700ms) to resolve the URL — Convex storage
-  // returns a signed URL once indexing finishes.
-  let mediaUrl: string | null = null;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    mediaUrl = await resolveMediaUrl(convex, args);
-    if (mediaUrl) break;
-    await new Promise((resolve) => setTimeout(resolve, 700));
-  }
-  if (!mediaUrl) {
-    await failPatch(convex, messageId, 'Could not resolve media URL', storageId);
-    return;
-  }
-
+  let transcription = '';
+  let language = 'unknown';
   try {
-    const response = await fetch(TRANSCRIBE_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        media_url: mediaUrl,
-        language_hint: languageHint || undefined,
-      }),
-    });
-    if (!response.ok) {
-      throw new Error(`Backend returned ${response.status}`);
+    if (localFileUri && /^file:\/\//i.test(localFileUri)) {
+      // Multipart upload path — used for E2EE-encrypted messages because the
+      // remote `mediaUrl` would be AES-GCM ciphertext that Whisper can't read.
+      const inferredName = fileName || extractFileName(localFileUri) || 'voice.m4a';
+      const mime = mimeFromName(inferredName);
+      const form = new FormData();
+      // React Native FormData expects the file object shape: { uri, name, type }.
+      // Cast to `any` because RN's FormData type signature differs from web.
+      form.append('file', { uri: localFileUri, name: inferredName, type: mime } as any);
+      if (languageHint) form.append('language_hint', languageHint);
+
+      const response = await fetch(TRANSCRIBE_UPLOAD_ENDPOINT, {
+        method: 'POST',
+        body: form as any,
+      });
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        throw new Error(`Backend returned ${response.status}${detail ? ` — ${detail.slice(0, 200)}` : ''}`);
+      }
+      const payload = (await response.json()) as { text?: string; language?: string };
+      transcription = (payload?.text || '').trim();
+      language = payload?.language || 'unknown';
+    } else {
+      // URL fetch path — works for plaintext (non-E2EE) Convex-stored media.
+      let mediaUrl: string | null = null;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        mediaUrl = await resolveMediaUrl(convex, args);
+        if (mediaUrl) break;
+        await new Promise((resolve) => setTimeout(resolve, 700));
+      }
+      if (!mediaUrl) {
+        await failPatch(convex, messageId, 'Could not resolve media URL', storageId);
+        return;
+      }
+      const response = await fetch(TRANSCRIBE_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          media_url: mediaUrl,
+          language_hint: languageHint || undefined,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`Backend returned ${response.status}`);
+      }
+      const payload = (await response.json()) as { text?: string; language?: string };
+      transcription = (payload?.text || '').trim();
+      language = payload?.language || 'unknown';
     }
-    const payload = (await response.json()) as {
-      text?: string;
-      language?: string;
-    };
-    const transcription = (payload?.text || '').trim();
-    const language = payload?.language || 'unknown';
+
     if (!transcription) {
       await failPatch(convex, messageId, 'Empty transcription from Whisper', storageId);
       return;
@@ -198,6 +229,26 @@ export async function triggerTranscription(args: TriggerArgs): Promise<void> {
     console.warn('[transcribe] failed:', errorValue?.message || errorValue);
     await failPatch(convex, messageId, errorValue?.message || 'Unknown error', storageId);
   }
+}
+
+function extractFileName(uri: string): string {
+  const trimmed = uri.split('?')[0];
+  const segments = trimmed.split('/');
+  const last = segments[segments.length - 1] || '';
+  return last.includes('.') ? last : '';
+}
+
+function mimeFromName(name: string): string {
+  const lower = name.toLowerCase();
+  if (lower.endsWith('.m4a')) return 'audio/mp4';
+  if (lower.endsWith('.mp3')) return 'audio/mpeg';
+  if (lower.endsWith('.wav')) return 'audio/wav';
+  if (lower.endsWith('.webm')) return 'audio/webm';
+  if (lower.endsWith('.ogg')) return 'audio/ogg';
+  if (lower.endsWith('.aac')) return 'audio/aac';
+  if (lower.endsWith('.mp4')) return 'video/mp4';
+  if (lower.endsWith('.mov')) return 'video/quicktime';
+  return 'application/octet-stream';
 }
 
 async function failPatch(

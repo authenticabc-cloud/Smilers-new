@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -179,6 +179,53 @@ async def transcribe_media(payload: TranscriptionRequest) -> TranscriptionRespon
             suffix = candidate
             break
 
+    return await _run_whisper(content, suffix, payload.language_hint, api_key)
+
+
+@api_router.post("/transcribe/upload", response_model=TranscriptionResponse)
+async def transcribe_uploaded_media(
+    file: UploadFile = File(...),
+    language_hint: str | None = Form(default=None),
+) -> TranscriptionResponse:
+    """Multipart-upload variant of /transcribe — used by the mobile client
+    when the message is E2EE-encrypted (mediaUrl points at ciphertext, so
+    fetching by URL is useless). The mobile sends the PLAINTEXT audio
+    bytes directly here, before Convex upload + encryption."""
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Transcription unavailable: OPENAI_API_KEY missing on server.")
+
+    max_bytes = 24 * 1024 * 1024
+    content = await file.read()
+    if len(content) > max_bytes:
+        raise HTTPException(status_code=413, detail="Media exceeds 24MB Whisper limit.")
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty upload.")
+
+    # Use the uploaded filename's extension if present, otherwise default to m4a.
+    suffix = ".m4a"
+    name = (file.filename or "").lower()
+    for candidate in (".m4a", ".mp3", ".wav", ".webm", ".ogg", ".mp4", ".mov", ".aac"):
+        if name.endswith(candidate):
+            suffix = candidate
+            break
+
+    return await _run_whisper(content, suffix, language_hint, api_key)
+
+
+async def _run_whisper(
+    content: bytes,
+    suffix: str,
+    language_hint: str | None,
+    api_key: str,
+) -> TranscriptionResponse:
+    """Shared Whisper helper used by both the URL-based and multipart
+    transcription endpoints."""
+
+    import tempfile
+    from openai import OpenAI
+
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
@@ -192,8 +239,8 @@ async def transcribe_media(payload: TranscriptionRequest) -> TranscriptionRespon
                 "file": audio_file,
                 "response_format": "verbose_json",
             }
-            if payload.language_hint:
-                kwargs["language"] = payload.language_hint
+            if language_hint:
+                kwargs["language"] = language_hint
             result = client_openai.audio.transcriptions.create(**kwargs)
 
         return TranscriptionResponse(
