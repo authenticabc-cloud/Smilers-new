@@ -1,24 +1,30 @@
 /**
- * Conference Create — Slice C of the Groups spec.
+ * Conference Create — mirrors the Smilers web app's "New Conference" form
+ * exactly (per provided web app screenshot):
  *
- * Mirrors the web app's flow: pick a parent group (optional), enter a title,
- * choose audio/video + open/invite-only, then assign the Clerk and Protocol
- * roles from the group's members. The viewer becomes the Chair automatically.
+ *   - Title (required)
+ *   - Description (optional, multi-line)
+ *   - Type segment: Video / Audio (gold-active outline style)
+ *   - Schedule: optional date+time picker chip
+ *   - Recurring toggle (off by default)
+ *   - Access Control card: "Open (anyone with link)" / "Admission only"
  *
- * Calls `api.conferences.startConference` with safe fallback. If the backend
- * endpoint isn't deployed yet we surface a clear alert; otherwise we route
- * straight into `/call/<conferenceId>?type=video&conferenceMode=1` so the
- * ConferenceHUD overlay appears on the call screen.
+ * No role assignment lives in this screen — roles (Chair / Clerk / Protocol)
+ * are wired in the post-create conference details / call HUD per Slice C.
+ *
+ * On submit calls `api.conferences.startConference`. Falls back to a clear
+ * "needs latest backend update" alert when the endpoint is missing.
  */
 
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
-  FlatList,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -28,103 +34,99 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
-import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
-import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
-import { useAuth } from '../src/providers/AuthProvider';
-import { findSavedContactDisplayName } from '../src/lib/displayName';
-import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/theme';
+import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
-interface MemberOption {
-  userId: string;
-  name: string;
+type ConferenceType = 'video' | 'audio';
+type AccessControl = 'open' | 'invite';
+
+function pad(n: number): string {
+  return n < 10 ? `0${n}` : String(n);
 }
 
-type Mode = 'video' | 'audio';
-type EntryMode = 'open' | 'invite';
-
-function normalizeMembers(group: any, contacts: any[]): MemberOption[] {
-  const raw =
-    group?.memberRecords ||
-    group?.members ||
-    group?.participants ||
-    [];
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((entry: any) => {
-      if (!entry) return null;
-      if (typeof entry === 'string') {
-        return { userId: entry, name: findSavedContactDisplayName(contacts, entry) || 'Member' } as MemberOption;
-      }
-      const userId = String(entry.userId || entry._id || entry.id || '');
-      if (!userId) return null;
-      const name =
-        entry.name ||
-        entry.displayName ||
-        entry.fullName ||
-        entry.user?.name ||
-        findSavedContactDisplayName(contacts, userId) ||
-        'Member';
-      return { userId, name } as MemberOption;
-    })
-    .filter(Boolean) as MemberOption[];
+function formatScheduleLabel(ts: number | null): string {
+  if (!ts) return '';
+  try {
+    const date = new Date(ts);
+    const dateLabel = date.toLocaleDateString(undefined, {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+    });
+    return `${dateLabel} · ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  } catch {
+    return new Date(ts).toString();
+  }
 }
 
-function MemberPickerModal({
+function ScheduleSheet({
   visible,
-  title,
-  options,
-  selectedUserId,
-  excludeUserId,
-  onSelect,
-  onClear,
+  initial,
+  onSave,
   onClose,
 }: {
   visible: boolean;
-  title: string;
-  options: MemberOption[];
-  selectedUserId: string | null;
-  excludeUserId?: string | null;
-  onSelect: (option: MemberOption) => void;
-  onClear: () => void;
+  initial: number | null;
+  onSave: (ts: number | null) => void;
   onClose: () => void;
 }) {
-  const filtered = options.filter((o) => o.userId !== excludeUserId);
+  const startBase = initial ? new Date(initial) : new Date(Date.now() + 60 * 60 * 1000);
+  const [year, setYear] = useState(String(startBase.getFullYear()));
+  const [month, setMonth] = useState(String(startBase.getMonth() + 1));
+  const [day, setDay] = useState(String(startBase.getDate()));
+  const [hour, setHour] = useState(pad(startBase.getHours()));
+  const [minute, setMinute] = useState(pad(startBase.getMinutes()));
+
+  const onConfirm = () => {
+    const candidate = new Date(
+      Number(year),
+      Math.max(0, Number(month) - 1),
+      Number(day),
+      Number(hour),
+      Number(minute),
+      0,
+    );
+    if (Number.isNaN(candidate.getTime())) {
+      Alert.alert('Invalid date', 'Please double-check the date and time fields.');
+      return;
+    }
+    onSave(candidate.getTime());
+  };
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.modalBackdrop} onPress={onClose}>
         <Pressable style={styles.modalCard} onPress={() => {}}>
-          <Text style={styles.modalTitle}>{title}</Text>
-          {filtered.length === 0 ? (
-            <Text style={styles.modalHint}>
-              Pick a group first — the role options come from its member list.
-            </Text>
-          ) : (
-            <FlatList
-              data={filtered}
-              keyExtractor={(item) => item.userId}
-              style={{ maxHeight: 320 }}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.modalRow}
-                  onPress={() => onSelect(item)}
-                  testID={`conf-role-pick-${item.userId}`}
-                >
-                  <View style={styles.miniAvatar}>
-                    <Text style={styles.miniAvatarText}>{(item.name || 'M').charAt(0).toUpperCase()}</Text>
-                  </View>
-                  <Text style={styles.modalRowText}>{item.name}</Text>
-                  {selectedUserId === item.userId ? <Feather name="check" size={18} color={Colors.primary} /> : null}
-                </TouchableOpacity>
-              )}
-            />
-          )}
-          <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-            <TouchableOpacity style={[styles.modalGhostBtn, { flex: 1 }]} onPress={onClear} testID="conf-role-clear">
+          <Text style={styles.modalTitle}>Pick a schedule</Text>
+          <Text style={styles.modalSubtitle}>Leave empty to start the conference right away.</Text>
+
+          <View style={styles.dateRow}>
+            <DateInput label="YYYY" value={year} onChangeText={(t) => setYear(t.replace(/[^0-9]/g, '').slice(0, 4))} maxLen={4} flex={2} />
+            <DateInput label="MM" value={month} onChangeText={(t) => setMonth(t.replace(/[^0-9]/g, '').slice(0, 2))} maxLen={2} flex={1} />
+            <DateInput label="DD" value={day} onChangeText={(t) => setDay(t.replace(/[^0-9]/g, '').slice(0, 2))} maxLen={2} flex={1} />
+          </View>
+
+          <View style={styles.dateRow}>
+            <DateInput label="HH" value={hour} onChangeText={(t) => setHour(t.replace(/[^0-9]/g, '').slice(0, 2))} maxLen={2} flex={1} />
+            <Text style={styles.timeColon}>:</Text>
+            <DateInput label="MM" value={minute} onChangeText={(t) => setMinute(t.replace(/[^0-9]/g, '').slice(0, 2))} maxLen={2} flex={1} />
+            <View style={{ flex: 2 }} />
+          </View>
+
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+            <TouchableOpacity
+              style={[styles.modalGhostBtn, { flex: 1 }]}
+              onPress={() => onSave(null)}
+              testID="conf-schedule-clear"
+            >
               <Text style={styles.modalGhostText}>Clear</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.modalGhostBtn, { flex: 1 }]} onPress={onClose} testID="conf-role-close">
-              <Text style={styles.modalGhostText}>Done</Text>
+            <TouchableOpacity
+              style={[styles.modalPrimaryBtn, { flex: 1 }]}
+              onPress={onConfirm}
+              testID="conf-schedule-save"
+            >
+              <Text style={styles.modalPrimaryBtnText}>Save</Text>
             </TouchableOpacity>
           </View>
         </Pressable>
@@ -133,271 +135,235 @@ function MemberPickerModal({
   );
 }
 
+function DateInput({
+  label,
+  value,
+  onChangeText,
+  maxLen,
+  flex,
+}: {
+  label: string;
+  value: string;
+  onChangeText: (t: string) => void;
+  maxLen: number;
+  flex: number;
+}) {
+  return (
+    <View style={[styles.dateInputWrap, { flex }]}>
+      <Text style={styles.dateInputLabel}>{label}</Text>
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        keyboardType="number-pad"
+        maxLength={maxLen}
+        style={styles.dateInputField}
+        placeholderTextColor={Colors.textMuted}
+      />
+    </View>
+  );
+}
+
 export default function ConferenceCreateScreen() {
   const router = useRouter();
-  const { isAuthenticated } = useAuth();
-  const { data: groups } = useSafeConvexQuery<any[]>(api.conversations.listGroups, {}, [], isAuthenticated);
-  const { data: contacts } = useSafeConvexQuery<any[]>(api.contacts.getContacts, {}, [], isAuthenticated);
-  const { data: me } = useSafeConvexQuery<any>(api.users.getCurrentUser, {}, null, isAuthenticated);
-
   const [title, setTitle] = useState('');
-  const [mode, setMode] = useState<Mode>('video');
-  const [entryMode, setEntryMode] = useState<EntryMode>('open');
-  const [groupId, setGroupId] = useState<string | null>(null);
-  const [showGroupPicker, setShowGroupPicker] = useState(false);
-  const [clerk, setClerk] = useState<MemberOption | null>(null);
-  const [protocol, setProtocol] = useState<MemberOption | null>(null);
-  const [showClerkPicker, setShowClerkPicker] = useState(false);
-  const [showProtocolPicker, setShowProtocolPicker] = useState(false);
+  const [description, setDescription] = useState('');
+  const [type, setType] = useState<ConferenceType>('video');
+  const [scheduledAt, setScheduledAt] = useState<number | null>(null);
+  const [recurring, setRecurring] = useState(false);
+  const [accessControl, setAccessControl] = useState<AccessControl>('open');
+  const [showSchedule, setShowSchedule] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-
-  const selectedGroup = useMemo(() => {
-    const list = Array.isArray(groups) ? groups : [];
-    return list.find((g: any) => String(g?._id || g?.id) === groupId) || null;
-  }, [groupId, groups]);
-
-  const memberOptions = useMemo(
-    () => normalizeMembers(selectedGroup, Array.isArray(contacts) ? contacts : []),
-    [contacts, selectedGroup],
-  );
-
-  const myUserId = me?._id ? String(me._id) : null;
 
   const startConferenceM = useMutation((api as any).conferences.startConference);
 
-  const handleStart = useCallback(async () => {
-    if (!title.trim()) {
-      Alert.alert('Add a title', 'Please give the conference a short title before starting.');
-      return;
-    }
+  const canSubmit = useMemo(() => title.trim().length > 0 && !submitting, [title, submitting]);
+
+  const handleCreate = useCallback(async () => {
+    if (!canSubmit) return;
     setSubmitting(true);
     try {
       const result: any = await startConferenceM({
         title: title.trim(),
-        mode,
-        entryMode,
-        groupId: groupId || undefined,
-        clerkUserId: clerk?.userId || undefined,
-        protocolUserId: protocol?.userId || undefined,
+        description: description.trim() || undefined,
+        mode: type,
+        entryMode: accessControl,
+        scheduledAt: scheduledAt || undefined,
+        recurring,
       });
       const conferenceId = String(result?.conferenceId || result?._id || result?.id || '');
       if (!conferenceId) {
         throw new Error('Backend did not return a conferenceId.');
       }
-      router.replace(`/call/${conferenceId}?type=${mode === 'audio' ? 'voice' : 'video'}&conferenceMode=1` as any);
+      // If a future schedule was set, take user back to the conference list
+      // so the just-created conference appears there. If "now", route into
+      // the call screen with the conference HUD overlay.
+      if (scheduledAt && scheduledAt > Date.now() + 60_000) {
+        Alert.alert('Conference scheduled', 'Your conference has been scheduled.');
+        router.back();
+      } else {
+        router.replace(`/call/${conferenceId}?type=${type === 'audio' ? 'voice' : 'video'}&conferenceMode=1` as any);
+      }
     } catch (errorValue: any) {
       const message = errorValue?.message || String(errorValue || '');
       Alert.alert(
-        'Could not start conference',
+        'Could not create conference',
         message.includes('CouldNotFindFunction') || message.includes('not found')
-          ? 'The conferencing backend endpoints haven\u2019t been deployed yet. Once the web team ships `conferences.startConference`, this flow will start the meeting end-to-end.'
+          ? 'The conferencing backend endpoints haven\u2019t been deployed yet. Once the web team ships `conferences.startConference`, this flow will create the conference end-to-end.'
           : message,
       );
     } finally {
       setSubmitting(false);
     }
-  }, [clerk, entryMode, groupId, mode, protocol, router, startConferenceM, title]);
+  }, [accessControl, canSubmit, description, recurring, router, scheduledAt, startConferenceM, title, type]);
+
+  const scheduleLabel = formatScheduleLabel(scheduledAt);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']} testID="conference-create-screen">
-      <Header
-        title="New conference"
-        showBack
-        onBack={() => router.back()}
-        variant="dark"
-        subtitle="Assign roles and kick off the meeting"
-      />
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="conference-create-screen">
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} hitSlop={10} style={styles.headerBtn} testID="conf-back">
+          <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>New Conference</Text>
+        <View style={{ width: 32 }} />
+      </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+        {/* Title */}
         <View style={styles.fieldGroup}>
-          <Text style={styles.label}>Title*</Text>
+          <Text style={styles.label}>Title</Text>
           <TextInput
             value={title}
             onChangeText={setTitle}
-            placeholder="e.g. Weekly board meeting"
+            placeholder="e.g. Weekly Team Standup"
             placeholderTextColor={Colors.textMuted}
             style={styles.textInput}
             testID="conf-title-input"
           />
         </View>
 
+        {/* Description */}
         <View style={styles.fieldGroup}>
-          <Text style={styles.label}>Mode</Text>
+          <Text style={styles.label}>Description (optional)</Text>
+          <TextInput
+            value={description}
+            onChangeText={setDescription}
+            placeholder="What's this meeting about?"
+            placeholderTextColor={Colors.textMuted}
+            multiline
+            numberOfLines={3}
+            style={[styles.textInput, styles.textArea]}
+            textAlignVertical="top"
+            testID="conf-description-input"
+          />
+        </View>
+
+        {/* Type */}
+        <View style={styles.fieldGroup}>
+          <Text style={styles.label}>Type</Text>
           <View style={styles.segmentRow}>
-            <SegmentButton
+            <TypeButton
               icon="videocam-outline"
               label="Video"
-              active={mode === 'video'}
-              onPress={() => setMode('video')}
-              testID="conf-mode-video"
+              active={type === 'video'}
+              onPress={() => setType('video')}
+              testID="conf-type-video"
             />
-            <SegmentButton
-              icon="call-outline"
+            <TypeButton
+              icon="mic-outline"
               label="Audio"
-              active={mode === 'audio'}
-              onPress={() => setMode('audio')}
-              testID="conf-mode-audio"
+              active={type === 'audio'}
+              onPress={() => setType('audio')}
+              testID="conf-type-audio"
             />
           </View>
         </View>
 
+        {/* Schedule */}
         <View style={styles.fieldGroup}>
-          <Text style={styles.label}>Entry</Text>
-          <Text style={styles.helperText}>
-            Open conferences accept anyone with the link. Invite-only requires the Protocol to admit each participant from the lobby.
-          </Text>
-          <View style={styles.segmentRow}>
-            <SegmentButton
-              icon="lock-open-outline"
-              label="Open"
-              active={entryMode === 'open'}
-              onPress={() => setEntryMode('open')}
-              testID="conf-entry-open"
+          <View style={styles.iconLabelRow}>
+            <Feather name="calendar" size={18} color={Colors.textPrimary} />
+            <Text style={styles.label}>Schedule</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.scheduleField}
+            onPress={() => setShowSchedule(true)}
+            activeOpacity={0.7}
+            testID="conf-schedule-trigger"
+          >
+            <Text style={[styles.scheduleFieldText, !scheduleLabel && styles.scheduleFieldPlaceholder]}>
+              {scheduleLabel || 'Tap to pick a date and time'}
+            </Text>
+            <Feather name="chevron-down" size={20} color={Colors.textMuted} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Recurring */}
+        <View style={[styles.fieldGroup, styles.toggleCard]}>
+          <View style={styles.iconLabelRow}>
+            <MaterialCommunityIcons name="repeat" size={18} color={Colors.textPrimary} />
+            <Text style={styles.label}>Recurring</Text>
+          </View>
+          <Switch
+            value={recurring}
+            onValueChange={setRecurring}
+            trackColor={{ true: Colors.primary, false: '#d6cfbf' }}
+            thumbColor={Platform.OS === 'android' ? '#fff' : undefined}
+            ios_backgroundColor="#d6cfbf"
+            testID="conf-recurring-toggle"
+          />
+        </View>
+
+        {/* Access Control */}
+        <View style={styles.accessCard}>
+          <View style={styles.iconLabelRow}>
+            <MaterialCommunityIcons name="shield-check-outline" size={18} color={Colors.textPrimary} />
+            <Text style={styles.label}>Access Control</Text>
+          </View>
+          <View style={[styles.segmentRow, { marginTop: 4 }]}>
+            <AccessButton
+              label={'Open (anyone\nwith link)'}
+              active={accessControl === 'open'}
+              onPress={() => setAccessControl('open')}
+              testID="conf-access-open"
             />
-            <SegmentButton
-              icon="lock-closed-outline"
-              label="Invite-only"
-              active={entryMode === 'invite'}
-              onPress={() => setEntryMode('invite')}
-              testID="conf-entry-invite"
+            <AccessButton
+              label="Admission only"
+              active={accessControl === 'invite'}
+              onPress={() => setAccessControl('invite')}
+              testID="conf-access-invite"
             />
           </View>
         </View>
-
-        <View style={styles.fieldGroup}>
-          <Text style={styles.label}>Parent group (optional)</Text>
-          <Text style={styles.helperText}>
-            Conferences are not tied to a group, but choosing one makes the role pickers populate with that group&apos;s members.
-          </Text>
-          <TouchableOpacity
-            style={styles.selectorRow}
-            onPress={() => setShowGroupPicker(true)}
-            testID="conf-group-picker"
-          >
-            <MaterialCommunityIcons name="account-group-outline" size={20} color={Colors.primary} />
-            <Text style={styles.selectorRowText}>{selectedGroup?.name || 'None'}</Text>
-            <Feather name="chevron-right" size={18} color={Colors.textMuted} />
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.fieldGroup}>
-          <Text style={styles.label}>Roles</Text>
-          <View style={styles.roleRow}>
-            <MaterialCommunityIcons name="crown" size={18} color="#92400e" />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.roleRowTitle}>Chair</Text>
-              <Text style={styles.roleRowSub}>You (creator) by default</Text>
-            </View>
-            <Text style={styles.roleStaticValue}>You</Text>
-          </View>
-
-          <TouchableOpacity
-            style={styles.roleRow}
-            onPress={() => setShowClerkPicker(true)}
-            testID="conf-clerk-row"
-          >
-            <MaterialCommunityIcons name="pencil-outline" size={18} color="#1e3a8a" />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.roleRowTitle}>Clerk / Secretary</Text>
-              <Text style={styles.roleRowSub}>Minutes, notice board, screen share</Text>
-            </View>
-            <Text style={styles.roleStaticValue}>{clerk?.name || 'Assign'}</Text>
-            <Feather name="chevron-right" size={18} color={Colors.textMuted} />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.roleRow}
-            onPress={() => setShowProtocolPicker(true)}
-            testID="conf-protocol-row"
-          >
-            <MaterialCommunityIcons name="shield-check" size={18} color="#166534" />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.roleRowTitle}>Protocol</Text>
-              <Text style={styles.roleRowSub}>Timer, force video off, admit lobby</Text>
-            </View>
-            <Text style={styles.roleStaticValue}>{protocol?.name || 'Assign'}</Text>
-            <Feather name="chevron-right" size={18} color={Colors.textMuted} />
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.infoBanner}>
-          <Feather name="info" size={18} color={Colors.primary} />
-          <Text style={styles.infoBannerText}>
-            All participants start muted. Unmuting requires Chair approval — you can unmute in batches once the call is live.
-          </Text>
-        </View>
-
-        <TouchableOpacity
-          style={[styles.startBtn, (!title.trim() || submitting) && styles.startBtnDisabled]}
-          onPress={handleStart}
-          disabled={!title.trim() || submitting}
-          testID="conf-start-button"
-        >
-          <Ionicons name={mode === 'audio' ? 'call-outline' : 'videocam-outline'} size={20} color={Colors.headerBg} />
-          <Text style={styles.startBtnText}>{submitting ? 'Starting…' : 'Start conference'}</Text>
-        </TouchableOpacity>
       </ScrollView>
 
-      <GroupPickerModal
-        visible={showGroupPicker}
-        groups={Array.isArray(groups) ? groups : []}
-        selectedGroupId={groupId}
-        onSelect={(nextId) => {
-          setGroupId(nextId);
-          // Reset role picks because the member list changed.
-          setClerk(null);
-          setProtocol(null);
-          setShowGroupPicker(false);
-        }}
-        onClear={() => {
-          setGroupId(null);
-          setClerk(null);
-          setProtocol(null);
-          setShowGroupPicker(false);
-        }}
-        onClose={() => setShowGroupPicker(false)}
-      />
+      <View style={styles.footer}>
+        <TouchableOpacity
+          style={[styles.createBtn, !canSubmit && styles.createBtnDisabled]}
+          onPress={handleCreate}
+          disabled={!canSubmit}
+          testID="conf-create-button"
+        >
+          <Text style={styles.createBtnText}>
+            {submitting ? 'Creating…' : 'Create Conference'}
+          </Text>
+        </TouchableOpacity>
+      </View>
 
-      <MemberPickerModal
-        visible={showClerkPicker}
-        title="Choose the Clerk"
-        options={memberOptions}
-        selectedUserId={clerk?.userId || null}
-        excludeUserId={myUserId}
-        onSelect={(option) => {
-          setClerk(option);
-          if (protocol?.userId === option.userId) setProtocol(null);
-          setShowClerkPicker(false);
+      <ScheduleSheet
+        visible={showSchedule}
+        initial={scheduledAt}
+        onSave={(ts) => {
+          setScheduledAt(ts);
+          setShowSchedule(false);
         }}
-        onClear={() => {
-          setClerk(null);
-          setShowClerkPicker(false);
-        }}
-        onClose={() => setShowClerkPicker(false)}
-      />
-
-      <MemberPickerModal
-        visible={showProtocolPicker}
-        title="Choose the Protocol"
-        options={memberOptions}
-        selectedUserId={protocol?.userId || null}
-        excludeUserId={myUserId}
-        onSelect={(option) => {
-          setProtocol(option);
-          if (clerk?.userId === option.userId) setClerk(null);
-          setShowProtocolPicker(false);
-        }}
-        onClear={() => {
-          setProtocol(null);
-          setShowProtocolPicker(false);
-        }}
-        onClose={() => setShowProtocolPicker(false)}
+        onClose={() => setShowSchedule(false)}
       />
     </SafeAreaView>
   );
 }
 
-function SegmentButton({
+function TypeButton({
   icon,
   label,
   active,
@@ -412,166 +378,167 @@ function SegmentButton({
 }) {
   return (
     <TouchableOpacity
-      style={[styles.segmentBtn, active ? styles.segmentBtnActive : null]}
+      style={[styles.typeBtn, active ? styles.typeBtnActive : null]}
       onPress={onPress}
-      testID={testID}
       activeOpacity={0.7}
+      testID={testID}
     >
-      <Ionicons name={icon} size={18} color={active ? Colors.headerBg : Colors.textPrimary} />
-      <Text style={[styles.segmentBtnText, active ? { color: Colors.headerBg } : null]}>{label}</Text>
+      <Ionicons name={icon} size={20} color={active ? Colors.primary : Colors.textPrimary} />
+      <Text style={[styles.typeBtnText, active ? styles.typeBtnTextActive : null]}>{label}</Text>
     </TouchableOpacity>
   );
 }
 
-function GroupPickerModal({
-  visible,
-  groups,
-  selectedGroupId,
-  onSelect,
-  onClear,
-  onClose,
+function AccessButton({
+  label,
+  active,
+  onPress,
+  testID,
 }: {
-  visible: boolean;
-  groups: any[];
-  selectedGroupId: string | null;
-  onSelect: (groupId: string) => void;
-  onClear: () => void;
-  onClose: () => void;
+  label: string;
+  active: boolean;
+  onPress: () => void;
+  testID?: string;
 }) {
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.modalBackdrop} onPress={onClose}>
-        <Pressable style={styles.modalCard} onPress={() => {}}>
-          <Text style={styles.modalTitle}>Pick a group</Text>
-          {groups.length === 0 ? (
-            <Text style={styles.modalHint}>No groups yet — you can still start a conference without one.</Text>
-          ) : (
-            <FlatList
-              data={groups}
-              keyExtractor={(item: any, index) => String(item?._id || item?.id || index)}
-              style={{ maxHeight: 320 }}
-              renderItem={({ item }) => {
-                const id = String(item?._id || item?.id || '');
-                const memberCount = item?.memberCount || item?.members?.length || 0;
-                return (
-                  <TouchableOpacity
-                    style={styles.modalRow}
-                    onPress={() => onSelect(id)}
-                    testID={`conf-group-pick-${id}`}
-                  >
-                    <View style={styles.miniAvatar}>
-                      <Text style={styles.miniAvatarText}>{(item?.name || 'G').charAt(0).toUpperCase()}</Text>
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.modalRowText}>{item?.name || 'Group'}</Text>
-                      <Text style={styles.modalRowSub}>{memberCount} member{memberCount === 1 ? '' : 's'}</Text>
-                    </View>
-                    {selectedGroupId === id ? <Feather name="check" size={18} color={Colors.primary} /> : null}
-                  </TouchableOpacity>
-                );
-              }}
-            />
-          )}
-          <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-            <TouchableOpacity style={[styles.modalGhostBtn, { flex: 1 }]} onPress={onClear} testID="conf-group-clear">
-              <Text style={styles.modalGhostText}>No group</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.modalGhostBtn, { flex: 1 }]} onPress={onClose} testID="conf-group-close">
-              <Text style={styles.modalGhostText}>Done</Text>
-            </TouchableOpacity>
-          </View>
-        </Pressable>
-      </Pressable>
-    </Modal>
+    <TouchableOpacity
+      style={[styles.accessBtn, active ? styles.accessBtnActive : null]}
+      onPress={onPress}
+      activeOpacity={0.7}
+      testID={testID}
+    >
+      <Text style={[styles.accessBtnText, active ? styles.accessBtnTextActive : null]}>{label}</Text>
+    </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  scrollContent: { padding: Spacing.base, gap: Spacing.lg, paddingBottom: Spacing.xxl * 2 },
+
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.base,
+    paddingVertical: Spacing.sm,
+    backgroundColor: Colors.background,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.borderLight,
+  },
+  headerBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: 22, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+
+  scrollContent: { padding: Spacing.base, paddingBottom: 120, gap: Spacing.lg },
 
   fieldGroup: { gap: 8 },
-  label: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  helperText: { fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
+  label: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+
+  iconLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
 
   textInput: {
-    minHeight: 48,
+    minHeight: 50,
     borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.border,
-    backgroundColor: Colors.surface,
+    backgroundColor: Colors.background,
     paddingHorizontal: Spacing.md,
     paddingVertical: 12,
     fontSize: FontSize.base,
     color: Colors.textPrimary,
   },
+  textArea: { minHeight: 90, paddingTop: 12 },
 
-  segmentRow: { flexDirection: 'row', gap: 8 },
-  segmentBtn: {
+  segmentRow: { flexDirection: 'row', gap: 10 },
+  typeBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    paddingVertical: 12,
+    paddingVertical: 14,
     borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.border,
-    backgroundColor: Colors.surface,
+    backgroundColor: Colors.background,
   },
-  segmentBtnActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  segmentBtnText: { fontSize: FontSize.base, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
+  typeBtnActive: {
+    borderColor: Colors.primary,
+    borderWidth: 2,
+    backgroundColor: '#fff7de',
+  },
+  typeBtnText: { fontSize: FontSize.base, color: Colors.textPrimary, fontWeight: FontWeight.medium },
+  typeBtnTextActive: { color: Colors.primary, fontWeight: FontWeight.bold },
 
-  selectorRow: {
+  scheduleField: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 12,
+    justifyContent: 'space-between',
+    minHeight: 56,
     borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.border,
-    backgroundColor: Colors.surface,
+    backgroundColor: Colors.background,
+    paddingHorizontal: Spacing.md,
   },
-  selectorRowText: { flex: 1, fontSize: FontSize.base, color: Colors.textPrimary },
+  scheduleFieldText: { fontSize: FontSize.base, color: Colors.textPrimary, flex: 1 },
+  scheduleFieldPlaceholder: { color: Colors.textMuted },
 
-  roleRow: {
+  toggleCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    justifyContent: 'space-between',
     paddingHorizontal: Spacing.md,
-    paddingVertical: 12,
+    paddingVertical: 14,
     borderRadius: Radius.md,
     borderWidth: 1,
-    borderColor: Colors.borderLight,
-    backgroundColor: Colors.surface,
-    marginBottom: 8,
+    borderColor: Colors.border,
+    backgroundColor: Colors.background,
   },
-  roleRowTitle: { fontSize: FontSize.base, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
-  roleRowSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
-  roleStaticValue: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.semibold, maxWidth: 130 },
 
-  infoBanner: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    padding: 14,
+  accessCard: {
+    padding: Spacing.md,
     borderRadius: Radius.md,
-    backgroundColor: Colors.primaryLight,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.background,
+    gap: 10,
   },
-  infoBannerText: { flex: 1, fontSize: FontSize.sm, color: Colors.textPrimary, lineHeight: 20 },
-
-  startBtn: {
-    flexDirection: 'row',
+  accessBtn: {
+    flex: 1,
+    minHeight: 76,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.background,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    paddingHorizontal: 12,
+  },
+  accessBtnActive: {
+    borderColor: Colors.primary,
+    borderWidth: 2,
+    backgroundColor: '#fff7de',
+  },
+  accessBtnText: { fontSize: FontSize.base, color: Colors.textPrimary, textAlign: 'center', fontWeight: FontWeight.medium },
+  accessBtnTextActive: { color: Colors.primary, fontWeight: FontWeight.bold },
+
+  footer: {
+    paddingHorizontal: Spacing.base,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.base,
+    backgroundColor: Colors.background,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.borderLight,
+  },
+  createBtn: {
     minHeight: 52,
     borderRadius: Radius.md,
     backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  startBtnDisabled: { opacity: 0.55 },
-  startBtnText: { fontSize: FontSize.base, color: Colors.headerBg, fontWeight: FontWeight.bold },
+  createBtnDisabled: { opacity: 0.55 },
+  createBtnText: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.headerBg },
 
   modalBackdrop: {
     flex: 1,
@@ -586,24 +553,12 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.background,
     borderRadius: Radius.lg,
     padding: Spacing.lg,
-    gap: 10,
-    ...Shadow.lg,
+    gap: 12,
   },
   modalTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  modalHint: { fontSize: FontSize.sm, color: Colors.textSecondary, paddingVertical: 8 },
-  modalRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.borderLight,
-  },
-  modalRowText: { fontSize: FontSize.base, color: Colors.textPrimary, fontWeight: FontWeight.medium },
-  modalRowSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
+  modalSubtitle: { fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
   modalGhostBtn: {
-    paddingVertical: 12,
+    paddingVertical: 14,
     borderRadius: Radius.md,
     backgroundColor: Colors.surface,
     alignItems: 'center',
@@ -611,14 +566,28 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
   },
   modalGhostText: { fontSize: FontSize.base, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
-
-  miniAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: Colors.primaryLight,
+  modalPrimaryBtn: {
+    paddingVertical: 14,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.primary,
     alignItems: 'center',
-    justifyContent: 'center',
   },
-  miniAvatarText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.bold },
+  modalPrimaryBtnText: { fontSize: FontSize.base, color: Colors.headerBg, fontWeight: FontWeight.bold },
+
+  dateRow: { flexDirection: 'row', gap: 8, alignItems: 'flex-end' },
+  dateInputWrap: { gap: 4 },
+  dateInputLabel: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: FontWeight.medium, textTransform: 'uppercase', letterSpacing: 0.5 },
+  dateInputField: {
+    minHeight: 48,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: Spacing.md,
+    fontSize: FontSize.lg,
+    color: Colors.textPrimary,
+    textAlign: 'center',
+    fontVariant: ['tabular-nums'],
+  },
+  timeColon: { fontSize: 24, fontWeight: FontWeight.bold, color: Colors.textPrimary, paddingBottom: 12 },
 });
