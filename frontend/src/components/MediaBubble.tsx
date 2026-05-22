@@ -70,9 +70,26 @@ export default function MediaBubble({
 }: BubbleProps) {
   const time = msg._creationTime ? new Date(msg._creationTime) : new Date();
   const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
-  const tickColor =
-    msg.readBy?.length ? Colors.tickBlue : msg.deliveredTo?.length ? Colors.tickYellow : Colors.tickGray;
-  const tickIcon = msg.readBy?.length || msg.deliveredTo?.length ? 'checkmark-done' : 'checkmark';
+
+  // Delivery status indicator (sender's own messages only) — per web spec:
+  //   green  → sent (server received, not delivered yet)
+  //   yellow → delivered (reached recipient device, not opened)
+  //   blue   → read (recipient opened the chat)
+  // We must exclude the sender's own userId from readBy/deliveredTo because
+  // the server records the sender as the original delivery target.
+  const senderUserId = msg.senderId ? String(msg.senderId) : null;
+  const readByOthers = Array.isArray(msg.readBy)
+    ? msg.readBy.filter((uid: any) => uid && String(uid) !== senderUserId)
+    : [];
+  const deliveredToOthers = Array.isArray(msg.deliveredTo)
+    ? msg.deliveredTo.filter((uid: any) => uid && String(uid) !== senderUserId)
+    : [];
+  const statusDotColor =
+    readByOthers.length > 0
+      ? Colors.tickBlue
+      : deliveredToOthers.length > 0
+        ? Colors.tickYellow
+        : Colors.tickGreen;
 
   const reactionSummary = useMemo(() => {
     const reactions: any[] = Array.isArray(msg.reactions) ? msg.reactions : [];
@@ -149,7 +166,12 @@ export default function MediaBubble({
         <View style={styles.bubbleMeta}>
           {msg.starred ? <Feather name="star" size={11} color={Colors.tickYellow} style={styles.starIcon} /> : null}
           {msg.type === 'image' ? null : <Text style={[styles.bubbleTime, { color: metaTextColor }]}>{timeStr}</Text>}
-          {isMine ? <Ionicons name={tickIcon as any} size={14} color={tickColor} style={styles.tickIcon} /> : null}
+          {isMine ? (
+            <View
+              style={[styles.statusDot, { backgroundColor: statusDotColor }]}
+              testID={`msg-status-dot-${msg._id}`}
+            />
+          ) : null}
         </View>
       </TouchableOpacity>
 
@@ -421,6 +443,56 @@ function VoiceMessage({ msg, e2eeStatus }: { msg: any; e2eeStatus: E2EEStatus | 
         </View>
         <Text style={styles.voiceDuration}>{fmtDur(remaining)}</Text>
       </View>
+      <TranscriptionPill msg={msg} />
+    </View>
+  );
+}
+
+/**
+ * Transcription pill — renders below voice and video bubbles when the
+ * message carries a transcription. Mirrors the web app's design exactly:
+ * a small language tag on top, then the transcribed text in a light card.
+ */
+function TranscriptionPill({ msg }: { msg: any }) {
+  const transcription: string =
+    typeof msg?.transcription === 'string' && msg.transcription.trim().length > 0
+      ? msg.transcription.trim()
+      : '';
+  const language: string =
+    typeof msg?.transcriptionLanguage === 'string' && msg.transcriptionLanguage.length > 0
+      ? msg.transcriptionLanguage
+      : '';
+  const isPending = msg?.transcriptionStatus === 'pending';
+  const isError = msg?.transcriptionStatus === 'error';
+
+  if (!transcription && !isPending && !isError) return null;
+
+  return (
+    <View style={styles.transcriptPill} testID={`transcript-${msg?._id || ''}`}>
+      {isPending ? (
+        <View style={styles.transcriptPendingRow}>
+          <ActivityIndicator size="small" color={Colors.primary} />
+          <Text style={styles.transcriptPendingText}>Transcribing…</Text>
+        </View>
+      ) : isError ? (
+        <View style={styles.transcriptPendingRow}>
+          <Feather name="alert-circle" size={12} color={Colors.danger} />
+          <Text style={[styles.transcriptPendingText, { color: Colors.danger }]}>
+            Transcription failed
+          </Text>
+        </View>
+      ) : (
+        <>
+          {language ? (
+            <Text style={styles.transcriptLanguage} testID="transcript-language">
+              {language}
+            </Text>
+          ) : null}
+          <Text style={styles.transcriptText} testID="transcript-text">
+            {transcription}
+          </Text>
+        </>
+      )}
     </View>
   );
 }
@@ -581,6 +653,44 @@ const styles = StyleSheet.create({
   bubbleMeta: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', marginTop: 6 },
   bubbleTime: { fontSize: 11, color: Colors.textMuted },
   bubbleTimeOverlay: { color: Colors.white, fontSize: 11, fontWeight: FontWeight.medium },
+  statusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginLeft: 4,
+  },
+  transcriptPill: {
+    marginTop: 8,
+    padding: 8,
+    paddingHorizontal: 10,
+    borderRadius: Radius.md,
+    backgroundColor: 'rgba(34,197,94,0.10)',
+    borderLeftWidth: 3,
+    borderLeftColor: '#22c55e',
+  },
+  transcriptLanguage: {
+    fontSize: 10,
+    color: '#16a34a',
+    fontWeight: FontWeight.bold,
+    textTransform: 'lowercase',
+    letterSpacing: 0.3,
+    marginBottom: 3,
+  },
+  transcriptText: {
+    fontSize: 13,
+    color: Colors.textPrimary,
+    lineHeight: 18,
+  },
+  transcriptPendingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  transcriptPendingText: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    fontWeight: FontWeight.medium,
+  },
   quoteBlock: {
     flexDirection: 'row',
     backgroundColor: 'rgba(61,42,0,0.08)',

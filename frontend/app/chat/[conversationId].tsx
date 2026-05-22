@@ -58,6 +58,7 @@ import { useConversationOtherUser } from '../../src/hooks/useConversationOtherUs
 import { useConversationE2EE } from '../../src/hooks/useConversationE2EE';
 import { useViewerSuspension } from '../../src/hooks/useViewerSuspension';
 import { decryptText } from '../../src/lib/e2eeCrypto';
+import { triggerTranscription } from '../../src/lib/triggerTranscription';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
@@ -563,8 +564,19 @@ export default function ChatScreen() {
     try {
       const mime = asset.mimeType || 'video/mp4';
       const storageId = await uploadFile(convex, asset.uri, mime);
-      await sendMessage({ conversationId, type: 'video', storageId, mimeType: mime });
+      const sentVideoId: any = await sendMessage({ conversationId, type: 'video', storageId, mimeType: mime });
       await refetchMessages();
+      const messageId = typeof sentVideoId === 'string'
+        ? sentVideoId
+        : (sentVideoId?._id || sentVideoId?.id || '');
+      if (messageId) {
+        triggerTranscription({
+          convex,
+          messageId: String(messageId),
+          storageId,
+          conversationId,
+        }).catch(() => {});
+      }
     } catch (errorValue: any) {
       Alert.alert('Failed to send video', errorValue?.message || 'Unknown error');
     } finally {
@@ -592,8 +604,19 @@ export default function ChatScreen() {
     try {
       const mime = asset.mimeType || 'video/mp4';
       const storageId = await uploadFile(convex, asset.uri, mime);
-      await sendMessage({ conversationId, type: 'video', storageId, mimeType: mime });
+      const sentVideoId: any = await sendMessage({ conversationId, type: 'video', storageId, mimeType: mime });
       await refetchMessages();
+      const messageId = typeof sentVideoId === 'string'
+        ? sentVideoId
+        : (sentVideoId?._id || sentVideoId?.id || '');
+      if (messageId) {
+        triggerTranscription({
+          convex,
+          messageId: String(messageId),
+          storageId,
+          conversationId,
+        }).catch(() => {});
+      }
     } catch (errorValue: any) {
       Alert.alert('Failed to send video', errorValue?.message || 'Unknown error');
     } finally {
@@ -800,7 +823,7 @@ export default function ChatScreen() {
 
         // Per backend contract: type='voice', duration in seconds, storageId
         // The backend auto-resolves storageId to mediaUrl on messages.list.
-        await sendMessage({
+        const sentVoiceId: any = await sendMessage({
           conversationId,
           type: 'voice',
           storageId,
@@ -811,6 +834,21 @@ export default function ChatScreen() {
 
         setReplyTo(null);
         await refetchMessages();
+
+        // Kick off OpenAI Whisper transcription in the background — the
+        // transcription pill on the voice bubble updates via Convex realtime
+        // once Whisper returns. Failure here never blocks the message send.
+        const messageId = typeof sentVoiceId === 'string'
+          ? sentVoiceId
+          : (sentVoiceId?._id || sentVoiceId?.id || '');
+        if (messageId) {
+          triggerTranscription({
+            convex,
+            messageId: String(messageId),
+            storageId,
+            conversationId,
+          }).catch(() => {});
+        }
       } catch (errorValue: any) {
         const detail = errorValue?.data?.message || errorValue?.message || 'Unknown error';
         console.error('[voice-send] failed:', detail, errorValue);

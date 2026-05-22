@@ -24,8 +24,9 @@ export const Colors = {
   black: '#000000',
   bubbleOut: '#FEF3C7',
   bubbleIn: '#FFFFFF',
-  tickBlue: '#2563EB',
-  tickYellow: '#F59E0B',
+  tickBlue: '#3b82f6',
+  tickYellow: '#eab308',
+  tickGreen: '#22c55e',
   tickGray: '#6B7280',
 };
 

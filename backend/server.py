@@ -119,6 +119,100 @@ async def get_status_checks():
     status_checks = await db.status_checks.find().to_list(1000)
     return [StatusCheck(**status_check) for status_check in status_checks]
 
+
+# ---------------------------------------------------------------------------
+# Transcription — OpenAI Whisper for voice / video message speech-to-text.
+# ---------------------------------------------------------------------------
+
+class TranscriptionRequest(BaseModel):
+    media_url: str = Field(..., description="HTTPS URL of the voice or video media to transcribe.")
+    language_hint: str | None = Field(
+        default=None,
+        description="Optional ISO 639-1 language code hint to bias Whisper.",
+    )
+
+
+class TranscriptionResponse(BaseModel):
+    text: str
+    language: str  # ISO 639-1 from Whisper response (or 'unknown')
+    duration_sec: float | None = None
+
+
+@api_router.post("/transcribe", response_model=TranscriptionResponse)
+async def transcribe_media(payload: TranscriptionRequest) -> TranscriptionResponse:
+    """Download the media at ``payload.media_url`` and transcribe it with
+    OpenAI Whisper. Supports voice notes (.m4a/.mp3/.webm/.wav) and short
+    videos (.mp4/.mov) — Whisper extracts the audio internally."""
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Transcription unavailable: OPENAI_API_KEY missing on server.")
+
+    import tempfile
+    import httpx
+    from openai import OpenAI
+
+    # Limit single-call duration / size so a stuck request can't hold the
+    # event loop forever; Whisper itself caps individual files at 25MB.
+    max_bytes = 24 * 1024 * 1024
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as http_client:
+            response = await http_client.get(payload.media_url)
+            if response.status_code != 200:
+                raise HTTPException(status_code=400, detail=f"Could not fetch media (HTTP {response.status_code}).")
+            content = response.content
+            if len(content) > max_bytes:
+                raise HTTPException(status_code=413, detail="Media exceeds 24MB Whisper limit.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("transcribe: failed to fetch media")
+        raise HTTPException(status_code=502, detail=f"Could not fetch media: {exc}") from exc
+
+    # Whisper requires a file with an extension to infer the codec. Use the
+    # last path segment when present, fall back to .m4a for voice notes.
+    suffix = ".m4a"
+    lower_url = payload.media_url.lower().split("?")[0]
+    for candidate in (".m4a", ".mp3", ".wav", ".webm", ".ogg", ".mp4", ".mov", ".aac"):
+        if lower_url.endswith(candidate):
+            suffix = candidate
+            break
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+
+        client_openai = OpenAI(api_key=api_key)
+        with open(tmp_path, "rb") as audio_file:
+            kwargs: dict = {
+                "model": "whisper-1",
+                "file": audio_file,
+                "response_format": "verbose_json",
+            }
+            if payload.language_hint:
+                kwargs["language"] = payload.language_hint
+            result = client_openai.audio.transcriptions.create(**kwargs)
+
+        return TranscriptionResponse(
+            text=getattr(result, "text", "") or "",
+            language=getattr(result, "language", None) or "unknown",
+            duration_sec=getattr(result, "duration", None),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("transcribe: Whisper call failed")
+        raise HTTPException(status_code=502, detail=f"Whisper failed: {exc}") from exc
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
 # Include the router in the main app
 app.include_router(api_router)
 
