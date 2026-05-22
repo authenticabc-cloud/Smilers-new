@@ -337,17 +337,25 @@ function VoiceMessage({ msg, e2eeStatus }: { msg: any; e2eeStatus: E2EEStatus | 
       if (!sound) {
         const created = await Audio.Sound.createAsync(
           { uri: src },
-          { shouldPlay: true },
+          { shouldPlay: true, isLooping: false },
           (status: any) => {
             if (!status?.isLoaded) return;
             setIsPlaying(!!status.isPlaying);
             setPosSec((status.positionMillis || 0) / 1000);
             if (status.didJustFinish) {
+              // The sound finished — stop playback explicitly so the player
+              // doesn't auto-replay from start on the next status update.
+              // (Spec: voice notes play once unless the user taps Play again.)
               setIsPlaying(false);
               setPosSec(0);
               try {
+                created.sound.pauseAsync().catch(() => {});
                 created.sound.setPositionAsync(0).catch(() => {});
               } catch {}
+              if (CURRENT_SOUND === created.sound) {
+                CURRENT_SOUND = null;
+                CURRENT_STOP = null;
+              }
             }
           }
         );
