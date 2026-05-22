@@ -570,11 +570,16 @@ export default function ChatScreen() {
         ? sentVideoId
         : (sentVideoId?._id || sentVideoId?.id || '');
       if (messageId) {
+        // Pass the LOCAL file URI so the transcription endpoint receives the
+        // plaintext bytes via multipart upload — the Convex storage URL would
+        // serve AES-GCM ciphertext on E2EE chats and Whisper would fail.
         triggerTranscription({
           convex,
           messageId: String(messageId),
           storageId,
           conversationId,
+          localFileUri: asset.uri,
+          fileName: (asset as any)?.fileName || 'video.mp4',
         }).catch(() => {});
       }
     } catch (errorValue: any) {
@@ -615,6 +620,8 @@ export default function ChatScreen() {
           messageId: String(messageId),
           storageId,
           conversationId,
+          localFileUri: asset.uri,
+          fileName: (asset as any)?.fileName || 'video.mp4',
         }).catch(() => {});
       }
     } catch (errorValue: any) {
@@ -842,11 +849,15 @@ export default function ChatScreen() {
           ? sentVoiceId
           : (sentVoiceId?._id || sentVoiceId?.id || '');
         if (messageId) {
+          // Pass the LOCAL file URI explicitly — Whisper must see the plaintext
+          // m4a bytes, not the E2EE ciphertext that Convex storage would serve.
           triggerTranscription({
             convex,
             messageId: String(messageId),
             storageId,
             conversationId,
+            localFileUri: uri,
+            fileName: 'voice.m4a',
           }).catch(() => {});
         }
       } catch (errorValue: any) {
@@ -1239,11 +1250,22 @@ export default function ChatScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.chatHeaderIdentity}
-            activeOpacity={hydratedConversation?.type === 'group' ? 0.7 : 1}
-            disabled={hydratedConversation?.type !== 'group'}
+            activeOpacity={0.7}
             onPress={() => {
               if (hydratedConversation?.type === 'group') {
                 router.push(`/group/${conversationId}` as any);
+                return;
+              }
+              // Direct chat — open the contact info page (mirrors web).
+              const otherUserId =
+                (hydratedConversation?.otherUser as any)?._id ||
+                (hydratedConversation?.otherUser as any)?.userId ||
+                (hydratedConversation as any)?.otherUserId ||
+                '';
+              if (otherUserId) {
+                router.push(
+                  `/user/${otherUserId}?conversationId=${conversationId}` as any,
+                );
               }
             }}
             testID="chat-header-identity"
@@ -2040,10 +2062,10 @@ function MessageBubble({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   chatHeader: {
-    minHeight: 110,
+    minHeight: 130,
     backgroundColor: '#3D2A00',
     paddingHorizontal: 12,
-    paddingVertical: 18,
+    paddingVertical: 24,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
