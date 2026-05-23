@@ -33,7 +33,9 @@ function makeLocalCode(): string {
   return out;
 }
 
-export default function ChatOnceScreen() {
+import PremiumGate from '../src/components/PremiumGate';
+
+function ChatOnceScreen() {
   const router = useRouter();
   const [tab, setTab] = useState<TabKey>('generate');
   const [generatedCode, setGeneratedCode] = useState<string | null>(null);
@@ -531,3 +533,11 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
   },
 });
+
+export default function GatedChatOnceScreen() {
+  return (
+    <PremiumGate featureName="Chat Once">
+      <ChatOnceScreen />
+    </PremiumGate>
+  );
+}

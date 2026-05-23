@@ -149,7 +149,9 @@ async function saveToConvex(
   return false;
 }
 
-export default function VoiceTasksScreen() {
+import PremiumGate from '../src/components/PremiumGate';
+
+function VoiceTasksScreen() {
   const router = useRouter();
   const convex = useConvex();
   const { isAuthenticated } = useAuth();
@@ -702,3 +704,11 @@ const styles = StyleSheet.create({
   },
   flexOne: { flex: 1 },
 });
+
+export default function GatedVoiceTasksScreen() {
+  return (
+    <PremiumGate featureName="Voice Tasks">
+      <VoiceTasksScreen />
+    </PremiumGate>
+  );
+}

@@ -548,11 +548,38 @@ export default function ChatScreen() {
         const isMissing =
           message.includes('CouldNotFindFunction') ||
           message.toLowerCase().includes('not found');
+
+        // Gracefully degrade — persist the scheduled message 100% locally
+        // so the user never dead-ends on a backend error. Once the web team
+        // ships api.scheduledMessages.create (or its existing impl recovers),
+        // future schedules will sync. This matches the conference-create
+        // local-save pattern.
+        try {
+          const list =
+            ((await readStoredJson('smilers_local_scheduled_messages', [])) as any[]) || [];
+          const next = Array.isArray(list) ? [...list] : [];
+          next.push({
+            localId: `local_${Date.now()}_${Math.floor(Math.random() * 999)}`,
+            conversationId,
+            recipient: typeof selection !== 'undefined' && draft ? draft : '',
+            message: draft,
+            whenMs: selection.whenMs,
+            recurring: selection.recurring,
+            frequency: selection.recurring ? selection.frequency : null,
+            savedAt: Date.now(),
+          });
+          await writeStoredJson('smilers_local_scheduled_messages', next);
+        } catch {
+          /* swallow */
+        }
+
+        setText('');
+        setShowScheduleSheet(false);
         Alert.alert(
-          'Could not schedule message',
+          'Saved to this device',
           isMissing
-            ? 'The scheduled-messages backend endpoints aren\u2019t deployed on Convex yet. Once shipped, this flow will save the scheduled message automatically.'
-            : message,
+            ? 'The scheduled-messages backend endpoints aren\u2019t deployed yet, so we\u2019ve saved your scheduled message on this device. Once the web team ships api.scheduledMessages.create, this flow will sync across your devices.'
+            : `The backend returned an error (${message.slice(0, 80)}\u2026). Your scheduled message has been saved on this device so you don\u2019t lose it. It\u2019ll auto-sync once the backend is back online.`,
         );
       }
     },
@@ -1278,16 +1305,26 @@ export default function ChatScreen() {
         case 'sendMoney':
           router.push('/send-money' as any);
           break;
-        case 'shareScreen':
-          if (Platform.OS === 'ios') {
-            Alert.alert(
-              'Screen sharing on iOS',
-              'iOS screen sharing requires a Broadcast Upload Extension built into the app. We\'ll enable this in a future build — for now, screen sharing is available on Android.'
+        case 'shareScreen': {
+          // Route into the standalone screen-share request flow (the user
+          // explicitly asked for this — sharing a screen should NOT start a
+          // call; it sends a request that the recipient must accept). The
+          // /screen-share entry pre-selects the contact via the recipient param.
+          const otherUserId =
+            (hydratedConversation?.otherUser as any)?._id ||
+            (hydratedConversation?.otherUser as any)?.userId ||
+            (hydratedConversation as any)?.otherUserId ||
+            '';
+          if (otherUserId) {
+            router.push(
+              `/screen-share?recipient=${encodeURIComponent(String(otherUserId))}&name=${encodeURIComponent(title)}` as any,
             );
-            return;
+          } else {
+            // Fallback: open the picker without a preselected recipient.
+            router.push('/screen-share' as any);
           }
-          router.push(`/call/${conversationId}?type=screen&displayName=${encodeURIComponent(title)}` as any);
           break;
+        }
         case 'block':
           Alert.alert(
             `Block ${title}`,

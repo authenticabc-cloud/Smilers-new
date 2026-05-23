@@ -14,7 +14,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons, Feather } from '@expo/vector-icons';
+import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useConvex, useMutation, useQuery } from 'convex/react';
 import * as ImagePicker from 'expo-image-picker';
@@ -247,6 +247,17 @@ export default function ProfileScreen() {
 
         <View style={styles.buttonsBlock}>
           <TouchableOpacity
+            style={styles.premiumBtn}
+            onPress={() => router.push('/premium' as any)}
+            testID="premium-btn"
+            activeOpacity={0.85}
+          >
+            <MaterialCommunityIcons name="crown" size={20} color="#3D2A00" />
+            <Text style={styles.premiumBtnText}>Premium</Text>
+            <Ionicons name="chevron-forward" size={18} color="#3D2A00" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
             style={styles.linkBtn}
             onPress={() => router.push('/starred' as any)}
             testID="starred-btn"
@@ -470,6 +481,21 @@ const styles = StyleSheet.create({
     fontSize: FontSize.base,
     fontWeight: FontWeight.semibold,
     color: Colors.textPrimary,
+  },
+  premiumBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: Spacing.base,
+    paddingVertical: 14,
+    borderRadius: Radius.lg,
+  },
+  premiumBtnText: {
+    flex: 1,
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.bold,
+    color: '#3D2A00',
   },
 
   /* Edit-field modal */

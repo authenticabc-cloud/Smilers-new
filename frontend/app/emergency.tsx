@@ -14,9 +14,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useMutation } from 'convex/react';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+import PremiumGate from '../src/components/PremiumGate';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
-export default function EmergencyScreen() {
+function EmergencyScreen() {
   const router = useRouter();
   const { data: activeAlert, refetch: refetchActiveAlert } = useSafeConvexQuery<any | null>(
     api.emergencyAlerts.getActiveAlert,
@@ -286,3 +287,11 @@ const styles = StyleSheet.create({
   statusTag: { fontSize: 10, color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 1 },
   flexOne: { flex: 1 },
 });
+
+export default function GatedEmergencyScreen() {
+  return (
+    <PremiumGate featureName="Emergency Features">
+      <EmergencyScreen />
+    </PremiumGate>
+  );
+}
