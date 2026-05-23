@@ -18,6 +18,7 @@ import { useMessageNotificationSound } from '../src/lib/notification/useMessageN
 import { usePushNotifications } from '../src/push/usePushNotifications';
 import AppLockGate from '../src/components/AppLockGate';
 import VoiceCommandLauncher from '../src/components/VoiceCommandLauncher';
+import IncomingScreenShareModal from '../src/components/IncomingScreenShareModal';
 import { recordTouchActivity } from '../src/lib/touchActivity';
 import { applyInterFontPatch } from '../src/lib/fontPatch';
 import { Colors } from '../src/theme';
@@ -117,8 +118,10 @@ export default function RootLayout() {
               <Stack.Screen name="status-compose" options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }} />
               <Stack.Screen name="status-view/[userId]" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
               <Stack.Screen name="contact-qr" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
+              <Stack.Screen name="screen-share" />
             </Stack>
             <VoiceCommandLauncher />
+            <IncomingScreenShareModal />
               </View>
             </AppLockGate>
           </ConvexClientProvider>

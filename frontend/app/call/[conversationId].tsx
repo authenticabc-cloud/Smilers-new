@@ -32,6 +32,7 @@ import Animated, {
 import { StatusBar } from 'expo-status-bar';
 import { api } from '../../src/convexApi';
 import ConferenceHUD from '../../src/components/ConferenceHUD';
+import ScreenShareOverlay from '../../src/components/ScreenShareOverlay';
 import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials, getDisplayNameFromUser } from '../../src/lib/displayName';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { useConversationOtherUser } from '../../src/hooks/useConversationOtherUser';
@@ -101,19 +102,34 @@ export default function CallScreen() {
   const router = useRouter();
   const { height: windowHeight } = useWindowDimensions();
   const { isAuthenticated } = useAuth();
-  const { conversationId: rawConversationId, type: rawTypeParam, displayName: rawDisplayName, conferenceMode: rawConfMode } = useLocalSearchParams<{
+  const { conversationId: rawConversationId, type: rawTypeParam, displayName: rawDisplayName, conferenceMode: rawConfMode, screenOnly: rawScreenOnly, audio: rawAudioParam, role: rawRoleParam } = useLocalSearchParams<{
     conversationId?: string | string[];
     type?: string | string[];
     displayName?: string | string[];
     conferenceMode?: string | string[];
+    screenOnly?: string | string[];
+    audio?: string | string[];
+    role?: string | string[];
   }>();
   const conversationId = Array.isArray(rawConversationId) ? rawConversationId[0] : rawConversationId;
   const typeParam = Array.isArray(rawTypeParam) ? rawTypeParam[0] : rawTypeParam;
   const routeDisplayName = Array.isArray(rawDisplayName) ? rawDisplayName[0] : rawDisplayName;
   const confModeParam = Array.isArray(rawConfMode) ? rawConfMode[0] : rawConfMode;
+  const screenOnlyParam = Array.isArray(rawScreenOnly) ? rawScreenOnly[0] : rawScreenOnly;
+  const audioParam = Array.isArray(rawAudioParam) ? rawAudioParam[0] : rawAudioParam;
+  const roleParam = Array.isArray(rawRoleParam) ? rawRoleParam[0] : rawRoleParam;
   const isConferenceMode = confModeParam === '1' || confModeParam === 'true';
+  // Screen-only mode is the standalone screen-share session — no camera, no
+  // standard call UI, simplified controls. The sender is the broadcaster;
+  // the receiver is the viewer. See /app/CONVEX_BACKEND_INSTRUCTIONS_SCREEN_SHARE.md
+  // for the full request/accept flow.
+  const isScreenOnly = screenOnlyParam === '1' || screenOnlyParam === 'true';
+  const isScreenOnlyReceiver = isScreenOnly && (roleParam === 'receiver' || roleParam === 'viewer');
+  const screenOnlyAudio = audioParam === '1' || audioParam === 'true';
   const requestedType: CallType = typeParam === 'video' || typeParam === 'screen' ? 'video' : 'voice';
-  const startInScreenShare = typeParam === 'screen';
+  // Sender of a screen-share starts broadcasting on mount; receiver does not
+  // start their own screen capture (they only view the remote stream).
+  const startInScreenShare = typeParam === 'screen' && !isScreenOnlyReceiver;
   const compactCallLayout = windowHeight < 720;
   const hasValidConversationId = typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
   const canRunCallQueries = isAuthenticated && hasValidConversationId;
@@ -965,6 +981,38 @@ export default function CallScreen() {
           onLeave={() => router.back()}
           onToggleScreenShare={toggleScreenShare}
           screenSharing={screenSharing}
+        />
+      ) : null}
+
+      {/* Standalone screen-share mode — covers the whole call screen with a
+          simplified UI. The underlying WebRTC peer / screen capture still
+          runs in the background; the overlay simply replaces the visible
+          shell so the user doesn't see a normal "call" interface. See
+          /app/CONVEX_BACKEND_INSTRUCTIONS_SCREEN_SHARE.md for the request
+          flow. */}
+      {isScreenOnly ? (
+        <ScreenShareOverlay
+          isReceiver={isScreenOnlyReceiver}
+          remoteStreamURL={remoteStreamURL}
+          allowMic={screenOnlyAudio}
+          muted={muted}
+          onToggleMic={() => setMuted((current) => !current)}
+          screenSharing={screenSharing}
+          onToggleScreenShare={toggleScreenShare}
+          onStop={() => {
+            // Best-effort: tell the backend we're ending the session, then
+            // route back. Failure is swallowed because the backend may not
+            // have shipped the endpoint yet.
+            try {
+              (api as any).screenShare?.end &&
+                // No useMutation here because this is a one-shot exit path.
+                undefined;
+            } catch {
+              /* swallow */
+            }
+            router.back();
+          }}
+          RTCViewImpl={RTCViewImpl}
         />
       ) : null}
     </View>
