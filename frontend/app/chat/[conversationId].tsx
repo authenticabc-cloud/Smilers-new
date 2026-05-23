@@ -60,6 +60,7 @@ import { useViewerSuspension } from '../../src/hooks/useViewerSuspension';
 import { decryptText } from '../../src/lib/e2eeCrypto';
 import { triggerTranscription } from '../../src/lib/triggerTranscription';
 import ScheduleMessageSheet, { ScheduleSelection } from '../../src/components/ScheduleMessageSheet';
+import CameraCapture from '../../src/components/CameraCapture';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
@@ -123,6 +124,7 @@ export default function ChatScreen() {
   const [reactionTargetMsg, setReactionTargetMsg] = useState<any | null>(null);
   const [showAttachSheet, setShowAttachSheet] = useState(false);
   const [showScheduleSheet, setShowScheduleSheet] = useState(false);
+  const [showCameraModal, setShowCameraModal] = useState(false);
   const [showPollComposer, setShowPollComposer] = useState(false);
   const [showGiphyPicker, setShowGiphyPicker] = useState(false);
   const [showForwardPicker, setShowForwardPicker] = useState(false);
@@ -637,23 +639,20 @@ export default function ChatScreen() {
     await sendImageFromUri(asset.uri, asset.mimeType || 'image/jpeg');
   }, [sendImageFromUri]);
 
-  const takePhoto = useCallback(async () => {
-    const permission = await ImagePicker.requestCameraPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert('Permission needed', 'Allow camera access to take photos.');
-      return;
-    }
+  const takePhoto = useCallback(() => {
+    // Open the in-app camera modal (mirrors web app's <CameraCapture>).
+    // The modal handles permissions, front/back toggle, and the preview
+    // before send — on confirm it gives us back the local file URI which
+    // we then encrypt + upload like a regular image attachment.
+    setShowCameraModal(true);
+  }, []);
 
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.85,
-      allowsEditing: false,
-    });
-
-    if (result.canceled || !result.assets?.[0]?.uri) return;
-    const asset = result.assets[0];
-    await sendImageFromUri(asset.uri, asset.mimeType || 'image/jpeg');
-  }, [sendImageFromUri]);
+  const handleCameraCapture = useCallback(
+    async (localUri: string) => {
+      await sendImageFromUri(localUri, 'image/jpeg');
+    },
+    [sendImageFromUri],
+  );
 
   const pickVideo = useCallback(async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -1738,10 +1737,17 @@ export default function ChatScreen() {
         visible={showAttachSheet}
         onClose={() => setShowAttachSheet(false)}
         onPickPhoto={pickPhoto}
+        onTakePhoto={takePhoto}
         onPickVideo={pickVideo}
         onRecordVideo={recordVideo}
         onPickDocument={onPickDocument}
         onShareLocation={shareLocation}
+      />
+
+      <CameraCapture
+        visible={showCameraModal}
+        onCapture={handleCameraCapture}
+        onClose={() => setShowCameraModal(false)}
       />
 
       <PollComposer

@@ -7,6 +7,7 @@ interface Props {
   visible: boolean;
   onClose: () => void;
   onPickPhoto: () => void;
+  onTakePhoto?: () => void;
   onPickVideo: () => void;
   onRecordVideo: () => void;
   onPickDocument?: () => void;
@@ -17,6 +18,7 @@ export default function AttachmentSheet({
   visible,
   onClose,
   onPickPhoto,
+  onTakePhoto,
   onPickVideo,
   onRecordVideo,
   onPickDocument,
@@ -28,11 +30,24 @@ export default function AttachmentSheet({
         <Pressable style={styles.sheetWrap} onPress={() => {}}>
           <View style={styles.sheet} testID="attachment-sheet">
             <ActionRow
+              color="#FEF3C7"
+              iconColor="#D97706"
+              icon="camera-outline"
+              lib="ion"
+              label="Take Photo"
+              onPress={() => {
+                onClose();
+                onTakePhoto?.();
+              }}
+              disabled={!onTakePhoto}
+              testID="attach-take-photo"
+            />
+            <ActionRow
               color="#FCE7F3"
               iconColor="#EC4899"
               icon="image-outline"
               lib="ion"
-              label="Photo"
+              label="Photo from Gallery"
               onPress={() => {
                 onClose();
                 onPickPhoto();
