@@ -129,7 +129,7 @@ Returns the current conference snapshot:
 
 | Name | Args | Notes |
 |------|------|-------|
-| `conferences.startConference` | `{ title, mode, entryMode, groupId?, clerkUserId?, protocolUserId? }` → `{ conferenceId }` | Chair = caller. Returns the new id used for routing. |
+| `conferences.startConference` | `{ title, mode, entryMode, groupId?, clerkUserId?, protocolUserId?, description?, scheduledAt?, recurring?, frequency? }` → `{ conferenceId }` | Chair = caller. Returns the new id used for routing. The mobile client now also sends optional **`description`** (string), **`scheduledAt`** (ms-since-epoch — when set the conference is scheduled, not started immediately), **`recurring`** (boolean), and **`frequency`** (`"daily" \| "weekly" \| "monthly" \| "yearly"`, only when `recurring=true`). Mobile uses a progressive-fallback submit: if the deployed validator rejects the full payload, it retries without `recurring`/`frequency`, then without `scheduledAt`, finally with only the core fields — so old backends still create a conference and the scheduling metadata stays cached on-device until you ship the new fields. |
 | `conferences.muteAll` | `{ conferenceId, enabled }` | Chair only — gates incoming audio at media SFU layer. |
 | `conferences.requestUnmute` | `{ conferenceId }` | Participant signals they want to talk. Spec: voice + pop-up notify the chair. |
 | `conferences.approveAllUnmute` | `{ conferenceId }` | Chair-batch approve. |

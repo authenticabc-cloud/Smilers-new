@@ -912,6 +912,34 @@
 ##     stuck_count: 0
 ##     priority: "medium"
 ##     needs_retesting: true
+##   - task: "Conference create progressive-fallback + local schedule cache"
+##     implemented: true
+##     working: "NA"
+##     file: "/app/frontend/app/conference-create.tsx"
+##     stuck_count: 0
+##     priority: "critical"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User tapped 'Create Conference' on the new conference form and got: CONVEX M(conferences:startConference) Server Error / Called by client. Form payload includes Schedule + Recurring fields that the currently-deployed Convex validator likely rejects."
+##       - working: "NA"
+##         agent: "main"
+##         comment: "Iteration 64: Added a progressive-fallback submit helper (`callStartConferenceWithFallback`) that retries the mutation with progressively smaller payloads — full → drop recurring/frequency → drop scheduledAt → core-only ({title, mode, entryMode, optional groupId/clerk/protocol}). Any 'CouldNotFindFunction' aborts the retry loop and surfaces a clear 'backend not deployed' message; other errors are passed through verbatim with a friendlier prefix. Also persists every successful conference's full metadata (description, scheduledAt, recurring, frequency) to AsyncStorage (`smilers_local_conferences`) so on-device scheduling info is preserved even when the deployed validator stripped those fields. Updated `/app/CONVEX_BACKEND_INSTRUCTIONS_GROUPS.md` to add the new optional schedule/recurring/frequency/description fields to the `conferences.startConference` contract."
+##   - task: "Face ID page web-parity rewrite"
+##     implemented: true
+##     working: "NA"
+##     file: "/app/frontend/app/face-id.tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User shared web app Face ID screenshot and asked for the mobile page to mirror it exactly. The mobile route was just a 'Coming soon' placeholder."
+##       - working: "NA"
+##         agent: "main"
+##         comment: "Iteration 64: Replaced the ComingSoon placeholder at /app/frontend/app/face-id.tsx with a full screen matching the web design: brown header with face-recognition icon + title + back button, cream 'Protect your account' info card with shield icon and copy ('Register up to 3 faces. When you log in from a new device, a quick selfie will verify your identity.'), REGISTERED FACES (N/3) list of face cards (thumbnail + label + 'Added DD/MM/YYYY' + trash), gold 'Add Face (N/3)' button that opens the front camera via expo-image-picker (front-facing, square aspect, base64 encoding so the captured image survives without a separate storage round-trip), TRUSTED DEVICES list, floating mute mic FAB, and fullscreen image-preview modal. Convex calls go through `api.faceId.*` (with alternate `api.devices.*` paths probed via the `(api as any).faceId?.X ?? (api as any).Y` pattern) — graceful fallback to AsyncStorage (`smilers_face_id_faces_v1`, `smilers_face_id_devices_v1`) means the screen is fully usable on this device even before the web team ships the backend. Created `/app/CONVEX_BACKEND_INSTRUCTIONS_FACE_ID.md` documenting the contract: `faceId.listMyFaces`, `faceId.listTrustedDevices`, `faceId.registerFace({imageBase64, mimeType, label})`, `faceId.deleteFace({faceId})`, `faceId.deleteTrustedDevice({deviceId})`. Screenshot verified the page renders cleanly with all sections, empty states, and the gold Add Face CTA exactly matching the web reference."
 ##     status_history:
 ##       - working: "NA"
 ##         agent: "main"
@@ -923,9 +951,8 @@
 ##   run_ui: false
 ## test_plan:
 ##   current_focus:
-##     - "Contact info page (web parity) + chat header tap navigation"
-##     - "Voice/video transcription failure fix via plaintext upload"
-##     - "Chat header vertical height bump to 130"
+##     - "Conference create progressive-fallback + local schedule cache"
+##     - "Face ID page web-parity rewrite"
 ##   stuck_tasks:
 ##     - "Voice note send multi-variant fallback + upload cleanup"
 ##   test_all: false

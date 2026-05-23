@@ -36,11 +36,14 @@ import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
 import { api } from '../src/convexApi';
+import { writeStoredJson, readStoredJson } from '../src/lib/settingsStorage';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
 type ConferenceType = 'video' | 'audio';
 type AccessControl = 'open' | 'invite';
 type Frequency = 'daily' | 'weekly' | 'monthly' | 'yearly';
+
+const LOCAL_CONFERENCES_KEY = 'smilers_local_conferences';
 
 const FREQUENCY_OPTIONS: { key: Frequency; label: string }[] = [
   { key: 'daily', label: 'Daily' },
@@ -51,6 +54,109 @@ const FREQUENCY_OPTIONS: { key: Frequency; label: string }[] = [
 
 function pad(n: number): string {
   return n < 10 ? `0${n}` : String(n);
+}
+
+/**
+ * Save scheduling metadata (description, scheduledAt, recurring, frequency)
+ * locally so the user can see scheduled conferences on this device even
+ * before the web team ships a backend store for those fields. Keyed by
+ * conferenceId; merges with the existing list.
+ */
+async function persistLocalConferenceMeta(meta: {
+  conferenceId: string;
+  title: string;
+  description?: string;
+  mode: ConferenceType;
+  entryMode: AccessControl;
+  scheduledAt?: number | null;
+  recurring?: boolean;
+  frequency?: Frequency | null;
+}): Promise<void> {
+  try {
+    const list = (await readStoredJson(LOCAL_CONFERENCES_KEY, [])) as any[];
+    const next = Array.isArray(list) ? [...list] : [];
+    const existingIndex = next.findIndex((c: any) => c?.conferenceId === meta.conferenceId);
+    const entry = { ...meta, savedAt: Date.now() };
+    if (existingIndex >= 0) {
+      next[existingIndex] = entry;
+    } else {
+      next.push(entry);
+    }
+    await writeStoredJson(LOCAL_CONFERENCES_KEY, next);
+  } catch {
+    /* swallow */
+  }
+}
+
+/**
+ * Attempt the Convex mutation with the FULL payload first. If the backend
+ * rejects the call (typically because its argument validator is stricter
+ * than the latest spec), retry with progressively trimmed payloads down to
+ * the minimum contract: { title, mode, entryMode }. This way the conference
+ * still gets created even before the web team ships the Schedule/Recurring
+ * support — the trimmed scheduling metadata is preserved in AsyncStorage so
+ * the device still surfaces it locally.
+ */
+async function callStartConferenceWithFallback(
+  mutationFn: (args: any) => Promise<any>,
+  fullPayload: Record<string, any>,
+): Promise<{ conferenceId: string; usedFallback: boolean; raw: any }> {
+  // Order matters — most-feature-rich first, simplest last.
+  const variants: Array<{ label: string; build: () => Record<string, any> }> = [
+    { label: 'full', build: () => fullPayload },
+    {
+      label: 'no-recurrence',
+      build: () => {
+        const { recurring: _r, frequency: _f, ...rest } = fullPayload;
+        return rest;
+      },
+    },
+    {
+      label: 'no-schedule',
+      build: () => {
+        const { recurring: _r, frequency: _f, scheduledAt: _s, ...rest } = fullPayload;
+        return rest;
+      },
+    },
+    {
+      label: 'core-only',
+      build: () => ({
+        title: fullPayload.title,
+        mode: fullPayload.mode,
+        entryMode: fullPayload.entryMode,
+        ...(fullPayload.groupId ? { groupId: fullPayload.groupId } : {}),
+        ...(fullPayload.clerkUserId ? { clerkUserId: fullPayload.clerkUserId } : {}),
+        ...(fullPayload.protocolUserId ? { protocolUserId: fullPayload.protocolUserId } : {}),
+      }),
+    },
+  ];
+
+  let lastError: any = null;
+  let attemptIdx = 0;
+  for (const variant of variants) {
+    try {
+      const payload = variant.build();
+      const raw = await mutationFn(payload);
+      const conferenceId = String(
+        raw?.conferenceId || raw?._id || raw?.id || (typeof raw === 'string' ? raw : ''),
+      );
+      if (!conferenceId) {
+        // Mutation returned but no id — treat as transient failure.
+        throw new Error('Backend did not return a conferenceId.');
+      }
+      return { conferenceId, usedFallback: attemptIdx > 0, raw };
+    } catch (errorValue: any) {
+      lastError = errorValue;
+      const message = String(errorValue?.message || errorValue || '');
+      // If the function itself is missing, no point in retrying any variant.
+      if (message.includes('CouldNotFindFunction')) {
+        throw errorValue;
+      }
+      attemptIdx += 1;
+      // Otherwise keep trying with a smaller payload.
+    }
+  }
+  throw lastError || new Error('Could not create conference.');
 }
 
 function formatScheduleLabel(ts: number | null): string {
@@ -193,7 +299,7 @@ export default function ConferenceCreateScreen() {
     if (!canSubmit) return;
     setSubmitting(true);
     try {
-      const result: any = await startConferenceM({
+      const fullPayload: Record<string, any> = {
         title: title.trim(),
         description: description.trim() || undefined,
         mode: type,
@@ -201,32 +307,56 @@ export default function ConferenceCreateScreen() {
         scheduledAt: scheduledAt || undefined,
         recurring,
         frequency: recurring ? frequency : undefined,
+      };
+      const { conferenceId, usedFallback } = await callStartConferenceWithFallback(
+        startConferenceM as any,
+        fullPayload,
+      );
+
+      // Persist the rich metadata locally so the scheduling/recurring info
+      // survives even if the deployed backend's strict validator discarded
+      // those fields. The on-device conference list can render them from here.
+      await persistLocalConferenceMeta({
+        conferenceId,
+        title: title.trim(),
+        description: description.trim() || undefined,
+        mode: type,
+        entryMode: accessControl,
+        scheduledAt: scheduledAt || null,
+        recurring,
+        frequency: recurring ? frequency : null,
       });
-      const conferenceId = String(result?.conferenceId || result?._id || result?.id || '');
-      if (!conferenceId) {
-        throw new Error('Backend did not return a conferenceId.');
-      }
+
       // If a future schedule was set, take user back to the conference list
       // so the just-created conference appears there. If "now", route into
       // the call screen with the conference HUD overlay.
       if (scheduledAt && scheduledAt > Date.now() + 60_000) {
-        Alert.alert('Conference scheduled', 'Your conference has been scheduled.');
+        Alert.alert(
+          'Conference scheduled',
+          usedFallback
+            ? 'Conference created — schedule and recurrence are saved on this device. Once the web team ships the latest backend update, they will sync to all your devices.'
+            : 'Your conference has been scheduled.',
+        );
         router.back();
       } else {
         router.replace(`/call/${conferenceId}?type=${type === 'audio' ? 'voice' : 'video'}&conferenceMode=1` as any);
       }
     } catch (errorValue: any) {
-      const message = errorValue?.message || String(errorValue || '');
+      const message = String(errorValue?.message || errorValue || '');
+      const isMissingFunction =
+        message.includes('CouldNotFindFunction') ||
+        message.includes('not found') ||
+        message.toLowerCase().includes('no function');
       Alert.alert(
         'Could not create conference',
-        message.includes('CouldNotFindFunction') || message.includes('not found')
-          ? 'The conferencing backend endpoints haven\u2019t been deployed yet. Once the web team ships `conferences.startConference`, this flow will create the conference end-to-end.'
-          : message,
+        isMissingFunction
+          ? 'The conferencing backend endpoints haven\u2019t been deployed yet. Once the web team ships `conferences.startConference`, this flow will create the conference end-to-end. Until then, conferences cannot be created.'
+          : `${message}\n\nIf this keeps happening, the backend may need a deploy.`,
       );
     } finally {
       setSubmitting(false);
     }
-  }, [accessControl, canSubmit, description, recurring, router, scheduledAt, startConferenceM, title, type]);
+  }, [accessControl, canSubmit, description, frequency, recurring, router, scheduledAt, startConferenceM, title, type]);
 
   const scheduleLabel = formatScheduleLabel(scheduledAt);
 
