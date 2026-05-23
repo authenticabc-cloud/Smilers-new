@@ -36,6 +36,10 @@ interface ConferenceHUDProps {
   conferenceId: string;
   myUserId?: string | null;
   onLeave?: () => void;
+  /** Toggle native screen sharing — wired from the call screen. */
+  onToggleScreenShare?: () => void | Promise<void>;
+  /** Whether screen-share is currently broadcasting. Drives the active state of the tool button. */
+  screenSharing?: boolean;
 }
 
 const REACTIONS: { key: string; icon: any; label: string }[] = [
@@ -304,7 +308,7 @@ function MinutesSheet({
   );
 }
 
-export default function ConferenceHUD({ conferenceId, onLeave }: ConferenceHUDProps) {
+export default function ConferenceHUD({ conferenceId, onLeave, onToggleScreenShare, screenSharing }: ConferenceHUDProps) {
   const clock = useDigitalClock();
   const [reactionsExpanded, setReactionsExpanded] = useState(false);
   const [audience, setAudience] = useState<'everyone' | 'chair' | 'secretary'>('everyone');
@@ -545,7 +549,22 @@ export default function ConferenceHUD({ conferenceId, onLeave }: ConferenceHUDPr
             <>
               <ToolBtn icon="clipboard-text-outline" label="Minutes" onPress={() => setShowMinutes(true)} testID="conf-tool-minutes" />
               <ToolBtn icon="bulletin-board" label="Notice" onPress={() => setShowNotice(true)} testID="conf-tool-notice" />
-              <ToolBtn icon="monitor-share" label="Share screen" onPress={() => Alert.alert('Screen sharing', 'Native screen-share requires the iOS broadcast extension / Android MediaProjection module — to be wired in the next iteration.')} testID="conf-tool-share" />
+              <ToolBtn
+                icon="monitor-share"
+                label={screenSharing ? 'Stop sharing' : 'Share screen'}
+                active={!!screenSharing}
+                onPress={() => {
+                  if (typeof onToggleScreenShare === 'function') {
+                    void onToggleScreenShare();
+                  } else {
+                    Alert.alert(
+                      'Screen sharing',
+                      'Screen share is only available from inside an active call. Start the conference call first, then tap Share screen.',
+                    );
+                  }
+                }}
+                testID="conf-tool-share"
+              />
             </>
           ) : null}
 
@@ -611,6 +630,7 @@ function ToolBtn({
   testID,
   danger,
   badge,
+  active,
 }: {
   icon: any;
   label: string;
@@ -618,17 +638,34 @@ function ToolBtn({
   testID?: string;
   danger?: boolean;
   badge?: number;
+  active?: boolean;
 }) {
   return (
     <TouchableOpacity
-      style={[styles.toolBtn, danger ? styles.toolBtnDanger : null, !onPress ? { opacity: 0.55 } : null]}
+      style={[
+        styles.toolBtn,
+        danger ? styles.toolBtnDanger : null,
+        active ? styles.toolBtnActive : null,
+        !onPress ? { opacity: 0.55 } : null,
+      ]}
       onPress={onPress}
       disabled={!onPress}
       testID={testID}
       activeOpacity={0.7}
     >
-      <MaterialCommunityIcons name={icon} size={20} color={danger ? '#fff' : Colors.textPrimary} />
-      <Text style={[styles.toolBtnLabel, danger ? { color: '#fff' } : null]} numberOfLines={1}>
+      <MaterialCommunityIcons
+        name={icon}
+        size={20}
+        color={danger ? '#fff' : active ? '#3D2A00' : Colors.textPrimary}
+      />
+      <Text
+        style={[
+          styles.toolBtnLabel,
+          danger ? { color: '#fff' } : null,
+          active ? { color: '#3D2A00', fontWeight: FontWeight.bold } : null,
+        ]}
+        numberOfLines={1}
+      >
         {label}
       </Text>
       {badge && badge > 0 ? (
@@ -772,6 +809,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff7de',
   },
   toolBtnDanger: { backgroundColor: '#dc2626' },
+  toolBtnActive: { backgroundColor: '#FACC15', borderWidth: 1, borderColor: '#3D2A00' },
   toolBtnLabel: { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.semibold, maxWidth: 110 },
   toolBtnBadge: {
     marginLeft: 4,

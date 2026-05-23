@@ -46,8 +46,9 @@ const Notifications = Platform.OS === 'web' ? null : (require('expo-notification
 
 function alertScreenShareIOSError() {
   Alert.alert(
-    'Screen sharing on iOS',
-    'iOS screen sharing requires a Broadcast Upload Extension built into the app. We\'ll enable this in a future build — for now, screen sharing is available on Android.'
+    'iOS screen sharing',
+    'iOS requires a Broadcast Upload Extension target compiled into the app. The next EAS build that adds the extension will unlock screen sharing on iOS — for now you can share your screen from Android.\n\nWe\u2019ve documented the exact build steps in /app/SCREEN_SHARING_SETUP.md for the next build.',
+    [{ text: 'OK', style: 'default' }],
   );
 }
 
@@ -114,13 +115,6 @@ export default function CallScreen() {
   const requestedType: CallType = typeParam === 'video' || typeParam === 'screen' ? 'video' : 'voice';
   const startInScreenShare = typeParam === 'screen';
   const compactCallLayout = windowHeight < 720;
-  const isVideoCall = callType === 'video';
-  // Video calls need to leave room for an extra row of Camera/Flip controls,
-  // so we shrink the hero avatar (and its pulsing ring wrap) to prevent the
-  // contact name from being pushed down onto the buttons.
-  const heroAvatarSize = isVideoCall
-    ? compactCallLayout ? 72 : 92
-    : compactCallLayout ? 110 : 132;
   const hasValidConversationId = typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
   const canRunCallQueries = isAuthenticated && hasValidConversationId;
 
@@ -167,6 +161,16 @@ export default function CallScreen() {
   const [screenSharing, setScreenSharing] = useState(startInScreenShare);
   const [statusText, setStatusText] = useState('Connecting…');
   const [permissionDenied, setPermissionDenied] = useState(false);
+
+  // Derived values that depend on `callType` MUST come after the useState
+  // above to avoid temporal-dead-zone errors when Metro hot-reloads this file.
+  const isVideoCall = callType === 'video';
+  // Video calls need to leave room for an extra row of Camera/Flip controls,
+  // so we shrink the hero avatar (and its pulsing ring wrap) to prevent the
+  // contact name from being pushed down onto the buttons.
+  const heroAvatarSize = isVideoCall
+    ? compactCallLayout ? 72 : 92
+    : compactCallLayout ? 110 : 132;
   const [callDurationSec, setCallDurationSec] = useState(0);
   const [audioModeReady, setAudioModeReady] = useState(false);
   const [screenReady, setScreenReady] = useState(Platform.OS !== 'android');
@@ -959,6 +963,8 @@ export default function CallScreen() {
           conferenceId={conversationId}
           myUserId={me?._id ? String(me._id) : null}
           onLeave={() => router.back()}
+          onToggleScreenShare={toggleScreenShare}
+          screenSharing={screenSharing}
         />
       ) : null}
     </View>
