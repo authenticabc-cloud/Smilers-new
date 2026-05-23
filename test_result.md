@@ -973,11 +973,11 @@
 ##         comment: "Iteration 65: Wired the ConferenceHUD's 'Share screen' tool button to the call screen's existing toggleScreenShare callback. ConferenceHUDProps now accepts onToggleScreenShare?:() => void|Promise<void> and screenSharing?:boolean; CallScreen passes both down. The tool button label flips between 'Share screen' and 'Stop sharing' and shows a yellow active state when broadcasting. Also added a new toolBtnActive style (yellow bg + brown border) to ToolBtn with `active` prop. Updated the iOS alert copy to mention the SCREEN_SHARING_SETUP.md and clarify the EAS build dependency. Added FOREGROUND_SERVICE_MEDIA_PROJECTION to /app/frontend/app.json (required by Android 14+ for screen capture). The underlying CallSession.startScreenShare()/stopScreenShare() (using react-native-webrtc's getDisplayMedia + RTCRtpSender.replaceTrack) was already implemented in /app/frontend/src/lib/webrtc/CallSession.ts and continues to work. Created comprehensive /app/SCREEN_SHARING_SETUP.md documenting Android (ready now), iOS Broadcast Upload Extension manual setup steps, and code surface map."
 ##   - task: "Pre-existing callType TDZ bug fix in /app/frontend/app/call/[conversationId].tsx"
 ##     implemented: true
-##     working: "NA"
+##     working: true
 ##     file: "/app/frontend/app/call/[conversationId].tsx"
 ##     stuck_count: 0
 ##     priority: "critical"
-##     needs_retesting: true
+##     needs_retesting: false
 ##     status_history:
 ##       - working: false
 ##         agent: "main"
@@ -985,6 +985,56 @@
 ##       - working: "NA"
 ##         agent: "main"
 ##         comment: "Iteration 65: Moved `isVideoCall` and `heroAvatarSize` declarations to AFTER all useState hooks. Verified via screenshot — the conference HUD now renders cleanly with all toolbar buttons visible (Mute / Audio / Screen / Add+ etc.), top role tag, voice composer footer, end-call FAB, and floating mic FAB."
+##       - working: true
+##         agent: "testing"
+##         comment: "Iteration 65 testing agent confirmed the conference HUD renders cleanly without crashes."
+##   - task: "Schedule Messages - bottom sheet + chat composer clock icon + sync to /scheduled inbox (iteration 66 testing)"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/src/components/ScheduleMessageSheet.tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "testing"
+##         comment: "Iteration 66 testing PASSED at 390x844. /schedule-preview opens with bottom sheet visible by default. Verified: gold clock icon + 'Schedule Message' title (22px bold), tab pills with 'Quick pick' active gold + 'Custom time' cream, all 5 quick pick items present (In 30 minutes / In 1 hour / In 3 hours / Tomorrow morning (9 AM) / Tomorrow evening (6 PM)) with computed datetimes on the right (May 23 2:03 PM / 2:33 PM / 4:33 PM / May 24 9:00 AM / 6:00 PM), Recurring checkbox initially unchecked, Cancel button. Tapping Recurring fills checkbox gold with check, reveals 'Repeat frequency:' label + 5 frequency pills (Hourly/Daily-default-gold/Weekly/Monthly/Yearly). Tapping Weekly switches active state to gold. Custom time tab swaps active state, hides quick pick list, shows Date field (23/05/2026 + chevron), Time field (14:33 + chevron), big gold Schedule button. Cancel closes the sheet cleanly. ZERO console errors throughout. Regression sweep PASSED for /chat/test-conv-id (fallback unavailable rendered, no crash), /scheduled (empty state intact), /conference-create (form intact), /face-id, /chat-appearance, /user/test-user-id, /call/test-conv-id?type=video&conferenceMode=1 — all render without crash overlays. Screenshots saved for Quick pick / Recurring on / Custom time states confirming 1:1 visual parity with the web app reference."
+##   - task: "Schedule Messages - bottom sheet + chat composer clock icon + sync to /scheduled inbox"
+##     implemented: true
+##     working: "NA"
+##     file: "/app/frontend/src/components/ScheduleMessageSheet.tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: "NA"
+##         agent: "main"
+##         comment: "Iteration 66: Built a new ScheduleMessageSheet component at /app/frontend/src/components/ScheduleMessageSheet.tsx mirroring the Smilers web app's Schedule Message dialog 1:1 (verified by side-by-side screenshot comparison against the user's reference). Layout: clock icon + 'Schedule Message' title, two-tab pill row 'Quick pick' (active/gold) / 'Custom time', Quick pick = 5 stacked options with computed datetimes (In 30 minutes / In 1 hour / In 3 hours / Tomorrow morning (9 AM) / Tomorrow evening (6 PM)), Custom time = Date dropdown + Time dropdown + big gold Schedule button (using @react-native-community/datetimepicker), Recurring message checkbox at bottom, when checked shows 'Repeat frequency:' label + pill row Hourly/Daily(default-active gold)/Weekly/Monthly/Yearly, Cancel button. Wired into the chat composer at /app/frontend/app/chat/[conversationId].tsx — a clock icon button (Feather clock, cream-background circle) is now rendered next to the send button whenever the composer has non-empty text. On confirm the sheet calls api.scheduledMessages.create with the existing schema {recipient, message, date, time, repeat, active} so the message appears automatically in the existing /scheduled inbox screen. The richer 5-frequency choice (hourly/yearly are not in the deployed schema) is mapped to the closest supported value (hourly→daily, yearly→monthly) so the mutation never fails on a wider client choice. Created a temporary preview route /schedule-preview for visual QA verification. Screenshots confirm 1:1 web parity for all three states (Quick pick / Recurring on / Custom time)."
+##   - task: "Conference create graceful local-only fallback on backend error (iteration 66 regression)"
+##     implemented: true
+##     working: true
+##     file: "/app/frontend/app/conference-create.tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: false
+##     status_history:
+##       - working: true
+##         agent: "testing"
+##         comment: "Iteration 66 regression PASSED: /conference-create still renders at 390x844 with the full form (Title / Description / Type / Schedule / Recurring / Access Control / Create Conference button). No JS crashes, zero console errors. Submission was intentionally not exercised (per test plan). Visual sweep confirms no regressions from the local-only fallback wiring."
+##   - task: "Conference create graceful local-only fallback on backend error"
+##     implemented: true
+##     working: "NA"
+##     file: "/app/frontend/app/conference-create.tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User still hit 'Could not create conference - CONVEX M(conferences:startConference) [Request ID: 34ec1e20c87607c2] Server Error / Called by client' even with the progressive-fallback retries — confirming the deployed Convex function exists but throws internally (not a validator-level issue). Mobile client can't patch the server function."
+##       - working: "NA"
+##         agent: "main"
+##         comment: "Iteration 66: When ALL progressive-fallback retries still fail, the screen now saves the conference 100% locally via persistLocalConferenceMeta (with a local_<ts>_<rand> id) and shows a friendly 'Saved to this device' alert with a clear explanation ('The conferencing backend endpoints haven't been deployed yet, so we've saved your conference on this device. Once the web team ships conferences.startConference, this flow will sync to all your devices.' for missing-function errors, or a shortened version of the raw error + 'Your conference has been saved on this device so you don't lose it' for other backend errors). Tapping OK returns to the previous screen. No more raw 'Server Error' text shown to the user — they're never dead-ended."
 ##       - working: true
 ##         agent: "testing"
 ##         comment: "Iteration 65 testing CONFIRMED: /call/test-conference-id?type=video&conferenceMode=1 renders the full conference HUD cleanly at 390x844 — brown background, top role bar with 'Participant' tag + clock (08:47:18) + chevron icon, center hero (avatar circle 'U' + 'Unknown' + 'Video Call' + 'Connecting…'), toolbar row showing Mute / Audio / Screen (with monitor icon) / Add+ buttons clearly visible, voice composer footer ('Toggle mic / To: everyone'), red end-call FAB at bottom-center, floating white FAB at bottom-right. NO red-screen, NO 'Cannot access callType before initialization' error, NO page errors logged. The Screen tool button is visible and tappable (no crash on tap). /call/test-conference-id?type=voice also stable with no errors. ALL REGRESSION ROUTES PASS: /face-id (Face ID page with Add Face button + Trusted Devices section), /conference-create (full form with title/description/type/schedule/recurring/access control rendering), /chat/test-conv-id (chat with 130px brown header + encryption banner + composer dock), /user/test-user-id?conversationId=test-conv-id (sign-in gate renders correctly). Bundle compiles cleanly, no missing-module errors observed. TDZ bug fix confirmed working in production code path."
@@ -1002,8 +1052,8 @@
 ##   run_ui: false
 ## test_plan:
 ##   current_focus:
-##     - "Native screen sharing wiring + Android MediaProjection foreground service permission"
-##     - "Pre-existing callType TDZ bug fix in /app/frontend/app/call/[conversationId].tsx"
+##     - "Schedule Messages - bottom sheet + chat composer clock icon + sync to /scheduled inbox"
+##     - "Conference create graceful local-only fallback on backend error"
 ##   stuck_tasks:
 ##     - "Voice note send multi-variant fallback + upload cleanup"
 ##   test_all: false
@@ -1240,4 +1290,8 @@
 
 ##   - agent: "main"
 ##     message: "Iteration 65: Native screen sharing wiring + Android MediaProjection permission + critical TDZ bug fix on the call screen. (1) ConferenceHUD's 'Share screen' tool button is now properly wired to the call screen's existing toggleScreenShare callback — previously it was an Alert placeholder. Added onToggleScreenShare and screenSharing optional props to ConferenceHUDProps; CallScreen passes both through. Added an `active` prop to the ToolBtn helper + a new toolBtnActive style (yellow background + brown border) so the share-screen button visually reflects the live broadcasting state, with the label flipping between 'Share screen' and 'Stop sharing'. (2) Added FOREGROUND_SERVICE_MEDIA_PROJECTION permission to /app/frontend/app.json — required by Android 14+ for screen capture services. Android screen sharing will work out of the box after the next EAS build (the @config-plugins/react-native-webrtc plugin already configures the rest). (3) Updated the iOS placeholder alert copy to reference the new /app/SCREEN_SHARING_SETUP.md doc and clarify the EAS build dependency. (4) Created /app/SCREEN_SHARING_SETUP.md documenting Android-ready status + iOS Broadcast Upload Extension manual setup (App Group, Info.plist keys, ReplayKit SampleHandler, extension target steps) + code surface map. (5) CRITICAL BUG FIX: discovered a pre-existing TDZ crash in /app/frontend/app/call/[conversationId].tsx — `const isVideoCall = callType === 'video'` and `const heroAvatarSize = ...` were declared at lines 118/122 BEFORE the `useState<CallType>(requestedType)` declaration of `callType` at line 161, causing 'Uncaught Error: Cannot access callType before initialization' on every direct route load. Moved both derivations to AFTER the useState block. Screenshot at /call/test-conference-id?type=video&conferenceMode=1 now renders the full conference HUD cleanly (top role bar with 'Participant' tag + clock + chevron, center hero with avatar/Unknown/Video Call/Connecting…, toolbar with Mute/Audio/Screen/Add+ buttons, voice composer footer, red end-call FAB, floating mic FAB). PLEASE TEST: visual layout of /call/[anyId]?type=video&conferenceMode=1 (the conference HUD should render now without any red-screen crashes), the Screen tool button is tappable (will trigger the on-Android system MediaProjection prompt in real device; on iOS will show the build-pending alert with the SCREEN_SHARING_SETUP.md reference). No regressions on /face-id, /conference-create, /user/[id], /chat/[id]. The Voice note multi-variant fallback task remains stuck (unchanged from previous iterations)."
+
+
+##   - agent: "main"
+##     message: "Iteration 66: TWO new changes landed. (1) NEW Schedule Messages feature mirroring the web app 1:1. Built /app/frontend/src/components/ScheduleMessageSheet.tsx — bottom sheet with clock icon + 'Schedule Message' title, 'Quick pick' (default active gold) / 'Custom time' tab pills, Quick pick lists 5 stacked options with computed datetimes (In 30 minutes / In 1 hour / In 3 hours / Tomorrow morning (9 AM) / Tomorrow evening (6 PM)), Custom time uses @react-native-community/datetimepicker for Date + Time + a big gold Schedule button, Recurring message checkbox at bottom (when checked reveals 'Repeat frequency:' label + Hourly/Daily(default gold)/Weekly/Monthly/Yearly pills), Cancel button. Wired into the chat composer at /app/frontend/app/chat/[conversationId].tsx — a new clock icon button (cream-bg circle) appears next to the send button whenever the composer has non-empty text. handleScheduleConfirm calls api.scheduledMessages.create with the deployed schema {recipient, message, date, time, repeat, active}; richer hourly/yearly choices are mapped to the closest supported value (hourly→daily, yearly→monthly) so the mutation never rejects. After scheduling, the message clears from the composer and an Alert tells the user 'Find it in Settings → Scheduled Messages'. Screenshots via /schedule-preview confirmed 1:1 web parity across Quick pick / Recurring on / Custom time states. (2) Conference create now gracefully degrades to a 100% local save when ALL progressive-fallback retries fail (previously surfaced raw 'Server Error / Called by client' to the user). On failure persistLocalConferenceMeta stores the full payload with a local_<ts> id and an Alert says 'Saved to this device' with a clear explanation depending on whether the function is missing or just throwing — no more dead-ends. PLEASE TEST: visual layout match for /schedule-preview (Quick pick tab gold, 5 options with computed times, Recurring checkbox + 5 frequency pills appear when checked, Custom time tab shows Date+Time fields and big Schedule button, Cancel works), the chat composer at /chat/[id] shows a small clock icon button next to send when text is typed, and the existing /scheduled inbox route still renders cleanly (no regressions). Also confirm /conference-create still renders correctly and no JS crashes on /chat/[id] or /face-id. The voice note multi-variant fallback task remains stuck (unchanged)."
 

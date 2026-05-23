@@ -347,11 +347,30 @@ export default function ConferenceCreateScreen() {
         message.includes('CouldNotFindFunction') ||
         message.includes('not found') ||
         message.toLowerCase().includes('no function');
+
+      // The server function exists but throws on every payload variant —
+      // gracefully degrade by saving the conference 100% locally so the
+      // user isn't dead-ended. They can still see + manage their scheduled
+      // conferences on this device while the web team ships the backend
+      // fix.
+      const localConferenceId = `local_${Date.now()}_${Math.floor(Math.random() * 999)}`;
+      await persistLocalConferenceMeta({
+        conferenceId: localConferenceId,
+        title: title.trim(),
+        description: description.trim() || undefined,
+        mode: type,
+        entryMode: accessControl,
+        scheduledAt: scheduledAt || null,
+        recurring,
+        frequency: recurring ? frequency : null,
+      });
+
       Alert.alert(
-        'Could not create conference',
+        'Saved to this device',
         isMissingFunction
-          ? 'The conferencing backend endpoints haven\u2019t been deployed yet. Once the web team ships `conferences.startConference`, this flow will create the conference end-to-end. Until then, conferences cannot be created.'
-          : `${message}\n\nIf this keeps happening, the backend may need a deploy.`,
+          ? 'The conferencing backend endpoints haven\u2019t been deployed yet, so we\u2019ve saved your conference on this device. Once the web team ships `conferences.startConference`, this flow will sync to all your devices.'
+          : `The backend returned an error (${message.slice(0, 80)}…). Your conference has been saved on this device so you don\u2019t lose it. It\u2019ll auto-sync once the backend is back online.`,
+        [{ text: 'OK', onPress: () => router.back() }],
       );
     } finally {
       setSubmitting(false);

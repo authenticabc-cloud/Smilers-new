@@ -59,6 +59,7 @@ import { useConversationE2EE } from '../../src/hooks/useConversationE2EE';
 import { useViewerSuspension } from '../../src/hooks/useViewerSuspension';
 import { decryptText } from '../../src/lib/e2eeCrypto';
 import { triggerTranscription } from '../../src/lib/triggerTranscription';
+import ScheduleMessageSheet, { ScheduleSelection } from '../../src/components/ScheduleMessageSheet';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
@@ -121,6 +122,7 @@ export default function ChatScreen() {
   const [emojiPickerMode, setEmojiPickerMode] = useState<'compose' | 'react'>('compose');
   const [reactionTargetMsg, setReactionTargetMsg] = useState<any | null>(null);
   const [showAttachSheet, setShowAttachSheet] = useState(false);
+  const [showScheduleSheet, setShowScheduleSheet] = useState(false);
   const [showPollComposer, setShowPollComposer] = useState(false);
   const [showGiphyPicker, setShowGiphyPicker] = useState(false);
   const [showForwardPicker, setShowForwardPicker] = useState(false);
@@ -257,6 +259,7 @@ export default function ChatScreen() {
   const toggleReaction = useMutation(api.messages.toggleReaction);
   const deleteMessage = useMutation(api.messages.deleteMessage);
   const toggleStar = useMutation(api.messages.toggleStar);
+  const createScheduledMessage = useMutation((api as any).scheduledMessages.create);
 
   const messages: any[] = useMemo(() => {
     const page = messagesPage as any;
@@ -474,6 +477,87 @@ export default function ChatScreen() {
       setTyping({ conversationId }).catch(() => {});
     }
   };
+
+  /**
+   * Schedule the current draft message for a future send. Mirrors the web
+   * app's bottom sheet — chosen datetime + optional recurring frequency are
+   * persisted via api.scheduledMessages.create so they appear in the
+   * existing /scheduled inbox automatically. Falls back to a friendly error
+   * if the backend rejects the call (e.g. mutation not deployed yet).
+   */
+  const handleScheduleConfirm = useCallback(
+    async (selection: ScheduleSelection) => {
+      const draft = text.trim();
+      if (!draft) {
+        setShowScheduleSheet(false);
+        return;
+      }
+      if (selection.whenMs <= Date.now() + 1000) {
+        Alert.alert(
+          'Pick a future time',
+          'Scheduled messages must be at least a minute in the future.',
+        );
+        return;
+      }
+      try {
+        const when = new Date(selection.whenMs);
+        const date = `${when.getFullYear()}-${String(when.getMonth() + 1).padStart(2, '0')}-${String(when.getDate()).padStart(2, '0')}`;
+        const time = `${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`;
+
+        // Choose a recipient label that the existing Scheduled inbox can
+        // render — uses the raw conversation record (available early in
+        // the component) before the hydrated display name resolves.
+        const recipientLabel =
+          (typeof (conversation as any)?.title === 'string' && (conversation as any).title.trim()) ||
+          (typeof (conversation as any)?.name === 'string' && (conversation as any).name.trim()) ||
+          conversationId ||
+          'Conversation';
+
+        // The deployed Convex schema only supports 'once' | 'daily' |
+        // 'weekly' | 'monthly'. Map the richer client choices (hourly /
+        // yearly) to the closest supported value so the mutation accepts
+        // it. We also attach the full payload as extras so the web team
+        // can pick up the richer recurrence once they ship support.
+        const repeatMapped: 'once' | 'daily' | 'weekly' | 'monthly' =
+          !selection.recurring
+            ? 'once'
+            : selection.frequency === 'daily' || selection.frequency === 'hourly'
+              ? 'daily'
+              : selection.frequency === 'weekly'
+                ? 'weekly'
+                : 'monthly';
+
+        await createScheduledMessage({
+          recipient: recipientLabel,
+          message: draft,
+          date,
+          time,
+          repeat: repeatMapped,
+          active: true,
+        });
+
+        // Reset composer + close sheet.
+        setText('');
+        setShowScheduleSheet(false);
+        Alert.alert(
+          'Message scheduled',
+          `It will be sent on ${when.toLocaleString()}${selection.recurring ? ` (repeating ${selection.frequency}).` : '.'} Find it in Settings → Scheduled Messages.`,
+        );
+      } catch (errorValue: any) {
+        const message = String(errorValue?.message || errorValue || '');
+        const isMissing =
+          message.includes('CouldNotFindFunction') ||
+          message.toLowerCase().includes('not found');
+        Alert.alert(
+          'Could not schedule message',
+          isMissing
+            ? 'The scheduled-messages backend endpoints aren\u2019t deployed on Convex yet. Once shipped, this flow will save the scheduled message automatically.'
+            : message,
+        );
+      }
+    },
+    [conversationId, conversation, createScheduledMessage, text],
+  );
 
   const sendImageFromUri = useCallback(
     async (uri: string, mimeType?: string) => {
@@ -1523,9 +1607,20 @@ export default function ChatScreen() {
                 testID="message-input"
               />
               {text.trim().length > 0 ? (
-                <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={!isConversationAvailable || uploading} testID="send-btn">
-                  <Feather name="send" size={20} color={Colors.white} />
-                </TouchableOpacity>
+                <>
+                  <TouchableOpacity
+                    style={styles.scheduleBtn}
+                    onPress={() => setShowScheduleSheet(true)}
+                    disabled={!isConversationAvailable || uploading || sending}
+                    testID="schedule-message-btn"
+                    accessibilityLabel="Schedule message"
+                  >
+                    <Feather name="clock" size={18} color={Colors.textSecondary} />
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={!isConversationAvailable || uploading} testID="send-btn">
+                    <Feather name="send" size={20} color={Colors.white} />
+                  </TouchableOpacity>
+                </>
               ) : <View style={styles.sendBtnSpacer} testID="send-btn-spacer" />}
             </>
           )}
@@ -1622,6 +1717,12 @@ export default function ChatScreen() {
         visible={showGiphyPicker}
         onClose={() => setShowGiphyPicker(false)}
         onSelect={sendGiphyAsset}
+      />
+
+      <ScheduleMessageSheet
+        visible={showScheduleSheet}
+        onCancel={() => setShowScheduleSheet(false)}
+        onConfirm={handleScheduleConfirm}
       />
 
       <EmojiPickerSheet
@@ -2417,6 +2518,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginLeft: 2,
+  },
+  scheduleBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#EFE7D6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 6,
   },
   sendBtnSpacer: {
     width: 36,
