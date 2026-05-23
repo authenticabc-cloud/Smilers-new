@@ -57,7 +57,7 @@ const PLANS: PlanOption[] = [
     key: '6months',
     variantId: 'var_premium_6months',
     label: '6 Months',
-    priceLabel: '€30',
+    priceLabel: '€15',
     perMonth: '/6 months',
     savings: 'Save 17%',
   },

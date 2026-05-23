@@ -6,7 +6,7 @@ mobile app `/premium` route + the `<PremiumGate>` wrapper on the
 
 The full spec was provided by the web app agent. Pricing:
 * **€3 / month** — `var_premium_monthly`
-* **€30 / 6 months** — `var_premium_6months`
+* **€15 / 6 months** — `var_premium_6months`
 * **€24 / year** — `var_premium_yearly` (highlighted as **Best value**)
 
 Every new user gets a **30-day free trial** from their `_creationTime`.

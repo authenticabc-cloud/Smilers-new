@@ -395,13 +395,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   trusteeName: {
-    fontSize: 22,
-    fontWeight: FontWeight.bold,
+    fontSize: 16,
+    fontWeight: FontWeight.semibold,
     color: '#1F1711',
   },
   trusteeMeta: {
-    marginTop: 4,
-    fontSize: 16,
+    marginTop: 2,
+    fontSize: 13,
     color: '#6E665B',
   },
   removeButton: {
