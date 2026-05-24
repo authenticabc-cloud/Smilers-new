@@ -153,9 +153,9 @@ export default function ChatsScreen() {
       <SosButton onPress={() => router.push('/emergency' as any)} />
       <FabStack
         onPencil={() => router.push('/(tabs)/contacts')}
-        onBuilding={() => {}}
-        onBroadcast={() => {}}
-        onPeople={() => router.push('/(tabs)/groups')}
+        onBuilding={() => router.push('/community-create' as any)}
+        onBroadcast={() => router.push('/broadcast-create' as any)}
+        onPeople={() => router.push('/groups-create' as any)}
       />
     </SafeAreaView>
   );

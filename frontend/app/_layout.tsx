@@ -92,6 +92,8 @@ export default function RootLayout() {
               <Stack.Screen name="call/[conversationId]" options={{ presentation: 'modal' }} />
               <Stack.Screen name="conference/[conferenceId]" options={{ presentation: 'modal' }} />
               <Stack.Screen name="groups-create" />
+              <Stack.Screen name="broadcast-create" />
+              <Stack.Screen name="community-create" />
               <Stack.Screen name="conference-create" />
               <Stack.Screen name="ads/create" />
               <Stack.Screen name="ads/review" />
