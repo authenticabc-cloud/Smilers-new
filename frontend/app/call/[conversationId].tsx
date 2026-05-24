@@ -33,6 +33,7 @@ import { StatusBar } from 'expo-status-bar';
 import { api } from '../../src/convexApi';
 import ConferenceHUD from '../../src/components/ConferenceHUD';
 import ScreenShareOverlay from '../../src/components/ScreenShareOverlay';
+import ScreenShareSwitchControls from '../../src/components/ScreenShareSwitchControls';
 import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials, getDisplayNameFromUser } from '../../src/lib/displayName';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { useConversationOtherUser } from '../../src/hooks/useConversationOtherUser';
@@ -1013,8 +1014,21 @@ export default function CallScreen() {
             router.back();
           }}
           RTCViewImpl={RTCViewImpl}
+          sessionId={conversationId || null}
+          conversationId={conversationId || null}
         />
-      ) : null}
+      ) : (
+        // In-call mode (non-screen-only): mount the switch-share listener so
+        // that if a remote viewer requests to take over our screen broadcast,
+        // we see the accept/decline modal. The viewer-side "Request to share"
+        // button is currently only available via the standalone screen-share
+        // route; can be exposed in-call in a follow-up iteration.
+        <ScreenShareSwitchControls
+          sessionId={conversationId || null}
+          conversationId={conversationId || null}
+          role="sharer"
+        />
+      )}
     </View>
   );
 

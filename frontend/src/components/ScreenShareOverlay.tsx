@@ -47,6 +47,8 @@ export default function ScreenShareOverlay({
   onToggleScreenShare,
   onStop,
   RTCViewImpl,
+  sessionId,
+  conversationId,
 }: ScreenShareOverlayProps) {
   const insets = useSafeAreaInsets();
   const pulse = useRef(new Animated.Value(0)).current;
@@ -115,6 +117,8 @@ export default function ScreenShareOverlay({
         </SafeAreaView>
 
         <View style={[styles.viewerStopWrap, { paddingBottom: Math.max(insets.bottom, 18) }]}>
+          {/* Switch-share request (viewer asks sharer to swap roles). */}
+          <ScreenShareSwitchControls sessionId={sessionId || null} role="viewer" />
           <TouchableOpacity
             style={styles.stopBtnDanger}
             onPress={onStop}
@@ -125,6 +129,14 @@ export default function ScreenShareOverlay({
             <Text style={styles.stopBtnText}>Leave screen share</Text>
           </TouchableOpacity>
         </View>
+        {/* If this device is also the sharer in another flow (shouldn't normally
+            happen on viewer route), still mount the sharer modal listener so
+            edge cases work. */}
+        <ScreenShareSwitchControls
+          sessionId={sessionId || null}
+          conversationId={conversationId || null}
+          role="sharer"
+        />
       </View>
     );
   }
@@ -209,6 +221,14 @@ export default function ScreenShareOverlay({
           <Text style={styles.stopBtnText}>End screen share</Text>
         </TouchableOpacity>
       </View>
+      {/* Sharer-side listener: shows accept/decline modal when a viewer
+          requests to take over the share. Safe no-op if backend mutations
+          aren't deployed yet. */}
+      <ScreenShareSwitchControls
+        sessionId={sessionId || null}
+        conversationId={conversationId || null}
+        role="sharer"
+      />
     </View>
   );
 }
