@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -22,7 +23,8 @@ import { useAuth } from '../src/providers/AuthProvider';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
-type Tab = 'overview' | 'users' | 'reports' | 'ads';
+type Tab = 'overview' | 'users' | 'reports' | 'ads' | 'premium' | 'activity';
+type AdsSubTab = 'review' | 'codes';
 
 interface Stats {
   totalUsers?: number;
@@ -111,6 +113,7 @@ export default function AdminDashboard() {
   const rejectAd = useMutation(api.ads.rejectAd);
 
   const [tab, setTab] = useState<Tab>('overview');
+  const [adsSubTab, setAdsSubTab] = useState<AdsSubTab>('review');
   const [busyId, setBusyId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -265,6 +268,8 @@ export default function AdminDashboard() {
     { key: 'users', label: 'Users', icon: 'people-outline', badge: stats?.totalUsers },
     { key: 'reports', label: 'Reports', icon: 'flag-outline', badge: stats?.pendingReports || reports?.length },
     { key: 'ads', label: 'Ads', icon: 'megaphone-outline', badge: stats?.pendingAds || pendingAds?.length },
+    { key: 'premium', label: 'Premium', icon: 'star-outline' },
+    { key: 'activity', label: 'Activity', icon: 'pulse-outline' },
   ];
 
   return (
@@ -334,8 +339,12 @@ export default function AdminDashboard() {
             busyId={busyId}
             onApprove={onApproveAd}
             onReject={onOpenReject}
+            subTab={adsSubTab}
+            onChangeSubTab={setAdsSubTab}
           />
         ) : null}
+        {tab === 'premium' ? <PremiumTab isAdmin={isAdmin} /> : null}
+        {tab === 'activity' ? <ActivityTab isAdmin={isAdmin} /> : null}
       </ScrollView>
 
       {/* Reject ad modal */}
@@ -617,6 +626,62 @@ function AdsTab({
   busyId,
   onApprove,
   onReject,
+  subTab,
+  onChangeSubTab,
+}: {
+  loading: boolean;
+  ads: AdItem[];
+  busyId: string | null;
+  onApprove: (a: AdItem) => void;
+  onReject: (a: AdItem) => void;
+  subTab: 'review' | 'codes';
+  onChangeSubTab: (t: 'review' | 'codes') => void;
+}) {
+  return (
+    <View>
+      {/* Sub-tab toggle */}
+      <View style={styles.subTabBar} testID="admin-ads-subtabs">
+        <TouchableOpacity
+          style={[styles.subTab, subTab === 'review' ? styles.subTabActive : null]}
+          onPress={() => onChangeSubTab('review')}
+          testID="admin-ads-subtab-review"
+        >
+          <Ionicons
+            name="checkmark-circle-outline"
+            size={16}
+            color={subTab === 'review' ? Colors.headerBg : Colors.textSecondary}
+          />
+          <Text style={[styles.subTabText, subTab === 'review' ? styles.subTabTextActive : null]}>
+            Review ads
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.subTab, subTab === 'codes' ? styles.subTabActive : null]}
+          onPress={() => onChangeSubTab('codes')}
+          testID="admin-ads-subtab-codes"
+        >
+          <Ionicons
+            name="ticket-outline"
+            size={16}
+            color={subTab === 'codes' ? Colors.headerBg : Colors.textSecondary}
+          />
+          <Text style={[styles.subTabText, subTab === 'codes' ? styles.subTabTextActive : null]}>
+            Ad codes
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {subTab === 'codes' ? <AdCodesTab /> : <AdsReviewList loading={loading} ads={ads} busyId={busyId} onApprove={onApprove} onReject={onReject} />}
+    </View>
+  );
+}
+
+function AdsReviewList({
+  loading,
+  ads,
+  busyId,
+  onApprove,
+  onReject,
 }: {
   loading: boolean;
   ads: AdItem[];
@@ -690,6 +755,546 @@ function AdsTab({
 }
 
 /* ──────────────── Helpers ──────────────── */
+
+async function copyToClipboard(text: string) {
+  try {
+    const Clipboard = require('expo-clipboard');
+    await Clipboard.setStringAsync(text);
+  } catch {
+    // Best-effort; clipboard is optional.
+  }
+}
+
+function StatusPill({ status }: { status: string }) {
+  const cfg: Record<string, { bg: string; fg: string; label: string }> = {
+    active: { bg: '#D1FAE5', fg: '#065F46', label: 'ACTIVE' },
+    redeemed: { bg: '#DBEAFE', fg: '#1E3A8A', label: 'REDEEMED' },
+    exhausted: { bg: '#F3F4F6', fg: '#374151', label: 'EXHAUSTED' },
+    revoked: { bg: '#FEE2E2', fg: '#991B1B', label: 'REVOKED' },
+  };
+  const c = cfg[status] || { bg: '#F3F4F6', fg: '#374151', label: status.toUpperCase() };
+  return (
+    <View style={[styles.tag, { backgroundColor: c.bg }]}>
+      <Text style={[styles.tagText, { color: c.fg }]}>{c.label}</Text>
+    </View>
+  );
+}
+
+/* ──────────────── PREMIUM TAB ──────────────── */
+interface PremiumCodeItem {
+  _id: string;
+  code: string;
+  type: 'lifetime' | 'months';
+  durationMonths?: number;
+  status: 'active' | 'redeemed' | 'revoked';
+  redeemedBy?: { name?: string };
+  redeemedByName?: string;
+  note?: string;
+  _creationTime?: number;
+}
+
+function PremiumTab({ isAdmin }: { isAdmin: boolean }) {
+  const { data: codes, refetch, loading } = useSafeConvexQuery<PremiumCodeItem[]>(
+    (api as any).premium.listLicenseCodes,
+    {},
+    [],
+    isAdmin,
+  );
+
+  const generateCode = useMutation((api as any).premium.generateLicenseCode);
+  const revokeCode = useMutation((api as any).premium.revokeLicenseCode);
+
+  const [busy, setBusy] = useState(false);
+  const [months, setMonths] = useState('1');
+  const [note, setNote] = useState('');
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const handleGenerate = async (type: 'lifetime' | 'months') => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const args: any = { type, note: note.trim() || undefined };
+      if (type === 'months') {
+        const m = Math.max(1, parseInt(months || '1', 10));
+        args.durationMonths = m;
+      }
+      const created: any = await generateCode(args);
+      const codeStr = typeof created === 'string' ? created : created?.code || '';
+      Alert.alert(
+        'Premium code generated',
+        codeStr ? `Code: ${codeStr}\n\n${type === 'lifetime' ? 'Lifetime access' : `${args.durationMonths} month${args.durationMonths === 1 ? '' : 's'}`}` : 'Code created.',
+        [
+          { text: 'Copy', onPress: () => codeStr && copyToClipboard(codeStr) },
+          { text: 'OK', style: 'cancel' },
+        ],
+      );
+      setNote('');
+      await refetch();
+    } catch (e: any) {
+      const message = String(e?.message || '');
+      const isMissing = message.includes('CouldNotFindFunction') || message.includes('not found');
+      Alert.alert(
+        'Could not generate code',
+        isMissing
+          ? 'The backend has not deployed api.premium.generateLicenseCode yet.'
+          : message || 'Please try again.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRevoke = (code: PremiumCodeItem) => {
+    Alert.alert('Revoke code?', `Revoke ${code.code}? This cannot be undone.`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Revoke',
+        style: 'destructive',
+        onPress: async () => {
+          setBusyId(code._id);
+          try {
+            await revokeCode({ codeId: code._id });
+            await refetch();
+          } catch (e: any) {
+            Alert.alert('Revoke failed', e?.message || 'Please try again.');
+          } finally {
+            setBusyId(null);
+          }
+        },
+      },
+    ]);
+  };
+
+  return (
+    <View style={{ paddingTop: Spacing.md, paddingHorizontal: Spacing.base, gap: Spacing.md }}>
+      {/* Generate card */}
+      <View style={styles.codeGenCard} testID="admin-premium-gen-card">
+        <View style={styles.codeGenHeader}>
+          <Ionicons name="star" size={20} color={Colors.primary} />
+          <Text style={styles.codeGenTitle}>Generate premium license code</Text>
+        </View>
+        <Text style={styles.codeGenSub}>Format: PRE-XXX-XXX · prefix &quot;PRE-&quot;</Text>
+
+        <View style={styles.codeGenRow}>
+          <View style={styles.codeGenField}>
+            <Text style={styles.codeGenLabel}>Duration (months)</Text>
+            <TextInput
+              value={months}
+              onChangeText={(v) => setMonths(v.replace(/[^0-9]/g, '').slice(0, 4))}
+              placeholder="1"
+              placeholderTextColor={Colors.textMuted}
+              keyboardType="number-pad"
+              style={styles.codeGenInput}
+              testID="admin-premium-months-input"
+            />
+          </View>
+        </View>
+
+        <View style={styles.codeGenField}>
+          <Text style={styles.codeGenLabel}>Note (optional)</Text>
+          <TextInput
+            value={note}
+            onChangeText={setNote}
+            placeholder="e.g. Gift to early adopter"
+            placeholderTextColor={Colors.textMuted}
+            style={styles.codeGenInput}
+            testID="admin-premium-note-input"
+          />
+        </View>
+
+        <View style={styles.codeGenActionsRow}>
+          <TouchableOpacity
+            style={[styles.smallBtn, styles.smallBtnApprove, busy ? { opacity: 0.6 } : null]}
+            onPress={() => handleGenerate('months')}
+            disabled={busy}
+            testID="admin-premium-gen-months"
+          >
+            {busy ? (
+              <ActivityIndicator size="small" color={Colors.white} />
+            ) : (
+              <>
+                <Ionicons name="time-outline" size={16} color={Colors.white} />
+                <Text style={styles.smallBtnDangerText}>Generate {months}mo</Text>
+              </>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.smallBtn, { backgroundColor: '#7C3AED' }, busy ? { opacity: 0.6 } : null]}
+            onPress={() => handleGenerate('lifetime')}
+            disabled={busy}
+            testID="admin-premium-gen-lifetime"
+          >
+            <Ionicons name="infinite-outline" size={16} color={Colors.white} />
+            <Text style={styles.smallBtnDangerText}>Lifetime</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Codes list */}
+      {loading && codes.length === 0 ? (
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator size="small" color={Colors.primary} />
+        </View>
+      ) : codes.length === 0 ? (
+        <EmptyState icon="ticket-outline" title="No premium codes yet" body="Generate one above to share with users." />
+      ) : (
+        <View style={{ gap: Spacing.sm }}>
+          {codes.map((c) => (
+            <CodeRow
+              key={c._id}
+              code={c.code}
+              status={c.status}
+              info={c.type === 'lifetime' ? 'Lifetime' : `${c.durationMonths || 1}mo`}
+              redeemedBy={c.redeemedBy?.name || c.redeemedByName}
+              note={c.note}
+              creationTime={c._creationTime}
+              busy={busyId === c._id}
+              canRevoke={c.status === 'active'}
+              onRevoke={() => handleRevoke(c)}
+              testID={`admin-premium-code-${c._id}`}
+            />
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
+
+/* ──────────────── AD CODES TAB ──────────────── */
+interface AdCodeItem {
+  _id: string;
+  code: string;
+  type: 'credit' | 'lifetime';
+  amountEur?: number;
+  remainingEur?: number;
+  status: 'active' | 'redeemed' | 'exhausted' | 'revoked';
+  redeemedBy?: { name?: string };
+  redeemedByName?: string;
+  note?: string;
+  _creationTime?: number;
+}
+
+function AdCodesTab() {
+  const { data: codes, refetch, loading } = useSafeConvexQuery<AdCodeItem[]>(
+    (api as any).adCreditCodes.listCodes,
+    {},
+    [],
+    true,
+  );
+
+  const generateCredit = useMutation((api as any).adCreditCodes.generateCreditCode);
+  const generateLifetime = useMutation((api as any).adCreditCodes.generateLifetimeCode);
+  const revokeCode = useMutation((api as any).adCreditCodes.revokeCode);
+
+  const [busy, setBusy] = useState(false);
+  const [amount, setAmount] = useState('10');
+  const [note, setNote] = useState('');
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const clickEstimate = useMemo(() => {
+    const n = parseFloat(amount || '0');
+    if (Number.isNaN(n) || n <= 0) return 0;
+    return Math.floor(n / 0.04);
+  }, [amount]);
+
+  const handleGen = async (type: 'credit' | 'lifetime') => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      let created: any;
+      if (type === 'credit') {
+        const n = parseFloat(amount || '0');
+        if (!n || n <= 0) {
+          Alert.alert('Invalid amount', 'Enter a positive EUR amount.');
+          setBusy(false);
+          return;
+        }
+        created = await generateCredit({ amountEur: n, note: note.trim() || undefined });
+      } else {
+        created = await generateLifetime({ note: note.trim() || undefined });
+      }
+      const codeStr = typeof created === 'string' ? created : created?.code || '';
+      Alert.alert(
+        'Ad code generated',
+        codeStr ? `Code: ${codeStr}` : 'Created.',
+        [
+          { text: 'Copy', onPress: () => codeStr && copyToClipboard(codeStr) },
+          { text: 'OK', style: 'cancel' },
+        ],
+      );
+      setNote('');
+      await refetch();
+    } catch (e: any) {
+      const message = String(e?.message || '');
+      const isMissing = message.includes('CouldNotFindFunction') || message.includes('not found');
+      Alert.alert(
+        'Could not generate code',
+        isMissing ? 'The ad codes backend endpoints have not been deployed yet.' : message || 'Please try again.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRevoke = (code: AdCodeItem) => {
+    Alert.alert('Revoke code?', `Revoke ${code.code}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Revoke',
+        style: 'destructive',
+        onPress: async () => {
+          setBusyId(code._id);
+          try {
+            await revokeCode({ codeId: code._id });
+            await refetch();
+          } catch (e: any) {
+            Alert.alert('Revoke failed', e?.message || 'Please try again.');
+          } finally {
+            setBusyId(null);
+          }
+        },
+      },
+    ]);
+  };
+
+  return (
+    <View style={{ paddingTop: Spacing.md, paddingHorizontal: Spacing.base, gap: Spacing.md }}>
+      <View style={styles.codeGenCard} testID="admin-adcodes-gen-card">
+        <View style={styles.codeGenHeader}>
+          <Ionicons name="ticket" size={20} color={Colors.primary} />
+          <Text style={styles.codeGenTitle}>Generate ad credit code</Text>
+        </View>
+        <Text style={styles.codeGenSub}>Format: XXX-XXX-XXX</Text>
+
+        <View style={styles.codeGenField}>
+          <Text style={styles.codeGenLabel}>Amount (EUR)</Text>
+          <TextInput
+            value={amount}
+            onChangeText={(v) => setAmount(v.replace(/[^0-9.]/g, '').slice(0, 8))}
+            placeholder="10"
+            placeholderTextColor={Colors.textMuted}
+            keyboardType="decimal-pad"
+            style={styles.codeGenInput}
+            testID="admin-adcodes-amount-input"
+          />
+          {clickEstimate > 0 ? (
+            <Text style={styles.codeGenHint}>≈ {clickEstimate.toLocaleString()} clicks at €0.04/click</Text>
+          ) : null}
+        </View>
+
+        <View style={styles.codeGenField}>
+          <Text style={styles.codeGenLabel}>Note (optional)</Text>
+          <TextInput
+            value={note}
+            onChangeText={setNote}
+            placeholder="e.g. Promo for ACME"
+            placeholderTextColor={Colors.textMuted}
+            style={styles.codeGenInput}
+            testID="admin-adcodes-note-input"
+          />
+        </View>
+
+        <View style={styles.codeGenActionsRow}>
+          <TouchableOpacity
+            style={[styles.smallBtn, styles.smallBtnApprove, busy ? { opacity: 0.6 } : null]}
+            onPress={() => handleGen('credit')}
+            disabled={busy}
+            testID="admin-adcodes-gen-credit"
+          >
+            {busy ? (
+              <ActivityIndicator size="small" color={Colors.white} />
+            ) : (
+              <>
+                <Ionicons name="cash-outline" size={16} color={Colors.white} />
+                <Text style={styles.smallBtnDangerText}>Credit code</Text>
+              </>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.smallBtn, { backgroundColor: '#7C3AED' }, busy ? { opacity: 0.6 } : null]}
+            onPress={() => handleGen('lifetime')}
+            disabled={busy}
+            testID="admin-adcodes-gen-lifetime"
+          >
+            <Ionicons name="infinite-outline" size={16} color={Colors.white} />
+            <Text style={styles.smallBtnDangerText}>Lifetime</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {loading && codes.length === 0 ? (
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator size="small" color={Colors.primary} />
+        </View>
+      ) : codes.length === 0 ? (
+        <EmptyState icon="ticket-outline" title="No ad codes yet" body="Generate one above to share with advertisers." />
+      ) : (
+        <View style={{ gap: Spacing.sm }}>
+          {codes.map((c) => (
+            <CodeRow
+              key={c._id}
+              code={c.code}
+              status={c.status}
+              info={
+                c.type === 'lifetime'
+                  ? 'Lifetime'
+                  : `€${(c.amountEur || 0).toFixed(2)}${
+                      typeof c.remainingEur === 'number' ? ` · €${c.remainingEur.toFixed(2)} left` : ''
+                    }`
+              }
+              redeemedBy={c.redeemedBy?.name || c.redeemedByName}
+              note={c.note}
+              creationTime={c._creationTime}
+              busy={busyId === c._id}
+              canRevoke={c.status === 'active' || c.status === 'redeemed'}
+              onRevoke={() => handleRevoke(c)}
+              testID={`admin-adcode-${c._id}`}
+            />
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
+
+/* ──────────────── ACTIVITY TAB ──────────────── */
+interface ActivityItem {
+  _id: string;
+  type?: 'text' | 'image' | 'video' | 'voice' | 'file' | 'poll' | string;
+  content?: string;
+  text?: string;
+  senderName?: string;
+  sender?: { name?: string };
+  conversationName?: string;
+  conversation?: { name?: string; isGroup?: boolean };
+  _creationTime?: number;
+}
+
+function ActivityTab({ isAdmin }: { isAdmin: boolean }) {
+  const { data: items, loading } = useSafeConvexQuery<ActivityItem[]>(
+    (api as any).admin.queries.getRecentActivity,
+    {},
+    [],
+    isAdmin,
+  );
+
+  if (loading && items.length === 0) {
+    return (
+      <View style={styles.loadingWrap}>
+        <ActivityIndicator size="small" color={Colors.primary} />
+      </View>
+    );
+  }
+  if (items.length === 0) {
+    return <EmptyState icon="pulse-outline" title="No recent activity" body="Recent messages will appear here." />;
+  }
+
+  const iconFor = (t?: string) => {
+    switch (t) {
+      case 'image': return 'image-outline';
+      case 'video': return 'videocam-outline';
+      case 'voice': return 'mic-outline';
+      case 'file': return 'document-outline';
+      case 'poll': return 'stats-chart-outline';
+      default: return 'chatbubble-ellipses-outline';
+    }
+  };
+
+  return (
+    <View style={{ paddingTop: Spacing.md, paddingHorizontal: Spacing.base, gap: 6 }}>
+      {items.map((m) => {
+        const senderName = m.senderName || m.sender?.name || 'Unknown';
+        const convName = m.conversationName || m.conversation?.name || (m.conversation?.isGroup ? 'Group' : 'Direct message');
+        const preview = m.text || m.content || `[${m.type || 'message'}]`;
+        return (
+          <View key={m._id} style={styles.activityRow} testID={`admin-activity-${m._id}`}>
+            <View style={[styles.activityIcon, { backgroundColor: Colors.primaryLight }]}>
+              <Ionicons name={iconFor(m.type) as any} size={16} color={Colors.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <View style={styles.activityHeaderRow}>
+                <Text style={styles.activitySender} numberOfLines={1}>{senderName}</Text>
+                <Text style={styles.activityConv} numberOfLines={1}> · {convName}</Text>
+              </View>
+              <Text style={styles.activityPreview} numberOfLines={2}>{preview}</Text>
+              {m._creationTime ? (
+                <Text style={styles.activityTime}>{new Date(m._creationTime).toLocaleString()}</Text>
+              ) : null}
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+/* ──────────────── CodeRow (shared) ──────────────── */
+function CodeRow({
+  code,
+  status,
+  info,
+  redeemedBy,
+  note,
+  creationTime,
+  busy,
+  canRevoke,
+  onRevoke,
+  testID,
+}: {
+  code: string;
+  status: string;
+  info: string;
+  redeemedBy?: string;
+  note?: string;
+  creationTime?: number;
+  busy?: boolean;
+  canRevoke?: boolean;
+  onRevoke: () => void;
+  testID?: string;
+}) {
+  return (
+    <View style={styles.codeRow} testID={testID}>
+      <View style={styles.codeRowTopLine}>
+        <Text style={styles.codeText} selectable>{code}</Text>
+        <StatusPill status={status} />
+      </View>
+      <View style={styles.codeRowMetaLine}>
+        <Text style={styles.codeInfo}>{info}</Text>
+        {creationTime ? <Text style={styles.codeTime}>{new Date(creationTime).toLocaleDateString()}</Text> : null}
+      </View>
+      {redeemedBy ? <Text style={styles.codeRedeemed}>Redeemed by {redeemedBy}</Text> : null}
+      {note ? <Text style={styles.codeNote}>📝 {note}</Text> : null}
+      <View style={styles.codeRowActions}>
+        <TouchableOpacity
+          style={[styles.smallBtn, styles.smallBtnGhost]}
+          onPress={() => copyToClipboard(code)}
+          testID={`${testID}-copy`}
+        >
+          <Ionicons name="copy-outline" size={14} color={Colors.textSecondary} />
+          <Text style={styles.smallBtnGhostText}>Copy</Text>
+        </TouchableOpacity>
+        {canRevoke ? (
+          <TouchableOpacity
+            style={[styles.smallBtn, styles.smallBtnDanger, busy ? { opacity: 0.5 } : null]}
+            onPress={onRevoke}
+            disabled={busy}
+            testID={`${testID}-revoke`}
+          >
+            {busy ? (
+              <ActivityIndicator size="small" color={Colors.white} />
+            ) : (
+              <>
+                <Ionicons name="close-circle-outline" size={14} color={Colors.white} />
+                <Text style={styles.smallBtnDangerText}>Revoke</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 function EmptyState({ icon, title, body }: { icon: string; title: string; body: string }) {
   return (
     <View style={styles.emptyWrap}>
@@ -1023,4 +1628,112 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   menuItemText: { fontSize: FontSize.base, color: Colors.textPrimary },
+
+  /* ── Sub-tab bar (Ads) ── */
+  subTabBar: {
+    flexDirection: 'row',
+    paddingHorizontal: Spacing.base,
+    paddingTop: Spacing.md,
+    gap: Spacing.sm,
+  },
+  subTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  subTabActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  subTabText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textSecondary },
+  subTabTextActive: { color: Colors.headerBg },
+
+  /* ── Code Gen Card (Premium / AdCodes) ── */
+  codeGenCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.base,
+    borderWidth: 1,
+    borderColor: Colors.borderLight,
+    gap: Spacing.sm,
+  },
+  codeGenHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  codeGenTitle: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  codeGenSub: { fontSize: FontSize.xs, color: Colors.textSecondary, marginBottom: 4 },
+  codeGenRow: { flexDirection: 'row', gap: Spacing.sm },
+  codeGenField: { flex: 1, gap: 4 },
+  codeGenLabel: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.textSecondary, textTransform: 'uppercase' },
+  codeGenInput: {
+    minHeight: 42,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.background,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 10,
+    fontSize: FontSize.base,
+    color: Colors.textPrimary,
+  },
+  codeGenHint: { fontSize: FontSize.xs, color: Colors.textSecondary, fontStyle: 'italic' },
+  codeGenActionsRow: { flexDirection: 'row', gap: Spacing.sm, marginTop: 4 },
+
+  /* ── Code Row ── */
+  codeRow: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.base,
+    borderWidth: 1,
+    borderColor: Colors.borderLight,
+    gap: 6,
+  },
+  codeRowTopLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  codeText: {
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+    letterSpacing: 1,
+  },
+  codeRowMetaLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  codeInfo: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.medium },
+  codeTime: { fontSize: FontSize.xs, color: Colors.textMuted },
+  codeRedeemed: { fontSize: FontSize.xs, color: Colors.textSecondary },
+  codeNote: { fontSize: FontSize.xs, color: Colors.textSecondary, fontStyle: 'italic' },
+  codeRowActions: { flexDirection: 'row', gap: 8, marginTop: 4 },
+
+  /* ── Activity ── */
+  activityRow: {
+    flexDirection: 'row',
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.md,
+    padding: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.borderLight,
+    gap: Spacing.sm,
+  },
+  activityIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  activityHeaderRow: { flexDirection: 'row', alignItems: 'center' },
+  activitySender: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  activityConv: { flex: 1, fontSize: FontSize.xs, color: Colors.textSecondary },
+  activityPreview: { fontSize: FontSize.sm, color: Colors.textPrimary, marginTop: 2 },
+  activityTime: { fontSize: 10, color: Colors.textMuted, marginTop: 2 },
 });
