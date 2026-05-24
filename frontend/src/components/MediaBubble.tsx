@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
@@ -11,7 +11,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import { Audio } from 'expo-av';
+import { Audio, ResizeMode, Video } from 'expo-av';
 import * as Linking from 'expo-linking';
 import { useConvex, useMutation, useQuery } from 'convex/react';
 import { api } from '../convexApi';
@@ -207,6 +207,8 @@ function BubbleBodyInner({ msg, timeStr, textStyle, isMine, e2eeStatus }: { msg:
   switch (msg.type) {
     case 'image':
       return <ImageMessage msg={msg} timeStr={timeStr} textStyle={textStyle} e2eeStatus={e2eeStatus} />;
+    case 'video':
+      return <VideoMessage msg={msg} timeStr={timeStr} textStyle={textStyle} e2eeStatus={e2eeStatus} />;
     case 'voice':
     case 'audio':
       return <VoiceMessage msg={msg} e2eeStatus={e2eeStatus} />;
@@ -314,6 +316,197 @@ function ImageViewer({ visible, onClose, uri }: { visible: boolean; onClose: () 
           <Image source={{ uri }} style={styles.viewerImage} resizeMode="contain" />
         </Pressable>
         <TouchableOpacity style={styles.viewerClose} onPress={onClose} hitSlop={12} testID="media-viewer-close">
+          <Feather name="x" size={28} color={Colors.white} />
+        </TouchableOpacity>
+      </View>
+    </Modal>
+  );
+}
+
+/**
+ * VideoMessage — web-parity inline video player with:
+ *   - Poster/first-frame preview
+ *   - Center play/pause overlay button
+ *   - Bottom-left elapsed time pill (0:06 style)
+ *   - Top-right fullscreen expand button → opens VideoViewer
+ *   - Subtitle pill below the bubble (uses existing TranscriptionPill)
+ */
+function VideoMessage({
+  msg,
+  timeStr,
+  textStyle,
+  e2eeStatus,
+}: {
+  msg: any;
+  timeStr: string;
+  textStyle?: any;
+  e2eeStatus: E2EEStatus | null;
+}) {
+  const { url: src, loading, error } = useDecryptedMediaUrl(msg, e2eeStatus);
+  const videoRef = useRef<Video | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [posMs, setPosMs] = useState(0);
+  const [durMs, setDurMs] = useState<number>(() => {
+    const remote = getMessageDurationSec(msg);
+    return remote ? remote * 1000 : 0;
+  });
+  const [viewerOpen, setViewerOpen] = useState(false);
+
+  // Clean up when unmounting so other media doesn't keep playing.
+  useEffect(() => {
+    return () => {
+      const v = videoRef.current;
+      if (v) {
+        v.pauseAsync?.().catch(() => {});
+      }
+    };
+  }, []);
+
+  const togglePlay = useCallback(async () => {
+    if (!src || !videoRef.current) return;
+    try {
+      const status: any = await videoRef.current.getStatusAsync();
+      if (status?.isPlaying) {
+        await videoRef.current.pauseAsync();
+      } else {
+        if (status?.didJustFinish || (status?.positionMillis ?? 0) >= (status?.durationMillis ?? 0) - 50) {
+          await videoRef.current.setPositionAsync(0);
+        }
+        await videoRef.current.playAsync();
+      }
+    } catch {}
+  }, [src]);
+
+  const onStatus = useCallback((status: any) => {
+    if (!status?.isLoaded) return;
+    setIsPlaying(!!status.isPlaying);
+    setPosMs(status.positionMillis || 0);
+    if (status.durationMillis && status.durationMillis !== durMs) {
+      setDurMs(status.durationMillis);
+    }
+    if (status.didJustFinish) {
+      setIsPlaying(false);
+      videoRef.current?.setPositionAsync(0).catch(() => {});
+    }
+  }, [durMs]);
+
+  if (!src) {
+    return (
+      <View style={[styles.videoPlaceholder]} testID="video-bubble-loading">
+        {error ? (
+          <Feather name="lock" size={22} color={Colors.danger} />
+        ) : loading ? (
+          <ActivityIndicator color={Colors.primary} />
+        ) : (
+          <Feather name="video" size={28} color={Colors.textMuted} />
+        )}
+      </View>
+    );
+  }
+
+  const elapsedSec = Math.floor(posMs / 1000);
+  const totalSec = Math.floor(durMs / 1000);
+  // Show elapsed when playing, total duration when paused at start.
+  const timeLabel = isPlaying || elapsedSec > 0 ? fmtDur(elapsedSec) : (totalSec > 0 ? fmtDur(totalSec) : '0:00');
+
+  return (
+    <>
+      <View>
+        <TouchableOpacity activeOpacity={0.9} onPress={togglePlay} testID="video-bubble" style={styles.videoWrap}>
+          <Video
+            ref={(r) => { videoRef.current = r; }}
+            source={{ uri: src }}
+            style={styles.videoPlayer}
+            resizeMode={ResizeMode.COVER}
+            useNativeControls={false}
+            shouldPlay={false}
+            isMuted={false}
+            onPlaybackStatusUpdate={onStatus}
+            posterStyle={styles.videoPlayer}
+          />
+
+          {/* Center play/pause overlay */}
+          <View style={styles.videoCenterOverlay} pointerEvents="none">
+            <View style={styles.videoPlayBtn}>
+              <Feather
+                name={isPlaying ? 'pause' : 'play'}
+                size={22}
+                color="#0F172A"
+                style={isPlaying ? undefined : { marginLeft: 3 }}
+              />
+            </View>
+          </View>
+
+          {/* Top-right fullscreen */}
+          <TouchableOpacity
+            style={styles.videoFullscreenBtn}
+            onPress={(event) => {
+              event.stopPropagation?.();
+              setViewerOpen(true);
+            }}
+            hitSlop={6}
+            testID="video-fullscreen-btn"
+          >
+            <Feather name="maximize-2" size={14} color={Colors.white} />
+          </TouchableOpacity>
+
+          {/* Bottom-left elapsed/duration pill */}
+          <View style={styles.videoTimePill}>
+            <Text style={styles.videoTimePillText}>{timeLabel}</Text>
+          </View>
+        </TouchableOpacity>
+
+        {/* Caption (if any) */}
+        {msg.text ? <RichMessageText text={msg.text} textStyle={[textStyle, styles.imageCaption]} /> : null}
+
+        {/* Subtitles / transcription */}
+        <TranscriptionPill msg={msg} />
+      </View>
+
+      {/* Fullscreen viewer */}
+      <VideoViewer visible={viewerOpen} onClose={() => setViewerOpen(false)} uri={src} initialPositionMs={posMs} />
+    </>
+  );
+}
+
+function VideoViewer({
+  visible,
+  onClose,
+  uri,
+  initialPositionMs,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  uri: string;
+  initialPositionMs?: number;
+}) {
+  const fullRef = useRef<Video | null>(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    const t = setTimeout(async () => {
+      try {
+        if (initialPositionMs && initialPositionMs > 200) {
+          await fullRef.current?.setPositionAsync(initialPositionMs);
+        }
+        await fullRef.current?.playAsync();
+      } catch {}
+    }, 200);
+    return () => clearTimeout(t);
+  }, [visible, initialPositionMs]);
+
+  return (
+    <Modal visible={visible} transparent={false} animationType="fade" onRequestClose={onClose}>
+      <View style={styles.viewerWrap} testID="video-viewer">
+        <Video
+          ref={(r) => { fullRef.current = r; }}
+          source={{ uri }}
+          style={styles.viewerVideo}
+          resizeMode={ResizeMode.CONTAIN}
+          useNativeControls
+          shouldPlay={false}
+        />
+        <TouchableOpacity style={styles.viewerClose} onPress={onClose} hitSlop={12} testID="video-viewer-close">
           <Feather name="x" size={28} color={Colors.white} />
         </TouchableOpacity>
       </View>
@@ -796,7 +989,73 @@ const styles = StyleSheet.create({
   viewerWrap: { flex: 1, backgroundColor: '#000' },
   viewerBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   viewerImage: { width: '100%', height: '100%' },
+  viewerVideo: { width: '100%', height: '100%' },
   viewerClose: { position: 'absolute', top: 48, right: 16, padding: 8, backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 20 },
+
+  /* ── Video bubble ── */
+  videoWrap: {
+    position: 'relative',
+    width: IMG_W,
+    height: Math.round(IMG_W * 1.33),
+    borderRadius: Radius.md,
+    overflow: 'hidden',
+    backgroundColor: '#0F172A',
+  },
+  videoPlayer: {
+    width: '100%',
+    height: '100%',
+  },
+  videoPlaceholder: {
+    width: IMG_W,
+    height: Math.round(IMG_W * 1.33),
+    borderRadius: Radius.md,
+    backgroundColor: Colors.borderLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoCenterOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoPlayBtn: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoFullscreenBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoTimePill: {
+    position: 'absolute',
+    bottom: 8,
+    left: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+  },
+  videoTimePillText: {
+    color: Colors.white,
+    fontSize: 11,
+    fontWeight: FontWeight.semibold,
+    fontVariant: ['tabular-nums'],
+  },
   richTextBold: { fontWeight: FontWeight.bold },
   deletedBubble: { opacity: 0.55 },
   deletedContent: { flexDirection: 'row', alignItems: 'center', gap: 6 },
