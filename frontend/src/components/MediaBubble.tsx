@@ -31,7 +31,7 @@ import BubbleErrorBoundary from './BubbleErrorBoundary';
 import { getMessageDurationSec } from '../hooks/useResolvedStorageUrl';
 import { useDecryptedMediaUrl } from '../hooks/useDecryptedMediaUrl';
 import type { E2EEStatus } from '../hooks/useConversationE2EE';
-import { getCachedTranscription, type CachedTranscription } from '../lib/triggerTranscription';
+import { getCachedTranscription, type CachedTranscription, type TranscriptionSegment } from '../lib/triggerTranscription';
 
 let CURRENT_SOUND: Audio.Sound | null = null;
 let CURRENT_STOP: (() => void) | null = null;
@@ -464,7 +464,7 @@ function VideoMessage({
       </View>
 
       {/* Fullscreen viewer */}
-      <VideoViewer visible={viewerOpen} onClose={() => setViewerOpen(false)} uri={src} initialPositionMs={posMs} />
+      <VideoViewer visible={viewerOpen} onClose={() => setViewerOpen(false)} uri={src} initialPositionMs={posMs} msg={msg} />
     </>
   );
 }
@@ -474,13 +474,40 @@ function VideoViewer({
   onClose,
   uri,
   initialPositionMs,
+  msg,
 }: {
   visible: boolean;
   onClose: () => void;
   uri: string;
   initialPositionMs?: number;
+  msg?: any;
 }) {
   const fullRef = useRef<Video | null>(null);
+  const [posMs, setPosMs] = useState(0);
+  const [segments, setSegments] = useState<TranscriptionSegment[] | null>(null);
+
+  // Resolve segments: prefer message field, fall back to local cache (keyed by storageId).
+  useEffect(() => {
+    if (!visible) return;
+    const inline = Array.isArray(msg?.transcriptionSegments) ? msg.transcriptionSegments : null;
+    if (inline && inline.length > 0) {
+      setSegments(inline);
+      return;
+    }
+    const storageId = msg?.storageId || msg?.mediaStorageId;
+    if (!storageId) {
+      setSegments(null);
+      return;
+    }
+    let alive = true;
+    (async () => {
+      const cached = await getCachedTranscription(String(storageId));
+      if (alive) setSegments(cached?.segments && cached.segments.length > 0 ? cached.segments : null);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [visible, msg]);
 
   useEffect(() => {
     if (!visible) return;
@@ -495,6 +522,25 @@ function VideoViewer({
     return () => clearTimeout(t);
   }, [visible, initialPositionMs]);
 
+  const onStatus = useCallback((status: any) => {
+    if (!status?.isLoaded) return;
+    setPosMs(status.positionMillis || 0);
+  }, []);
+
+  // Find the segment whose [start, end] range contains the current position.
+  const activeCaption = useMemo(() => {
+    if (!segments || segments.length === 0) return null;
+    const sec = posMs / 1000;
+    for (let i = 0; i < segments.length; i += 1) {
+      const seg = segments[i];
+      if (sec >= seg.start && sec <= seg.end) {
+        const text = (seg.text || '').trim();
+        return text || null;
+      }
+    }
+    return null;
+  }, [segments, posMs]);
+
   return (
     <Modal visible={visible} transparent={false} animationType="fade" onRequestClose={onClose}>
       <View style={styles.viewerWrap} testID="video-viewer">
@@ -505,7 +551,18 @@ function VideoViewer({
           resizeMode={ResizeMode.CONTAIN}
           useNativeControls
           shouldPlay={false}
+          onPlaybackStatusUpdate={onStatus}
         />
+
+        {/* Time-synced caption overlay */}
+        {activeCaption ? (
+          <View style={styles.videoCaptionWrap} pointerEvents="none" testID="video-caption-overlay">
+            <View style={styles.videoCaptionBubble}>
+              <Text style={styles.videoCaptionText}>{activeCaption}</Text>
+            </View>
+          </View>
+        ) : null}
+
         <TouchableOpacity style={styles.viewerClose} onPress={onClose} hitSlop={12} testID="video-viewer-close">
           <Feather name="x" size={28} color={Colors.white} />
         </TouchableOpacity>
@@ -991,6 +1048,29 @@ const styles = StyleSheet.create({
   viewerImage: { width: '100%', height: '100%' },
   viewerVideo: { width: '100%', height: '100%' },
   viewerClose: { position: 'absolute', top: 48, right: 16, padding: 8, backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 20 },
+
+  /* ── Time-synced video captions ── */
+  videoCaptionWrap: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 64,
+    alignItems: 'center',
+  },
+  videoCaptionBubble: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 6,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    maxWidth: '90%',
+  },
+  videoCaptionText: {
+    color: Colors.white,
+    fontSize: 17,
+    fontWeight: FontWeight.semibold,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
 
   /* ── Video bubble ── */
   videoWrap: {

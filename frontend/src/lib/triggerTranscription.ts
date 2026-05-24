@@ -23,11 +23,18 @@ const TRANSCRIBE_UPLOAD_ENDPOINT = `${process.env.EXPO_PUBLIC_BACKEND_URL || ''}
  *  of whether Convex's sendMessage returned the new message id or not. */
 const TRANSCRIPT_CACHE_PREFIX = 'smilers_transcript_';
 
+export interface TranscriptionSegment {
+  start: number; // seconds
+  end: number;   // seconds
+  text: string;
+}
+
 export interface CachedTranscription {
   text: string;
   language: string;
   status: 'pending' | 'ready' | 'error';
   error?: string;
+  segments?: TranscriptionSegment[];
 }
 
 export async function getCachedTranscription(
@@ -139,6 +146,7 @@ export async function triggerTranscription(args: TriggerArgs): Promise<void> {
 
   let transcription = '';
   let language = 'unknown';
+  let segments: TranscriptionSegment[] | undefined = undefined;
   try {
     if (localFileUri && /^file:\/\//i.test(localFileUri)) {
       // Multipart upload path — used for E2EE-encrypted messages because the
@@ -159,9 +167,14 @@ export async function triggerTranscription(args: TriggerArgs): Promise<void> {
         const detail = await response.text().catch(() => '');
         throw new Error(`Backend returned ${response.status}${detail ? ` — ${detail.slice(0, 200)}` : ''}`);
       }
-      const payload = (await response.json()) as { text?: string; language?: string };
+      const payload = (await response.json()) as {
+        text?: string;
+        language?: string;
+        segments?: TranscriptionSegment[];
+      };
       transcription = (payload?.text || '').trim();
       language = payload?.language || 'unknown';
+      segments = Array.isArray(payload?.segments) ? payload.segments : undefined;
     } else {
       // URL fetch path — works for plaintext (non-E2EE) Convex-stored media.
       let mediaUrl: string | null = null;
@@ -185,9 +198,14 @@ export async function triggerTranscription(args: TriggerArgs): Promise<void> {
       if (!response.ok) {
         throw new Error(`Backend returned ${response.status}`);
       }
-      const payload = (await response.json()) as { text?: string; language?: string };
+      const payload = (await response.json()) as {
+        text?: string;
+        language?: string;
+        segments?: TranscriptionSegment[];
+      };
       transcription = (payload?.text || '').trim();
       language = payload?.language || 'unknown';
+      segments = Array.isArray(payload?.segments) ? payload.segments : undefined;
     }
 
     if (!transcription) {
@@ -200,6 +218,7 @@ export async function triggerTranscription(args: TriggerArgs): Promise<void> {
       text: transcription,
       language,
       status: 'ready',
+      segments,
     });
     if (messageId) {
       try {
@@ -208,6 +227,7 @@ export async function triggerTranscription(args: TriggerArgs): Promise<void> {
           transcription,
           transcriptionLanguage: language,
           transcriptionStatus: 'ready',
+          transcriptionSegments: segments,
         });
       } catch {
         // Older backends may not accept `setTranscription` — try a generic
@@ -218,6 +238,7 @@ export async function triggerTranscription(args: TriggerArgs): Promise<void> {
             transcription,
             transcriptionLanguage: language,
             transcriptionStatus: 'ready',
+            transcriptionSegments: segments,
           });
         } catch {
           /* swallow — local cache still drives the UI */

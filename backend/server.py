@@ -132,10 +132,17 @@ class TranscriptionRequest(BaseModel):
     )
 
 
+class TranscriptionSegment(BaseModel):
+    start: float
+    end: float
+    text: str
+
+
 class TranscriptionResponse(BaseModel):
     text: str
     language: str  # ISO 639-1 from Whisper response (or 'unknown')
     duration_sec: float | None = None
+    segments: list[TranscriptionSegment] | None = None
 
 
 @api_router.post("/transcribe", response_model=TranscriptionResponse)
@@ -243,10 +250,33 @@ async def _run_whisper(
                 kwargs["language"] = language_hint
             result = client_openai.audio.transcriptions.create(**kwargs)
 
+        # Whisper verbose_json returns a list of segments with start/end times
+        # so the mobile client can render time-synced captions over the video.
+        raw_segments = getattr(result, "segments", None) or []
+        segments: list[TranscriptionSegment] = []
+        for seg in raw_segments:
+            # OpenAI SDK returns objects with attribute access; fall back to
+            # dict-style if a future SDK version switches to dicts.
+            start = getattr(seg, "start", None)
+            end = getattr(seg, "end", None)
+            text = getattr(seg, "text", None)
+            if start is None and isinstance(seg, dict):
+                start = seg.get("start")
+                end = seg.get("end")
+                text = seg.get("text")
+            if start is None or end is None or text is None:
+                continue
+            segments.append(TranscriptionSegment(
+                start=float(start),
+                end=float(end),
+                text=str(text).strip(),
+            ))
+
         return TranscriptionResponse(
             text=getattr(result, "text", "") or "",
             language=getattr(result, "language", None) or "unknown",
             duration_sec=getattr(result, "duration", None),
+            segments=segments or None,
         )
     except HTTPException:
         raise
