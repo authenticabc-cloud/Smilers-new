@@ -1004,7 +1004,7 @@ export default function CallScreen() {
             // route back. Failure is swallowed because the backend may not
             // have shipped the endpoint yet.
             try {
-              (api as any).screenShare?.end &&
+              (api as any).screenSharing?.stopScreenShare &&
                 // No useMutation here because this is a one-shot exit path.
                 undefined;
             } catch {

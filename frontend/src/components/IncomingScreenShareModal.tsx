@@ -2,7 +2,7 @@
  * IncomingScreenShareModal — global overlay that auto-pops whenever a new
  * pending screen-share request arrives for the current user.
  *
- * Subscribes to `api.screenShare.listIncoming` via useSafeConvexQuery, so
+ * Subscribes to `api.screenSharing.listIncoming` via useSafeConvexQuery, so
  * the modal is silently dormant until the backend ships the endpoint
  * (returns empty array on missing function — no crash, no noise).
  *
@@ -64,15 +64,21 @@ export default function IncomingScreenShareModal() {
   const [dismissedShareIds, setDismissedShareIds] = useState<Set<string>>(new Set());
   const [busyShareId, setBusyShareId] = useState<string | null>(null);
 
+  // NOTE: `screenSharing.listIncoming` is not part of the documented contract
+  // — the deployed backend only exposes `getActiveSession({ conversationId })`
+  // which is per-conversation. We keep the optimistic global query here so
+  // that if/when the backend ships a `listIncoming`-style endpoint, the
+  // modal lights up automatically. Until then `useSafeConvexQuery` falls
+  // back to an empty array and no modal is shown.
   const { data: incomingRaw } = useSafeConvexQuery<any[]>(
-    (api as any).screenShare?.listIncoming,
+    (api as any).screenSharing?.listIncoming,
     {},
     [],
     isAuthenticated,
   );
 
-  const acceptMutation = useMutation((api as any).screenShare?.accept);
-  const declineMutation = useMutation((api as any).screenShare?.decline);
+  const acceptMutation = useMutation((api as any).screenSharing?.acceptScreenShare);
+  const declineMutation = useMutation((api as any).screenSharing?.declineScreenShare);
 
   const pending = useMemo<IncomingRequest[]>(() => {
     const list = Array.isArray(incomingRaw) ? incomingRaw : [];
@@ -94,7 +100,7 @@ export default function IncomingScreenShareModal() {
     setBusyShareId(current.shareId);
     try {
       try {
-        await (acceptMutation as any)({ shareId: current.shareId });
+        await (acceptMutation as any)({ sessionId: current.shareId });
       } catch (errorValue: any) {
         const message = String(errorValue?.message || errorValue || '');
         // Missing backend — silently route into the viewer with what we have.
@@ -120,7 +126,7 @@ export default function IncomingScreenShareModal() {
     setBusyShareId(current.shareId);
     try {
       try {
-        await (declineMutation as any)({ shareId: current.shareId });
+        await (declineMutation as any)({ sessionId: current.shareId });
       } catch {
         /* swallow — missing endpoint or transient failure */
       }

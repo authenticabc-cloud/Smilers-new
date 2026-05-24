@@ -77,7 +77,8 @@ export default function ScreenShareSenderScreen() {
     isAuthenticated,
   );
 
-  const requestMutation = useMutation((api as any).screenShare?.request);
+  const requestMutation = useMutation((api as any).screenSharing?.requestScreenShare);
+  const getOrCreateDirect = useMutation((api as any).conversations.getOrCreateDirect);
 
   const contactRows = useMemo<ContactRow[]>(() => {
     const list = Array.isArray(contacts) ? contacts : [];
@@ -105,11 +106,16 @@ export default function ScreenShareSenderScreen() {
     let shareId: string | null = null;
     let backendShipped = false;
     try {
-      const result: any = await (requestMutation as any)({
-        recipientUserId: selectedId,
-        includeAudio,
-      });
-      shareId = String(result?.shareId || result?._id || result?.id || '');
+      // The Convex `screenSharing.requestScreenShare` mutation requires a
+      // conversationId, so first resolve / create a direct conversation with
+      // the picked recipient. Audio inclusion is signalled via WebRTC later.
+      const conv: any = await getOrCreateDirect({ otherUserId: selectedId });
+      const conversationId = typeof conv === 'string' ? conv : conv?._id || conv?.conversationId || conv?.id;
+      if (!conversationId) throw new Error('Could not open a conversation with that contact.');
+
+      const result: any = await (requestMutation as any)({ conversationId });
+      shareId =
+        String(result?.sessionId || result?.shareId || result?._id || result?.id || conversationId);
       backendShipped = !!shareId;
     } catch (errorValue: any) {
       const message = String(errorValue?.message || errorValue || '');
@@ -131,7 +137,7 @@ export default function ScreenShareSenderScreen() {
     if (!backendShipped) {
       Alert.alert(
         'Screen share backend not deployed yet',
-        'The Convex `screenShare.request` mutation hasn\u2019t been shipped on your backend yet. The mobile UI is fully wired — once the web team ships the contract documented at /app/CONVEX_BACKEND_INSTRUCTIONS_SCREEN_SHARE.md, this flow will deliver the request to the recipient in realtime.\n\nWould you like to preview the active broadcast mode anyway?',
+        'The Convex `screenSharing.requestScreenShare` mutation hasn\u2019t been shipped on your backend yet. The mobile UI is fully wired — once the web team ships the contract, this flow will deliver the request to the recipient in realtime.\n\nWould you like to preview the active broadcast mode anyway?',
         [
           { text: 'Cancel', style: 'cancel', onPress: () => setSubmitting(false) },
           {
