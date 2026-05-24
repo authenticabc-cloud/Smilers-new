@@ -65,12 +65,14 @@ export default function GroupsScreen() {
   );
 
   // Conferences come from a dedicated backend list — NOT from filtering the
-  // groups list (which only ever contains groups). When the backend hasn't
-  // shipped `conferences.listConferences` yet this safely returns [], so the
-  // Conferences tab simply shows the empty state instead of falsely listing
-  // groups as conferences.
+  // groups list (which only ever contains groups). The deployed spec
+  // exposes `conferences.listMyConferences` (mine, sorted by scheduledAt) and
+  // `conferences.listAll` (mine + ended, excludes adjourned). We prefer
+  // `listMyConferences`. The `useSafeConvexQuery` hook falls back to [] if
+  // the function isn't found, but the previous code was calling a non-
+  // existent `listConferences` path so this list was always empty on native.
   const { data: conferences, loading: conferencesLoading } = useSafeConvexQuery<any[]>(
-    (api as any).conferences.listConferences,
+    (api as any).conferences.listMyConferences ?? (api as any).conferences.listAll,
     {},
     [],
     tab === 'conferences',
