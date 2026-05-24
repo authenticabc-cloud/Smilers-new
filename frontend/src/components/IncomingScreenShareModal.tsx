@@ -41,20 +41,33 @@ interface IncomingRequest {
 
 function normalizeRequest(record: any): IncomingRequest | null {
   if (!record) return null;
-  const shareId = record.shareId || record._id || record.id;
+  // Session id can be `_id` (Convex doc), `sessionId`, `shareId`, or `id`.
+  const shareId = record._id || record.sessionId || record.shareId || record.id;
   if (!shareId) return null;
-  const sender = record.sender || record.from || record.requester || {};
+  // Backend may flat-attach the sharer's name/avatar or nest them under
+  // `sender` / `from` / `requester` / `sharer`. Handle every variant we've seen.
+  const nested = record.sharer || record.sender || record.from || record.requester || {};
+  const name =
+    record.sharerName ||
+    record.requesterName ||
+    record.senderName ||
+    nested.displayName ||
+    nested.name ||
+    'A Smilers user';
+  const avatar =
+    record.sharerAvatar ||
+    record.requesterAvatar ||
+    record.senderAvatar ||
+    nested.avatarUrl ||
+    nested.avatar ||
+    nested.photoURL ||
+    null;
   return {
     shareId: String(shareId),
-    senderName:
-      sender.displayName ||
-      sender.name ||
-      record.senderName ||
-      'A Smilers user',
-    senderAvatar:
-      sender.avatarUrl || sender.avatar || sender.photoURL || null,
-    includeAudio: !!(record.includeAudio ?? sender.includeAudio ?? false),
-    requestedAt: Number(record.requestedAt || record._creationTime || Date.now()),
+    senderName: name,
+    senderAvatar: avatar,
+    includeAudio: !!(record.includeAudio ?? nested.includeAudio ?? false),
+    requestedAt: Number(record.requestedAt || record.createdAt || record._creationTime || Date.now()),
   };
 }
 
