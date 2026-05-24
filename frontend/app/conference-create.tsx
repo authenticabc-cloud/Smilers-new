@@ -101,20 +101,21 @@ async function callStartConferenceWithFallback(
   mutationFn: (args: any) => Promise<any>,
   fullPayload: Record<string, any>,
 ): Promise<{ conferenceId: string; usedFallback: boolean; raw: any }> {
-  // Order matters — most-feature-rich first, simplest last.
+  // Order matters — most-feature-rich first, simplest last. Field names
+  // match the deployed `api.conferences.create` spec.
   const variants: Array<{ label: string; build: () => Record<string, any> }> = [
     { label: 'full', build: () => fullPayload },
     {
       label: 'no-recurrence',
       build: () => {
-        const { recurring: _r, frequency: _f, ...rest } = fullPayload;
+        const { isRecurring: _r, frequency: _f, ...rest } = fullPayload;
         return rest;
       },
     },
     {
       label: 'no-schedule',
       build: () => {
-        const { recurring: _r, frequency: _f, scheduledAt: _s, ...rest } = fullPayload;
+        const { isRecurring: _r, frequency: _f, scheduledAt: _s, ...rest } = fullPayload;
         return rest;
       },
     },
@@ -122,11 +123,9 @@ async function callStartConferenceWithFallback(
       label: 'core-only',
       build: () => ({
         title: fullPayload.title,
-        mode: fullPayload.mode,
-        entryMode: fullPayload.entryMode,
-        ...(fullPayload.groupId ? { groupId: fullPayload.groupId } : {}),
-        ...(fullPayload.clerkUserId ? { clerkUserId: fullPayload.clerkUserId } : {}),
-        ...(fullPayload.protocolUserId ? { protocolUserId: fullPayload.protocolUserId } : {}),
+        type: fullPayload.type,
+        accessMode: fullPayload.accessMode,
+        scheduledAt: fullPayload.scheduledAt,
       }),
     },
   ];
@@ -291,7 +290,7 @@ export default function ConferenceCreateScreen() {
   const [showFrequency, setShowFrequency] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const startConferenceM = useMutation((api as any).conferences.startConference);
+  const startConferenceM = useMutation((api as any).conferences.create);
 
   const canSubmit = useMemo(() => title.trim().length > 0 && !submitting, [title, submitting]);
 
@@ -299,13 +298,17 @@ export default function ConferenceCreateScreen() {
     if (!canSubmit) return;
     setSubmitting(true);
     try {
+      // The spec for `api.conferences.create` takes ISO timestamps + explicit
+      // `type` / `accessMode` / `isRecurring` field names. We always need a
+      // scheduledAt — if the user picked "now", we just use the current time.
+      const scheduledIso = new Date(scheduledAt && scheduledAt > 0 ? scheduledAt : Date.now()).toISOString();
       const fullPayload: Record<string, any> = {
         title: title.trim(),
         description: description.trim() || undefined,
-        mode: type,
-        entryMode: accessControl,
-        scheduledAt: scheduledAt || undefined,
-        recurring,
+        type, // 'video' | 'audio'
+        accessMode: accessControl, // 'open' | 'admission'
+        scheduledAt: scheduledIso,
+        isRecurring: recurring,
         frequency: recurring ? frequency : undefined,
       };
       const { conferenceId, usedFallback } = await callStartConferenceWithFallback(
@@ -368,7 +371,7 @@ export default function ConferenceCreateScreen() {
       Alert.alert(
         'Saved to this device',
         isMissingFunction
-          ? 'The conferencing backend endpoints haven\u2019t been deployed yet, so we\u2019ve saved your conference on this device. Once the web team ships `conferences.startConference`, this flow will sync to all your devices.'
+          ? 'The conferencing backend endpoints haven\u2019t been deployed yet, so we\u2019ve saved your conference on this device. Once the web team ships `conferences.create`, this flow will sync to all your devices.'
           : `The backend returned an error (${message.slice(0, 80)}…). Your conference has been saved on this device so you don\u2019t lose it. It\u2019ll auto-sync once the backend is back online.`,
         [{ text: 'OK', onPress: () => router.back() }],
       );

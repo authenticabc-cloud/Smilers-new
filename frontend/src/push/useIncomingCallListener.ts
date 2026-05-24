@@ -23,6 +23,33 @@ export function useIncomingCallListener() {
     if (!incomingCall || !incomingCall._id) return;
     if (incomingCall.status !== 'ringing') return;
     if (handledCallId.current === incomingCall._id) return;
+
+    // Suppress auto-route + ringtone when the incoming call is actually a
+    // screen-share request. The IncomingScreenShareModal handles those
+    // silently with a system overlay (no audible ring). The backend may
+    // tag screen-share calls under several possible field names, so we
+    // check every one we've seen.
+    const incomingType = String(
+      incomingCall?.type ||
+      incomingCall?.callType ||
+      incomingCall?.kind ||
+      incomingCall?.mediaType ||
+      '',
+    ).toLowerCase();
+    const isScreenShare =
+      incomingType === 'screen' ||
+      incomingType === 'screenshare' ||
+      incomingType === 'screen-share' ||
+      incomingType === 'screen_share' ||
+      incomingType === 'sharing' ||
+      !!incomingCall?.screenShareSessionId ||
+      !!incomingCall?.screenSharing ||
+      !!incomingCall?.isScreenShare;
+    if (isScreenShare) {
+      handledCallId.current = incomingCall._id;
+      return;
+    }
+
     handledCallId.current = incomingCall._id;
 
     const conversationId = incomingCall.conversationId;
