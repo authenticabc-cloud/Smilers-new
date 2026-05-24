@@ -26,6 +26,7 @@ import {
 } from 'react-native';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useMutation } from 'convex/react';
+import { useRouter } from 'expo-router';
 import { api } from '../convexApi';
 import { useSafeConvexQuery } from '../hooks/useSafeConvexQuery';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../theme';
@@ -309,6 +310,7 @@ function MinutesSheet({
 }
 
 export default function ConferenceHUD({ conferenceId, onLeave, onToggleScreenShare, screenSharing }: ConferenceHUDProps) {
+  const router = useRouter();
   const clock = useDigitalClock();
   const [reactionsExpanded, setReactionsExpanded] = useState(false);
   const [audience, setAudience] = useState<'everyone' | 'chair' | 'secretary'>('everyone');
@@ -524,6 +526,14 @@ export default function ConferenceHUD({ conferenceId, onLeave, onToggleScreenSha
 
         {/* Role-aware tools */}
         <View style={styles.toolsRow}>
+          {/* Universal: Open dedicated meeting room (participant grid + chat) */}
+          <ToolBtn
+            icon="view-grid-outline"
+            label="Meeting room"
+            onPress={() => router.push(`/conference/${conferenceId}` as any)}
+            testID="conf-tool-open-room"
+          />
+
           {isChair ? (
             <>
               <ToolBtn

@@ -90,6 +90,7 @@ export default function RootLayout() {
               <Stack.Screen name="auth-webview" options={{ presentation: 'modal' }} />
               <Stack.Screen name="chat/[conversationId]" />
               <Stack.Screen name="call/[conversationId]" options={{ presentation: 'modal' }} />
+              <Stack.Screen name="conference/[conferenceId]" options={{ presentation: 'modal' }} />
               <Stack.Screen name="groups-create" />
               <Stack.Screen name="conference-create" />
               <Stack.Screen name="ads/create" />
