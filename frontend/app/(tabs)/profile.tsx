@@ -474,13 +474,14 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
     backgroundColor: Colors.primaryLight,
     paddingHorizontal: Spacing.base,
-    paddingVertical: 14,
+    paddingVertical: 16,
     borderRadius: Radius.lg,
   },
   linkText: {
-    fontSize: FontSize.base,
-    fontWeight: FontWeight.semibold,
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
     color: Colors.textPrimary,
+    letterSpacing: 0.2,
   },
   premiumBtn: {
     flexDirection: 'row',
@@ -488,14 +489,18 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
     backgroundColor: Colors.primary,
     paddingHorizontal: Spacing.base,
-    paddingVertical: 14,
+    paddingVertical: 16,
     borderRadius: Radius.lg,
+    borderWidth: 1.5,
+    borderColor: Colors.primaryDark,
+    ...Shadow.sm,
   },
   premiumBtnText: {
     flex: 1,
-    fontSize: FontSize.base,
+    fontSize: FontSize.lg,
     fontWeight: FontWeight.bold,
     color: '#3D2A00',
+    letterSpacing: 0.2,
   },
 
   /* Edit-field modal */
