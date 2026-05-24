@@ -50,7 +50,7 @@ function parseHM(s: string) { const [h, m] = s.split(':').map(Number); const dt 
 export default function ScheduledScreen() {
   const router = useRouter();
   const { data: items, loading } = useSafeConvexQuery<Schedule[]>(api.scheduledMessages.listMine, {}, []);
-  const createSchedule = useMutation(api.scheduledMessages.create);
+  const createSchedule = useMutation(api.scheduling.scheduleMessageMobile);
   const updateSchedule = useMutation(api.scheduledMessages.update);
   const removeSchedule = useMutation(api.scheduledMessages.remove);
   const setActiveSchedule = useMutation(api.scheduledMessages.setActive);

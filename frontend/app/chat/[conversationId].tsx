@@ -261,7 +261,7 @@ export default function ChatScreen() {
   const toggleReaction = useMutation(api.messages.toggleReaction);
   const deleteMessage = useMutation(api.messages.deleteMessage);
   const toggleStar = useMutation(api.messages.toggleStar);
-  const createScheduledMessage = useMutation((api as any).scheduledMessages.create);
+  const createScheduledMessage = useMutation((api as any).scheduling.scheduleMessageMobile);
 
   const messages: any[] = useMemo(() => {
     const page = messagesPage as any;
@@ -530,6 +530,7 @@ export default function ChatScreen() {
                 : 'monthly';
 
         await createScheduledMessage({
+          conversationId,
           recipient: recipientLabel,
           message: draft,
           date,
