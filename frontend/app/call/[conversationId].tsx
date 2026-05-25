@@ -31,6 +31,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { StatusBar } from 'expo-status-bar';
 import { api } from '../../src/convexApi';
+import CallErrorBoundary from '../../src/components/CallErrorBoundary';
 import ConferenceHUD from '../../src/components/ConferenceHUD';
 import ScreenShareOverlay from '../../src/components/ScreenShareOverlay';
 import ScreenShareSwitchControls from '../../src/components/ScreenShareSwitchControls';
@@ -100,6 +101,19 @@ function buildConferenceName(baseName: string, addedName: string) {
 }
 
 export default function CallScreen() {
+  // Wrap the heavy inner component in an Error Boundary so any render-time
+  // crash (WebRTC native-module load failure on Expo Go, stale ref deref
+  // after `activeCall.status → 'active'`, etc.) shows a friendly fallback
+  // instead of bringing down the whole React tree.
+  const router = useRouter();
+  return (
+    <CallErrorBoundary onClose={() => router.back()}>
+      <CallScreenInner />
+    </CallErrorBoundary>
+  );
+}
+
+function CallScreenInner() {
   const router = useRouter();
   const { height: windowHeight } = useWindowDimensions();
   const { isAuthenticated } = useAuth();

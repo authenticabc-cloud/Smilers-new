@@ -2,9 +2,10 @@
  * IncomingScreenShareModal — global overlay that auto-pops whenever a new
  * pending screen-share request arrives for the current user.
  *
- * Subscribes to `api.screenSharing.listIncoming` via useSafeConvexQuery, so
- * the modal is silently dormant until the backend ships the endpoint
- * (returns empty array on missing function — no crash, no noise).
+ * Subscribes to `api.screenSharing.listIncoming` via the REACTIVE
+ * useReactiveSafeConvexQuery hook, so the modal lights up the moment a
+ * new pending session arrives. If the backend hasn't shipped
+ * `listIncoming` yet, the hook silently falls back to an empty array.
  *
  * The accept flow routes to /call/<shareId> in screen-only viewer mode;
  * decline simply calls the backend mutation and dismisses.
@@ -26,7 +27,7 @@ import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
 import { api } from '../convexApi';
-import { useSafeConvexQuery } from '../hooks/useSafeConvexQuery';
+import { useReactiveSafeConvexQuery } from '../hooks/useReactiveSafeConvexQuery';
 import { useAuth } from '../providers/AuthProvider';
 import { getDisplayInitials } from '../lib/displayName';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../theme';
@@ -77,13 +78,13 @@ export default function IncomingScreenShareModal() {
   const [dismissedShareIds, setDismissedShareIds] = useState<Set<string>>(new Set());
   const [busyShareId, setBusyShareId] = useState<string | null>(null);
 
-  // NOTE: `screenSharing.listIncoming` is not part of the documented contract
-  // — the deployed backend only exposes `getActiveSession({ conversationId })`
-  // which is per-conversation. We keep the optimistic global query here so
-  // that if/when the backend ships a `listIncoming`-style endpoint, the
-  // modal lights up automatically. Until then `useSafeConvexQuery` falls
-  // back to an empty array and no modal is shown.
-  const { data: incomingRaw } = useSafeConvexQuery<any[]>(
+  // NOTE: `screenSharing.listIncoming` is the documented Convex contract
+  // (see /app/CONVEX_BACKEND_INSTRUCTIONS_SCREEN_SHARE_LIST_INCOMING.md).
+  // We use the REACTIVE safe-query wrapper so the modal lights up the
+  // moment a new pending session is inserted on the backend (no polling).
+  // If the backend hasn't shipped `listIncoming` yet, the hook silently
+  // falls back to an empty array — no modal, no noise.
+  const { data: incomingRaw } = useReactiveSafeConvexQuery<any[]>(
     (api as any).screenSharing?.listIncoming,
     {},
     [],
