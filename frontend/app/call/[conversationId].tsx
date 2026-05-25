@@ -280,7 +280,13 @@ export default function CallScreen() {
       me &&
       !activeCallLoading &&
       !conversationLoading &&
-      !meLoading;
+      !meLoading &&
+      // Screen-only mode (standalone screen share) MUST NOT trigger a regular
+      // call — otherwise the recipient would hear a ringtone. The screen-share
+      // session is created up-front by /screen-share via
+      // api.screenSharing.requestScreenShare and the recipient is notified
+      // silently via IncomingScreenShareModal (subscribes to listIncoming).
+      !isScreenOnly;
     if (!shouldAutoInitiate) return;
     let cancelled = false;
     (async () => {
@@ -296,7 +302,7 @@ export default function CallScreen() {
     return () => {
       cancelled = true;
     };
-  }, [activeCall, activeCallLoading, callId, canRunCallQueries, conversation, conversationId, conversationLoading, initiateCall, isAuthenticated, me, meLoading, requestedType]);
+  }, [activeCall, activeCallLoading, callId, canRunCallQueries, conversation, conversationId, conversationLoading, initiateCall, isAuthenticated, isScreenOnly, me, meLoading, requestedType]);
 
   // ====== Update status text based on state ======
   useEffect(() => {
@@ -778,7 +784,11 @@ export default function CallScreen() {
   const showVideo = callType === 'video' && isActive && RTCViewImpl != null;
 
   // Play the caller's selected ringtone while dialing, and the callee's while receiving.
-  useRingtonePlayer(!!isIncoming || !!isOutgoingRinging, { vibrate: !!isIncoming });
+  // Screen-only mode never rings — it's a silent system-share session.
+  useRingtonePlayer(
+    !isScreenOnly && (!!isIncoming || !!isOutgoingRinging),
+    { vibrate: !isScreenOnly && !!isIncoming },
+  );
 
   // Background gradient for non-video states (incoming/outgoing/voice/active-voice)
   const gradientColors = isIncoming

@@ -24,6 +24,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../theme';
+import ScreenShareSwitchControls from './ScreenShareSwitchControls';
 
 interface ScreenShareOverlayProps {
   isReceiver: boolean;
@@ -35,6 +36,10 @@ interface ScreenShareOverlayProps {
   onToggleScreenShare: () => void | Promise<void>;
   onStop: () => void;
   RTCViewImpl: any;
+  /** Active screen-share session id (used by switch-share controls). */
+  sessionId?: string | null;
+  /** Conversation id backing the session (sharer-side `getActiveSession` query). */
+  conversationId?: string | null;
 }
 
 export default function ScreenShareOverlay({
