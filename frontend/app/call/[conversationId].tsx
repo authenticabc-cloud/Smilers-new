@@ -204,10 +204,17 @@ function CallScreenInner() {
   const answerCall = useMutation(api.calls.answerCall);
   const endCall = useMutation(api.calls.endCall);
   const declineCall = useMutation(api.calls.declineCall);
+  // Backend-confirmed contract (June 2025): `api.calls.heartbeat({ callId })`
+  // is wired up to a 60s cron that auto-`ends` calls without a recent ping.
+  // Without this mobile-side heartbeat ping, an active call gets force-ended
+  // within 60–90s of being answered, which manifested on the receiver as
+  // "Call ended unexpectedly" the moment they answered. (Cast as `any` since
+  // the cached anyApi proxy can be undefined-tolerant when the backend is
+  // mid-deploy.)
+  const heartbeat = useMutation((api as any).calls.heartbeat);
   const createGroup = useMutation((api as any).conversations.createGroup);
   const sendSignal = useMutation(api.signaling.send);
   const markConsumed = useMutation(api.signaling.markConsumed);
-  const cleanupSignaling = useMutation(api.signaling.cleanup);
 
   const [callId, setCallId] = useState<string | null>(null);
   const [callType, setCallType] = useState<CallType>(requestedType);
@@ -423,10 +430,38 @@ function CallScreenInner() {
         callId,
         remoteUserId,
         sendSignal: async (sig) => {
+          // The backend's `signaling.send` validator uses a strict union.
+          // Different deployments may use the camelCase `'iceCandidate'` or
+          // the kebab `'ice-candidate'` literal — accept either by retrying
+          // with the alternative if the first attempt is rejected for
+          // type-validation reasons. This is what every "answered call but
+          // no audio/video" report comes down to in the wild.
+          const tryVariant = async (typeOverride?: string) => {
+            const payload = typeOverride ? { ...sig, type: typeOverride as any } : sig;
+            await sendSignal(payload as any);
+          };
           try {
-            await sendSignal(sig);
+            await tryVariant();
           } catch (errorValue: any) {
-            console.warn('sendSignal failed:', errorValue?.message);
+            const message = String(errorValue?.message || '');
+            // Only retry the alternate variant if the backend rejected the
+            // literal — most other failures are network-level, retrying is
+            // pointless.
+            const isValidationFailure =
+              message.includes('ArgumentValidationError') ||
+              message.includes('Validator error') ||
+              message.toLowerCase().includes('union') ||
+              message.toLowerCase().includes('literal');
+            if (isValidationFailure && sig.type === 'ice-candidate') {
+              try {
+                await tryVariant('iceCandidate');
+                return;
+              } catch (retryErr: any) {
+                console.warn('sendSignal retry (iceCandidate) failed:', retryErr?.message);
+                return;
+              }
+            }
+            console.warn('sendSignal failed:', message);
           }
         },
         onLocalStream: (stream) => {
@@ -486,6 +521,48 @@ function CallScreenInner() {
     }
   }, [isCaller, isActive, callId, startPeerConnection]);
 
+  // ====== Heartbeat — REQUIRED by the backend's expireDeadCalls cron ======
+  //
+  // The backend runs `cleanupZombies` / `expireDeadCalls` every 60s. Active
+  // calls without a recent `heartbeat` ping (default 60–90s window) are
+  // force-`ended` server-side. Without the mobile pinging in on a steady
+  // 10s cadence, every answered call would be killed within ~90s of being
+  // active — which is exactly the symptom the user reported as
+  // "Receiver's app still crashes upon answering calls" (the live
+  // `getActiveCall` query re-emits `status: 'ended'` shortly after answer,
+  // the call screen renders the error fallback, the user thinks the app
+  // crashed).
+  //
+  // We ping every 10s. The mutation is idempotent server-side and a no-op
+  // for non-active calls, so it's safe to keep firing during the brief
+  // ringing→active transition.
+  useEffect(() => {
+    if (!callId || !isActive) return;
+    let cancelled = false;
+    const ping = async () => {
+      if (cancelled || !callId) return;
+      try {
+        await (heartbeat as any)({ callId });
+      } catch (errorValue: any) {
+        // Backward-compat: if the backend hasn't yet shipped heartbeat for
+        // any reason, swallow the error so it doesn't crash the call.
+        const message = String(errorValue?.message || errorValue || '');
+        if (!message.includes('CouldNotFindFunction')) {
+          console.warn('heartbeat ping failed (non-fatal):', message.slice(0, 100));
+        }
+      }
+    };
+    // Fire one immediately so the moment the call becomes active the
+    // backend sees a fresh `lastHeartbeat` and never marks it dead in
+    // the first 60s window.
+    void ping();
+    const interval = setInterval(() => void ping(), 10_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [callId, isActive, heartbeat]);
+
   // ====== Process incoming signaling messages ======
   useEffect(() => {
     if (!signals || !Array.isArray(signals) || signals.length === 0) return;
@@ -495,11 +572,19 @@ function CallScreenInner() {
     (async () => {
       for (const msg of signals) {
         try {
+          // Accept BOTH naming conventions for ICE candidates ('iceCandidate'
+          // camelCase from the contract docs + 'ice-candidate' kebab from
+          // the historical mobile implementation) — see the matching
+          // send-side fallback in the startPeerConnection sendSignal wrapper.
           if (msg.type === 'offer') {
             await sessionRef.current?.handleRemoteOffer(msg.payload);
           } else if (msg.type === 'answer') {
             await sessionRef.current?.handleRemoteAnswer(msg.payload);
-          } else if (msg.type === 'ice-candidate') {
+          } else if (
+            msg.type === 'ice-candidate' ||
+            msg.type === 'iceCandidate' ||
+            msg.type === 'ice'
+          ) {
             await sessionRef.current?.handleRemoteIceCandidate(msg.payload);
           }
           messageIds.push(msg._id);
@@ -531,12 +616,14 @@ function CallScreenInner() {
           await endCall({ callId: id });
         }
       } catch {}
-      try {
-        await cleanupSignaling({ callId: id });
-      } catch {}
+      // NOTE: signaling cleanup is intentionally skipped — the backend's
+      // confirmed June 2025 contract exposes `signaling.send / poll /
+      // markConsumed` only. The `signaling.cleanup` mutation was removed
+      // server-side, and the dead-call cron (`expireDeadCalls`) handles
+      // pruning expired signaling rows automatically.
     }
     router.back();
-  }, [activeCall?.status, callId, cleanupSignaling, declineCall, endCall, router]);
+  }, [activeCall?.status, callId, declineCall, endCall, router]);
 
   const handleDecline = useCallback(async () => {
     const id = callId;
@@ -547,12 +634,10 @@ function CallScreenInner() {
       try {
         await declineCall({ callId: id });
       } catch {}
-      try {
-        await cleanupSignaling({ callId: id });
-      } catch {}
+      // Cleanup handled server-side by `expireDeadCalls` cron — see comment above.
     }
     router.back();
-  }, [callId, cleanupSignaling, declineCall, router]);
+  }, [callId, declineCall, router]);
 
   const handleAnswer = useCallback(async () => {
     if (!callId) return;
