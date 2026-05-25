@@ -38,6 +38,8 @@ interface IncomingRequest {
   senderAvatar?: string | null;
   includeAudio: boolean;
   requestedAt: number;
+  /** The real Convex conversation id (NOT the screen-share session id). */
+  conversationId: string | null;
 }
 
 function normalizeRequest(record: any): IncomingRequest | null {
@@ -63,12 +65,19 @@ function normalizeRequest(record: any): IncomingRequest | null {
     nested.avatar ||
     nested.photoURL ||
     null;
+  // The screen-share session row backs a real conversation; capture its id
+  // so the call screen can resolve the contact name/avatar via
+  // `conversations.getConversation` (the URL path param is the session id
+  // and would fail that query — see CallErrorBoundary fallback bug).
+  const conversationId =
+    record.conversationId || record.chatId || record.threadId || nested.conversationId || null;
   return {
     shareId: String(shareId),
     senderName: name,
     senderAvatar: avatar,
     includeAudio: !!(record.includeAudio ?? nested.includeAudio ?? false),
     requestedAt: Number(record.requestedAt || record.createdAt || record._creationTime || Date.now()),
+    conversationId: conversationId ? String(conversationId) : null,
   };
 }
 
@@ -127,8 +136,13 @@ export default function IncomingScreenShareModal() {
         }
       }
       setDismissedShareIds((current_) => new Set([...current_, current.shareId]));
+      // Pass the real conversationId (NOT the session id) so the call
+      // screen can resolve the contact's name/avatar via
+      // `conversations.getConversation`. Without this, the call screen
+      // would query with the session id and hit a Convex Server Error.
+      const convQuery = current.conversationId ? `&convId=${current.conversationId}` : '';
       router.push(
-        `/call/${current.shareId}?type=screen&screenOnly=1&audio=${current.includeAudio ? 1 : 0}&role=receiver` as any,
+        `/call/${current.shareId}?type=screen&screenOnly=1&audio=${current.includeAudio ? 1 : 0}&role=receiver${convQuery}` as any,
       );
     } finally {
       setBusyShareId(null);

@@ -158,8 +158,11 @@ export default function ScreenShareSenderScreen() {
     }
 
     // Backend shipped — route into the call screen in screen-only mode.
+    // Pass the real `conversationId` separately as `convId` so the call
+    // screen's `getConversation` query doesn't try to look up a record
+    // by the screen-share session id (which would Server-Error).
     router.replace(
-      `/call/${shareId}?type=screen&screenOnly=1&audio=${includeAudio ? 1 : 0}` as any,
+      `/call/${shareId}?type=screen&screenOnly=1&audio=${includeAudio ? 1 : 0}&convId=${conversationId}` as any,
     );
   };
 

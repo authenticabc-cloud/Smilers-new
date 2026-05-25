@@ -38,6 +38,7 @@ import ScreenShareSwitchControls from '../../src/components/ScreenShareSwitchCon
 import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials, getDisplayNameFromUser } from '../../src/lib/displayName';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { useConversationOtherUser } from '../../src/hooks/useConversationOtherUser';
+import { useReactiveSafeConvexQuery } from '../../src/hooks/useReactiveSafeConvexQuery';
 import { Colors, FontSize, FontWeight, Shadow, Spacing } from '../../src/theme';
 import { useRingtonePlayer } from '../../src/lib/ringtone/useRingtonePlayer';
 
@@ -117,7 +118,7 @@ function CallScreenInner() {
   const router = useRouter();
   const { height: windowHeight } = useWindowDimensions();
   const { isAuthenticated } = useAuth();
-  const { conversationId: rawConversationId, type: rawTypeParam, displayName: rawDisplayName, conferenceMode: rawConfMode, screenOnly: rawScreenOnly, audio: rawAudioParam, role: rawRoleParam } = useLocalSearchParams<{
+  const { conversationId: rawConversationId, type: rawTypeParam, displayName: rawDisplayName, conferenceMode: rawConfMode, screenOnly: rawScreenOnly, audio: rawAudioParam, role: rawRoleParam, convId: rawConvIdParam } = useLocalSearchParams<{
     conversationId?: string | string[];
     type?: string | string[];
     displayName?: string | string[];
@@ -125,6 +126,7 @@ function CallScreenInner() {
     screenOnly?: string | string[];
     audio?: string | string[];
     role?: string | string[];
+    convId?: string | string[];
   }>();
   const conversationId = Array.isArray(rawConversationId) ? rawConversationId[0] : rawConversationId;
   const typeParam = Array.isArray(rawTypeParam) ? rawTypeParam[0] : rawTypeParam;
@@ -133,6 +135,11 @@ function CallScreenInner() {
   const screenOnlyParam = Array.isArray(rawScreenOnly) ? rawScreenOnly[0] : rawScreenOnly;
   const audioParam = Array.isArray(rawAudioParam) ? rawAudioParam[0] : rawAudioParam;
   const roleParam = Array.isArray(rawRoleParam) ? rawRoleParam[0] : rawRoleParam;
+  // Optional explicit conversationId override — used by /screen-share and
+  // IncomingScreenShareModal in screen-only mode, where the URL's path param
+  // (`conversationId`) is actually a screen-share *session* id, not a real
+  // conversation id. When present, prefer this for `getConversation`.
+  const convIdParam = Array.isArray(rawConvIdParam) ? rawConvIdParam[0] : rawConvIdParam;
   const isConferenceMode = confModeParam === '1' || confModeParam === 'true';
   // Screen-only mode is the standalone screen-share session — no camera, no
   // standard call UI, simplified controls. The sender is the broadcaster;
@@ -147,15 +154,36 @@ function CallScreenInner() {
   const startInScreenShare = typeParam === 'screen' && !isScreenOnlyReceiver;
   const compactCallLayout = windowHeight < 720;
   const hasValidConversationId = typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
+  // Real conversationId for the Convex queries — prefers the explicit
+  // `convId` URL param (screen-share path), falls back to the route segment.
+  const effectiveConversationId =
+    convIdParam && /^[a-z0-9]+$/i.test(convIdParam) && convIdParam.length > 10
+      ? convIdParam
+      : conversationId;
+  const hasValidEffectiveConversationId =
+    typeof effectiveConversationId === 'string' &&
+    /^[a-z0-9]+$/i.test(effectiveConversationId) &&
+    effectiveConversationId.length > 10;
   const canRunCallQueries = isAuthenticated && hasValidConversationId;
 
   const me = useQuery(api.users.getCurrentUser, canRunCallQueries ? {} : 'skip') as any | null | undefined;
   const meLoading = canRunCallQueries && me === undefined;
-  const conversation = useQuery(
+  // `getConversation` is wrapped in the REACTIVE safe-query hook so a
+  // server-side error (invalid id, transient auth blip, schema mismatch
+  // etc.) doesn't bubble into a render crash — the call screen continues
+  // with whatever `routeDisplayName` we have from the URL. The Convex
+  // request id error the user saw historically came from screen-only
+  // mode passing a screen-share *session* id to this query; we now use
+  // the explicit `convId` URL param when available, so this is a
+  // safety net for any future ID mismatch.
+  const { data: conversationData, loading: conversationLoadingRaw } = useReactiveSafeConvexQuery<any>(
     api.conversations.getConversation,
-    canRunCallQueries ? { conversationId } : 'skip'
-  ) as any | null | undefined;
-  const conversationLoading = canRunCallQueries && conversation === undefined;
+    hasValidEffectiveConversationId ? { conversationId: effectiveConversationId } : undefined,
+    null,
+    !!isAuthenticated && hasValidEffectiveConversationId,
+  );
+  const conversation = conversationData as any | null;
+  const conversationLoading = canRunCallQueries && conversationLoadingRaw;
   const activeCall = useQuery(
     (api as any).calls.getActiveCall,
     canRunCallQueries ? { conversationId } : 'skip'
