@@ -1,6 +1,12 @@
 import { useEffect, useRef } from 'react';
 import { Platform, Vibration } from 'react-native';
-import { Audio } from 'expo-av';
+import {
+  AudioModule,
+  createAudioPlayer,
+  setAudioModeAsync,
+  type AudioPlayer,
+  type AudioSource,
+} from 'expo-audio';
 import { readStoredJson } from '../settingsStorage';
 import { DEFAULT_RING_ID, getRingSource, type RingId } from './ringCatalog';
 
@@ -34,10 +40,10 @@ const DEFAULT_PREFS: RingPrefs = {
  *  - Vibrates the device in a phone-call cadence (unless user disabled vibrate)
  *
  * Stops both immediately when `active` flips to false or the hook unmounts.
- * Safe on web (no-ops).
+ * Safe on web (no-ops). Uses `expo-audio` (expo-av was deprecated in SDK 54).
  */
 export function useRingtonePlayer(active: boolean, options?: UseRingtonePlayerOptions): void {
-  const soundRef = useRef<Audio.Sound | null>(null);
+  const playerRef = useRef<AudioPlayer | null>(null);
   const isPlayingRef = useRef(false);
 
   useEffect(() => {
@@ -57,28 +63,45 @@ export function useRingtonePlayer(active: boolean, options?: UseRingtonePlayerOp
         const shouldVibrate = options?.vibrate ?? (prefs.vibrate !== false);
         const isSilent = ringSource === null;
 
-        // Configure audio mode so ringtone plays through speaker / ringer channel
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          playsInSilentModeIOS: true,
-          staysActiveInBackground: true,
-          shouldDuckAndroid: false,
-          playThroughEarpieceAndroid: false,
-        });
+        // Configure audio mode so ringtone plays through speaker / ringer channel.
+        // expo-audio API: playsInSilentMode / shouldPlayInBackground / shouldRouteThroughEarpiece
+        // (replaces expo-av's playsInSilentModeIOS / staysActiveInBackground / playThroughEarpieceAndroid).
+        try {
+          await setAudioModeAsync({
+            playsInSilentMode: true,
+            allowsRecording: false,
+            shouldPlayInBackground: true,
+            interruptionMode: 'duckOthers',
+            shouldRouteThroughEarpiece: false,
+          });
+        } catch (audioModeError: any) {
+          console.warn('ringtone setAudioModeAsync failed:', audioModeError?.message);
+        }
 
         if (!isSilent && ringSource) {
-          const { sound } = await Audio.Sound.createAsync(ringSource as any, {
-            isLooping: true,
-            volume: 1.0,
-          });
-
-          if (cancelled) {
-            await sound.unloadAsync().catch(() => {});
-            return;
+          try {
+            const player = createAudioPlayer(ringSource as AudioSource);
+            if (cancelled) {
+              try {
+                player.remove();
+              } catch {}
+              return;
+            }
+            playerRef.current = player;
+            try {
+              player.loop = true;
+            } catch {}
+            try {
+              player.volume = 1.0;
+            } catch {}
+            try {
+              player.play();
+            } catch (playError: any) {
+              console.warn('ringtone play failed:', playError?.message);
+            }
+          } catch (createError: any) {
+            console.warn('ringtone create failed:', createError?.message);
           }
-
-          soundRef.current = sound;
-          await sound.playAsync().catch(() => {});
         }
 
         if (shouldVibrate) {
@@ -94,14 +117,14 @@ export function useRingtonePlayer(active: boolean, options?: UseRingtonePlayerOp
       try {
         Vibration.cancel();
       } catch {}
-      const sound = soundRef.current;
-      soundRef.current = null;
-      if (sound) {
+      const player = playerRef.current;
+      playerRef.current = null;
+      if (player) {
         try {
-          await sound.stopAsync();
+          player.pause();
         } catch {}
         try {
-          await sound.unloadAsync();
+          player.remove();
         } catch {}
       }
     };
@@ -118,3 +141,6 @@ export function useRingtonePlayer(active: boolean, options?: UseRingtonePlayerOp
     };
   }, [active, options?.vibrate]);
 }
+
+// AudioModule import kept to ensure the native module is bundled.
+void AudioModule;

@@ -19,7 +19,7 @@ import { Feather, Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery } from 'convex/react';
 import { Camera } from 'expo-camera';
-import { Audio } from 'expo-av';
+import { setAudioModeAsync } from 'expo-audio';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   Easing,
@@ -207,15 +207,23 @@ export default function CallScreen() {
   const applyAudioMode = useCallback(async () => {
     if (Platform.OS === 'web') return;
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: audioOutput !== 'speaker' && callType === 'voice',
+      // expo-audio replaces the deprecated expo-av Audio.setAudioModeAsync.
+      // The field names are different from expo-av, see Audio.types.d.ts:
+      //   playsInSilentMode (was playsInSilentModeIOS)
+      //   allowsRecording   (was allowsRecordingIOS)
+      //   shouldPlayInBackground (was staysActiveInBackground)
+      //   interruptionMode    (was shouldDuckAndroid boolean)
+      //   shouldRouteThroughEarpiece (was playThroughEarpieceAndroid)
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: true,
+        shouldPlayInBackground: false,
+        interruptionMode: 'duckOthers',
+        shouldRouteThroughEarpiece:
+          audioOutput !== 'speaker' && callType === 'voice',
       });
     } catch (errorValue: any) {
-      console.warn('Audio.setAudioModeAsync failed:', errorValue?.message);
+      console.warn('setAudioModeAsync failed:', errorValue?.message);
     }
   }, [audioOutput, callType]);
 
