@@ -184,11 +184,35 @@ function CallScreenInner() {
   );
   const conversation = conversationData as any | null;
   const conversationLoading = canRunCallQueries && conversationLoadingRaw;
-  const activeCall = useQuery(
-    (api as any).calls.getActiveCall,
-    canRunCallQueries ? { conversationId } : 'skip'
-  ) as any | null | undefined;
-  const activeCallLoading = canRunCallQueries && activeCall === undefined;
+  // `getActiveCall` is wrapped in the REACTIVE safe-query hook for the same
+  // reason `getConversation` is — a Server Error here used to bubble into a
+  // render crash and the user saw "Call ended unexpectedly [CONVEX
+  // Q(calls:getActiveCall)] Server Error" the moment they entered the call
+  // screen. This happened in two ways:
+  //
+  //   1. Screen-share and conference modes pass a screen-share-session id
+  //      / conference id as the route segment. The backend's
+  //      `calls.getActiveCall` validator expects a real conversation id
+  //      and throws a Server Error on mismatch.
+  //   2. For regular calls a transient backend hiccup or auth gap
+  //      surfaces as the same Server Error.
+  //
+  // In screen-only AND conference mode we explicitly skip the query —
+  // those modes don't use the `calls` table at all (screen-only uses
+  // `screenSharingSessions`, conference uses `conferences`). For normal
+  // calls the safe-query wrapper lets us continue with `null` instead of
+  // crashing.
+  const shouldQueryActiveCall =
+    canRunCallQueries && !isScreenOnly && !isConferenceMode;
+  const { data: activeCallData, loading: activeCallLoadingRaw } =
+    useReactiveSafeConvexQuery<any>(
+      (api as any).calls.getActiveCall,
+      shouldQueryActiveCall ? { conversationId } : undefined,
+      null,
+      shouldQueryActiveCall,
+    );
+  const activeCall = activeCallData as any | null;
+  const activeCallLoading = shouldQueryActiveCall && activeCallLoadingRaw;
   const contacts = useQuery(api.contacts.getContacts, isAuthenticated ? {} : 'skip') as any[] | undefined;
   const contactsLoading = isAuthenticated && contacts === undefined;
 
@@ -343,7 +367,10 @@ function CallScreenInner() {
       // session is created up-front by /screen-share via
       // api.screenSharing.requestScreenShare and the recipient is notified
       // silently via IncomingScreenShareModal (subscribes to listIncoming).
-      !isScreenOnly;
+      !isScreenOnly &&
+      // Conference mode similarly must NOT touch the `calls` table — it uses
+      // the separate `conferences` table and its own signaling channel.
+      !isConferenceMode;
     if (!shouldAutoInitiate) return;
     let cancelled = false;
     (async () => {
@@ -359,7 +386,7 @@ function CallScreenInner() {
     return () => {
       cancelled = true;
     };
-  }, [activeCall, activeCallLoading, callId, canRunCallQueries, conversation, conversationId, conversationLoading, initiateCall, isAuthenticated, isScreenOnly, me, meLoading, requestedType]);
+  }, [activeCall, activeCallLoading, callId, canRunCallQueries, conversation, conversationId, conversationLoading, initiateCall, isAuthenticated, isConferenceMode, isScreenOnly, me, meLoading, requestedType]);
 
   // ====== Update status text based on state ======
   useEffect(() => {
