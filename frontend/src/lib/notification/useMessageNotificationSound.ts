@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Platform, AppState } from 'react-native';
-import { Audio } from 'expo-av';
+import { createAudioPlayer, setAudioModeAsync, type AudioSource } from 'expo-audio';
 import { useQuery } from 'convex/react';
 import { usePathname } from 'expo-router';
 import { api } from '../../convexApi';
@@ -32,23 +32,44 @@ export function useMessageNotificationSound() {
   const initializedRef = useRef(false);
   const playingRef = useRef(false);
 
-  const playClip = async (source: number) => {
-    const { sound } = await Audio.Sound.createAsync(source as any, { volume: 1.0 });
+  const playClip = async (source: number | AudioSource) => {
+    // expo-audio replaces expo-av's Audio.Sound API. Create a one-shot
+    // player, await playback end via `playbackStatusUpdate`, then remove().
+    const player = createAudioPlayer(source as AudioSource);
     try {
+      try {
+        player.volume = 1.0;
+      } catch {}
       await new Promise<void>((resolve, reject) => {
-        sound.setOnPlaybackStatusUpdate((status) => {
-          if (!status.isLoaded) {
-            reject(new Error('unloaded sound'));
-            return;
+        const handle = (player as any).addListener?.('playbackStatusUpdate', (status: any) => {
+          if (!status?.isLoaded && status?.isLoaded !== undefined) {
+            // didJustFinish lives at status.didJustFinish in expo-audio
           }
-          if (status.didJustFinish) {
+          if (status?.didJustFinish || status?.playbackState === 'ended') {
+            try { handle?.remove?.(); } catch {}
             resolve();
           }
         });
-        sound.playAsync().catch(reject);
+        try {
+          player.play();
+        } catch (errorValue: any) {
+          try { handle?.remove?.(); } catch {}
+          reject(errorValue);
+        }
+        // Safety net — most ringtones are < 5 s; resolve regardless after 8 s
+        // so we don't leak a Promise if the listener API differs.
+        setTimeout(() => {
+          try { handle?.remove?.(); } catch {}
+          resolve();
+        }, 8000);
       });
     } finally {
-      await sound.unloadAsync().catch(() => {});
+      try {
+        player.pause();
+      } catch {}
+      try {
+        player.remove();
+      } catch {}
     }
   };
 
@@ -57,12 +78,14 @@ export function useMessageNotificationSound() {
     if (playingRef.current) return;
     try {
       playingRef.current = true;
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
+      // expo-audio API: playsInSilentMode / allowsRecording / shouldPlayInBackground /
+      // interruptionMode / shouldRouteThroughEarpiece — see /call/[id].tsx for the matching call.
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: false,
+        shouldPlayInBackground: false,
+        interruptionMode: 'duckOthers',
+        shouldRouteThroughEarpiece: false,
       }).catch(() => {});
       const stored = (await readStoredJson('smilers_ringtone_prefs', null)) as { notificationSound?: RingId } | null;
       const selectedTone = stored?.notificationSound || 'smilers_notification';
@@ -73,7 +96,7 @@ export function useMessageNotificationSound() {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       await playClip(require('../../../assets/sounds/message_notification_beep.mp3'));
       if (followup) {
-        await playClip(followup);
+        await playClip(followup as AudioSource);
       }
     } catch (errorValue: any) {
       console.warn('[msg-sound] play failed:', errorValue?.message);

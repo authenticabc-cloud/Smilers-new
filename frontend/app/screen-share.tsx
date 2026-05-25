@@ -105,12 +105,17 @@ export default function ScreenShareSenderScreen() {
     setSubmitting(true);
     let shareId: string | null = null;
     let backendShipped = false;
+    // ⚠️ MUST be declared in the outer scope of handleStart — the historical
+    // bug had this `const` declared inside the `try` block, so the success-path
+    // route on line ~166 hit a silent ReferenceError, `setSubmitting(false)`
+    // never ran, and the sender's "Start sharing" button spun forever.
+    let conversationId: string | null = null;
     try {
       // The Convex `screenSharing.requestScreenShare` mutation requires a
       // conversationId, so first resolve / create a direct conversation with
       // the picked recipient. Audio inclusion is signalled via WebRTC later.
       const conv: any = await getOrCreateDirect({ otherUserId: selectedId });
-      const conversationId = typeof conv === 'string' ? conv : conv?._id || conv?.conversationId || conv?.id;
+      conversationId = typeof conv === 'string' ? conv : conv?._id || conv?.conversationId || conv?.id || null;
       if (!conversationId) throw new Error('Could not open a conversation with that contact.');
 
       const result: any = await (requestMutation as any)({ conversationId });
@@ -161,9 +166,16 @@ export default function ScreenShareSenderScreen() {
     // Pass the real `conversationId` separately as `convId` so the call
     // screen's `getConversation` query doesn't try to look up a record
     // by the screen-share session id (which would Server-Error).
-    router.replace(
-      `/call/${shareId}?type=screen&screenOnly=1&audio=${includeAudio ? 1 : 0}&convId=${conversationId}` as any,
-    );
+    // Always reset the spinner here — even if router.replace throws we
+    // don't want the button stuck spinning.
+    const convQuery = conversationId ? `&convId=${conversationId}` : '';
+    try {
+      router.replace(
+        `/call/${shareId}?type=screen&screenOnly=1&audio=${includeAudio ? 1 : 0}${convQuery}` as any,
+      );
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const headerSubtitle = selected

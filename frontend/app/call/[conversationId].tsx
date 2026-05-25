@@ -548,6 +548,39 @@ function CallScreenInner() {
     }
   }, [isCaller, isActive, callId, startPeerConnection]);
 
+  // ====== Screen-only mode: bootstrap peer-connection directly ======
+  //
+  // Screen-share doesn't use the regular `calls` table — there's no `activeCall`
+  // and no `callId` minted by `initiateCall`. The old call screen therefore
+  // never invoked `startPeerConnection`, which is why the receiver showed
+  // "Waiting for the sender's screen to start broadcasting…" forever and
+  // the sender's overlay spun without ever producing a stream.
+  //
+  // Fix: bootstrap the peer connection using the URL's `conversationId`
+  // path segment as the synthetic signaling key (it IS the screen-share
+  // session id when the route is `/call/[sessionId]?screenOnly=1`). The
+  // backend's `signaling.send` / `signaling.poll` accept arbitrary string
+  // ids, so this gives both sides a shared signaling rendezvous keyed by
+  // the session id.
+  //
+  // The sender (sharer) starts screen capture (`startInScreenShare=true`)
+  // and creates the offer; the receiver (viewer) waits for the offer and
+  // replies with an answer.
+  useEffect(() => {
+    if (!isScreenOnly) return;
+    if (!conversationId) return;
+    if (sessionRef.current || initStartedRef.current) return;
+    // Plant the conversationId / session id as the signaling key.
+    setCallId(conversationId);
+    if (isScreenOnlyReceiver) {
+      // Receiver: wait for offer (asCaller=false), no screen capture.
+      void startPeerConnection(false);
+    } else {
+      // Sender: capture screen, send offer (asCaller=true).
+      void startPeerConnection(true);
+    }
+  }, [isScreenOnly, isScreenOnlyReceiver, conversationId, startPeerConnection]);
+
   // ====== Heartbeat — REQUIRED by the backend's expireDeadCalls cron ======
   //
   // The backend runs `cleanupZombies` / `expireDeadCalls` every 60s. Active
