@@ -40,6 +40,8 @@ interface IncomingRequest {
   requestedAt: number;
   /** The real Convex conversation id (NOT the screen-share session id). */
   conversationId: string | null;
+  /** The sharer's user id — required by `screenSharing.sendSignal({ toUserId })`. */
+  requesterId: string | null;
 }
 
 function normalizeRequest(record: any): IncomingRequest | null {
@@ -71,6 +73,17 @@ function normalizeRequest(record: any): IncomingRequest | null {
   // and would fail that query — see CallErrorBoundary fallback bug).
   const conversationId =
     record.conversationId || record.chatId || record.threadId || nested.conversationId || null;
+  // Sharer's user id — used as `peerUserId` URL param for the call screen's
+  // `screenSharing.sendSignal({ toUserId })` calls.
+  const requesterId =
+    record.requesterId ||
+    record.sharerId ||
+    record.senderId ||
+    record.fromUserId ||
+    nested._id ||
+    nested.id ||
+    nested.userId ||
+    null;
   return {
     shareId: String(shareId),
     senderName: name,
@@ -78,6 +91,7 @@ function normalizeRequest(record: any): IncomingRequest | null {
     includeAudio: !!(record.includeAudio ?? nested.includeAudio ?? false),
     requestedAt: Number(record.requestedAt || record.createdAt || record._creationTime || Date.now()),
     conversationId: conversationId ? String(conversationId) : null,
+    requesterId: requesterId ? String(requesterId) : null,
   };
 }
 
@@ -140,9 +154,13 @@ export default function IncomingScreenShareModal() {
       // screen can resolve the contact's name/avatar via
       // `conversations.getConversation`. Without this, the call screen
       // would query with the session id and hit a Convex Server Error.
+      // Also pass the sharer's user id as `peerUserId` — required by
+      // `screenSharing.sendSignal({ sessionId, toUserId })` so the answer
+      // and ICE candidates route back to the sharer.
       const convQuery = current.conversationId ? `&convId=${current.conversationId}` : '';
+      const peerQuery = current.requesterId ? `&peerUserId=${current.requesterId}` : '';
       router.push(
-        `/call/${current.shareId}?type=screen&screenOnly=1&audio=${current.includeAudio ? 1 : 0}&role=receiver${convQuery}` as any,
+        `/call/${current.shareId}?type=screen&screenOnly=1&audio=${current.includeAudio ? 1 : 0}&role=receiver${convQuery}${peerQuery}` as any,
       );
     } finally {
       setBusyShareId(null);

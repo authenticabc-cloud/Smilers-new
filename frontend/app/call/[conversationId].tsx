@@ -118,7 +118,7 @@ function CallScreenInner() {
   const router = useRouter();
   const { height: windowHeight } = useWindowDimensions();
   const { isAuthenticated } = useAuth();
-  const { conversationId: rawConversationId, type: rawTypeParam, displayName: rawDisplayName, conferenceMode: rawConfMode, screenOnly: rawScreenOnly, audio: rawAudioParam, role: rawRoleParam, convId: rawConvIdParam } = useLocalSearchParams<{
+  const { conversationId: rawConversationId, type: rawTypeParam, displayName: rawDisplayName, conferenceMode: rawConfMode, screenOnly: rawScreenOnly, audio: rawAudioParam, role: rawRoleParam, convId: rawConvIdParam, peerUserId: rawPeerUserIdParam } = useLocalSearchParams<{
     conversationId?: string | string[];
     type?: string | string[];
     displayName?: string | string[];
@@ -127,6 +127,7 @@ function CallScreenInner() {
     audio?: string | string[];
     role?: string | string[];
     convId?: string | string[];
+    peerUserId?: string | string[];
   }>();
   const conversationId = Array.isArray(rawConversationId) ? rawConversationId[0] : rawConversationId;
   const typeParam = Array.isArray(rawTypeParam) ? rawTypeParam[0] : rawTypeParam;
@@ -140,6 +141,11 @@ function CallScreenInner() {
   // (`conversationId`) is actually a screen-share *session* id, not a real
   // conversation id. When present, prefer this for `getConversation`.
   const convIdParam = Array.isArray(rawConvIdParam) ? rawConvIdParam[0] : rawConvIdParam;
+  // Required by `screenSharing.sendSignal` — the other party's user id. Set
+  // by /screen-share (sender knows recipient) and IncomingScreenShareModal
+  // (receiver knows sharer via session.requesterId). Without this we cannot
+  // route signaling messages through the per-recipient screenSharing queue.
+  const peerUserIdParam = Array.isArray(rawPeerUserIdParam) ? rawPeerUserIdParam[0] : rawPeerUserIdParam;
   const isConferenceMode = confModeParam === '1' || confModeParam === 'true';
   // Screen-only mode is the standalone screen-share session — no camera, no
   // standard call UI, simplified controls. The sender is the broadcaster;
@@ -239,6 +245,14 @@ function CallScreenInner() {
   const createGroup = useMutation((api as any).conversations.createGroup);
   const sendSignal = useMutation(api.signaling.send);
   const markConsumed = useMutation(api.signaling.markConsumed);
+  // Per the backend team's June-2025 spec (and what their logs show is wired
+  // up): screen-share sessions DO NOT use `api.signaling.*` — that endpoint
+  // has a strict `v.id("calls")` validator that rejects screen-share session
+  // ids. Instead use the dedicated `api.screenSharing.sendSignal` /
+  // `pollSignals` / `markSignalsConsumed`, which are keyed by `{sessionId,
+  // toUserId}` and route through a per-recipient queue.
+  const sendScreenSignal = useMutation((api as any).screenSharing?.sendSignal);
+  const markScreenSignalsConsumed = useMutation((api as any).screenSharing?.markSignalsConsumed);
 
   const [callId, setCallId] = useState<string | null>(null);
   const [callType, setCallType] = useState<CallType>(requestedType);
@@ -333,8 +347,27 @@ function CallScreenInner() {
     };
   }, [screenReady]);
 
-  // Subscribe to incoming signaling messages for this call
-  const signals = useQuery((api as any).signaling.poll, callId && isAuthenticated ? { callId } : 'skip') as any[] | undefined;
+  // Subscribe to incoming signaling messages — the channel depends on mode.
+  //
+  // • Regular calls: `api.signaling.poll({ callId })` — strict callId validator,
+  //   keyed by the calls-table id.
+  //
+  // • Screen-share sessions: `api.screenSharing.pollSignals({ sessionId })` —
+  //   keyed by the screen-share session id (NOT a calls-table id). The backend
+  //   team confirmed this is the right channel for screen sharing; using
+  //   `signaling.poll` with a session id silently fails its `v.id("calls")`
+  //   validator. See iteration-78 fix.
+  const regularSignals = useQuery(
+    (api as any).signaling.poll,
+    !isScreenOnly && callId && isAuthenticated ? { callId } : 'skip',
+  ) as any[] | undefined;
+  const screenShareSignalsRaw = useReactiveSafeConvexQuery<any[]>(
+    (api as any).screenSharing?.pollSignals,
+    isScreenOnly && conversationId ? { sessionId: conversationId } : undefined,
+    [],
+    !!(isScreenOnly && conversationId && isAuthenticated),
+  );
+  const signals = (isScreenOnly ? screenShareSignalsRaw.data : regularSignals) as any[] | undefined;
 
   // Derived role: outgoing if I'm the caller, incoming otherwise
   const isCaller = activeCall && me ? activeCall.callerId === me._id : false;
@@ -457,6 +490,62 @@ function CallScreenInner() {
         callId,
         remoteUserId,
         sendSignal: async (sig) => {
+          // ┌─────────────────────────────────────────────────────────────┐
+          // │ SCREEN-SHARE PATH: route through `api.screenSharing.        │
+          // │ sendSignal({ sessionId, toUserId, type, payload })`.        │
+          // │ The plain `api.signaling.send` has a `v.id("calls")`        │
+          // │ validator and silently rejects screen-share session ids —   │
+          // │ which is why the receiver used to sit forever on           │
+          // │ "Waiting for the sender's screen to start broadcasting…".   │
+          // └─────────────────────────────────────────────────────────────┘
+          if (isScreenOnly) {
+            if (!conversationId || !peerUserIdParam) {
+              console.warn(
+                'screen-share sendSignal skipped — missing sessionId or peerUserId (sessionId=%s peerUserId=%s)',
+                conversationId,
+                peerUserIdParam,
+              );
+              return;
+            }
+            try {
+              await (sendScreenSignal as any)({
+                sessionId: conversationId,
+                toUserId: peerUserIdParam,
+                type: sig.type,
+                payload: sig.payload,
+              });
+            } catch (errorValue: any) {
+              // Some deployments use 'iceCandidate' (camel) literal — retry
+              // with the alternate naming if validation rejects 'ice-candidate'.
+              const message = String(errorValue?.message || '');
+              const isValidation =
+                message.includes('ArgumentValidationError') ||
+                message.includes('Validator error') ||
+                message.toLowerCase().includes('union') ||
+                message.toLowerCase().includes('literal');
+              if (isValidation && sig.type === 'ice-candidate') {
+                try {
+                  await (sendScreenSignal as any)({
+                    sessionId: conversationId,
+                    toUserId: peerUserIdParam,
+                    type: 'iceCandidate',
+                    payload: sig.payload,
+                  });
+                  return;
+                } catch (retryErr: any) {
+                  console.warn(
+                    'screen-share sendSignal retry (iceCandidate) failed:',
+                    retryErr?.message,
+                  );
+                  return;
+                }
+              }
+              console.warn('screen-share sendSignal failed:', message);
+            }
+            return;
+          }
+
+          // ── REGULAR CALL PATH ──────────────────────────────────────────
           // The backend's `signaling.send` validator uses a strict union.
           // Different deployments may use the camelCase `'iceCandidate'` or
           // the kebab `'ice-candidate'` literal — accept either by retrying
@@ -531,7 +620,7 @@ function CallScreenInner() {
         setPermissionDenied(true);
       }
     },
-    [CallSessionCtor, activeCall, applyAudioMode, callId, callType, sendSignal, startInScreenShare]
+    [CallSessionCtor, activeCall, applyAudioMode, callId, callType, conversationId, isScreenOnly, peerUserIdParam, sendScreenSignal, sendSignal, startInScreenShare]
   );
 
   // Caller: kick off peer-connection as soon as we have a callId (status may still be ringing)
@@ -654,13 +743,22 @@ function CallScreenInner() {
       }
       if (messageIds.length > 0) {
         try {
-          await markConsumed({ messageIds });
+          // Route the ACK to the same channel we received from. The screen-
+          // share queue uses `markSignalsConsumed`, the regular call queue
+          // uses `markConsumed`.
+          if (isScreenOnly) {
+            if (markScreenSignalsConsumed) {
+              await (markScreenSignalsConsumed as any)({ messageIds });
+            }
+          } else {
+            await markConsumed({ messageIds });
+          }
         } catch (errorValue: any) {
           console.warn('markConsumed failed:', errorValue?.message);
         }
       }
     })();
-  }, [signals, markConsumed]);
+  }, [signals, markConsumed, markScreenSignalsConsumed, isScreenOnly]);
 
   // ====== End call ======
   const handleHangup = useCallback(async () => {

@@ -166,12 +166,16 @@ export default function ScreenShareSenderScreen() {
     // Pass the real `conversationId` separately as `convId` so the call
     // screen's `getConversation` query doesn't try to look up a record
     // by the screen-share session id (which would Server-Error).
+    // Pass the recipient's user id as `peerUserId` — required by the
+    // backend's `screenSharing.sendSignal({ sessionId, toUserId, ... })`
+    // for WebRTC offer/answer/ICE routing.
     // Always reset the spinner here — even if router.replace throws we
     // don't want the button stuck spinning.
     const convQuery = conversationId ? `&convId=${conversationId}` : '';
+    const peerQuery = selectedId ? `&peerUserId=${selectedId}` : '';
     try {
       router.replace(
-        `/call/${shareId}?type=screen&screenOnly=1&audio=${includeAudio ? 1 : 0}${convQuery}` as any,
+        `/call/${shareId}?type=screen&screenOnly=1&audio=${includeAudio ? 1 : 0}${convQuery}${peerQuery}` as any,
       );
     } finally {
       setSubmitting(false);
