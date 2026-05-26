@@ -283,23 +283,15 @@ export class CallSession {
           );
         }
       });
-    } else {
-      // Viewer-only mode (screen-share receiver) — no local tracks. Explicitly
-      // declare a recvonly video transceiver so the SDP answer signals "I can
-      // receive video" to the sender. Without this, some libwebrtc builds
-      // omit the m=video section from the answer entirely and the sender's
-      // screen video track has nowhere to land.
-      try {
-        if (typeof (pc as any).addTransceiver === 'function') {
-          (pc as any).addTransceiver('video', { direction: 'recvonly' });
-          (pc as any).addTransceiver('audio', { direction: 'recvonly' });
-        }
-      } catch (errorValue) {
-        // Older WebRTC implementations may not expose addTransceiver — fall
-        // back to relying on the offer/answer auto-negotiation.
-        console.warn('addTransceiver(recvonly) failed (non-fatal):', errorValue);
-      }
     }
+    // Viewer-only mode (no local stream): we DO NOT pre-add `recvonly`
+    // transceivers anymore — that was attempted in iteration 79 but caused
+    // hard native crashes in `react-native-webrtc` v124 on some Android
+    // devices when paired with an asymmetric offer. The WebRTC spec
+    // guarantees that `setRemoteDescription(offer)` auto-creates matching
+    // transceivers for every m-line in the offer (defaulting to `recvonly`
+    // when we have no local tracks to send), so the receiver will still
+    // negotiate video correctly without any explicit `addTransceiver` call.
 
     return pc;
   }

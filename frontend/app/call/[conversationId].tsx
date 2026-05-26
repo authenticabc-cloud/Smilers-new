@@ -683,9 +683,9 @@ function CallScreenInner() {
   // Fix: bootstrap the peer connection using the URL's `conversationId`
   // path segment as the synthetic signaling key (it IS the screen-share
   // session id when the route is `/call/[sessionId]?screenOnly=1`). The
-  // backend's `signaling.send` / `signaling.poll` accept arbitrary string
-  // ids, so this gives both sides a shared signaling rendezvous keyed by
-  // the session id.
+  // backend's dedicated `screenSharing.sendSignal` / `screenSharing.pollSignals`
+  // accept arbitrary session ids, so this gives both sides a shared signaling
+  // rendezvous keyed by the session id.
   //
   // The sender (sharer) starts screen capture (`startInScreenShare=true`)
   // and creates the offer; the receiver (viewer) waits for the offer and
@@ -693,17 +693,36 @@ function CallScreenInner() {
   useEffect(() => {
     if (!isScreenOnly) return;
     if (!conversationId) return;
-    if (sessionRef.current || initStartedRef.current) return;
-    // Plant the conversationId / session id as the signaling key.
-    setCallId(conversationId);
-    if (isScreenOnlyReceiver) {
-      // Receiver: wait for offer (asCaller=false), no screen capture.
-      void startPeerConnection(false);
-    } else {
-      // Sender: capture screen, send offer (asCaller=true).
-      void startPeerConnection(true);
+    // Receiver MUST have the sharer's user id (passed via &peerUserId=). The
+    // sender always has it from the contact picker. Without this we cannot
+    // route signaling, so bail safely without mounting a half-broken
+    // peer connection.
+    if (!peerUserIdParam) {
+      console.warn(
+        'screen-only bootstrap: missing &peerUserId= URL param — cannot establish WebRTC. ' +
+          'Sender: /screen-share must include &peerUserId. Receiver: IncomingScreenShareModal ' +
+          'must extract session.requesterId.',
+      );
+      return;
     }
-  }, [isScreenOnly, isScreenOnlyReceiver, conversationId, startPeerConnection]);
+    if (sessionRef.current || initStartedRef.current) return;
+    // Defer everything inside a try/catch so a single misbehaving call
+    // doesn't take down the render tree (the CallErrorBoundary above us
+    // would catch it, but a guarded fallback is friendlier for users).
+    try {
+      // Plant the conversationId / session id as the signaling key.
+      setCallId(conversationId);
+      if (isScreenOnlyReceiver) {
+        // Receiver: wait for offer (asCaller=false), no screen capture.
+        void startPeerConnection(false);
+      } else {
+        // Sender: capture screen, send offer (asCaller=true).
+        void startPeerConnection(true);
+      }
+    } catch (errorValue: any) {
+      console.warn('screen-only bootstrap failed:', errorValue?.message);
+    }
+  }, [isScreenOnly, isScreenOnlyReceiver, conversationId, peerUserIdParam, startPeerConnection]);
 
   // ====== Heartbeat — REQUIRED by the backend's expireDeadCalls cron ======
   //
