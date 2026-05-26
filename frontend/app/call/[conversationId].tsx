@@ -454,29 +454,58 @@ function CallScreenInner() {
   // ====== Build & tear down peer connection when call becomes active ======
   const startPeerConnection = useCallback(
     async (asCaller: boolean) => {
-      if (!callId || !activeCall || initStartedRef.current || !CallSessionCtor) return;
+      if (!callId || initStartedRef.current || !CallSessionCtor) return;
       if (Platform.OS === 'web') return; // skip on web preview
-      const remoteUserId = asCaller ? activeCall.recipientId : activeCall.callerId;
-      if (!remoteUserId) return;
+      // ┌─────────────────────────────────────────────────────────────────┐
+      // │ REMOTE USER ID resolution                                        │
+      // │ • Regular call: read from `activeCall.{recipient,caller}Id`.    │
+      // │ • Screen-only:  there is no `calls` row, so the peer's user id  │
+      // │   was passed in via the `&peerUserId=` URL param (sender sets   │
+      // │   it from the contact picker; receiver sets it from the         │
+      // │   session.requesterId).                                          │
+      // │                                                                  │
+      // │ Historical bug: the function early-returned on `!activeCall`,    │
+      // │ so the screen-share sender NEVER created a peer connection and   │
+      // │ NEVER sent the offer — receiver sat forever on "Connecting…".    │
+      // └─────────────────────────────────────────────────────────────────┘
+      let remoteUserId: string | null = null;
+      if (isScreenOnly) {
+        remoteUserId = peerUserIdParam || null;
+      } else {
+        if (!activeCall) return;
+        remoteUserId = asCaller ? activeCall.recipientId : activeCall.callerId;
+      }
+      if (!remoteUserId) {
+        console.warn('startPeerConnection: no remoteUserId (screen-only=%s, peerUserId=%s)', isScreenOnly, peerUserIdParam);
+        return;
+      }
 
       initStartedRef.current = true;
 
       // Request permissions
       try {
+        // Screen-only RECEIVER (viewer) needs NEITHER camera NOR mic — it's
+        // purely receiving. Asking for camera permission and then denying
+        // used to throw `permissionDenied=true` which prevented the PC from
+        // being created at all. Skip the prompt entirely in viewer mode.
+        const isViewerOnly = isScreenOnly && isScreenOnlyReceiver;
         let camGranted = true;
-        if (callType === 'video') {
+        if (callType === 'video' && !isViewerOnly && !isScreenOnly) {
+          // Regular video call — request camera
           const cam = await Camera.requestCameraPermissionsAsync();
           camGranted = cam.status === 'granted';
         }
-        const micPermission = await Camera.requestMicrophonePermissionsAsync().catch(() => null);
-        const micGranted = micPermission?.status === 'granted';
-        if (callType === 'video' && !camGranted) {
-          setPermissionDenied(true);
-          return;
-        }
-        if (!micGranted) {
-          setPermissionDenied(true);
-          return;
+        if (!isViewerOnly) {
+          const micPermission = await Camera.requestMicrophonePermissionsAsync().catch(() => null);
+          const micGranted = micPermission?.status === 'granted';
+          if (callType === 'video' && !camGranted && !isScreenOnly) {
+            setPermissionDenied(true);
+            return;
+          }
+          if (!micGranted && !isScreenOnly) {
+            setPermissionDenied(true);
+            return;
+          }
         }
         await applyAudioMode();
         setAudioModeReady(true);
@@ -605,7 +634,13 @@ function CallScreenInner() {
       sessionRef.current = session;
 
       try {
-        await session.initLocalMedia(startInScreenShare);
+        // For screen-only RECEIVER (viewer): no local capture at all. Pass
+        // `viewerOnly=true` so initLocalMedia returns null without
+        // prompting for camera/mic permissions (which would otherwise
+        // throw and prevent the PC from being created — exactly the
+        // "Connecting…" symptom we kept hitting in the field).
+        const isViewerOnly = isScreenOnly && isScreenOnlyReceiver;
+        await (session as any).initLocalMedia(startInScreenShare, isViewerOnly);
         await session.createPeerConnection();
         if (asCaller) {
           await session.createOffer();
@@ -620,7 +655,7 @@ function CallScreenInner() {
         setPermissionDenied(true);
       }
     },
-    [CallSessionCtor, activeCall, applyAudioMode, callId, callType, conversationId, isScreenOnly, peerUserIdParam, sendScreenSignal, sendSignal, startInScreenShare]
+    [CallSessionCtor, activeCall, applyAudioMode, callId, callType, conversationId, isScreenOnly, isScreenOnlyReceiver, peerUserIdParam, sendScreenSignal, sendSignal, startInScreenShare]
   );
 
   // Caller: kick off peer-connection as soon as we have a callId (status may still be ringing)

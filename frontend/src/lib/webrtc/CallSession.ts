@@ -54,8 +54,19 @@ export class CallSession {
   }
 
   /** Acquire camera/mic and attach to the peer connection. */
-  async initLocalMedia(useScreen: boolean = false): Promise<MediaStream> {
+  async initLocalMedia(useScreen: boolean = false, viewerOnly: boolean = false): Promise<MediaStream | null> {
     const webrtc = await this.getWebRTC();
+    if (viewerOnly) {
+      // Screen-share viewer: NO local capture at all. We're purely receiving
+      // the sender's screen — capturing our own camera/mic would be wrong
+      // UX (and would block the whole flow if the user denies camera, which
+      // is exactly what happened in the field). The offer/answer SDP
+      // negotiation will still create a recvonly video transceiver because
+      // the remote offer advertises a video sender.
+      this.localStream = null;
+      this.opts.onLocalStream?.(null as any);
+      return null;
+    }
     if (useScreen) {
       // Screen-share-only mode: capture the device screen + mic audio
       const screenStream = await this.captureScreen();
@@ -272,6 +283,22 @@ export class CallSession {
           );
         }
       });
+    } else {
+      // Viewer-only mode (screen-share receiver) — no local tracks. Explicitly
+      // declare a recvonly video transceiver so the SDP answer signals "I can
+      // receive video" to the sender. Without this, some libwebrtc builds
+      // omit the m=video section from the answer entirely and the sender's
+      // screen video track has nowhere to land.
+      try {
+        if (typeof (pc as any).addTransceiver === 'function') {
+          (pc as any).addTransceiver('video', { direction: 'recvonly' });
+          (pc as any).addTransceiver('audio', { direction: 'recvonly' });
+        }
+      } catch (errorValue) {
+        // Older WebRTC implementations may not expose addTransceiver — fall
+        // back to relying on the offer/answer auto-negotiation.
+        console.warn('addTransceiver(recvonly) failed (non-fatal):', errorValue);
+      }
     }
 
     return pc;
@@ -281,10 +308,26 @@ export class CallSession {
   async createOffer(): Promise<void> {
     if (!this.pc) throw new Error('Peer connection not initialized');
     const offer = await this.pc.createOffer({
+      // Screen sharing is callType==='video' but we always want to receive
+      // the remote video too in case of bidirectional flows. For pure voice
+      // calls we still set offerToReceiveAudio:true.
       offerToReceiveAudio: true,
       offerToReceiveVideo: this.opts.callType === 'video',
     } as any);
     await this.pc.setLocalDescription(offer);
+    const videoTracks = (this.localStream as any)?.getVideoTracks?.() || [];
+    const screenTrack = videoTracks[0];
+    if (screenTrack) {
+      // Diagnostic log per backend team's checklist (Iteration 79):
+      //   "Log track kind/id/readyState after screen share starts."
+      console.log(
+        '[CallSession] outgoing video track:',
+        'kind=', screenTrack.kind,
+        'id=', screenTrack.id,
+        'enabled=', screenTrack.enabled,
+        'readyState=', screenTrack.readyState,
+      );
+    }
     await this.opts.sendSignal({
       callId: this.opts.callId,
       toUserId: this.opts.remoteUserId,
