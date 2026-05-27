@@ -8,7 +8,7 @@
     "icon": "./assets/images/icon.png",
     "scheme": "smilers",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.smilers.app",
@@ -158,6 +158,16 @@
         }
       ],
       "@react-native-community/datetimepicker",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 24,
+            "enableProguardInReleaseBuilds": true,
+            "extraProguardRules": "# react-native-webrtc — keep all native classes from being stripped by R8 in release builds.\n# Without these rules the org.webrtc.* classes are stripped → instant native crash on require().\n-keep class org.webrtc.** { *; }\n-keep interface org.webrtc.** { *; }\n-dontwarn org.webrtc.**\n# React Native bridge module for WebRTC\n-keep class com.oney.WebRTCModule.** { *; }\n-keep interface com.oney.WebRTCModule.** { *; }\n-dontwarn com.oney.WebRTCModule.**\n# React Native core modules that WebRTC depends on\n-keep class com.facebook.react.modules.** { *; }\n-keep class com.facebook.jni.** { *; }\n# Keep all JNI native methods\n-keepclasseswithmembernames class * { native <methods>; }"
+          }
+        }
+      ],
       "@config-plugins/react-native-webrtc"
     ],
     "experiments": {
