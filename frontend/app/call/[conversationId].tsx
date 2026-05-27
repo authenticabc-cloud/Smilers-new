@@ -467,35 +467,51 @@ function CallScreenInner() {
         callDebug.push('CALL', 'startPeerConnection skipped: web preview');
         return; // skip on web preview
       }
+      // ⚡ CRITICAL: claim the slot IMMEDIATELY, before any other guards.
+      // The previous version set this AFTER the `!activeCall` / `!remoteUserId`
+      // bails — meaning if those bails fired (e.g. activeCall query returns
+      // null due to a transient Server Error from the safe-query wrapper),
+      // the ref stayed false. On the next heartbeat re-emit (every 10s) the
+      // useEffect re-fired and the function entered AGAIN, leaving a sea of
+      // 'startPeerConnection asCaller=true' log entries with no PC events
+      // afterward (exactly what iteration-81's debug overlay revealed).
+      initStartedRef.current = true;
+
       callDebug.push(
         'CALL',
         `startPeerConnection asCaller=${asCaller} screenOnly=${isScreenOnly} viewer=${isScreenOnlyReceiver} callType=${callType}`,
       );
       // ┌─────────────────────────────────────────────────────────────────┐
       // │ REMOTE USER ID resolution                                        │
-      // │ • Regular call: read from `activeCall.{recipient,caller}Id`.    │
-      // │ • Screen-only:  there is no `calls` row, so the peer's user id  │
-      // │   was passed in via the `&peerUserId=` URL param (sender sets   │
-      // │   it from the contact picker; receiver sets it from the         │
-      // │   session.requesterId).                                          │
-      // │                                                                  │
-      // │ Historical bug: the function early-returned on `!activeCall`,    │
-      // │ so the screen-share sender NEVER created a peer connection and   │
-      // │ NEVER sent the offer — receiver sat forever on "Connecting…".    │
+      // │ • Regular call: prefer `activeCall.{recipient,caller}Id`, but    │
+      // │   fall back to the hydrated `fetchedOtherUser` from the          │
+      // │   conversation when the safe-query wrapper has activeCall=null.  │
+      // │ • Screen-only:  read from the URL `&peerUserId=` param.          │
       // └─────────────────────────────────────────────────────────────────┘
       let remoteUserId: string | null = null;
       if (isScreenOnly) {
         remoteUserId = peerUserIdParam || null;
-      } else {
-        if (!activeCall) return;
+      } else if (activeCall) {
         remoteUserId = asCaller ? activeCall.recipientId : activeCall.callerId;
+      } else if (fetchedOtherUser) {
+        // Convex `getActiveCall` is briefly unavailable / errored — use the
+        // conversation contact directly (this is the same person we just
+        // called via `initiateCall`).
+        remoteUserId = (fetchedOtherUser as any)?._id || (fetchedOtherUser as any)?.userId || null;
+        callDebug.push(
+          'CALL',
+          `remoteUserId resolved from fetchedOtherUser=${String(remoteUserId).slice(0, 8)}…`,
+        );
       }
       if (!remoteUserId) {
-        console.warn('startPeerConnection: no remoteUserId (screen-only=%s, peerUserId=%s)', isScreenOnly, peerUserIdParam);
+        callDebug.push(
+          'ERR',
+          `no remoteUserId (screenOnly=${isScreenOnly}, activeCall=${!!activeCall}, otherUser=${!!fetchedOtherUser})`,
+        );
+        // Release the slot so a future state update can retry.
+        initStartedRef.current = false;
         return;
       }
-
-      initStartedRef.current = true;
 
       // Request permissions
       try {
