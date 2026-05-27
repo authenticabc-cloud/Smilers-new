@@ -717,21 +717,34 @@ function CallScreenInner() {
       sessionRef.current = session;
 
       try {
-        // NOTE: iteration 80 reverted the iteration-79 `viewerOnly` flag — it
-        // was introducing a crash on receiver-accept. Until we see the
-        // on-screen debug overlay output for a real session, we go back to
-        // the historical behaviour: even in screen-only viewer mode the
-        // receiver requests `initLocalMedia(false)` (mic only — video=false
-        // for `callType==='voice'`, or mic+camera attempt for video calls).
-        // The cost is that the receiver may be prompted for mic / camera
-        // permission, but the crash goes away.
-        await session.initLocalMedia(startInScreenShare);
+        // Per Emergent Support guidance (iteration 83): the screen-only
+        // VIEWER (receiver of a screen share) must NOT call initLocalMedia
+        // at all. The viewer has no media to send — it's purely consuming
+        // the sender's stream. WebRTC's setRemoteDescription(offer) will
+        // auto-create matching transceivers in the recvonly direction from
+        // the sender's offer SDP, so we only need to:
+        //   1. createPeerConnection (no local tracks),
+        //   2. wait for the sender's offer to arrive via signaling,
+        //   3. setRemoteDescription + createAnswer.
+        // Calling initLocalMedia on the viewer used to crash both devices
+        // (the camera/mic capture failed → exception → fallback paths
+        // triggered native crashes on react-native-webrtc@124.0.7).
+        const isViewerOnly = isScreenOnly && isScreenOnlyReceiver;
+        if (!isViewerOnly) {
+          await session.initLocalMedia(startInScreenShare);
+        } else {
+          callDebug.push(
+            'SCRN',
+            'viewer-only: skipping initLocalMedia (transceivers auto-created from remote offer)',
+          );
+        }
         await session.createPeerConnection();
         if (asCaller) {
           await session.createOffer();
         }
       } catch (errorValue: any) {
         console.warn('startPeerConnection failed:', errorValue?.message);
+        callDebug.push('ERR', `startPeerConnection failed: ${errorValue?.message || 'unknown'}`);
         if (startInScreenShare) {
           Platform.OS === 'ios'
             ? alertScreenShareIOSError()
@@ -740,7 +753,26 @@ function CallScreenInner() {
         setPermissionDenied(true);
       }
     },
-    [CallSessionCtor, activeCall, applyAudioMode, callId, callType, conversationId, isScreenOnly, isScreenOnlyReceiver, peerUserIdParam, sendScreenSignal, sendSignal, startInScreenShare]
+    [
+      CallSessionCtor,
+      activeCall,
+      applyAudioMode,
+      callId,
+      callType,
+      conversationId,
+      // ⚠ fetchedOtherUser is referenced inside the body (used as the
+      // remoteUserId fallback when activeCall is missing the recipient
+      // field). Without it in the deps, a stale closure could see
+      // fetchedOtherUser === null even after the hook resolves it, causing
+      // the "no remoteUserId" retry loop. — Emergent Support iteration 83.
+      fetchedOtherUser,
+      isScreenOnly,
+      isScreenOnlyReceiver,
+      peerUserIdParam,
+      sendScreenSignal,
+      sendSignal,
+      startInScreenShare,
+    ]
   );
 
   // Caller: kick off peer-connection as soon as we have a callId (status may still be ringing)

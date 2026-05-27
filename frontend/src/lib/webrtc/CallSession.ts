@@ -95,15 +95,43 @@ export class CallSession {
     return stream;
   }
 
-  /** Internal: capture the device screen using getDisplayMedia. */
+  /** Internal: capture the device screen using getDisplayMedia.
+   *
+   * ⚠ Per Emergent Support iteration 83 — the native `getDisplayMedia`
+   * implementation in `react-native-webrtc@124.0.7` can fail in ways that
+   * propagate as uncaught native errors and crash the JS bridge. We wrap
+   * the call in a try/catch and surface a JS-side Error so the call screen
+   * can show a friendly alert via the existing `setPermissionDenied` /
+   * `alertScreenShareIOSError` paths instead of bringing down the whole
+   * app.
+   */
   private async captureScreen(): Promise<MediaStream> {
     const webrtc = await this.getWebRTC();
     const md: any = webrtc.mediaDevices as any;
     if (typeof md.getDisplayMedia !== 'function') {
       throw new Error('Screen capture is not available on this device.');
     }
-    const stream = (await md.getDisplayMedia({ video: true, audio: false })) as MediaStream;
-    return stream;
+    try {
+      const stream = (await md.getDisplayMedia({ video: true, audio: false })) as MediaStream;
+      if (!stream || typeof (stream as any).getVideoTracks !== 'function') {
+        throw new Error('Screen capture returned an invalid stream.');
+      }
+      const videoTracks = stream.getVideoTracks();
+      if (!videoTracks || videoTracks.length === 0) {
+        throw new Error('Screen capture returned no video tracks.');
+      }
+      return stream;
+    } catch (errorValue: any) {
+      const friendly =
+        errorValue?.message ||
+        errorValue?.name ||
+        'Screen capture failed. Please try again or check screen-recording permissions.';
+      // Re-throw as a regular JS Error so the caller's try/catch can handle
+      // it gracefully (it does — startPeerConnection wraps initLocalMedia
+      // in a try/catch that calls alertScreenShareIOSError on iOS and
+      // setPermissionDenied(true) on Android).
+      throw new Error(friendly);
+    }
   }
 
   /**
