@@ -371,9 +371,23 @@ function CallScreenInner() {
   );
   const signals = (isScreenOnly ? screenShareSignalsRaw.data : regularSignals) as any[] | undefined;
 
-  // Derived role: outgoing if I'm the caller, incoming otherwise
-  const isCaller = activeCall && me ? activeCall.callerId === me._id : false;
-  const isIncoming = activeCall && me && activeCall.callerId !== me._id && activeCall.status === 'ringing';
+  // Derived role: outgoing if I'm the caller, incoming otherwise.
+  //
+  // ⚠ Backend-schema tolerance: the Convex `calls` row exposes the caller's
+  // user id under EITHER `callerId` (legacy) OR `callerUserId` (per the new
+  // spec in /app/CONVEX_BACKEND_INSTRUCTIONS_URGENT_MOBILE_BLOCKERS.md §A.3).
+  // We accept both so the call screen keeps working through the backend
+  // migration without rebuilding the mobile binary.
+  const activeCallCallerId = activeCall
+    ? (activeCall as any).callerId || (activeCall as any).callerUserId || null
+    : null;
+  const isCaller = !!(activeCallCallerId && me && activeCallCallerId === me._id);
+  const isIncoming = !!(
+    activeCallCallerId &&
+    me &&
+    activeCallCallerId !== me._id &&
+    activeCall?.status === 'ringing'
+  );
   const isOutgoingRinging = isCaller && activeCall?.status === 'ringing';
   const isActive = activeCall?.status === 'active';
 
@@ -483,25 +497,63 @@ function CallScreenInner() {
       );
       // ┌─────────────────────────────────────────────────────────────────┐
       // │ REMOTE USER ID resolution                                        │
-      // │ • Regular call: prefer `activeCall.{recipient,caller}Id`, but    │
-      // │   fall back to the hydrated `fetchedOtherUser` from the          │
-      // │   conversation when the safe-query wrapper has activeCall=null.  │
+      // │ • Regular call: try ALL known field-name variants on the         │
+      // │   `activeCall` row (the backend schema has historically used     │
+      // │   `recipientId`, `calleeId`, `calleeUserId`, `recipientUserId`,  │
+      // │   `receiverId`, `toUserId` — and the same fanout for the         │
+      // │   caller-side field). If none yield a value, fall back to the    │
+      // │   hydrated `fetchedOtherUser` from the conversation — that IS    │
+      // │   the remote user in any 1-on-1 call.                            │
       // │ • Screen-only:  read from the URL `&peerUserId=` param.          │
+      // │                                                                  │
+      // │ Bug fixed (iteration-82): on-screen Call Debug overlay showed    │
+      // │ `no remoteUserId (screenOnly=false, activeCall=true,             │
+      // │ otherUser=true)` in a tight retry loop. Root cause was that the  │
+      // │ Convex `calls` row uses `calleeUserId`, not `recipientId`, so    │
+      // │ the old `activeCall.recipientId` lookup always returned          │
+      // │ undefined → peer connection never created → call/screen-share    │
+      // │ hung on "Connecting…" forever.                                   │
       // └─────────────────────────────────────────────────────────────────┘
       let remoteUserId: string | null = null;
       if (isScreenOnly) {
         remoteUserId = peerUserIdParam || null;
-      } else if (activeCall) {
-        remoteUserId = asCaller ? activeCall.recipientId : activeCall.callerId;
-      } else if (fetchedOtherUser) {
-        // Convex `getActiveCall` is briefly unavailable / errored — use the
-        // conversation contact directly (this is the same person we just
-        // called via `initiateCall`).
-        remoteUserId = (fetchedOtherUser as any)?._id || (fetchedOtherUser as any)?.userId || null;
-        callDebug.push(
-          'CALL',
-          `remoteUserId resolved from fetchedOtherUser=${String(remoteUserId).slice(0, 8)}…`,
-        );
+      } else {
+        const ac: any = activeCall || {};
+        const pickCallerField = () =>
+          ac.callerId ||
+          ac.callerUserId ||
+          ac.fromUserId ||
+          ac.from ||
+          null;
+        const pickCalleeField = () =>
+          ac.recipientId ||
+          ac.recipientUserId ||
+          ac.calleeId ||
+          ac.calleeUserId ||
+          ac.receiverId ||
+          ac.toUserId ||
+          ac.to ||
+          null;
+        const fromActive = asCaller ? pickCalleeField() : pickCallerField();
+        if (fromActive) {
+          remoteUserId = String(fromActive);
+        } else if (fetchedOtherUser) {
+          // The call row doesn't carry the remote user id (either because
+          // the backend schema diverged, or because the safe-query wrapper
+          // is briefly serving a stale/null activeCall). Use the
+          // conversation's hydrated other user — for a 1-on-1 call this is
+          // always the correct remote peer.
+          remoteUserId =
+            (fetchedOtherUser as any)?._id ||
+            (fetchedOtherUser as any)?.userId ||
+            null;
+          if (remoteUserId) {
+            callDebug.push(
+              'CALL',
+              `remoteUserId resolved from fetchedOtherUser=${String(remoteUserId).slice(0, 8)}…`,
+            );
+          }
+        }
       }
       if (!remoteUserId) {
         callDebug.push(
