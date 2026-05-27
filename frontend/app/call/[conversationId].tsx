@@ -31,6 +31,8 @@ import Animated, {
 } from 'react-native-reanimated';
 import { StatusBar } from 'expo-status-bar';
 import { api } from '../../src/convexApi';
+import CallDebugOverlay from '../../src/components/CallDebugOverlay';
+import { callDebug } from '../../src/lib/callDebugLog';
 import CallErrorBoundary from '../../src/components/CallErrorBoundary';
 import ConferenceHUD from '../../src/components/ConferenceHUD';
 import ScreenShareOverlay from '../../src/components/ScreenShareOverlay';
@@ -454,8 +456,21 @@ function CallScreenInner() {
   // ====== Build & tear down peer connection when call becomes active ======
   const startPeerConnection = useCallback(
     async (asCaller: boolean) => {
-      if (!callId || initStartedRef.current || !CallSessionCtor) return;
-      if (Platform.OS === 'web') return; // skip on web preview
+      if (!callId || initStartedRef.current || !CallSessionCtor) {
+        callDebug.push(
+          'CALL',
+          `startPeerConnection skipped (callId=${!!callId} alreadyInit=${initStartedRef.current} ctor=${!!CallSessionCtor})`,
+        );
+        return;
+      }
+      if (Platform.OS === 'web') {
+        callDebug.push('CALL', 'startPeerConnection skipped: web preview');
+        return; // skip on web preview
+      }
+      callDebug.push(
+        'CALL',
+        `startPeerConnection asCaller=${asCaller} screenOnly=${isScreenOnly} viewer=${isScreenOnlyReceiver} callType=${callType}`,
+      );
       // ┌─────────────────────────────────────────────────────────────────┐
       // │ REMOTE USER ID resolution                                        │
       // │ • Regular call: read from `activeCall.{recipient,caller}Id`.    │
@@ -634,13 +649,15 @@ function CallScreenInner() {
       sessionRef.current = session;
 
       try {
-        // For screen-only RECEIVER (viewer): no local capture at all. Pass
-        // `viewerOnly=true` so initLocalMedia returns null without
-        // prompting for camera/mic permissions (which would otherwise
-        // throw and prevent the PC from being created — exactly the
-        // "Connecting…" symptom we kept hitting in the field).
-        const isViewerOnly = isScreenOnly && isScreenOnlyReceiver;
-        await (session as any).initLocalMedia(startInScreenShare, isViewerOnly);
+        // NOTE: iteration 80 reverted the iteration-79 `viewerOnly` flag — it
+        // was introducing a crash on receiver-accept. Until we see the
+        // on-screen debug overlay output for a real session, we go back to
+        // the historical behaviour: even in screen-only viewer mode the
+        // receiver requests `initLocalMedia(false)` (mic only — video=false
+        // for `callType==='voice'`, or mic+camera attempt for video calls).
+        // The cost is that the receiver may be prompted for mic / camera
+        // permission, but the crash goes away.
+        await session.initLocalMedia(startInScreenShare);
         await session.createPeerConnection();
         if (asCaller) {
           await session.createOffer();
@@ -673,54 +690,31 @@ function CallScreenInner() {
   }, [isCaller, isActive, callId, startPeerConnection]);
 
   // ====== Screen-only mode: bootstrap peer-connection directly ======
-  //
-  // Screen-share doesn't use the regular `calls` table — there's no `activeCall`
-  // and no `callId` minted by `initiateCall`. The old call screen therefore
-  // never invoked `startPeerConnection`, which is why the receiver showed
-  // "Waiting for the sender's screen to start broadcasting…" forever and
-  // the sender's overlay spun without ever producing a stream.
-  //
-  // Fix: bootstrap the peer connection using the URL's `conversationId`
-  // path segment as the synthetic signaling key (it IS the screen-share
-  // session id when the route is `/call/[sessionId]?screenOnly=1`). The
-  // backend's dedicated `screenSharing.sendSignal` / `screenSharing.pollSignals`
-  // accept arbitrary session ids, so this gives both sides a shared signaling
-  // rendezvous keyed by the session id.
-  //
-  // The sender (sharer) starts screen capture (`startInScreenShare=true`)
-  // and creates the offer; the receiver (viewer) waits for the offer and
-  // replies with an answer.
   useEffect(() => {
     if (!isScreenOnly) return;
     if (!conversationId) return;
-    // Receiver MUST have the sharer's user id (passed via &peerUserId=). The
-    // sender always has it from the contact picker. Without this we cannot
-    // route signaling, so bail safely without mounting a half-broken
-    // peer connection.
     if (!peerUserIdParam) {
-      console.warn(
-        'screen-only bootstrap: missing &peerUserId= URL param — cannot establish WebRTC. ' +
-          'Sender: /screen-share must include &peerUserId. Receiver: IncomingScreenShareModal ' +
-          'must extract session.requesterId.',
+      callDebug.push(
+        'ERR',
+        'screen-only bootstrap: missing &peerUserId= URL param — cannot establish WebRTC',
       );
       return;
     }
     if (sessionRef.current || initStartedRef.current) return;
-    // Defer everything inside a try/catch so a single misbehaving call
-    // doesn't take down the render tree (the CallErrorBoundary above us
-    // would catch it, but a guarded fallback is friendlier for users).
     try {
-      // Plant the conversationId / session id as the signaling key.
+      callDebug.push(
+        'CALL',
+        `screen-only mount role=${isScreenOnlyReceiver ? 'viewer' : 'sharer'} ` +
+          `sessionId=${String(conversationId).slice(0, 8)}… peer=${String(peerUserIdParam).slice(0, 8)}…`,
+      );
       setCallId(conversationId);
       if (isScreenOnlyReceiver) {
-        // Receiver: wait for offer (asCaller=false), no screen capture.
         void startPeerConnection(false);
       } else {
-        // Sender: capture screen, send offer (asCaller=true).
         void startPeerConnection(true);
       }
     } catch (errorValue: any) {
-      console.warn('screen-only bootstrap failed:', errorValue?.message);
+      callDebug.push('ERR', `screen-only bootstrap: ${errorValue?.message}`);
     }
   }, [isScreenOnly, isScreenOnlyReceiver, conversationId, peerUserIdParam, startPeerConnection]);
 
@@ -853,10 +847,12 @@ function CallScreenInner() {
 
   const handleAnswer = useCallback(async () => {
     if (!callId) return;
+    callDebug.push('CALL', `handleAnswer → answerCall(${String(callId).slice(0, 8)}…)`);
     try {
       await answerCall({ callId });
+      callDebug.push('CALL', 'answerCall mutation OK');
     } catch (errorValue: any) {
-      console.warn('answerCall failed:', errorValue?.message);
+      callDebug.push('ERR', `answerCall failed: ${errorValue?.message}`);
     }
   }, [answerCall, callId]);
 
@@ -1386,6 +1382,11 @@ function CallScreenInner() {
           role="sharer"
         />
       )}
+
+      {/* On-screen debug overlay — bottom-right floating "activity" badge.
+          Tap to expand the last ~60 call/screen-share events. Visible in
+          production APK to bypass console.log / adb logcat barriers. */}
+      <CallDebugOverlay />
     </View>
   );
 

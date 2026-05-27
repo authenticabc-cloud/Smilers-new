@@ -1,4 +1,5 @@
 import { PEER_CONNECTION_CONFIG } from './iceServers';
+import { callDebug } from '../callDebugLog';
 
 type MediaStream = any;
 type RTCPeerConnection = any;
@@ -54,19 +55,8 @@ export class CallSession {
   }
 
   /** Acquire camera/mic and attach to the peer connection. */
-  async initLocalMedia(useScreen: boolean = false, viewerOnly: boolean = false): Promise<MediaStream | null> {
+  async initLocalMedia(useScreen: boolean = false): Promise<MediaStream> {
     const webrtc = await this.getWebRTC();
-    if (viewerOnly) {
-      // Screen-share viewer: NO local capture at all. We're purely receiving
-      // the sender's screen — capturing our own camera/mic would be wrong
-      // UX (and would block the whole flow if the user denies camera, which
-      // is exactly what happened in the field). The offer/answer SDP
-      // negotiation will still create a recvonly video transceiver because
-      // the remote offer advertises a video sender.
-      this.localStream = null;
-      this.opts.onLocalStream?.(null as any);
-      return null;
-    }
     if (useScreen) {
       // Screen-share-only mode: capture the device screen + mic audio
       const screenStream = await this.captureScreen();
@@ -234,11 +224,17 @@ export class CallSession {
     const webrtc = await this.getWebRTC();
     const pc = new webrtc.RTCPeerConnection(PEER_CONNECTION_CONFIG);
     this.pc = pc;
+    callDebug.push(
+      'PC',
+      `created (callType=${this.opts.callType}, isCaller=${this.opts.isCaller}, ` +
+        `hasLocalStream=${!!this.localStream}, localTracks=${this.localStream?.getTracks?.()?.length ?? 0})`,
+    );
 
     // ICE candidates → send via signaling
     (pc as any).addEventListener('icecandidate', (event: any) => {
       if (event?.candidate && !this.closed) {
         const payload = JSON.stringify(event.candidate.toJSON ? event.candidate.toJSON() : event.candidate);
+        callDebug.push('SIG', `→ ice-candidate (${(event.candidate?.candidate || '').slice(0, 40)})`);
         void Promise.resolve(
           this.opts.sendSignal({
             callId: this.opts.callId,
@@ -256,6 +252,11 @@ export class CallSession {
     (pc as any).addEventListener('track', (event: any) => {
       const streams = event?.streams as MediaStream[] | undefined;
       const stream = streams && streams.length > 0 ? streams[0] : null;
+      const trackInfo =
+        event?.track
+          ? `kind=${event.track.kind} readyState=${event.track.readyState}`
+          : 'no-track';
+      callDebug.push('PC', `ontrack ${trackInfo}, streams=${streams?.length ?? 0}`);
       if (stream) {
         this.remoteStream = stream;
         this.opts.onRemoteStream?.(stream);
@@ -264,12 +265,18 @@ export class CallSession {
 
     (pc as any).addEventListener('connectionstatechange', () => {
       const state = (pc as any).connectionState as string | undefined;
-      if (state) this.opts.onConnectionStateChange?.(state);
+      if (state) {
+        callDebug.push('PC', `state=${state}`);
+        this.opts.onConnectionStateChange?.(state);
+      }
     });
 
     (pc as any).addEventListener('iceconnectionstatechange', () => {
       const state = (pc as any).iceConnectionState as string | undefined;
-      if (state) this.opts.onConnectionStateChange?.(`ice:${state}`);
+      if (state) {
+        callDebug.push('PC', `ice=${state}`);
+        this.opts.onConnectionStateChange?.(`ice:${state}`);
+      }
     });
 
     // Add local tracks
@@ -299,6 +306,7 @@ export class CallSession {
   /** Caller: create + send the SDP offer. */
   async createOffer(): Promise<void> {
     if (!this.pc) throw new Error('Peer connection not initialized');
+    callDebug.push('PC', 'createOffer() called');
     const offer = await this.pc.createOffer({
       // Screen sharing is callType==='video' but we always want to receive
       // the remote video too in case of bidirectional flows. For pure voice
@@ -310,16 +318,17 @@ export class CallSession {
     const videoTracks = (this.localStream as any)?.getVideoTracks?.() || [];
     const screenTrack = videoTracks[0];
     if (screenTrack) {
-      // Diagnostic log per backend team's checklist (Iteration 79):
-      //   "Log track kind/id/readyState after screen share starts."
-      console.log(
-        '[CallSession] outgoing video track:',
-        'kind=', screenTrack.kind,
-        'id=', screenTrack.id,
-        'enabled=', screenTrack.enabled,
-        'readyState=', screenTrack.readyState,
+      callDebug.push(
+        'SCRN',
+        `track kind=${screenTrack.kind} enabled=${screenTrack.enabled} state=${screenTrack.readyState}`,
       );
+    } else {
+      callDebug.push('SCRN', 'no video track on localStream (audio-only or no capture)');
     }
+    callDebug.push(
+      'SIG',
+      `→ offer (sdp ${(offer.sdp || '').length}B, recvVideo=${this.opts.callType === 'video'})`,
+    );
     await this.opts.sendSignal({
       callId: this.opts.callId,
       toUserId: this.opts.remoteUserId,
@@ -330,15 +339,21 @@ export class CallSession {
 
   /** Callee: handle a received offer and reply with an answer. */
   async handleRemoteOffer(payload: string): Promise<void> {
-    if (!this.pc) throw new Error('Peer connection not initialized');
+    if (!this.pc) {
+      callDebug.push('ERR', 'handleRemoteOffer: pc is null');
+      throw new Error('Peer connection not initialized');
+    }
+    callDebug.push('SIG', `← offer (${payload.length}B)`);
     const offer = JSON.parse(payload);
     const webrtc = await this.getWebRTC();
     await this.pc.setRemoteDescription(new webrtc.RTCSessionDescription(offer));
     this.remoteDescriptionSet = true;
+    callDebug.push('PC', 'setRemoteDescription(offer) ok');
     await this.flushPendingIce();
 
     const answer = await this.pc.createAnswer();
     await this.pc.setLocalDescription(answer);
+    callDebug.push('SIG', `→ answer (sdp ${(answer.sdp || '').length}B)`);
     await this.opts.sendSignal({
       callId: this.opts.callId,
       toUserId: this.opts.remoteUserId,
@@ -350,6 +365,7 @@ export class CallSession {
   /** Caller: handle the answer from the callee. */
   async handleRemoteAnswer(payload: string): Promise<void> {
     if (!this.pc) throw new Error('Peer connection not initialized');
+    callDebug.push('SIG', `← answer (${payload.length}B)`);
     const answer = JSON.parse(payload);
     const webrtc = await this.getWebRTC();
     await this.pc.setRemoteDescription(new webrtc.RTCSessionDescription(answer));
