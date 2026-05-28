@@ -24,6 +24,7 @@ import { applyInterFontPatch } from '../src/lib/fontPatch';
 import {
   installGlobalDiagnostics,
   flushDiagnostics,
+  sendDiagnosticHeartbeat,
   recordDiagnostic,
 } from '../src/lib/diagnostics';
 import { Colors } from '../src/theme';
@@ -36,6 +37,18 @@ import { Colors } from '../src/theme';
 // completely invisible to us.
 installGlobalDiagnostics();
 recordDiagnostic({ tag: 'BOOT', source: '_layout', message: 'root layout module evaluated' });
+
+// ⚡ Fire a heartbeat ping IMMEDIATELY at module-evaluation time. This
+// does NOT wait for React to mount, AsyncStorage writes to finish, or
+// providers to render — it just POSTs `{ events: [{tag:'HB', …}] }` to
+// /api/diagnostic-logs as soon as the JS bundle starts executing. If we
+// see ANY 'HB' tagged entry in the backend supervisor logs, we know the
+// diagnostics module is alive in the APK. If we DON'T see one even after
+// the user reopens the app, something is preventing the network call
+// itself (wrong URL, no internet permission, certificate pinning, etc.).
+try {
+  void sendDiagnosticHeartbeat();
+} catch {}
 
 // Apply the global Inter font patch eagerly (before any <Text> renders) so the
 // very first paint already uses Inter weights once the .ttf files are loaded.

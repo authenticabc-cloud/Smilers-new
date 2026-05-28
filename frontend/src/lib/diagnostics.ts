@@ -139,6 +139,74 @@ export function setDiagnosticUser(userId: string | null | undefined): void {
 }
 
 /**
+ * Fire-and-forget single POST that includes a snapshot of any currently
+ * stored events. Used on app launch to definitively confirm the
+ * diagnostics module is alive in the production APK. Unlike
+ * `flushDiagnostics`, this ALWAYS sends a payload — even if there are
+ * zero stored events — so the backend will see at least the heartbeat
+ * BOOT marker on every cold start. The payload also includes a
+ * deterministic 'HB' tag so the main agent can grep for it.
+ *
+ * Returns `true` if the server accepted the payload; never throws.
+ */
+export async function sendDiagnosticHeartbeat(): Promise<boolean> {
+  if (!FLUSH_ENDPOINT || FLUSH_ENDPOINT.endsWith('/api/diagnostic-logs') === false) {
+    return false;
+  }
+  try {
+    const sid = await loadOrCreateSessionId();
+    const meta = getDeviceMeta();
+    // Read any stored events too so the heartbeat doubles as a flush.
+    let stored: DiagnosticEvent[] = [];
+    try {
+      stored = await readStoredEvents();
+    } catch {}
+    const events: DiagnosticEvent[] = [
+      {
+        ts: Date.now(),
+        tag: 'HB',
+        message: `heartbeat from ${meta.platform || '?'}/${meta.platformVersion || '?'} app=${meta.appVersion || '?'} device=${meta.device || '?'}`,
+        source: 'heartbeat',
+      },
+      ...stored,
+    ];
+    const body = JSON.stringify({
+      sessionId: sid,
+      userId: currentUserId,
+      appVersion: meta.appVersion,
+      platform: meta.platform,
+      platformVersion: meta.platformVersion,
+      device: meta.device,
+      events,
+    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch(FLUSH_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        return false;
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+    // Stored events were just sent piggybacked on the heartbeat — clear them.
+    if (stored.length > 0) {
+      try {
+        await AsyncStorage.removeItem(STORAGE_KEY);
+      } catch {}
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * POST any stored events to the backend, then clear them. Returns the
  * number of events flushed (0 if nothing was queued). Never throws.
  */
