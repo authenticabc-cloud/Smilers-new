@@ -290,6 +290,91 @@ async def _run_whisper(
             except OSError:
                 pass
 
+
+# ============================================================================
+# Diagnostic Logs — capture mobile crashes / JS errors from production APKs
+# ============================================================================
+#
+# The mobile app uses Emergent's release-build pipeline (no development
+# profile available), so console.log / adb logcat are not visible. The
+# frontend installs a global JS error handler + persistent ring buffer that
+# survives an app crash via AsyncStorage. On the next app launch, any
+# stored diagnostic events are flushed to this endpoint so the main agent
+# can read them from supervisor logs in real time without round-trips
+# through the user.
+
+class DiagnosticEntry(BaseModel):
+    ts: int                              # ms since epoch
+    tag: str                             # e.g. 'ERR', 'CALL', 'PC', 'SIG'
+    message: str
+    stack: str | None = None
+    source: str | None = None            # e.g. 'global', 'errorBoundary', 'callDebug'
+
+
+class DiagnosticPayload(BaseModel):
+    sessionId: str | None = None
+    userId: str | None = None
+    appVersion: str | None = None
+    platform: str | None = None          # 'android' / 'ios' / 'web'
+    platformVersion: str | None = None
+    device: str | None = None
+    events: List[DiagnosticEntry] = Field(default_factory=list)
+
+
+@api_router.post("/diagnostic-logs")
+async def diagnostic_logs(payload: DiagnosticPayload):
+    """Receive a batch of diagnostic events from the mobile app.
+
+    Logs each event with a distinctive prefix so the main agent can grep
+    supervisor logs in real time. Also persists the raw payload to MongoDB
+    so historical crashes are queryable.
+    """
+    header = (
+        f"[DIAG] session={payload.sessionId or '-'} "
+        f"user={payload.userId or '-'} "
+        f"plat={payload.platform or '-'}/{payload.platformVersion or '-'} "
+        f"app={payload.appVersion or '-'} "
+        f"device={payload.device or '-'} "
+        f"events={len(payload.events)}"
+    )
+    logger.warning(header)
+    for ev in payload.events:
+        logger.warning(
+            "[DIAG][%s][%s] %s%s",
+            ev.tag,
+            ev.source or '-',
+            ev.message,
+            (f"\n  stack: {ev.stack}" if ev.stack else ''),
+        )
+    try:
+        await db['diagnostic_logs'].insert_one({
+            'sessionId': payload.sessionId,
+            'userId': payload.userId,
+            'appVersion': payload.appVersion,
+            'platform': payload.platform,
+            'platformVersion': payload.platformVersion,
+            'device': payload.device,
+            'events': [ev.dict() for ev in payload.events],
+            'receivedAt': datetime.utcnow(),
+        })
+    except Exception:  # noqa: BLE001
+        logger.exception("[DIAG] failed to persist payload to mongo")
+    return {"ok": True, "received": len(payload.events)}
+
+
+@api_router.get("/diagnostic-logs/recent")
+async def diagnostic_logs_recent(limit: int = 50):
+    """Return the most recent crash payloads — used by the main agent."""
+    safe_limit = max(1, min(limit, 200))
+    cursor = db['diagnostic_logs'].find({}, {'_id': False}).sort('receivedAt', -1).limit(safe_limit)
+    items = []
+    async for doc in cursor:
+        if isinstance(doc.get('receivedAt'), datetime):
+            doc['receivedAt'] = doc['receivedAt'].isoformat()
+        items.append(doc)
+    return {"items": items, "count": len(items)}
+
+
 # Include the router in the main app
 app.include_router(api_router)
 

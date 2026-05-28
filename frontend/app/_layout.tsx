@@ -21,7 +21,21 @@ import VoiceCommandLauncher from '../src/components/VoiceCommandLauncher';
 import IncomingScreenShareModal from '../src/components/IncomingScreenShareModal';
 import { recordTouchActivity } from '../src/lib/touchActivity';
 import { applyInterFontPatch } from '../src/lib/fontPatch';
+import {
+  installGlobalDiagnostics,
+  flushDiagnostics,
+  recordDiagnostic,
+} from '../src/lib/diagnostics';
 import { Colors } from '../src/theme';
+
+// ⚡ Install the global JS error handler + console.error tee + unhandled
+// promise rejection listener BEFORE anything else runs. This way, any
+// crash during module load, font loading, provider mount, etc. is
+// captured and persisted to AsyncStorage — and flushed to the backend on
+// the NEXT app launch. Without this, production-APK crashes are
+// completely invisible to us.
+installGlobalDiagnostics();
+recordDiagnostic({ tag: 'BOOT', source: '_layout', message: 'root layout module evaluated' });
 
 // Apply the global Inter font patch eagerly (before any <Text> renders) so the
 // very first paint already uses Inter weights once the .ttf files are loaded.
@@ -54,6 +68,27 @@ export default function RootLayout() {
       SplashScreen.hideAsync().catch(() => {});
     }
   }, [fontsLoaded, fontError]);
+
+  // ⚡ On app boot, flush any diagnostic events that were captured during
+  // a previous session (e.g. a crash). The events are persisted to
+  // AsyncStorage by `installGlobalDiagnostics()` and `callDebug.push()`,
+  // so even an app that died mid-render still has its trail of crumbs
+  // recoverable on the next launch. Fire-and-forget — we never block UI.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const flushed = await flushDiagnostics();
+        if (!cancelled && flushed > 0) {
+          // eslint-disable-next-line no-console
+          console.log(`[diagnostics] flushed ${flushed} pending event(s) to backend`);
+        }
+      } catch {}
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // On native we wait for Inter weights to load (the patched Text would
   // otherwise reference a font that doesn't exist yet, causing a fallback

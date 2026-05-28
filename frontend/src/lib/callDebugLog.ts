@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { recordDiagnostic } from './diagnostics';
 
 /**
  * callDebugLog — a tiny in-memory ring buffer + pub/sub so the call screen
@@ -49,6 +50,17 @@ class CallDebugBuffer {
     try {
       // eslint-disable-next-line no-console
       console.log(`[callDebug:${event.tag}]`, event.message);
+    } catch {}
+    // Persist to the global diagnostic buffer so the event survives an
+    // app crash and gets flushed to the FastAPI backend on the next
+    // launch. This is the ONLY way to see what happened on a production
+    // release APK where the on-screen overlay can't render.
+    try {
+      recordDiagnostic({
+        tag: event.tag,
+        message: event.message,
+        source: 'callDebug',
+      });
     } catch {}
     for (const listener of this.listeners) {
       try {

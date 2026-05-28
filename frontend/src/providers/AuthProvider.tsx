@@ -3,6 +3,7 @@ import { AppState, AppStateStatus, Platform } from 'react-native';
 import * as AuthSession from 'expo-auth-session';
 import * as SecureStore from 'expo-secure-store';
 import * as WebBrowser from 'expo-web-browser';
+import { setDiagnosticUser } from '../lib/diagnostics';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -105,6 +106,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [idToken, setIdToken] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [userInfo, setUserInfo] = useState<AuthContextValue['userInfo']>(null);
+
+  // Keep the diagnostics module's currentUserId in sync with the OIDC
+  // subject so any crash log POSTed via `flushDiagnostics()` is tied to
+  // the user that experienced it. Strictly best-effort; never throws.
+  useEffect(() => {
+    try {
+      setDiagnosticUser(userInfo?.sub ?? null);
+    } catch {}
+  }, [userInfo?.sub]);
   // Tracks the timestamp of the last successful refresh. Used to throttle
   // background refresh attempts so we don't hammer the OIDC endpoint.
   const lastRefreshAtRef = useRef<number>(0);
