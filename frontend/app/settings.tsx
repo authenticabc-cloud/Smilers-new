@@ -13,6 +13,7 @@ type IconLib = 'ion' | 'mc';
 type Row = { key: string; route: string; title: string; sub: string; icon: string; lib: IconLib; danger?: boolean; adminOnly?: boolean };
 
 const ITEMS: Row[] = [
+  { key: 'diagnostic-logs', route: '/diagnostic-logs', title: 'Diagnostic Logs', sub: 'Crash + WebRTC event log (for support)', icon: 'bug-outline', lib: 'ion' },
   { key: 'privacy', route: '/privacy', title: 'Privacy', sub: 'Last seen, profile photo, about', icon: 'shield-outline', lib: 'ion' },
   { key: 'app-lock', route: '/app-lock', title: 'App Lock', sub: 'PIN code and biometric unlock', icon: 'fingerprint', lib: 'mc' },
   { key: 'face-id', route: '/face-id', title: 'Face ID', sub: 'Verify identity on new devices', icon: 'face-recognition', lib: 'mc' },
