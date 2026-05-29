@@ -169,8 +169,7 @@
         }
       ],
       "@config-plugins/react-native-webrtc",
-      "expo-font",
-      "@sentry/react-native/expo"
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": false

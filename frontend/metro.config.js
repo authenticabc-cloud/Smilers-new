@@ -1,16 +1,18 @@
 // metro.config.js
 //
-// Wrapped with Sentry's Expo-aware config helper so JS bundles get
-// injected with unique Debug IDs that match uploaded source maps. Even
-// though we currently don't upload source maps (no auth token), this is
-// harmless to keep and makes future symbol upload work without code
-// changes. See:
-//   https://docs.sentry.io/platforms/react-native/sourcemaps/uploading/expo/
-const { getSentryExpoConfig } = require('@sentry/react-native/metro');
+// NOTE: Sentry's `getSentryExpoConfig` helper was removed because we
+// dropped the `@sentry/react-native/expo` plugin from app.json (it was
+// causing the EAS Gradle build to fail because its source-map upload
+// task requires an auth token we don't yet have). We use the standard
+// Expo metro config instead. The Sentry RUNTIME SDK (`@sentry/react-native`)
+// is still installed and `sentry.init({dsn})` still runs at app start —
+// but without the build-time plugin, source maps won't be uploaded and
+// JS stack traces will appear minified on the Sentry dashboard.
+const { getDefaultConfig } = require("expo/metro-config");
 const path = require('path');
 const { FileStore } = require('metro-cache');
 
-const config = getSentryExpoConfig(__dirname);
+const config = getDefaultConfig(__dirname);
 
 // Use a stable on-disk store (shared across web/android)
 const root = process.env.METRO_CACHE_ROOT || path.join(__dirname, '.metro-cache');
