@@ -32,6 +32,7 @@ import { useRouter } from 'expo-router';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
+import { sentry } from '../src/lib/sentry';
 import Header from '../src/components/Header';
 import { Colors, FontSize, FontWeight, Spacing } from '../src/theme';
 import {
@@ -183,6 +184,55 @@ export default function DiagnosticLogsScreen() {
     );
   }, [refresh]);
 
+  const handleSentryTest = useCallback(() => {
+    Alert.alert(
+      'Sentry verification',
+      'Pick a test crash type:',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'JS Error',
+          onPress: () => {
+            try {
+              sentry.captureMessage('Diagnostic Logs: manual JS test event', 'info');
+              sentry.captureException(
+                new Error('Manual test exception from Diagnostic Logs screen'),
+              );
+              Alert.alert(
+                'Sent',
+                'Sentry event sent. Check the Sentry dashboard in 1-2 minutes.',
+              );
+            } catch (errorValue: any) {
+              Alert.alert('Failed', errorValue?.message || 'Could not send.');
+            }
+          },
+        },
+        {
+          text: 'NATIVE Crash',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert(
+              'About to crash',
+              'This will deliberately crash the app at the native level to verify Sentry captures NDK crashes. Reopen the app afterward to confirm. Proceed?',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Crash now',
+                  style: 'destructive',
+                  onPress: () => {
+                    try {
+                      sentry.nativeCrash();
+                    } catch {}
+                  },
+                },
+              ],
+            );
+          },
+        },
+      ],
+    );
+  }, []);
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <Header
@@ -213,6 +263,10 @@ export default function DiagnosticLogsScreen() {
         <TouchableOpacity style={styles.toolBtn} onPress={handleRetryUpload}>
           <Feather name="upload-cloud" size={16} color={Colors.white} />
           <Text style={styles.toolText}>Upload</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.toolBtn} onPress={handleSentryTest}>
+          <Feather name="alert-triangle" size={16} color="#ffb300" />
+          <Text style={[styles.toolText, { color: '#ffb300' }]}>Test Sentry</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.toolBtn, styles.toolBtnDanger]}

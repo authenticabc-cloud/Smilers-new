@@ -5,6 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as SplashScreen from 'expo-splash-screen';
+import { sentry } from '../src/lib/sentry';
 import {
   useFonts,
   Inter_400Regular,
@@ -28,6 +29,50 @@ import {
   recordDiagnostic,
 } from '../src/lib/diagnostics';
 import { Colors } from '../src/theme';
+
+// ⚡ Initialize Sentry as early as possible — this MUST happen at the very
+// top of the JS bundle (before any other code runs) so it can install its
+// native crash handlers in time to capture errors during the rest of the
+// JS module-load phase. On Android, Sentry's native NDK integration is
+// what allows us to see crashes inside C/C++ libraries like
+// `react-native-webrtc` (which would otherwise just show "Smilers has
+// stopped" with no recoverable trace).
+//
+// The DSN is read from EXPO_PUBLIC_SENTRY_DSN baked into the bundle at
+// build time. If the env var is missing (e.g. local dev with no .env),
+// Sentry.init is a no-op — it won't throw.
+const SENTRY_DSN = process.env.EXPO_PUBLIC_SENTRY_DSN;
+if (SENTRY_DSN) {
+  try {
+    sentry.init({
+      dsn: SENTRY_DSN,
+      // Production builds have minified JS; we'd need source maps uploaded
+      // (auth-token-gated) to get readable JS stack traces. The native
+      // stack trace is what matters for the current WebRTC crash anyway.
+      debug: false,
+      // Capture all events. We have low volume — no sampling needed.
+      tracesSampleRate: 0.0,
+      // Avoid sending PII automatically; we set user manually from AuthProvider.
+      sendDefaultPii: false,
+      // Surface native (NDK) crashes — this is what we actually need.
+      enableNative: true,
+      enableNativeCrashHandling: true,
+      enableNativeNagger: false,
+      enableAutoSessionTracking: true,
+      // Tag the release with the bundled app version so we can correlate
+      // crashes with specific build numbers.
+      release: `smilers-mobile@${process.env.EXPO_PUBLIC_APP_VERSION || '2.1.x'}`,
+    });
+  } catch (errorValue: any) {
+    // sentry.init can throw in rare configurations (e.g. invalid DSN
+    // format). Swallow so the app still boots — diagnostics module below
+    // still works.
+    try {
+      // eslint-disable-next-line no-console
+      console.warn('Sentry.init failed:', errorValue?.message);
+    } catch {}
+  }
+}
 
 // ⚡ Install the global JS error handler + console.error tee + unhandled
 // promise rejection listener BEFORE anything else runs. This way, any

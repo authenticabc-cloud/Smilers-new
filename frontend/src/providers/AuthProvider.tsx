@@ -3,6 +3,7 @@ import { AppState, AppStateStatus, Platform } from 'react-native';
 import * as AuthSession from 'expo-auth-session';
 import * as SecureStore from 'expo-secure-store';
 import * as WebBrowser from 'expo-web-browser';
+import { sentry } from '../lib/sentry';
 import { setDiagnosticUser } from '../lib/diagnostics';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -110,11 +111,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Keep the diagnostics module's currentUserId in sync with the OIDC
   // subject so any crash log POSTed via `flushDiagnostics()` is tied to
   // the user that experienced it. Strictly best-effort; never throws.
+  // Also tag the Sentry user for native-crash attribution.
   useEffect(() => {
     try {
       setDiagnosticUser(userInfo?.sub ?? null);
     } catch {}
-  }, [userInfo?.sub]);
+    try {
+      if (userInfo?.sub) {
+        sentry.setUser({
+          id: String(userInfo.sub),
+          email: userInfo?.email,
+          username: userInfo?.name || undefined,
+        });
+      } else {
+        sentry.setUser(null);
+      }
+    } catch {}
+  }, [userInfo?.sub, userInfo?.email, userInfo?.name]);
   // Tracks the timestamp of the last successful refresh. Used to throttle
   // background refresh attempts so we don't hammer the OIDC endpoint.
   const lastRefreshAtRef = useRef<number>(0);
