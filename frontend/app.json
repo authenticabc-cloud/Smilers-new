@@ -8,7 +8,7 @@
     "icon": "./assets/images/icon.png",
     "scheme": "smilers",
     "userInterfaceStyle": "light",
-    "newArchEnabled": false,
+    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.smilers.app",
@@ -170,14 +170,7 @@
       ],
       "@config-plugins/react-native-webrtc",
       "expo-font",
-      [
-        "@sentry/react-native/expo",
-        {
-          "url": "https://sentry.io/",
-          "project": "react-native",
-          "organization": "smilers"
-        }
-      ]
+      "@sentry/react-native/expo"
     ],
     "experiments": {
       "typedRoutes": false

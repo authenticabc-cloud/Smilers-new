@@ -22,7 +22,7 @@
     "@expo/vector-icons": "^15.0.3",
     "@noble/ciphers": "^2.2.0",
     "@noble/hashes": "^2.2.0",
-    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-async-storage/async-storage": "^1.24.0",
     "@react-native-community/datetimepicker": "8.4.4",
     "@react-native-community/slider": "5.0.1",
     "@react-navigation/bottom-tabs": "^7.3.10",
@@ -46,7 +46,6 @@
     "expo-constants": "~18.0.13",
     "expo-contacts": "~15.0.11",
     "expo-crypto": "~15.0.9",
-    "expo-dev-client": "~6.0.21",
     "expo-device": "~8.0.10",
     "expo-document-picker": "~14.0.8",
     "expo-file-system": "~19.0.23",
@@ -99,6 +98,11 @@
         ],
         "listUnknownPackages": false
       }
+    },
+    "install": {
+      "exclude": [
+        "@react-native-async-storage/async-storage"
+      ]
     }
   },
   "overrides": {
