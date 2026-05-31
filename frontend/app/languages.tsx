@@ -23,6 +23,7 @@ import { useAuth } from '../src/providers/AuthProvider';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { getLanguageByCode, LANGUAGES, LanguageItem, UN_OFFICIAL_LANGUAGE_CODES } from '../src/lib/languages';
 import { readStoredJson, writeStoredJson } from '../src/lib/settingsStorage';
+import { safeMutation } from '../src/lib/safeMutation';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/theme';
 
 const LOCAL_KEY = 'smilers_user_languages';
@@ -117,7 +118,12 @@ function LegacyLanguagesScreen() {
     setSaving(true);
     let serverOk = false;
     try {
-      await updateProfile({ languages: selected });
+      const payload = { languages: selected };
+      await safeMutation(
+        'users.updateProfile(languages)',
+        () => updateProfile(payload),
+        payload,
+      );
       serverOk = true;
     } catch (errorValue: any) {
       // Backend may not have the field yet — write locally so the choice
@@ -536,7 +542,12 @@ export function MessageLanguageScreen() {
 
       let savedToServer = false;
       try {
-        await updateProfile({ preferredLanguage: item.code });
+        const payload = { preferredLanguage: item.code };
+        await safeMutation(
+          'users.updateProfile(preferredLanguage)',
+          () => updateProfile(payload),
+          payload,
+        );
         savedToServer = true;
       } catch (errorValue: any) {
         console.warn('updateProfile(preferredLanguage) failed:', errorValue?.message);

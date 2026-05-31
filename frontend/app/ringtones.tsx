@@ -20,6 +20,7 @@ import { api } from '../src/convexApi';
 import { useAuth } from '../src/providers/AuthProvider';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { readStoredJson, writeStoredJson } from '../src/lib/settingsStorage';
+import { safeMutation } from '../src/lib/safeMutation';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 import {
   DEFAULT_RING_ID,
@@ -198,7 +199,12 @@ export default function RingtonesScreen() {
         await writeStoredJson(RINGTONE_PREFS_KEY, next);
       } catch {}
       try {
-        await updateProfile({ ringtonePrefs: next });
+        const payload = { ringtonePrefs: next };
+        await safeMutation(
+          'users.updateProfile(ringtonePrefs)',
+          () => updateProfile(payload),
+          payload,
+        );
         try {
           await refetch();
         } catch {}

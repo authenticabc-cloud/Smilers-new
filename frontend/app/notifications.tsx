@@ -9,6 +9,7 @@ import { useMutation } from 'convex/react';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { requestPushDiagnosticsRetry, usePushDiagnostics } from '../src/push/pushDiagnostics';
+import { safeMutation } from '../src/lib/safeMutation';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/theme';
 
 const ITEMS = [
@@ -40,7 +41,12 @@ export default function NotificationsScreen() {
         return;
       }
       try {
-        await updateProfile({ notifications: { ...notifications, [key]: value } });
+        const payload = { notifications: { ...notifications, [key]: value } };
+        await safeMutation(
+          `users.updateProfile(notifications.${key})`,
+          () => updateProfile(payload),
+          payload,
+        );
         await refetch();
       } catch (errorValue: any) {
         console.warn('Failed to update notification', errorValue);

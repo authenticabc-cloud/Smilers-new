@@ -22,6 +22,7 @@ import {
   readStoredJson,
   writeStoredJson,
 } from '../src/lib/settingsStorage';
+import { safeMutation } from '../src/lib/safeMutation';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
 const BACKUP_SETTINGS_KEY = 'smilers_backup_settings';
@@ -197,7 +198,12 @@ export default function BackupScreen() {
         await writeStoredJson(BACKUP_SETTINGS_KEY, next);
       } catch {}
       try {
-        await updateProfile({ backupSettings: next });
+        const payload = { backupSettings: next };
+        await safeMutation(
+          'users.updateProfile(backupSettings)',
+          () => updateProfile(payload),
+          payload,
+        );
         if (!silent) {
           try {
             await refetch();

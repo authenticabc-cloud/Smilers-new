@@ -25,7 +25,25 @@ import { api } from '../../src/convexApi';
 import { getLanguageByCode } from '../../src/lib/languages';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { uploadFile } from '../../src/lib/uploadFile';
+import { safeMutation } from '../../src/lib/safeMutation';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
+
+/**
+ * Coerce any value to a renderable string. Prevents Hermes
+ * `TypeError: Cannot determine default value of object` when the backend
+ * returns a non-string for a field we render in <Text>{...}</Text>.
+ */
+function safeString(value: unknown, fallback = ''): string {
+  if (value == null) return fallback;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  // Object / array — never let Hermes coerce it directly.
+  try {
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 type EditableField = 'name' | 'about';
 
@@ -63,16 +81,24 @@ export default function ProfileScreen() {
   const [editValue, setEditValue] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const name = me?.name || userInfo?.name || 'Smilers';
-  const email = me?.email || userInfo?.email || '';
-  const about = me?.about || 'Hey there! I am using Smilers.';
-  const language = getLanguageByCode(me?.preferredLanguage || '')?.name || 'No preference — show original';
+  const name = safeString(me?.name ?? userInfo?.name, 'Smilers');
+  const email = safeString(me?.email ?? userInfo?.email, '');
+  const about = safeString(me?.about, 'Hey there! I am using Smilers.');
+  const language = safeString(
+    getLanguageByCode(safeString(me?.preferredLanguage))?.name,
+    'No preference — show original',
+  );
   // Per backend spec: getCurrentUser auto-resolves storageId → URL on `avatar`.
-  const avatarUri =
-    (me as any)?.avatar ||
-    (me as any)?.avatarUrl ||
-    (me as any)?.photoUrl ||
+  // Some backend revisions may temporarily return objects instead of strings —
+  // we ONLY pass through string URIs to avoid Hermes TypeError on image loaders.
+  const avatarUriRaw =
+    (me as any)?.avatar ??
+    (me as any)?.avatarUrl ??
+    (me as any)?.photoUrl ??
     undefined;
+  const avatarUri = typeof avatarUriRaw === 'string' && avatarUriRaw.length > 0
+    ? avatarUriRaw
+    : undefined;
 
   const openEditor = useCallback(
     (field: EditableField) => {
@@ -97,7 +123,12 @@ export default function ProfileScreen() {
     }
     setSaving(true);
     try {
-      await updateProfile({ [editingField]: trimmed });
+      const payload = { [editingField]: trimmed };
+      await safeMutation(
+        `users.updateProfile(${editingField})`,
+        () => updateProfile(payload),
+        payload,
+      );
       closeEditor();
     } catch (errorValue: any) {
       Alert.alert(
@@ -120,7 +151,12 @@ export default function ProfileScreen() {
         const storageId = await uploadFile(convex, uri, mime);
         // Per Smilers backend contract: `avatar` field accepts a storageId
         // string and `getCurrentUser` auto-resolves it to a URL.
-        await updateProfile({ avatar: storageId });
+        const payload = { avatar: storageId };
+        await safeMutation(
+          'users.updateProfile(avatar)',
+          () => updateProfile(payload),
+          payload,
+        );
       } catch (errorValue: any) {
         const detail =
           errorValue?.data?.message ||
@@ -386,10 +422,19 @@ function Row({
   onEdit?: () => void;
   testID?: string;
 }) {
+  // Defense-in-depth: even though props are typed `string`, defensively
+  // coerce here so a backend regression returning an object does NOT
+  // surface as the Hermes "Cannot determine default value of object" crash.
+  const displayValue =
+    typeof value === 'string'
+      ? value
+      : typeof value === 'number' || typeof value === 'boolean'
+        ? String(value)
+        : '';
   const content = (
     <View style={styles.valueRow} testID={testID}>
       <Text style={styles.valueText} numberOfLines={2}>
-        {value}
+        {displayValue}
       </Text>
       {editable ? <Feather name="edit-2" size={16} color={Colors.textMuted} /> : null}
     </View>
