@@ -292,6 +292,16 @@ function CallScreenInner() {
   const callStartedAtRef = useRef<number | null>(null);
   const incomingCallSeenRef = useRef(false);
   const incomingCallAnsweredRef = useRef(false);
+  // sessionReadyTick — bumped each time sessionRef.current transitions from
+  // null → a real CallSession instance. The signal-processing useEffect at
+  // line ~864 used to bail out early if `sessionRef.current` was null,
+  // and because Convex `signaling.poll` returns the SAME array reference
+  // (no diff) once the offer lands, it would never re-fire after the
+  // session was built → the offer/ICE were dropped forever and the call
+  // sat in 76s of silence (the exact pattern in iter-93 diagnostic logs).
+  // By incrementing this tick whenever the session becomes available,
+  // we force the effect to re-run and process any queued signals.
+  const [sessionReadyTick, setSessionReadyTick] = useState(0);
 
   const applyAudioMode = useCallback(async () => {
     if (Platform.OS === 'web') return;
@@ -739,6 +749,14 @@ function CallScreenInner() {
           );
         }
         await session.createPeerConnection();
+        // ⚠️ FIRE THE TICK ONLY AFTER pc IS CREATED. Bumping the tick
+        // earlier (right after `new CallSession`) would cause the
+        // signal-processing useEffect to call handleRemoteOffer while
+        // `this.pc` is still null inside CallSession, which throws
+        // 'Peer connection not initialized' and drops the offer
+        // permanently. By deferring the bump until pc exists, we
+        // guarantee the offer can be processed end-to-end.
+        setSessionReadyTick((tick) => tick + 1);
         if (asCaller) {
           await session.createOffer();
         }
@@ -863,7 +881,13 @@ function CallScreenInner() {
   // ====== Process incoming signaling messages ======
   useEffect(() => {
     if (!signals || !Array.isArray(signals) || signals.length === 0) return;
-    if (!sessionRef.current) return;
+    if (!sessionRef.current) {
+      callDebug.push(
+        'SIG',
+        `← skipped ${signals.length} signal(s): session not ready yet (waiting for sessionReadyTick)`,
+      );
+      return;
+    }
 
     const messageIds: string[] = [];
     (async () => {
@@ -874,8 +898,10 @@ function CallScreenInner() {
           // the historical mobile implementation) — see the matching
           // send-side fallback in the startPeerConnection sendSignal wrapper.
           if (msg.type === 'offer') {
+            callDebug.push('SIG', `← offer (processing, ${(msg.payload || '').length}B)`);
             await sessionRef.current?.handleRemoteOffer(msg.payload);
           } else if (msg.type === 'answer') {
+            callDebug.push('SIG', `← answer (processing, ${(msg.payload || '').length}B)`);
             await sessionRef.current?.handleRemoteAnswer(msg.payload);
           } else if (
             msg.type === 'ice-candidate' ||
@@ -887,6 +913,7 @@ function CallScreenInner() {
           messageIds.push(msg._id);
         } catch (errorValue: any) {
           console.warn('handle signal failed:', msg.type, errorValue?.message);
+          callDebug.push('ERR', `handle ${msg.type} failed: ${errorValue?.message || 'unknown'}`);
         }
       }
       if (messageIds.length > 0) {
@@ -906,7 +933,10 @@ function CallScreenInner() {
         }
       }
     })();
-  }, [signals, markConsumed, markScreenSignalsConsumed, isScreenOnly]);
+    // sessionReadyTick is a critical dep: when the session is built AFTER
+    // the offer arrived (the race that caused the 76s silence in iter-93),
+    // this effect re-runs and processes the queued signals.
+  }, [signals, sessionReadyTick, markConsumed, markScreenSignalsConsumed, isScreenOnly]);
 
   // ====== End call ======
   const handleHangup = useCallback(async () => {
