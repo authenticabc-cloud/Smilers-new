@@ -169,7 +169,8 @@
         }
       ],
       "@config-plugins/react-native-webrtc",
-      "expo-font"
+      "expo-font",
+      "expo-video"
     ],
     "experiments": {
       "typedRoutes": false

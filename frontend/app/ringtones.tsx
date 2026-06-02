@@ -13,7 +13,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { Audio } from 'expo-av';
+import {
+  createAudioPlayer,
+  setAudioModeAsync,
+  type AudioPlayer,
+  type AudioSource,
+} from 'expo-audio';
 import { useMutation } from 'convex/react';
 import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
@@ -92,7 +97,9 @@ export default function RingtonesScreen() {
   const [mode, setMode] = useState<Mode>('ringtone');
   const [playingId, setPlayingId] = useState<RingId | null>(null);
   const [loadingId, setLoadingId] = useState<RingId | null>(null);
-  const soundRef = useRef<Audio.Sound | null>(null);
+  // expo-audio: an AudioPlayer holds a single sound; replaces expo-av's Audio.Sound.
+  const playerRef = useRef<AudioPlayer | null>(null);
+  const playerListenerRef = useRef<{ remove: () => void } | null>(null);
 
   // Hydrate prefs.
   useEffect(() => {
@@ -121,27 +128,46 @@ export default function RingtonesScreen() {
 
   // Configure audio session for playback. Stop sound when leaving screen.
   useEffect(() => {
-    void Audio.setAudioModeAsync({
-      playsInSilentModeIOS: true,
-      allowsRecordingIOS: false,
-      staysActiveInBackground: false,
+    // expo-audio: setAudioModeAsync uses the new platform-agnostic names.
+    void setAudioModeAsync({
+      playsInSilentMode: true,
+      allowsRecording: false,
+      shouldPlayInBackground: false,
+      interruptionMode: 'duckOthers',
+      shouldRouteThroughEarpiece: false,
     }).catch(() => undefined);
     return () => {
-      const s = soundRef.current;
-      soundRef.current = null;
-      if (s) {
-        s.unloadAsync().catch(() => undefined);
+      const player = playerRef.current;
+      playerRef.current = null;
+      try {
+        playerListenerRef.current?.remove?.();
+      } catch {}
+      playerListenerRef.current = null;
+      if (player) {
+        try {
+          player.pause();
+        } catch {}
+        try {
+          player.remove();
+        } catch {}
       }
     };
   }, []);
 
   const stopCurrentSound = useCallback(async () => {
-    const s = soundRef.current;
-    soundRef.current = null;
+    const player = playerRef.current;
+    playerRef.current = null;
     setPlayingId(null);
-    if (s) {
+    try {
+      playerListenerRef.current?.remove?.();
+    } catch {}
+    playerListenerRef.current = null;
+    if (player) {
       try {
-        await s.unloadAsync();
+        player.pause();
+      } catch {}
+      try {
+        player.remove();
       } catch {}
     }
   }, []);
@@ -162,22 +188,39 @@ export default function RingtonesScreen() {
       await stopCurrentSound();
       setLoadingId(ring.id);
       try {
-        const { sound } = await Audio.Sound.createAsync(
-          ring.source as any,
-          { shouldPlay: true, volume: 1.0 },
-          (status: any) => {
-            if (!status?.isLoaded) return;
-            if (status.didJustFinish) {
-              // Auto-stop after the clip finishes.
-              setPlayingId(null);
-              if (soundRef.current) {
-                soundRef.current.unloadAsync().catch(() => undefined);
-                soundRef.current = null;
-              }
+        // expo-audio: createAudioPlayer replaces Audio.Sound.createAsync.
+        const player = createAudioPlayer(ring.source as AudioSource);
+        try {
+          player.volume = 1.0;
+        } catch {}
+        // Listen for playback completion via addListener('playbackStatusUpdate', ...)
+        // so we can auto-stop after the clip finishes.
+        const listener = player.addListener('playbackStatusUpdate', (status: any) => {
+          if (!status?.isLoaded) return;
+          if (status.didJustFinish) {
+            setPlayingId(null);
+            try {
+              listener?.remove?.();
+            } catch {}
+            playerListenerRef.current = null;
+            try {
+              player.pause();
+            } catch {}
+            try {
+              player.remove();
+            } catch {}
+            if (playerRef.current === player) {
+              playerRef.current = null;
             }
-          },
-        );
-        soundRef.current = sound;
+          }
+        });
+        playerListenerRef.current = listener;
+        playerRef.current = player;
+        try {
+          player.play();
+        } catch (playError: any) {
+          console.warn('preview play failed:', playError?.message);
+        }
         setPlayingId(ring.id);
       } catch (errorValue: any) {
         console.warn('preview failed:', errorValue?.message);

@@ -11,7 +11,13 @@ import {
   View,
 } from 'react-native';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import { Audio, ResizeMode, Video } from 'expo-av';
+import {
+  createAudioPlayer,
+  setAudioModeAsync as setExpoAudioModeAsync,
+  type AudioPlayer,
+  type AudioSource,
+} from 'expo-audio';
+import { useVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
 import * as Linking from 'expo-linking';
 import { useConvex, useMutation, useQuery } from 'convex/react';
 import { api } from '../convexApi';
@@ -33,7 +39,10 @@ import { useDecryptedMediaUrl } from '../hooks/useDecryptedMediaUrl';
 import type { E2EEStatus } from '../hooks/useConversationE2EE';
 import { getCachedTranscription, type CachedTranscription, type TranscriptionSegment } from '../lib/triggerTranscription';
 
-let CURRENT_SOUND: Audio.Sound | null = null;
+// Module-level "currently playing" audio singleton — guarantees only one
+// voice message plays at a time. Uses expo-audio's AudioPlayer (expo-av
+// has been deprecated in SDK 54).
+let CURRENT_SOUND: AudioPlayer | null = null;
 let CURRENT_STOP: (() => void) | null = null;
 
 function fmtDur(sec: number): string {
@@ -343,7 +352,17 @@ function VideoMessage({
   e2eeStatus: E2EEStatus | null;
 }) {
   const { url: src, loading, error } = useDecryptedMediaUrl(msg, e2eeStatus);
-  const videoRef = useRef<Video | null>(null);
+  // expo-video: useVideoPlayer creates the player and the setup callback runs
+  // once. We start PAUSED (videos in chat don't auto-play; user taps Play).
+  const player = useVideoPlayer(
+    src ? { uri: src } : null,
+    (p) => {
+      try {
+        p.loop = false;
+        p.muted = false;
+      } catch {}
+    },
+  );
   const [isPlaying, setIsPlaying] = useState(false);
   const [posMs, setPosMs] = useState(0);
   const [durMs, setDurMs] = useState<number>(() => {
@@ -352,43 +371,79 @@ function VideoMessage({
   });
   const [viewerOpen, setViewerOpen] = useState(false);
 
+  // Track playback status via expo-video event listeners. statusChange fires
+  // when player.status flips between idle / loading / readyToPlay / error.
+  // timeUpdate fires every ~200ms while playing — gives us currentTime.
+  // playToEnd fires once when the video finishes.
+  useEffect(() => {
+    if (!player) return;
+    const statusSub = player.addListener('statusChange', () => {
+      try {
+        setIsPlaying(!!player.playing);
+        if (typeof player.duration === 'number' && player.duration > 0) {
+          setDurMs(player.duration * 1000);
+        }
+      } catch {}
+    });
+    const timeSub = player.addListener('timeUpdate', (event: any) => {
+      const current = typeof event?.currentTime === 'number' ? event.currentTime : player.currentTime;
+      const playing = typeof event?.isPlaying === 'boolean' ? event.isPlaying : !!player.playing;
+      if (typeof current === 'number') {
+        setPosMs(current * 1000);
+      }
+      setIsPlaying(playing);
+    });
+    const endSub = player.addListener('playToEnd', () => {
+      setIsPlaying(false);
+      try {
+        if (typeof player.seekTo === 'function') {
+          void player.seekTo(0);
+        } else {
+          player.currentTime = 0;
+        }
+      } catch {}
+    });
+    return () => {
+      try {
+        statusSub.remove();
+      } catch {}
+      try {
+        timeSub.remove();
+      } catch {}
+      try {
+        endSub.remove();
+      } catch {}
+    };
+  }, [player]);
+
   // Clean up when unmounting so other media doesn't keep playing.
   useEffect(() => {
     return () => {
-      const v = videoRef.current;
-      if (v) {
-        v.pauseAsync?.().catch(() => {});
-      }
+      try {
+        player?.pause();
+      } catch {}
     };
-  }, []);
+  }, [player]);
 
   const togglePlay = useCallback(async () => {
-    if (!src || !videoRef.current) return;
+    if (!src || !player) return;
     try {
-      const status: any = await videoRef.current.getStatusAsync();
-      if (status?.isPlaying) {
-        await videoRef.current.pauseAsync();
+      if (player.playing) {
+        player.pause();
       } else {
-        if (status?.didJustFinish || (status?.positionMillis ?? 0) >= (status?.durationMillis ?? 0) - 50) {
-          await videoRef.current.setPositionAsync(0);
+        const cur = typeof player.currentTime === 'number' ? player.currentTime : 0;
+        const dur = typeof player.duration === 'number' ? player.duration : 0;
+        if (dur > 0 && cur >= dur - 0.05) {
+          if (typeof player.seekTo === 'function') {
+            await player.seekTo(0);
+          } else {
+            player.currentTime = 0;
+          }
         }
-        await videoRef.current.playAsync();
+        player.play();
       }
     } catch {}
-  }, [src]);
-
-  const onStatus = useCallback((status: any) => {
-    if (!status?.isLoaded) return;
-    setIsPlaying(!!status.isPlaying);
-    setPosMs(status.positionMillis || 0);
-    if (status.durationMillis && status.durationMillis !== durMs) {
-      setDurMs(status.durationMillis);
-    }
-    if (status.didJustFinish) {
-      setIsPlaying(false);
-      videoRef.current?.setPositionAsync(0).catch(() => {});
-    }
-  }, [durMs]);
+  }, [src, player]);
 
   if (!src) {
     return (
@@ -413,16 +468,11 @@ function VideoMessage({
     <>
       <View>
         <TouchableOpacity activeOpacity={0.9} onPress={togglePlay} testID="video-bubble" style={styles.videoWrap}>
-          <Video
-            ref={(r) => { videoRef.current = r; }}
-            source={{ uri: src }}
+          <VideoView
+            player={player}
             style={styles.videoPlayer}
-            resizeMode={ResizeMode.COVER}
-            useNativeControls={false}
-            shouldPlay={false}
-            isMuted={false}
-            onPlaybackStatusUpdate={onStatus}
-            posterStyle={styles.videoPlayer}
+            contentFit="cover"
+            nativeControls={false}
           />
 
           {/* Center play/pause overlay */}
@@ -482,7 +532,14 @@ function VideoViewer({
   initialPositionMs?: number;
   msg?: any;
 }) {
-  const fullRef = useRef<Video | null>(null);
+  // expo-video: create a player only when the modal is open. We pass uri
+  // as the source — when the modal closes, the player is still around
+  // (managed by the hook), so we explicitly pause on close.
+  const player = useVideoPlayer(visible ? { uri } : null, (p) => {
+    try {
+      p.loop = false;
+    } catch {}
+  });
   const [posMs, setPosMs] = useState(0);
   const [segments, setSegments] = useState<TranscriptionSegment[] | null>(null);
 
@@ -509,23 +566,48 @@ function VideoViewer({
     };
   }, [visible, msg]);
 
+  // On open, seek to the position the bubble was at + auto-play.
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || !player) return;
     const t = setTimeout(async () => {
       try {
         if (initialPositionMs && initialPositionMs > 200) {
-          await fullRef.current?.setPositionAsync(initialPositionMs);
+          if (typeof player.seekTo === 'function') {
+            await player.seekTo(initialPositionMs / 1000);
+          } else {
+            player.currentTime = initialPositionMs / 1000;
+          }
         }
-        await fullRef.current?.playAsync();
+        player.play();
       } catch {}
     }, 200);
     return () => clearTimeout(t);
-  }, [visible, initialPositionMs]);
+  }, [visible, initialPositionMs, player]);
 
-  const onStatus = useCallback((status: any) => {
-    if (!status?.isLoaded) return;
-    setPosMs(status.positionMillis || 0);
-  }, []);
+  // Listen for time updates to drive the caption overlay.
+  useEffect(() => {
+    if (!player || !visible) return;
+    const timeSub = player.addListener('timeUpdate', (event: any) => {
+      const current = typeof event?.currentTime === 'number' ? event.currentTime : player.currentTime;
+      if (typeof current === 'number') {
+        setPosMs(current * 1000);
+      }
+    });
+    return () => {
+      try {
+        timeSub.remove();
+      } catch {}
+    };
+  }, [player, visible]);
+
+  // Stop playback when modal closes.
+  useEffect(() => {
+    if (!visible && player) {
+      try {
+        player.pause();
+      } catch {}
+    }
+  }, [visible, player]);
 
   // Find the segment whose [start, end] range contains the current position.
   const activeCaption = useMemo(() => {
@@ -544,15 +626,11 @@ function VideoViewer({
   return (
     <Modal visible={visible} transparent={false} animationType="fade" onRequestClose={onClose}>
       <View style={styles.viewerWrap} testID="video-viewer">
-        <Video
-          ref={(r) => { fullRef.current = r; }}
-          source={{ uri }}
+        <VideoView
+          player={player}
           style={styles.viewerVideo}
-          resizeMode={ResizeMode.CONTAIN}
-          useNativeControls
-          shouldPlay={false}
-          onPlaybackStatusUpdate={onStatus}
-          progressUpdateIntervalMillis={250}
+          contentFit="contain"
+          nativeControls
         />
 
         {/* Time-synced caption overlay */}
@@ -576,28 +654,39 @@ function VoiceMessage({ msg, e2eeStatus }: { msg: any; e2eeStatus: E2EEStatus | 
   const totalSec = getMessageDurationSec(msg);
   const { url: src, error: srcError } = useDecryptedMediaUrl(msg, e2eeStatus);
 
-  const soundRef = useRef<Audio.Sound | null>(null);
+  // expo-audio: AudioPlayer instance for THIS voice bubble's playback.
+  const playerRef = useRef<AudioPlayer | null>(null);
+  const statusListenerRef = useRef<{ remove: () => void } | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [posSec, setPosSec] = useState(0);
 
   useEffect(() => {
     return () => {
-      const sound = soundRef.current;
-      if (CURRENT_SOUND === sound) {
+      const player = playerRef.current;
+      if (CURRENT_SOUND === player) {
         CURRENT_SOUND = null;
         CURRENT_STOP = null;
       }
-      soundRef.current = null;
-      if (sound) {
-        sound.unloadAsync().catch(() => {});
+      playerRef.current = null;
+      try {
+        statusListenerRef.current?.remove?.();
+      } catch {}
+      statusListenerRef.current = null;
+      if (player) {
+        try {
+          player.pause();
+        } catch {}
+        try {
+          player.remove();
+        } catch {}
       }
     };
   }, []);
 
-  const stopOtherSounds = async () => {
-    if (CURRENT_SOUND && CURRENT_SOUND !== soundRef.current) {
+  const stopOtherSounds = () => {
+    if (CURRENT_SOUND && CURRENT_SOUND !== playerRef.current) {
       try {
-        await CURRENT_SOUND.pauseAsync();
+        CURRENT_SOUND.pause();
       } catch {}
       if (CURRENT_STOP) CURRENT_STOP();
     }
@@ -606,47 +695,79 @@ function VoiceMessage({ msg, e2eeStatus }: { msg: any; e2eeStatus: E2EEStatus | 
   const toggle = async () => {
     if (!src) return;
     try {
-      await stopOtherSounds();
-      let sound = soundRef.current;
-      if (!sound) {
-        const created = await Audio.Sound.createAsync(
-          { uri: src },
-          { shouldPlay: true, isLooping: false },
-          (status: any) => {
-            if (!status?.isLoaded) return;
-            setIsPlaying(!!status.isPlaying);
-            setPosSec((status.positionMillis || 0) / 1000);
-            if (status.didJustFinish) {
-              // The sound finished — stop playback explicitly so the player
-              // doesn't auto-replay from start on the next status update.
-              // (Spec: voice notes play once unless the user taps Play again.)
-              setIsPlaying(false);
-              setPosSec(0);
-              try {
-                created.sound.pauseAsync().catch(() => {});
-                created.sound.setPositionAsync(0).catch(() => {});
-              } catch {}
-              if (CURRENT_SOUND === created.sound) {
-                CURRENT_SOUND = null;
-                CURRENT_STOP = null;
+      stopOtherSounds();
+      let player = playerRef.current;
+      if (!player) {
+        // Create + start a fresh player. expo-audio: createAudioPlayer
+        // replaces Audio.Sound.createAsync. We then subscribe to
+        // 'playbackStatusUpdate' for play/pause/position events.
+        const newPlayer = createAudioPlayer({ uri: src } as AudioSource);
+        try {
+          newPlayer.volume = 1.0;
+        } catch {}
+        const listener = newPlayer.addListener('playbackStatusUpdate', (status: any) => {
+          if (!status) return;
+          if (typeof status.isLoaded === 'boolean' && !status.isLoaded) return;
+          setIsPlaying(!!status.playing);
+          const pos = typeof status.currentTime === 'number'
+            ? status.currentTime
+            : typeof status.positionMillis === 'number'
+              ? status.positionMillis / 1000
+              : 0;
+          setPosSec(pos);
+          if (status.didJustFinish) {
+            // Spec: voice notes play once. Stop and reset to start so
+            // the user can replay by tapping again.
+            setIsPlaying(false);
+            setPosSec(0);
+            try {
+              newPlayer.pause();
+            } catch {}
+            try {
+              if (typeof newPlayer.seekTo === 'function') {
+                newPlayer.seekTo(0);
+              } else {
+                newPlayer.currentTime = 0;
               }
+            } catch {}
+            if (CURRENT_SOUND === newPlayer) {
+              CURRENT_SOUND = null;
+              CURRENT_STOP = null;
             }
           }
-        );
-        sound = created.sound;
-        soundRef.current = sound;
-        CURRENT_SOUND = sound;
+        });
+        statusListenerRef.current = listener;
+        try {
+          newPlayer.play();
+        } catch {}
+        player = newPlayer;
+        playerRef.current = newPlayer;
+        CURRENT_SOUND = newPlayer;
         CURRENT_STOP = () => setIsPlaying(false);
       } else {
-        const status: any = await sound.getStatusAsync();
-        if (status.isPlaying) {
-          await sound.pauseAsync();
+        // Toggle existing player.
+        const playing = !!player.playing;
+        if (playing) {
+          try {
+            player.pause();
+          } catch {}
         } else {
-          if (status.didJustFinish || status.positionMillis >= (status.durationMillis || 0)) {
-            await sound.setPositionAsync(0);
-          }
-          await sound.playAsync();
-          CURRENT_SOUND = sound;
+          // If we reached the end, rewind before playing again.
+          try {
+            const dur = typeof player.duration === 'number' ? player.duration : 0;
+            const cur = typeof player.currentTime === 'number' ? player.currentTime : 0;
+            if (dur > 0 && cur >= dur - 0.05) {
+              if (typeof player.seekTo === 'function') {
+                await player.seekTo(0);
+              } else {
+                player.currentTime = 0;
+              }
+            }
+          } catch {}
+          try {
+            player.play();
+          } catch {}
+          CURRENT_SOUND = player;
           CURRENT_STOP = () => setIsPlaying(false);
         }
       }

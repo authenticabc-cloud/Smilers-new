@@ -352,6 +352,19 @@ export function usePushNotifications() {
   }, []);
 
   useEffect(() => {
+    // Compute the displayed registration status carefully so that a
+    // transient Convex auth flicker does NOT downgrade a successful
+    // 'registered' state to 'waiting-auth' (which would mislead users
+    // into thinking they need to retry — even though the backend still
+    // has their token).
+    const currentStatus = getPushDiagnosticsState().registrationStatus;
+    const isTerminalSuccess = currentStatus === 'registered';
+    const computedStatus = canRegisterWithBackend
+      ? currentStatus
+      : isTerminalSuccess
+        ? 'registered'
+        : 'waiting-auth';
+
     setPushDiagnostics({
       authSessionReady: hasAuthSession,
       convexAuthReady: isConvexAuthenticated,
@@ -359,7 +372,7 @@ export function usePushNotifications() {
       canRegisterWithBackend,
       isPhysicalDevice: Platform.OS === 'web' ? null : Device.isDevice,
       projectId: getProjectId() || '',
-      registrationStatus: canRegisterWithBackend ? getPushDiagnosticsState().registrationStatus : 'waiting-auth',
+      registrationStatus: computedStatus,
     });
   }, [canRegisterWithBackend, hasAuthSession, isConvexAuthenticated, isConvexAuthLoading]);
 
@@ -377,10 +390,26 @@ export function usePushNotifications() {
         appVersion: getAppVersion(),
       };
 
+      // 🚨 IMPORTANT: wrap the Convex mutation calls in a timeout. If the
+      // Convex auth handshake glitches mid-flight (e.g. token refresh,
+      // intermittent network), the mutation can hang forever — the Convex
+      // client just queues it. Without a timeout, the diagnostics get
+      // stuck at 'registering-backend' with no error, and we lose the
+      // chance to schedule a retry.
+      const REGISTER_TIMEOUT_MS = 15_000;
+
       try {
-        await registerMobileDevice(payload);
+        await withTimeout(
+          registerMobileDevice(payload),
+          REGISTER_TIMEOUT_MS,
+          'Timed out while registering this device with the Smilers push backend (Convex auth may be unstable).',
+        );
       } catch (primaryError: any) {
-        await registerLegacyDevice(payload).catch((legacyError: any) => {
+        await withTimeout(
+          registerLegacyDevice(payload),
+          REGISTER_TIMEOUT_MS,
+          'Timed out while registering with the legacy push backend.',
+        ).catch((legacyError: any) => {
           throw legacyError?.message ? legacyError : primaryError;
         });
       }

@@ -17,7 +17,8 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Feather, Ionicons } from '@expo/vector-icons';
-import { Audio, Video, ResizeMode } from 'expo-av';
+import { useVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
+import { setAudioModeAsync as setExpoAudioModeAsync } from 'expo-audio';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../src/convexApi';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
@@ -62,13 +63,15 @@ export default function StatusViewScreen() {
   const [showViewers, setShowViewers] = useState(false);
   const progress = useRef(new Animated.Value(0)).current;
   const animRef = useRef<Animated.CompositeAnimation | null>(null);
-  const videoRef = useRef<Video | null>(null);
+  const videoPlayerRef = useRef<VideoPlayer | null>(null);
 
   const current = stories[idx];
   const total = stories.length;
 
   useEffect(() => {
-    Audio.setAudioModeAsync({ playsInSilentModeIOS: true }).catch(() => {});
+    // expo-audio's setAudioModeAsync — only needed to ensure video plays
+    // through the speaker even when phone is on silent (iOS).
+    setExpoAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
   }, []);
 
   const goNext = useCallback(() => {
@@ -116,9 +119,15 @@ export default function StatusViewScreen() {
   }, [idx, paused, current, goNext, progress]);
 
   useEffect(() => {
-    const video = videoRef.current;
+    const video = videoPlayerRef.current;
     if (!video) return;
-    (paused ? video.pauseAsync() : video.playAsync()).catch(() => {});
+    try {
+      if (paused) {
+        video.pause();
+      } else {
+        video.play();
+      }
+    } catch {}
   }, [paused]);
 
   const onPressIn = () => setPaused(true);
@@ -208,7 +217,7 @@ export default function StatusViewScreen() {
       </View>
 
       <View style={styles.body}>
-        <StoryContent story={current} fg={fg} videoRef={videoRef} onVideoEnd={goNext} />
+        <StoryContent story={current} fg={fg} videoPlayerRef={videoPlayerRef} onVideoEnd={goNext} />
       </View>
 
       <View style={styles.tapZones}>
@@ -311,12 +320,12 @@ export default function StatusViewScreen() {
 function StoryContent({
   story,
   fg,
-  videoRef,
+  videoPlayerRef,
   onVideoEnd,
 }: {
   story: any;
   fg: string;
-  videoRef: React.MutableRefObject<Video | null>;
+  videoPlayerRef: React.MutableRefObject<VideoPlayer | null>;
   onVideoEnd: () => void;
 }) {
   const url = useQuery(api.files.getUrl, story.fileUrl ? 'skip' : story.storageId ? { storageId: story.storageId } : 'skip') as
@@ -324,6 +333,43 @@ function StoryContent({
     | null
     | undefined;
   const src = story.fileUrl || url;
+
+  // expo-video: useVideoPlayer creates the player and the setup callback runs
+  // when source changes. The player keeps running until the StoryContent is
+  // unmounted (i.e. moves to next story) — perfect for our single-clip flow.
+  const videoSource = src && story.type === 'video' ? { uri: src as string } : null;
+  const player = useVideoPlayer(videoSource, (p) => {
+    try {
+      p.loop = false;
+      p.play();
+    } catch {}
+  });
+
+  // Publish the latest player to the parent so the parent can pause/play
+  // on long-press (held-to-pause).
+  useEffect(() => {
+    videoPlayerRef.current = player;
+    return () => {
+      if (videoPlayerRef.current === player) {
+        videoPlayerRef.current = null;
+      }
+    };
+  }, [player, videoPlayerRef]);
+
+  // Listen for end-of-playback so the story advances to the next slide.
+  useEffect(() => {
+    if (!player || story.type !== 'video') return;
+    const sub = player.addListener('playToEnd', () => {
+      try {
+        onVideoEnd();
+      } catch {}
+    });
+    return () => {
+      try {
+        sub.remove();
+      } catch {}
+    };
+  }, [player, onVideoEnd, story.type]);
 
   if (story.type === 'text') {
     return (
@@ -343,16 +389,11 @@ function StoryContent({
 
   if (story.type === 'video') {
     return (
-      <Video
-        ref={videoRef}
-        source={{ uri: src }}
+      <VideoView
         style={styles.mediaBody}
-        resizeMode={ResizeMode.CONTAIN}
-        shouldPlay
-        isLooping={false}
-        onPlaybackStatusUpdate={(status: any) => {
-          if (status?.didJustFinish) onVideoEnd();
-        }}
+        player={player}
+        contentFit="contain"
+        nativeControls={false}
       />
     );
   }
