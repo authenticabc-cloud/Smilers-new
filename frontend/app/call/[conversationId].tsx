@@ -629,40 +629,75 @@ function CallScreenInner() {
               );
               return;
             }
-            try {
-              await (sendScreenSignal as any)({
-                sessionId: conversationId,
-                toUserId: peerUserIdParam,
-                type: sig.type,
-                payload: sig.payload,
-              });
-            } catch (errorValue: any) {
-              // Some deployments use 'iceCandidate' (camel) literal — retry
-              // with the alternate naming if validation rejects 'ice-candidate'.
-              const message = String(errorValue?.message || '');
-              const isValidation =
-                message.includes('ArgumentValidationError') ||
-                message.includes('Validator error') ||
-                message.toLowerCase().includes('union') ||
-                message.toLowerCase().includes('literal');
-              if (isValidation && sig.type === 'ice-candidate') {
-                try {
-                  await (sendScreenSignal as any)({
-                    sessionId: conversationId,
-                    toUserId: peerUserIdParam,
-                    type: 'iceCandidate',
-                    payload: sig.payload,
-                  });
-                  return;
-                } catch (retryErr: any) {
-                  console.warn(
-                    'screen-share sendSignal retry (iceCandidate) failed:',
-                    retryErr?.message,
+            // Retry with exponential backoff to absorb transient backend
+            // "Server Error" responses (iter-96 showed 4× CONVEX
+            // screenSharing:sendSignal Server Error within 110ms while
+            // sharing — sometimes the Convex transaction layer hits a
+            // contention or schema retry. With 3 retries (150/450/1200ms)
+            // a single hiccup is recoverable instead of dropping the
+            // offer entirely → no more "Connecting to screen…" forever.
+            const MAX_ATTEMPTS = 3;
+            const BACKOFF_MS = [150, 450, 1200];
+            let lastError: any = null;
+            for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+              try {
+                await (sendScreenSignal as any)({
+                  sessionId: conversationId,
+                  toUserId: peerUserIdParam,
+                  type: sig.type,
+                  payload: sig.payload,
+                });
+                if (attempt > 0) {
+                  callDebug.push(
+                    'SIG',
+                    `→ ${sig.type} screen-share recovered after ${attempt + 1} attempts`,
                   );
-                  return;
+                }
+                lastError = null;
+                break;
+              } catch (errorValue: any) {
+                lastError = errorValue;
+                const message = String(errorValue?.message || '');
+                const isValidation =
+                  message.includes('ArgumentValidationError') ||
+                  message.includes('Validator error') ||
+                  message.toLowerCase().includes('union') ||
+                  message.toLowerCase().includes('literal');
+                if (isValidation && sig.type === 'ice-candidate') {
+                  try {
+                    await (sendScreenSignal as any)({
+                      sessionId: conversationId,
+                      toUserId: peerUserIdParam,
+                      type: 'iceCandidate',
+                      payload: sig.payload,
+                    });
+                    callDebug.push(
+                      'SIG',
+                      `→ iceCandidate screen-share (camel variant) ok`,
+                    );
+                    lastError = null;
+                    break;
+                  } catch (retryErr: any) {
+                    lastError = retryErr;
+                  }
+                }
+                const isLast = attempt === MAX_ATTEMPTS - 1;
+                if (!isLast) {
+                  callDebug.push(
+                    'SIG',
+                    `→ ${sig.type} screen-share failed (attempt ${attempt + 1}/${MAX_ATTEMPTS}): ${message.slice(0, 80)} — retrying in ${BACKOFF_MS[attempt]}ms`,
+                  );
+                  await new Promise((resolve) => setTimeout(resolve, BACKOFF_MS[attempt]));
                 }
               }
-              console.warn('screen-share sendSignal failed:', message);
+            }
+            if (lastError) {
+              const finalMessage = String(lastError?.message || 'unknown');
+              callDebug.push(
+                'ERR',
+                `screen-share sendSignal(${sig.type}) FAILED after ${MAX_ATTEMPTS} attempts: ${finalMessage.slice(0, 120)}`,
+              );
+              console.warn('screen-share sendSignal failed permanently:', finalMessage);
             }
             return;
           }

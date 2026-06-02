@@ -371,6 +371,17 @@ export class CallSession {
       callDebug.push('ERR', 'handleRemoteOffer: pc is null');
       throw new Error('Peer connection not initialized');
     }
+    // Idempotency: if we already applied the same remote description,
+    // skip — the duplicate would cause RTCPeerConnection to throw
+    // "Failed to set remote offer sdp: Called in wrong state: stable".
+    // Background: signaling.poll re-emits the same offer multiple times
+    // between markConsumed cycles, and the signal-processing useEffect
+    // re-runs on every Convex query refresh. See iter-96 diagnostic logs
+    // showing 3 duplicate ← answer events and 2 ERR messages.
+    if ((this.pc as any).signalingState === 'stable' && this.remoteDescriptionSet) {
+      callDebug.push('SIG', '← offer ignored (already applied, signalingState=stable)');
+      return;
+    }
     callDebug.push('SIG', `← offer (${payload.length}B)`);
     const offer = JSON.parse(payload);
     const webrtc = await this.getWebRTC();
@@ -393,6 +404,17 @@ export class CallSession {
   /** Caller: handle the answer from the callee. */
   async handleRemoteAnswer(payload: string): Promise<void> {
     if (!this.pc) throw new Error('Peer connection not initialized');
+    // Idempotency guard — same reasoning as handleRemoteOffer. Once the
+    // remote answer is set, the PC's signalingState transitions from
+    // 'have-local-offer' → 'stable'. A second setRemoteDescription on a
+    // stable PC throws "Failed to set remote answer sdp: Called in wrong
+    // state: stable". This was the source of the ERR rows we saw in
+    // iter-96 — they were noise, the call still worked, but we want to
+    // avoid the unnecessary error spam (and the brief async overhead).
+    if ((this.pc as any).signalingState === 'stable' && this.remoteDescriptionSet) {
+      callDebug.push('SIG', '← answer ignored (already applied, signalingState=stable)');
+      return;
+    }
     callDebug.push('SIG', `← answer (${payload.length}B)`);
     const answer = JSON.parse(payload);
     const webrtc = await this.getWebRTC();
