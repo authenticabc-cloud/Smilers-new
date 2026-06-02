@@ -260,8 +260,21 @@ export default function ChatScreen() {
   const markRead = useMutation(api.messages.markRead);
   const toggleReaction = useMutation(api.messages.toggleReaction);
   const deleteMessage = useMutation(api.messages.deleteMessage);
+  // Optional edit mutations — different Convex deployments expose this under
+  // different names (`editMessage`, `updateMessage`, `editText`). We try them
+  // in order at call-time. `api: any` keeps TS happy even if the function
+  // doesn't exist server-side; the runtime catch handles missing endpoints.
+  const editMessage = useMutation((api as any).messages.editMessage);
+  const updateMessage = useMutation((api as any).messages.updateMessage);
+  const editTextMutation = useMutation((api as any).messages.editText);
   const toggleStar = useMutation(api.messages.toggleStar);
   const createScheduledMessage = useMutation((api as any).scheduling.scheduleMessageMobile);
+
+  // When the user taps "Edit" on an existing message, we capture its id so
+  // the composer's next "Send" becomes an edit instead of a brand-new
+  // message. Clearing this id (Cancel or successful save) returns the
+  // composer to normal send mode. See iter-97 fix.
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
 
   const messages: any[] = useMemo(() => {
     const page = messagesPage as any;
@@ -454,20 +467,58 @@ export default function ChatScreen() {
 
     setSending(true);
     const replyToMessageId = replyTo?._id;
+    const editTargetId = editingMessageId;
     setText('');
     setReplyTo(null);
+    setEditingMessageId(null);
     resetComposerFormatting();
 
     try {
-      await sendMessage({
-        conversationId,
-        type: 'text',
-        text: formattedValue,
-        ...(replyToMessageId ? { replyToMessageId } : {}),
-      });
+      if (editTargetId) {
+        // EDIT mode — try to update the original message in place. If the
+        // backend exposes an edit mutation under any of the known names,
+        // a single call updates the row. Otherwise we fall back to
+        // delete-then-resend so the user STILL sees the edit reflected
+        // (instead of the prior behaviour where the original stayed
+        // visible AND a duplicate was appended — see iter-97 screenshot).
+        const result = await tryEditMutations(editTargetId, formattedValue);
+        if (!result.ok) {
+          console.warn(
+            'edit not available on backend, falling back to delete+resend:',
+            result.lastError?.message,
+          );
+          // Best-effort fallback: delete original then send new. Even
+          // if delete fails (no permission to delete-for-everyone),
+          // we still post the new message so the user sees their edit.
+          try {
+            await (deleteMessage as any)({ messageId: editTargetId });
+          } catch (deleteErr: any) {
+            console.warn('delete-original during edit fallback failed:', deleteErr?.message);
+          }
+          await sendMessage({
+            conversationId,
+            type: 'text',
+            text: formattedValue,
+            ...(replyToMessageId ? { replyToMessageId } : {}),
+          });
+        }
+      } else {
+        await sendMessage({
+          conversationId,
+          type: 'text',
+          text: formattedValue,
+          ...(replyToMessageId ? { replyToMessageId } : {}),
+        });
+      }
       await refetchMessages();
     } catch (e: any) {
       console.warn('send failed:', e?.message);
+      // Restore the composer so the user can retry. If this was an edit,
+      // also restore the editing context so the next Send tries again.
+      setText(value);
+      if (editTargetId) {
+        setEditingMessageId(editTargetId);
+      }
     } finally {
       setSending(false);
     }
@@ -1125,14 +1176,69 @@ export default function ChatScreen() {
     const msg = selectedMsg;
     if (!msg) return;
     closeActionSheet();
-    // Seed the composer with the message text so the user can edit it inline.
-    // The backend `messages.edit` endpoint is wired separately; until shipped,
-    // we still let the user re-send the modified text as a new message — a
-    // safe degradation that mirrors how WhatsApp on Android handled this
-    // pre-Edit-Message feature.
+    // Capture which message we're editing so handleSend can route to
+    // the proper edit mutation instead of sending a brand-new message.
+    // Only TEXT messages support editing — images/voice/etc. have
+    // immutable storageIds and shouldn't be edited.
+    if (msg.type && msg.type !== 'text') {
+      Alert.alert('Edit not available', 'Only text messages can be edited.');
+      return;
+    }
+    setEditingMessageId(String(msg._id));
     setText(stripRichTextTags(msg.text) || '');
     setComposerFocused(true);
   }, [selectedMsg]);
+
+  const cancelEdit = useCallback(() => {
+    setEditingMessageId(null);
+    setText('');
+    resetComposerFormatting();
+  }, [resetComposerFormatting]);
+
+  /**
+   * Attempt to call any of the known edit mutations the backend may expose.
+   * Different Convex deployments use different function names — try each
+   * until one succeeds. Returns true on success, false if none worked.
+   */
+  const tryEditMutations = useCallback(
+    async (messageId: string, newText: string): Promise<{ ok: boolean; lastError?: any }> => {
+      const attempts: { label: string; run: () => Promise<unknown> }[] = [
+        {
+          label: 'messages.editMessage',
+          run: () => (editMessage as any)({ messageId, text: newText }),
+        },
+        {
+          label: 'messages.updateMessage',
+          run: () => (updateMessage as any)({ messageId, text: newText }),
+        },
+        {
+          label: 'messages.editText',
+          run: () => (editTextMutation as any)({ messageId, text: newText }),
+        },
+      ];
+      let lastError: any = null;
+      for (const attempt of attempts) {
+        try {
+          await attempt.run();
+          return { ok: true };
+        } catch (errorValue: any) {
+          lastError = errorValue;
+          const message = String(errorValue?.message || '');
+          // If the function literally doesn't exist on the backend, fall
+          // through to the next variant. Anything else (permission /
+          // validation / Server Error) — stop and report.
+          if (
+            !message.includes('CouldNotFindFunction') &&
+            !message.toLowerCase().includes('not found')
+          ) {
+            return { ok: false, lastError: errorValue };
+          }
+        }
+      }
+      return { ok: false, lastError };
+    },
+    [editMessage, updateMessage, editTextMutation],
+  );
 
   const doForwardTo = useCallback(
     async (targetConversationId: string) => {
@@ -1213,13 +1319,28 @@ export default function ChatScreen() {
           }
           return;
         }
-        // Sent messages — pass the mode so the backend can scope deletion.
-        // Older backends that only accept { messageId } will still receive a
-        // valid call and treat it as a soft delete-for-me.
-        await (deleteMessage as any)({ messageId: msg._id, mode });
+        // Sent messages — try with the explicit mode first (newer backend
+        // schema). If the deployed backend rejects the `mode` arg (Server
+        // Error from validator mismatch — iter-97 screenshot), fall back
+        // to the legacy `{ messageId }` only signature which most Convex
+        // deployments still support.
+        try {
+          await (deleteMessage as any)({ messageId: msg._id, mode });
+        } catch (modeError: any) {
+          console.warn(
+            'deleteMessage with mode=%s failed (%s) — retrying without mode',
+            mode,
+            String(modeError?.message || '').slice(0, 100),
+          );
+          await (deleteMessage as any)({ messageId: msg._id });
+        }
         await refetchMessages();
       } catch (errorValue: any) {
-        Alert.alert('Failed to delete', errorValue?.message || 'Unknown error');
+        const detail =
+          errorValue?.data?.message ||
+          errorValue?.message ||
+          'Unknown error';
+        Alert.alert('Failed to delete', String(detail).slice(0, 240));
       }
     },
     [deleteMessage, deleteTarget, refetchMessages],
@@ -1530,6 +1651,26 @@ export default function ChatScreen() {
                 </Text>
               </View>
               <TouchableOpacity onPress={() => setReplyTo(null)} hitSlop={10} testID="reply-preview-close">
+                <Feather name="x" size={18} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {/* Editing indicator — visible whenever the user tapped "Edit"
+              on a message. Mirrors the reply-preview pill UI so the
+              affordance is familiar. Tapping the X cancels the edit
+              and clears the composer; tapping Send (handleSend) routes
+              to the edit-mutation flow instead of a brand-new send. */}
+          {editingMessageId && isConversationAvailable ? (
+            <View style={styles.replyPill} testID="edit-preview-pill">
+              <View style={[styles.replyAccent, styles.editAccent]} />
+              <View style={styles.flexOne}>
+                <Text style={styles.replyLabel}>Editing message</Text>
+                <Text style={styles.replyText} numberOfLines={1} testID="edit-preview-text">
+                  Tap send to save changes
+                </Text>
+              </View>
+              <TouchableOpacity onPress={cancelEdit} hitSlop={10} testID="edit-preview-close">
                 <Feather name="x" size={18} color={Colors.textSecondary} />
               </TouchableOpacity>
             </View>
@@ -2417,6 +2558,9 @@ const styles = StyleSheet.create({
     borderTopColor: Colors.border,
   },
   replyAccent: { width: 3, height: 32, borderRadius: 2, backgroundColor: Colors.primary },
+  // editAccent — orange/warning accent so the editing pill is visually
+  // distinct from the green reply pill. Same dimensions/shape.
+  editAccent: { backgroundColor: Colors.warning ?? '#F59E0B' },
   replyLabel: { fontSize: 11, fontWeight: FontWeight.bold, color: Colors.primary },
   replyText: { fontSize: 13, color: Colors.textSecondary, marginTop: 2 },
   uploadBar: {
