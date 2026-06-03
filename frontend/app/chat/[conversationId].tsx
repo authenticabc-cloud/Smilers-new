@@ -505,7 +505,7 @@ export default function ChatScreen() {
             conversationId,
             type: 'text',
             text: formattedValue,
-            ...(replyToMessageId ? { replyToMessageId } : {}),
+            ...(replyToMessageId ? { replyToMessageId, replyToId: replyToMessageId } : {}),
           });
         }
       } else {
@@ -513,7 +513,7 @@ export default function ChatScreen() {
           conversationId,
           type: 'text',
           text: formattedValue,
-          ...(replyToMessageId ? { replyToMessageId } : {}),
+          ...(replyToMessageId ? { replyToMessageId, replyToId: replyToMessageId } : {}),
         });
       }
       await refetchMessages();
@@ -667,7 +667,7 @@ export default function ChatScreen() {
           type: 'image',
           text: formattedCaption,
           storageId,
-          ...(replyToMessageId ? { replyToMessageId } : {}),
+          ...(replyToMessageId ? { replyToMessageId, replyToId: replyToMessageId } : {}),
         });
         setText('');
         setReplyTo(null);
@@ -820,7 +820,9 @@ export default function ChatScreen() {
         conversationId,
         type: 'text',
         text,
-        ...(replyTo?._id ? { replyToMessageId: replyTo._id } : {}),
+        ...(replyTo?._id
+          ? { replyToMessageId: replyTo._id, replyToId: replyTo._id }
+          : {}),
       });
       setReplyTo(null);
       await refetchMessages();
@@ -890,7 +892,7 @@ export default function ChatScreen() {
           storageId,
           mimeType: 'image/gif',
           fileName: `giphy-${asset.id}.gif`,
-          ...(replyToMessageId ? { replyToMessageId } : {}),
+          ...(replyToMessageId ? { replyToMessageId, replyToId: replyToMessageId } : {}),
         });
         setText('');
         setReplyTo(null);
@@ -928,7 +930,7 @@ export default function ChatScreen() {
           conversationId,
           type: 'poll',
           poll: { question: poll.question, options: poll.options },
-          ...(replyToMessageId ? { replyToMessageId } : {}),
+          ...(replyToMessageId ? { replyToMessageId, replyToId: replyToMessageId } : {}),
         });
         setReplyTo(null);
         await refetchMessages();
@@ -1007,7 +1009,7 @@ export default function ChatScreen() {
           storageId,
           mimeType: mime,
           duration: totalSec,
-          ...(replyToMessageId ? { replyToMessageId } : {}),
+          ...(replyToMessageId ? { replyToMessageId, replyToId: replyToMessageId } : {}),
         });
 
         setReplyTo(null);
@@ -1786,7 +1788,16 @@ export default function ChatScreen() {
                     msg={item}
                     isMine={item.senderId === me?._id}
                     myUserId={me?._id}
-                    parentMsg={item.replyToMessageId ? msgById.get(item.replyToMessageId) : undefined}
+                    parentMsg={(() => {
+                      // Backend field name normalisation (iter-101):
+                      // Smilers Convex stores the parent reference under
+                      // `replyToId` per the public spec, but the mobile
+                      // client historically wrote `replyToMessageId`.
+                      // Look up by either to be robust against both
+                      // historical AND fresh messages.
+                      const parentId = item.replyToId || item.replyToMessageId;
+                      return parentId ? msgById.get(parentId) : undefined;
+                    })()}
                     appearance={chatAppearance}
                     e2eeStatus={e2eeStatus}
                     onLongPress={viewerSuspension ? () => {} : () => {
@@ -2552,7 +2563,7 @@ function MessageBubble({
               </Text>
             </View>
           </View>
-        ) : msg.replyToMessageId ? (
+        ) : (msg.replyToId || msg.replyToMessageId) ? (
           <View style={styles.quoteBlock}>
             <View style={styles.quoteAccent} />
             <Text style={styles.quoteText} numberOfLines={1}>
