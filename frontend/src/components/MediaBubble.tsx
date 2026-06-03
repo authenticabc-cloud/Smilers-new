@@ -129,14 +129,65 @@ export default function MediaBubble({
   const isOutgoing = isMine;
   const messageTextColor = isOutgoing ? '#F6FFF9' : Colors.textPrimary;
   const metaTextColor = isOutgoing ? 'rgba(246,255,249,0.82)' : Colors.textMuted;
+  // For "edited" indicator: prefer msg.editedAt (server canonical timestamp),
+  // fall back to msg._creationTime if the backend doesn't expose it but the
+  // local edit just happened. Web app shows "edited HH:MM" inline with the
+  // timestamp. Per iter-98 user screenshot of the web app design.
+  const editedAtMs =
+    typeof msg.editedAt === 'number'
+      ? msg.editedAt
+      : typeof msg.editedAt === 'string'
+        ? Date.parse(msg.editedAt) || null
+        : null;
+  const editedTimeStr =
+    editedAtMs && Number.isFinite(editedAtMs)
+      ? new Date(editedAtMs).toLocaleTimeString('en-GB', {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+        })
+      : timeStr;
+  const isEdited = !!editedAtMs || msg.edited === true || msg.isEdited === true;
 
   if (msg.deletedAt) {
+    // Web-app parity for deleted messages: faded bubble (opacity), italic
+    // text "This message was deleted", and timestamp on the right —
+    // matching the screenshot the user shared in iter-98.
+    const deletedTimeMs =
+      typeof msg.deletedAt === 'number'
+        ? msg.deletedAt
+        : typeof msg.deletedAt === 'string'
+          ? Date.parse(msg.deletedAt) || time.getTime()
+          : time.getTime();
+    const deletedTimeStr = new Date(deletedTimeMs).toLocaleTimeString('en-GB', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
     return (
       <View style={[styles.bubbleRow, isMine ? styles.bubbleRowMine : styles.bubbleRowOther]}>
-        <View style={[styles.bubble, isMine ? styles.bubbleMine : styles.bubbleOther, bubbleDynamicStyle, styles.deletedBubble]}>
-          <View style={styles.deletedContent}>
-            <Feather name="slash" size={12} color={Colors.textMuted} />
-            <Text style={[styles.bubbleText, bubbleTextStyle, styles.deletedText]}>Message deleted</Text>
+        <View
+          style={[
+            styles.bubble,
+            isMine ? styles.bubbleMine : styles.bubbleOther,
+            bubbleDynamicStyle,
+            styles.deletedBubble,
+          ]}
+          testID={`message-bubble-deleted-${msg._id}`}
+        >
+          <Text style={[styles.bubbleText, bubbleTextStyle, styles.deletedText]}>
+            This message was deleted
+          </Text>
+          <View style={styles.bubbleMeta}>
+            <Text style={[styles.bubbleTime, styles.deletedTimeText, { color: metaTextColor }]}>
+              {deletedTimeStr}
+            </Text>
+            {isMine ? (
+              <View
+                style={[styles.statusDot, { backgroundColor: statusDotColor }]}
+                testID={`msg-status-dot-${msg._id}`}
+              />
+            ) : null}
           </View>
         </View>
       </View>
@@ -175,6 +226,16 @@ export default function MediaBubble({
 
         <View style={styles.bubbleMeta}>
           {msg.starred ? <Feather name="star" size={11} color={Colors.tickYellow} style={styles.starIcon} /> : null}
+          {/* Web-app parity (iter-98 screenshot): if the message was
+              edited, show italic "edited HH:MM" inline before the
+              regular time stamp. We render this only for non-image
+              messages because image bubbles have their own time
+              overlay inside the media frame. */}
+          {isEdited && msg.type !== 'image' ? (
+            <Text style={[styles.bubbleTime, styles.editedBadge, { color: metaTextColor }]}>
+              edited {editedTimeStr}
+            </Text>
+          ) : null}
           {msg.type === 'image' ? null : <Text style={[styles.bubbleTime, { color: metaTextColor }]}>{timeStr}</Text>}
           {isMine ? (
             <View
@@ -1260,8 +1321,14 @@ const styles = StyleSheet.create({
   },
   richTextBold: { fontWeight: FontWeight.bold },
   deletedBubble: { opacity: 0.55 },
+  // deletedTimeText — italic + slightly muted to match the web app's
+  // "This message was deleted | 6:45 PM" pattern (iter-98 screenshot).
+  deletedTimeText: { fontStyle: 'italic', opacity: 0.85 },
   deletedContent: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   deletedText: { fontStyle: 'italic', color: Colors.textMuted },
+  // editedBadge — italic "edited HH:MM" rendered before the real time
+  // stamp inside the bubble meta row. Per web-app design parity.
+  editedBadge: { fontStyle: 'italic', marginRight: 6, opacity: 0.85 },
   starIcon: { marginRight: 4 },
   tickIcon: { marginLeft: 4 },
   flexOne: { flex: 1 },

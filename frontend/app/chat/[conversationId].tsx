@@ -2269,12 +2269,32 @@ function MessageBubble({
   }, [msg.reactions, myUserId]);
 
   if (msg.deletedAt) {
+    // Web-app parity (iter-98 screenshot): "This message was deleted"
+    // italic + timestamp on the right inside a faded bubble. Mirrors the
+    // identical pattern in MediaBubble's deleted branch.
+    const deletedTimeMs =
+      typeof msg.deletedAt === 'number'
+        ? msg.deletedAt
+        : typeof msg.deletedAt === 'string'
+          ? Date.parse(msg.deletedAt) || time.getTime()
+          : time.getTime();
+    const deletedTimeStr = new Date(deletedTimeMs).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
     return (
       <View style={[styles.bubbleRow, isMine ? styles.bubbleRowMine : styles.bubbleRowOther]}>
-        <View style={[styles.bubble, isMine ? styles.bubbleMine : styles.bubbleOther, styles.deletedBubble]}>
-          <View style={styles.deletedContent}>
-            <Feather name="slash" size={12} color={Colors.textMuted} />
-            <Text style={[styles.bubbleText, styles.deletedText]}>Message deleted</Text>
+        <View
+          style={[
+            styles.bubble,
+            isMine ? styles.bubbleMine : styles.bubbleOther,
+            styles.deletedBubble,
+          ]}
+          testID={`message-bubble-deleted-${msg._id}`}
+        >
+          <Text style={[styles.bubbleText, styles.deletedText]}>This message was deleted</Text>
+          <View style={styles.bubbleMeta}>
+            <Text style={[styles.bubbleTime, styles.deletedTimeText]}>{deletedTimeStr}</Text>
           </View>
         </View>
       </View>
@@ -2319,6 +2339,26 @@ function MessageBubble({
           {msg.starred ? (
             <Feather name="star" size={11} color={Colors.tickYellow} style={styles.starIcon} />
           ) : null}
+          {/* Web-app parity: "edited HH:MM" inline before the timestamp
+              for messages the user (or the other party) has edited.
+              Mirrors the same pattern added in MediaBubble. */}
+          {(() => {
+            const editedAtMs =
+              typeof msg.editedAt === 'number'
+                ? msg.editedAt
+                : typeof msg.editedAt === 'string'
+                  ? Date.parse(msg.editedAt) || null
+                  : null;
+            const isEdited = !!editedAtMs || msg.edited === true || msg.isEdited === true;
+            if (!isEdited) return null;
+            const editedTimeStr =
+              editedAtMs && Number.isFinite(editedAtMs)
+                ? new Date(editedAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                : timeStr;
+            return (
+              <Text style={[styles.bubbleTime, styles.editedBadge]}>edited {editedTimeStr}</Text>
+            );
+          })()}
           <Text style={styles.bubbleTime}>{timeStr}</Text>
           {isMine ? (
             <Ionicons name={tickIcon as any} size={14} color={tickColor} style={styles.tickIcon} />
@@ -2973,6 +3013,12 @@ const styles = StyleSheet.create({
   deletedBubble: { opacity: 0.55 },
   deletedContent: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   deletedText: { fontStyle: 'italic', color: Colors.textMuted },
+  // deletedTimeText — italic + slightly muted to match the web app's
+  // "This message was deleted  6:45 PM" timestamp on the right.
+  deletedTimeText: { fontStyle: 'italic', opacity: 0.85, color: Colors.textMuted },
+  // editedBadge — italic "edited HH:MM" rendered before the real time
+  // stamp inside the bubble meta row. Per web-app design parity.
+  editedBadge: { fontStyle: 'italic', marginRight: 6, opacity: 0.85 },
   starIcon: { marginRight: 4 },
   tickIcon: { marginLeft: 4 },
   forwardListContent: { paddingBottom: Spacing.lg },
