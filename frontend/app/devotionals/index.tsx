@@ -38,6 +38,7 @@ import { getLanguageByCode } from '../../src/lib/languages';
 import { getDisplayInitials } from '../../src/lib/displayName';
 import DevotionalMediaPlayer from '../../src/components/DevotionalMediaPlayer';
 import { recordDiagnostic } from '../../src/lib/diagnostics';
+import { useReactiveSafeConvexQuery } from '../../src/hooks/useReactiveSafeConvexQuery';
 
 // Module-evaluation marker: records the very first signal that this file
 // was loaded by the JS bundle. If we see this in the backend diagnostics
@@ -101,12 +102,31 @@ export default function DevotionalsFeedScreen() {
     } catch {}
   }, []);
 
-  const feedResult = useQuery((api as any).devotionals?.getFeed, {
-    paginationOpts: { numItems: FEED_PAGE_SIZE, cursor: null },
-  });
-  const viewerLanguage = useQuery((api as any).devotionals?.getViewerLanguage, {});
+  const { data: feedResult, error: feedError } = useReactiveSafeConvexQuery<{ page?: DevotionalItem[] } | DevotionalItem[] | null>(
+    (api as any).devotionals?.getFeed,
+    { paginationOpts: { numItems: FEED_PAGE_SIZE, cursor: null } },
+    null,
+  );
+  const { data: viewerLanguage } = useReactiveSafeConvexQuery<any>(
+    (api as any).devotionals?.getViewerLanguage,
+    {},
+    null,
+  );
   const me = useQuery(api.users.getCurrentUser);
   const removeDevotional = useMutation((api as any).devotionals?.remove);
+
+  // Log feed errors so we can see them server-side without crashing the UI.
+  useEffect(() => {
+    if (feedError) {
+      try {
+        recordDiagnostic({
+          tag: 'ERR',
+          source: 'devotionals/index',
+          message: `getFeed failed: ${feedError.message?.slice(0, 240) || 'unknown'}`,
+        });
+      } catch {}
+    }
+  }, [feedError]);
 
   // Local-only "no translate these source languages" preference.
   const [noTranslateLangs, setNoTranslateLangs] = useState<string[]>([]);
@@ -448,7 +468,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.base,
     gap: 10,
   },
-  emptyTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semiBold, color: Colors.textPrimary },
+  emptyTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   emptyHint: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center' },
   fab: {
     position: 'absolute',

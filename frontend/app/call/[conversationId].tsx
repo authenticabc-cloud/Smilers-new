@@ -864,19 +864,76 @@ function CallScreenInner() {
     ]
   );
 
-  // Caller: kick off peer-connection as soon as we have a callId (status may still be ringing)
+  // Stable ref to the latest startPeerConnection callback so the kick-off
+  // useEffects below don't re-fire when the callback identity changes
+  // (which it does on EVERY activeCall server re-emit — i.e. every
+  // heartbeat tick — because `activeCall` is in the useCallback deps).
+  //
+  // iter-104 bug: without this ref, the diagnostic overlay showed
+  // FOUR `startPeerConnection asCaller=false` log lines within the same
+  // second after the user tapped Answer. That meant the useEffect was
+  // running 4 times in 4 separate React commits before any of them
+  // could set `initStartedRef.current = true` — each one then created
+  // its own peer connection, none of which completed the SDP handshake.
+  // Symptom: "no audio and in video calls videos are off and no audios".
+  const startPeerConnectionRef = useRef(startPeerConnection);
   useEffect(() => {
-    if (isCaller && callId && !sessionRef.current && !initStartedRef.current) {
-      void startPeerConnection(true);
+    startPeerConnectionRef.current = startPeerConnection;
+  }, [startPeerConnection]);
+
+  // Stable "remote user is resolved" signal — flips false→true exactly
+  // ONCE per call (the moment we can answer "yes I know who to dial").
+  // Used as a useEffect dep below so the kick-off retries automatically
+  // if the first attempt bailed because activeCall / fetchedOtherUser
+  // hadn't synced yet. This replaces the old behavior of putting
+  // `startPeerConnection` in the dep array, which caused multiple
+  // re-fires on every heartbeat tick.
+  const remoteResolved = useMemo(() => {
+    if (isScreenOnly) return !!peerUserIdParam;
+    const ac: any = activeCall || {};
+    const fromActive =
+      ac.callerId || ac.callerUserId || ac.fromUserId || ac.from ||
+      ac.recipientId || ac.recipientUserId || ac.calleeId || ac.calleeUserId ||
+      ac.receiverId || ac.toUserId || ac.to || null;
+    if (fromActive) return true;
+    if (fetchedOtherUser) return true;
+    return false;
+  }, [isScreenOnly, peerUserIdParam, activeCall, fetchedOtherUser]);
+
+  // Caller: kick off peer-connection as soon as we have a callId (status may still be ringing).
+  // We CLAIM the slot synchronously BEFORE invoking the async function so a
+  // back-to-back effect run in the same JS turn can't fire a second time.
+  useEffect(() => {
+    if (
+      isCaller &&
+      callId &&
+      remoteResolved &&
+      !sessionRef.current &&
+      !initStartedRef.current
+    ) {
+      initStartedRef.current = true; // claim BEFORE the await
+      void startPeerConnectionRef.current(true);
     }
-  }, [isCaller, callId, startPeerConnection]);
+    // intentionally NOT depending on startPeerConnection — we deref via the
+    // ref so heartbeat-driven activeCall re-emits never re-fire this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCaller, callId, remoteResolved]);
 
   // Callee: kick off peer-connection when answered (status → active)
   useEffect(() => {
-    if (!isCaller && isActive && callId && !sessionRef.current && !initStartedRef.current) {
-      void startPeerConnection(false);
+    if (
+      !isCaller &&
+      isActive &&
+      callId &&
+      remoteResolved &&
+      !sessionRef.current &&
+      !initStartedRef.current
+    ) {
+      initStartedRef.current = true; // claim BEFORE the await
+      void startPeerConnectionRef.current(false);
     }
-  }, [isCaller, isActive, callId, startPeerConnection]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCaller, isActive, callId, remoteResolved]);
 
   // ====== Screen-only mode: bootstrap peer-connection directly ======
   useEffect(() => {
@@ -897,15 +954,17 @@ function CallScreenInner() {
           `sessionId=${String(conversationId).slice(0, 8)}… peer=${String(peerUserIdParam).slice(0, 8)}…`,
       );
       setCallId(conversationId);
+      initStartedRef.current = true; // claim BEFORE the await
       if (isScreenOnlyReceiver) {
-        void startPeerConnection(false);
+        void startPeerConnectionRef.current(false);
       } else {
-        void startPeerConnection(true);
+        void startPeerConnectionRef.current(true);
       }
     } catch (errorValue: any) {
       callDebug.push('ERR', `screen-only bootstrap: ${errorValue?.message}`);
     }
-  }, [isScreenOnly, isScreenOnlyReceiver, conversationId, peerUserIdParam, startPeerConnection]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isScreenOnly, isScreenOnlyReceiver, conversationId, peerUserIdParam]);
 
   // ====== Heartbeat — REQUIRED by the backend's expireDeadCalls cron ======
   //

@@ -20,10 +20,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useQuery } from 'convex/react';
 
 import { api } from '../convexApi';
 import { Colors, FontSize, FontWeight, Radius } from '../theme';
+import { useReactiveSafeConvexQuery } from '../hooks/useReactiveSafeConvexQuery';
 
 interface Props {
   storageId: string;
@@ -75,9 +75,19 @@ export default function DevotionalMediaPlayer({ storageId, type, durationSec, ac
   // Defensive — never call the query with an empty/bogus storageId, which
   // would surface a Convex validator error and could blow up the feed.
   const safeStorageId = typeof storageId === 'string' && storageId.length > 0 ? storageId : null;
-  const mediaUrl = useQuery(
+  // Use a NON-THROWING safe query wrapper. Convex's vanilla `useQuery`
+  // throws synchronously on a Server Error (which is what happened on
+  // user device at iter-103 — the backend's files.getUrl returned
+  // [CONVEX Q(files:getUrl)] Server Error, which propagated to the
+  // ErrorBoundary and killed the whole Devotionals screen). With
+  // useReactiveSafeConvexQuery the error becomes a value (`error`) and
+  // we render an inline 'Media unavailable' placeholder instead of
+  // crashing — the rest of the feed keeps working.
+  const { data: mediaUrl, loading: mediaLoading, error: mediaError } = useReactiveSafeConvexQuery<string | null>(
     (api as any).files?.getUrl,
-    safeStorageId ? { storageId: safeStorageId } : 'skip' as any,
+    safeStorageId ? { storageId: safeStorageId } : undefined,
+    null,
+    Boolean(safeStorageId),
   );
 
   if (!safeStorageId) {
@@ -88,18 +98,20 @@ export default function DevotionalMediaPlayer({ storageId, type, durationSec, ac
       </View>
     );
   }
-  if (mediaUrl === undefined) {
+  if (mediaLoading) {
     return (
       <View style={styles.loadingWrap}>
         <ActivityIndicator color={accentColor || Colors.primary} />
       </View>
     );
   }
-  if (!mediaUrl) {
+  if (mediaError || !mediaUrl) {
     return (
       <View style={styles.errorWrap}>
         <Feather name="alert-circle" size={16} color={Colors.danger} />
-        <Text style={styles.errorText}>Media unavailable</Text>
+        <Text style={styles.errorText}>
+          {mediaError ? 'Media couldn\u2019t load' : 'Media unavailable'}
+        </Text>
       </View>
     );
   }

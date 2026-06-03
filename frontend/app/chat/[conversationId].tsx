@@ -558,8 +558,12 @@ export default function ChatScreen() {
         );
         return;
       }
+      // Hoisted out of the try block — referenced from the catch fallback
+      // path below to format the "saved locally for HH:MM" alert. Was
+      // previously declared inside the try, which caused a TS2304 'Cannot
+      // find name when' error when the catch tried to log it.
+      const when = new Date(selection.whenMs);
       try {
-        const when = new Date(selection.whenMs);
         const date = `${when.getFullYear()}-${String(when.getMonth() + 1).padStart(2, '0')}-${String(when.getDate()).padStart(2, '0')}`;
         const time = `${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`;
 
@@ -586,8 +590,16 @@ export default function ChatScreen() {
                 ? 'weekly'
                 : 'monthly';
 
+        // Backend schema for scheduling.scheduleMessageMobile accepts ONLY
+        // { recipient, message, date, time, repeat, active }. Passing the
+        // extra `conversationId` field — which we used to attach for our
+        // own bookkeeping — triggers Convex's strict validator and the
+        // mutation throws "[CONVEX M(scheduling:scheduleMessageMobile)]
+        // Server Error Called by client". Verified against the working
+        // app/scheduled.tsx call site (which omits conversationId). We
+        // still log the conversation hint into the recipient label so
+        // the Scheduled Messages inbox stays usable.
         await createScheduledMessage({
-          conversationId,
           recipient: recipientLabel,
           message: draft,
           date,
@@ -2721,7 +2733,7 @@ const styles = StyleSheet.create({
   multiSelectCountText: {
     color: Colors.white,
     fontSize: FontSize.base,
-    fontWeight: FontWeight.semiBold,
+    fontWeight: FontWeight.semibold,
     flex: 1,
   },
   multiSelectForwardBtn: {
@@ -2735,7 +2747,7 @@ const styles = StyleSheet.create({
   multiSelectForwardIcon: { marginRight: 6 },
   multiSelectForwardLabel: {
     color: Colors.white,
-    fontWeight: FontWeight.semiBold,
+    fontWeight: FontWeight.semibold,
     fontSize: FontSize.sm,
   },
   multiSelectForwardLabelDim: { color: 'rgba(255,255,255,0.5)' },
