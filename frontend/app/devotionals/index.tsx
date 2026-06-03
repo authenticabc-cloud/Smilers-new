@@ -37,6 +37,22 @@ import { chooseDisplayText, readNoTranslateLangs } from '../../src/lib/devotiona
 import { getLanguageByCode } from '../../src/lib/languages';
 import { getDisplayInitials } from '../../src/lib/displayName';
 import DevotionalMediaPlayer from '../../src/components/DevotionalMediaPlayer';
+import { recordDiagnostic } from '../../src/lib/diagnostics';
+
+// Module-evaluation marker: records the very first signal that this file
+// was loaded by the JS bundle. If we see this in the backend diagnostics
+// stream but DON'T see the matching MOUNT row, the crash is happening
+// somewhere between module load and the first render — usually in a
+// useQuery / useMutation hook initialization.
+try {
+  recordDiagnostic({
+    tag: 'BOOT',
+    source: 'devotionals/index',
+    message: 'module evaluated',
+  });
+} catch {
+  /* swallow — diagnostics is best-effort */
+}
 
 // Yellow accent matching the web app's devotional CTA + play button colour
 // (iter-102). Used for FAB, play button, active filter highlight, and the
@@ -70,6 +86,20 @@ const FEED_PAGE_SIZE = 50;
 
 export default function DevotionalsFeedScreen() {
   const router = useRouter();
+
+  // Mount marker — if we see BOOT but not MOUNT in the diagnostics stream,
+  // the crash is in a top-level hook call (useQuery / useMutation) before
+  // the component returns its first JSX. If we see MOUNT but not RENDER,
+  // it's in renderItem or a child component.
+  React.useEffect(() => {
+    try {
+      recordDiagnostic({
+        tag: 'BOOT',
+        source: 'devotionals/index',
+        message: 'screen mounted',
+      });
+    } catch {}
+  }, []);
 
   const feedResult = useQuery((api as any).devotionals?.getFeed, {
     paginationOpts: { numItems: FEED_PAGE_SIZE, cursor: null },

@@ -8,16 +8,19 @@
  *
  * Designed for the devotionals feed list — it tears down the
  * audio player on unmount so scrolling away kills any active playback.
+ *
+ * NOTE on imports: `expo-audio` and `expo-video` are required LAZILY
+ * (inside the sub-components, not at module top-level). If a native
+ * link issue makes one of them throw on import — e.g. the user's APK
+ * predates the expo-audio config plugin — the WHOLE feed screen would
+ * otherwise blow up. By deferring the require we contain the failure
+ * to the specific bubble that needs it, and let the rest of the feed
+ * render normally.
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useQuery } from 'convex/react';
-import {
-  createAudioPlayer,
-  type AudioPlayer,
-} from 'expo-audio';
-import { useVideoPlayer, VideoView } from 'expo-video';
 
 import { api } from '../convexApi';
 import { Colors, FontSize, FontWeight, Radius } from '../theme';
@@ -27,6 +30,8 @@ interface Props {
   type: 'voice' | 'video';
   durationSec?: number;
   mimeType?: string;
+  /** Optional accent colour for the play button (defaults to Colors.primary). */
+  accentColor?: string;
 }
 
 function formatDuration(sec: number): string {
@@ -36,17 +41,60 @@ function formatDuration(sec: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export default function DevotionalMediaPlayer({ storageId, type, durationSec }: Props) {
-  const mediaUrl = useQuery((api as any).files?.getUrl, { storageId });
+// ─────────────────────────────────────────────────────────────────────
+// Lazy loaders — wrap `require()` in try/catch so a missing native
+// module never crashes the JS bundle at module-load time.
+// ─────────────────────────────────────────────────────────────────────
+function loadExpoAudio(): any {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('expo-audio');
+  } catch (err) {
+    if (__DEV__) {
+      // eslint-disable-next-line no-console
+      console.warn('[DevotionalMediaPlayer] expo-audio require failed:', (err as Error)?.message);
+    }
+    return null;
+  }
+}
 
-  if (mediaUrl === undefined) {
+function loadExpoVideo(): any {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('expo-video');
+  } catch (err) {
+    if (__DEV__) {
+      // eslint-disable-next-line no-console
+      console.warn('[DevotionalMediaPlayer] expo-video require failed:', (err as Error)?.message);
+    }
+    return null;
+  }
+}
+
+export default function DevotionalMediaPlayer({ storageId, type, durationSec, accentColor }: Props) {
+  // Defensive — never call the query with an empty/bogus storageId, which
+  // would surface a Convex validator error and could blow up the feed.
+  const safeStorageId = typeof storageId === 'string' && storageId.length > 0 ? storageId : null;
+  const mediaUrl = useQuery(
+    (api as any).files?.getUrl,
+    safeStorageId ? { storageId: safeStorageId } : 'skip' as any,
+  );
+
+  if (!safeStorageId) {
     return (
-      <View style={styles.loadingWrap}>
-        <ActivityIndicator color={Colors.primary} />
+      <View style={styles.errorWrap}>
+        <Feather name="alert-circle" size={16} color={Colors.danger} />
+        <Text style={styles.errorText}>Missing media</Text>
       </View>
     );
   }
-
+  if (mediaUrl === undefined) {
+    return (
+      <View style={styles.loadingWrap}>
+        <ActivityIndicator color={accentColor || Colors.primary} />
+      </View>
+    );
+  }
   if (!mediaUrl) {
     return (
       <View style={styles.errorWrap}>
@@ -55,20 +103,32 @@ export default function DevotionalMediaPlayer({ storageId, type, durationSec }: 
       </View>
     );
   }
-
   if (type === 'video') {
     return <DevotionalVideo url={mediaUrl as string} />;
   }
-  return <DevotionalVoice url={mediaUrl as string} durationSec={durationSec} />;
+  return <DevotionalVoice url={mediaUrl as string} durationSec={durationSec} accentColor={accentColor} />;
 }
 
-function DevotionalVoice({ url, durationSec }: { url: string; durationSec?: number }) {
-  const playerRef = useRef<AudioPlayer | null>(null);
+function DevotionalVoice({
+  url,
+  durationSec,
+  accentColor,
+}: {
+  url: string;
+  durationSec?: number;
+  accentColor?: string;
+}) {
+  const playerRef = useRef<any>(null);
   const statusSubRef = useRef<{ remove: () => void } | null>(null);
   const [playing, setPlaying] = useState(false);
   const [positionSec, setPositionSec] = useState(0);
+  const [audioAvailable, setAudioAvailable] = useState(true);
 
   useEffect(() => {
+    // Check that expo-audio actually loaded; if not, render the disabled
+    // state instead of a broken play button that throws on tap.
+    const mod = loadExpoAudio();
+    setAudioAvailable(!!mod?.createAudioPlayer);
     return () => {
       try {
         statusSubRef.current?.remove?.();
@@ -80,7 +140,7 @@ function DevotionalVoice({ url, durationSec }: { url: string; durationSec?: numb
           p.pause();
         } catch {}
         try {
-          p.remove();
+          p.remove?.();
         } catch {}
       }
     };
@@ -88,9 +148,14 @@ function DevotionalVoice({ url, durationSec }: { url: string; durationSec?: numb
 
   const toggle = () => {
     try {
+      const mod = loadExpoAudio();
+      if (!mod?.createAudioPlayer) {
+        setAudioAvailable(false);
+        return;
+      }
       let p = playerRef.current;
       if (!p) {
-        const newP = createAudioPlayer({ uri: url });
+        const newP = mod.createAudioPlayer({ uri: url });
         const sub = newP.addListener('playbackStatusUpdate', (status: any) => {
           if (!status) return;
           if (typeof status.isLoaded === 'boolean' && !status.isLoaded) return;
@@ -118,20 +183,27 @@ function DevotionalVoice({ url, durationSec }: { url: string; durationSec?: numb
       } else {
         p.play();
       }
-    } catch {}
+    } catch (err) {
+      if (__DEV__) {
+        // eslint-disable-next-line no-console
+        console.warn('[DevotionalVoice] toggle failed:', (err as Error)?.message);
+      }
+    }
   };
 
   const total = durationSec || 0;
   const elapsedLabel = formatDuration(positionSec);
   const totalLabel = formatDuration(total);
+  const playBg = accentColor || Colors.primary;
 
   return (
     <View style={styles.voiceWrap} testID="devotional-voice-player">
       <TouchableOpacity
         onPress={toggle}
-        style={styles.playButton}
+        style={[styles.playButton, { backgroundColor: audioAvailable ? playBg : Colors.textMuted }]}
         hitSlop={8}
         testID="devotional-voice-toggle"
+        disabled={!audioAvailable}
       >
         <Feather name={playing ? 'pause' : 'play'} size={20} color={Colors.white} />
       </TouchableOpacity>
@@ -145,6 +217,7 @@ function DevotionalVoice({ url, durationSec }: { url: string; durationSec?: numb
         <Text style={styles.voiceTime}>
           {elapsedLabel}
           {total ? ` / ${totalLabel}` : ''}
+          {!audioAvailable ? '  • audio unavailable' : ''}
         </Text>
       </View>
     </View>
@@ -152,11 +225,16 @@ function DevotionalVoice({ url, durationSec }: { url: string; durationSec?: numb
 }
 
 function DevotionalVideo({ url }: { url: string }) {
-  const player = useVideoPlayer({ uri: url }, (p) => {
-    try {
-      p.loop = false;
-    } catch {}
-  });
+  // Resolve expo-video lazily. If the module isn't linked, render a
+  // friendly placeholder instead of crashing the whole feed.
+  const expoVideo = React.useMemo(() => loadExpoVideo(), []);
+  const player = expoVideo?.useVideoPlayer
+    ? expoVideo.useVideoPlayer({ uri: url }, (p: any) => {
+        try {
+          p.loop = false;
+        } catch {}
+      })
+    : null;
 
   useEffect(() => {
     return () => {
@@ -166,6 +244,16 @@ function DevotionalVideo({ url }: { url: string }) {
     };
   }, [player]);
 
+  if (!expoVideo?.VideoView || !player) {
+    return (
+      <View style={[styles.videoWrap, styles.videoPlaceholder]}>
+        <Feather name="alert-circle" size={20} color={Colors.white} />
+        <Text style={styles.videoPlaceholderText}>Video unavailable on this build</Text>
+      </View>
+    );
+  }
+
+  const VideoView = expoVideo.VideoView;
   return (
     <View style={styles.videoWrap}>
       <VideoView
@@ -223,4 +311,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
   videoView: { width: '100%', height: 220 },
+  videoPlaceholder: {
+    paddingVertical: 32,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    gap: 8,
+  },
+  videoPlaceholderText: {
+    color: Colors.white,
+    fontSize: FontSize.sm,
+    textAlign: 'center',
+  },
 });
