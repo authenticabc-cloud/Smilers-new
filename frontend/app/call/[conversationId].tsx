@@ -21,6 +21,7 @@ import { useMutation, useQuery } from 'convex/react';
 import { Camera } from 'expo-camera';
 import { setAudioModeAsync } from 'expo-audio';
 import { LinearGradient } from 'expo-linear-gradient';
+import { InCallAudio } from '../../src/lib/webrtc/inCallManager';
 import Animated, {
   Easing,
   cancelAnimation,
@@ -292,6 +293,10 @@ function CallScreenInner() {
   const callStartedAtRef = useRef<number | null>(null);
   const incomingCallSeenRef = useRef(false);
   const incomingCallAnsweredRef = useRef(false);
+  // Tracks whether InCallManager.start() has been invoked for this call. We
+  // only want to fire start() once per CallSession — subsequent audioOutput
+  // changes go through chooseAudioRoute() / setSpeakerOn() instead.
+  const inCallStartedRef = useRef(false);
   // sessionReadyTick — bumped each time sessionRef.current transitions from
   // null → a real CallSession instance. The signal-processing useEffect at
   // line ~864 used to bail out early if `sessionRef.current` was null,
@@ -324,6 +329,37 @@ function CallScreenInner() {
     } catch (errorValue: any) {
       console.warn('setAudioModeAsync failed:', errorValue?.message);
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // react-native-incall-manager handles the LOW-LEVEL Android audio
+    // routing that `setAudioModeAsync` can't reliably control:
+    //   • Switches Android into MODE_IN_COMMUNICATION (required for the
+    //     speaker/earpiece switch to actually work during a WebRTC call).
+    //   • Acquires a wake-lock so the screen stays on during the call.
+    //   • Routes audio to the right output (SPEAKER_PHONE / EARPIECE /
+    //     BLUETOOTH) via Android's AudioManager.
+    //
+    // We start() it ONCE per call (tracked via inCallStartedRef) and then
+    // change routes through the chooseAudioRoute path for every subsequent
+    // audioOutput change.
+    // ─────────────────────────────────────────────────────────────────────
+    if (!inCallStartedRef.current) {
+      InCallAudio.start(callType === 'video' ? 'video' : 'audio');
+      inCallStartedRef.current = true;
+      callDebug.push(
+        'AUDIO',
+        `InCallManager.start(${callType === 'video' ? 'video' : 'audio'})`,
+      );
+    }
+    if (audioOutput === 'speaker') {
+      InCallAudio.setSpeakerOn(true);
+    } else if (audioOutput === 'bluetooth') {
+      InCallAudio.setBluetoothOn();
+    } else {
+      // 'earpiece' (default for voice calls)
+      InCallAudio.setEarpieceOn();
+    }
+    callDebug.push('AUDIO', `route=${audioOutput} mode=${callType}`);
   }, [audioOutput, callType]);
 
   useEffect(() => {
@@ -979,6 +1015,11 @@ function CallScreenInner() {
     sessionRef.current?.close();
     sessionRef.current = null;
     initStartedRef.current = false;
+    if (inCallStartedRef.current) {
+      InCallAudio.stop();
+      inCallStartedRef.current = false;
+      callDebug.push('AUDIO', 'InCallManager.stop() (hangup)');
+    }
     if (id) {
       try {
         if (activeCall?.status === 'ringing') {
@@ -1001,6 +1042,11 @@ function CallScreenInner() {
     sessionRef.current?.close();
     sessionRef.current = null;
     initStartedRef.current = false;
+    if (inCallStartedRef.current) {
+      InCallAudio.stop();
+      inCallStartedRef.current = false;
+      callDebug.push('AUDIO', 'InCallManager.stop() (decline)');
+    }
     if (id) {
       try {
         await declineCall({ callId: id });
@@ -1040,6 +1086,11 @@ function CallScreenInner() {
       sessionRef.current.close();
       sessionRef.current = null;
       initStartedRef.current = false;
+      if (inCallStartedRef.current) {
+        InCallAudio.stop();
+        inCallStartedRef.current = false;
+        callDebug.push('AUDIO', 'InCallManager.stop() (remote-ended)');
+      }
       // Give the user 700ms to see the "Call ended" state before popping
       const timeoutId = setTimeout(() => router.back(), 700);
       return () => clearTimeout(timeoutId);
@@ -1079,6 +1130,10 @@ function CallScreenInner() {
       sessionRef.current?.close();
       sessionRef.current = null;
       initStartedRef.current = false;
+      if (inCallStartedRef.current) {
+        InCallAudio.stop();
+        inCallStartedRef.current = false;
+      }
     };
   }, []);
 
