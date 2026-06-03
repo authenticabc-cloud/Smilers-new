@@ -66,6 +66,11 @@ interface BubbleProps {
   e2eeStatus?: E2EEStatus | null;
   onLongPress: () => void;
   onToggleReaction: (emoji: string) => void;
+  // iter-99: multi-select forward mode. When `onPress` is supplied,
+  // taps on the bubble fire it instead of the default no-op.
+  // `multiSelected` drives the checkmark overlay visual.
+  onPress?: () => void;
+  multiSelected?: boolean;
 }
 
 export default function MediaBubble({
@@ -77,6 +82,8 @@ export default function MediaBubble({
   e2eeStatus,
   onLongPress,
   onToggleReaction,
+  onPress,
+  multiSelected,
 }: BubbleProps) {
   const time = msg._creationTime ? new Date(msg._creationTime) : new Date();
   const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -200,9 +207,26 @@ export default function MediaBubble({
         activeOpacity={0.85}
         onLongPress={onLongPress}
         delayLongPress={250}
-        style={[styles.bubble, isMine ? styles.bubbleMine : styles.bubbleOther, bubbleDynamicStyle, msg.type === 'image' ? styles.bubbleImage : null]}
+        onPress={onPress}
+        style={[
+          styles.bubble,
+          isMine ? styles.bubbleMine : styles.bubbleOther,
+          bubbleDynamicStyle,
+          msg.type === 'image' ? styles.bubbleImage : null,
+          // Multi-select visual feedback (iter-99): green ring + light
+          // tint when this bubble is in the selection set.
+          multiSelected ? styles.bubbleMultiSelected : null,
+        ]}
         testID={`message-bubble-${msg._id}`}
       >
+        {/* Multi-select checkmark overlay — only visible when this
+            bubble is one of the user's selections. Positioned top-right
+            so it doesn't obscure the text body. */}
+        {multiSelected ? (
+          <View style={styles.multiSelectCheckOverlay} pointerEvents="none">
+            <Feather name="check-circle" size={18} color="#FFFFFF" />
+          </View>
+        ) : null}
         <View style={styles.encryptedRow}>
           <Ionicons name="shield-checkmark-outline" size={12} color={isOutgoing ? '#F6FFF9' : Colors.primary} />
           <Text style={[styles.encryptedText, { color: isOutgoing ? '#F6FFF9' : Colors.primary }]}>Encrypted</Text>
@@ -1321,6 +1345,28 @@ const styles = StyleSheet.create({
   },
   richTextBold: { fontWeight: FontWeight.bold },
   deletedBubble: { opacity: 0.55 },
+  // bubbleMultiSelected — visual feedback when this bubble is in the
+  // multi-select forwarding set (iter-99). Light green tint + a
+  // primary-colour border ring. Works for both incoming + outgoing bubbles.
+  bubbleMultiSelected: {
+    borderWidth: 2,
+    borderColor: Colors.primary,
+    backgroundColor: 'rgba(74, 222, 128, 0.18)',
+  },
+  // multiSelectCheckOverlay — checkmark badge in the top-right
+  // corner of the bubble while selected.
+  multiSelectCheckOverlay: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2,
+  },
   // deletedTimeText — italic + slightly muted to match the web app's
   // "This message was deleted | 6:45 PM" pattern (iter-98 screenshot).
   deletedTimeText: { fontStyle: 'italic', opacity: 0.85 },

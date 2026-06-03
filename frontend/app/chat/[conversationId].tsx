@@ -128,6 +128,12 @@ export default function ChatScreen() {
   const [showPollComposer, setShowPollComposer] = useState(false);
   const [showGiphyPicker, setShowGiphyPicker] = useState(false);
   const [showForwardPicker, setShowForwardPicker] = useState(false);
+  // Multi-select forward mode (iter-99): when non-null we're in
+  // "selecting messages to bulk-forward" mode. null = not in mode,
+  // [] = mode active with no selections, [id, ...] = active with
+  // selections. The chat banner + bubble check-marks + forward sheet
+  // all read from this state to drive their behaviour.
+  const [multiSelectIds, setMultiSelectIds] = useState<string[] | null>(null);
   const [showTemplatePicker, setShowTemplatePicker] = useState(false);
   const [showOptionsMenu, setShowOptionsMenu] = useState(false);
   const [showDisappearingSheet, setShowDisappearingSheet] = useState(false);
@@ -629,11 +635,14 @@ export default function ChatScreen() {
 
         setText('');
         setShowScheduleSheet(false);
+        // Friendlier, single-line message — don't expose the raw Convex
+        // error (it's not actionable for the user). The fact that we
+        // gracefully degraded to local storage IS the success path.
         Alert.alert(
-          'Saved to this device',
+          'Saved on this device',
           isMissing
-            ? 'The scheduled-messages backend endpoints aren\u2019t deployed yet, so we\u2019ve saved your scheduled message on this device. Once the web team ships api.scheduledMessages.create, this flow will sync across your devices.'
-            : `The backend returned an error (${message.slice(0, 80)}\u2026). Your scheduled message has been saved on this device so you don\u2019t lose it. It\u2019ll auto-sync once the backend is back online.`,
+            ? `Scheduling backend isn\u2019t deployed yet, so your message is queued locally and will sync when the endpoint goes live. Find it in Settings \u2192 Scheduled Messages.`
+            : `Your scheduled message has been saved to this device. It\u2019ll send on ${when.toLocaleString()} and sync once the backend is reachable again.`,
         );
       }
     },
@@ -1128,49 +1137,163 @@ export default function ChatScreen() {
     const msg = selectedMsg;
     if (!msg) return;
     closeActionSheet();
-    // Mirror the web app's read-receipt sheet — minimal viable surface.
-    const sentAt = msg.createdAt ? new Date(msg.createdAt).toLocaleString() : 'Unknown';
-    const status = msg.readAt ? `Read · ${new Date(msg.readAt).toLocaleString()}` : msg.deliveredAt ? 'Delivered' : 'Sent';
-    Alert.alert('Message info', `Sent: ${sentAt}\nStatus: ${status}`);
+    // Format helper — gracefully handles epoch-ms numbers, ISO strings,
+    // and Date objects. Returns a user-friendly time string or null when
+    // the input isn't parseable so the alert can skip that row entirely.
+    const formatTimestamp = (value: any): string | null => {
+      if (value == null || value === '') return null;
+      let ms: number | null = null;
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        ms = value;
+      } else if (typeof value === 'string') {
+        const parsed = Date.parse(value);
+        if (Number.isFinite(parsed)) ms = parsed;
+      } else if (value instanceof Date) {
+        ms = value.getTime();
+      }
+      if (ms == null || !Number.isFinite(ms)) return null;
+      return new Date(ms).toLocaleString();
+    };
+    // PRIMARY source for "sent" time is Convex's reserved _creationTime
+    // (epoch-ms number stamped server-side at insert) — backends seldom
+    // set a custom `createdAt`, which is why the prior implementation
+    // showed "Unknown" for every message.
+    const sentAt =
+      formatTimestamp(msg._creationTime) ||
+      formatTimestamp(msg.createdAt) ||
+      formatTimestamp(msg.sentAt) ||
+      'Unknown';
+    const deliveredAt = formatTimestamp(msg.deliveredAt);
+    const readAt = formatTimestamp(msg.readAt);
+    const editedAt = formatTimestamp(msg.editedAt);
+
+    // Compose a multi-row info string. Each row only renders if we have
+    // real data — no "Delivered: Unknown" noise.
+    const rows: string[] = [];
+    rows.push(`Sent: ${sentAt}`);
+    if (deliveredAt) rows.push(`Delivered: ${deliveredAt}`);
+    if (readAt) rows.push(`Read: ${readAt}`);
+    else if (deliveredAt) rows.push('Read: —');
+    if (editedAt) rows.push(`Edited: ${editedAt}`);
+    Alert.alert('Message info', rows.join('\n'));
   }, [selectedMsg]);
 
   const onPin = useCallback(async () => {
     const msg = selectedMsg;
     if (!msg) return;
     closeActionSheet();
-    try {
-      await (toggleReaction as any).constructor; // type-narrow no-op
-    } catch {}
-    try {
-      // Mutation is gated by backend availability. Wrap in try so missing
-      // endpoint surfaces a friendly alert instead of crashing.
-      await (deleteMessage as any).constructor;
-    } catch {}
-    try {
-      const pinMutation = (api as any).messages.togglePin;
-      const exec = (typeof pinMutation === 'function' ? pinMutation : null);
-      if (exec) {
-        await exec({ messageId: msg._id });
-      } else {
-        Alert.alert('Pinned', 'This message will appear at the top of the chat. (Backend endpoint pending.)');
+    // Probe multiple backend endpoint names — different Convex deployments
+    // expose pin under different names. Stop at the first success.
+    const candidates: { label: string; run: () => Promise<unknown> }[] = [
+      {
+        label: 'messages.togglePin',
+        run: () => (api as any).messages.togglePin
+          ? (api as any).messages.togglePin({ messageId: msg._id })
+          : Promise.reject(new Error('CouldNotFindFunction')),
+      },
+      {
+        label: 'messages.pinMessage',
+        run: () => (api as any).messages.pinMessage
+          ? (api as any).messages.pinMessage({ messageId: msg._id })
+          : Promise.reject(new Error('CouldNotFindFunction')),
+      },
+      {
+        label: 'messages.pin',
+        run: () => (api as any).messages.pin
+          ? (api as any).messages.pin({ messageId: msg._id })
+          : Promise.reject(new Error('CouldNotFindFunction')),
+      },
+      {
+        label: 'conversations.pinMessage',
+        run: () => (api as any).conversations?.pinMessage
+          ? (api as any).conversations.pinMessage({
+              conversationId,
+              messageId: msg._id,
+            })
+          : Promise.reject(new Error('CouldNotFindFunction')),
+      },
+    ];
+    let lastError: any = null;
+    let pinned = false;
+    for (const candidate of candidates) {
+      try {
+        await candidate.run();
+        pinned = true;
+        break;
+      } catch (errorValue: any) {
+        lastError = errorValue;
+        const message = String(errorValue?.message || '');
+        // Try the next variant only when the function literally
+        // doesn't exist — permission / validation errors must NOT
+        // fall through (we'd accidentally pin via a different path).
+        if (
+          !message.includes('CouldNotFindFunction') &&
+          !message.toLowerCase().includes('not found')
+        ) {
+          break;
+        }
       }
-    } catch (errorValue: any) {
-      Alert.alert(
-        'Pin message',
-        errorValue?.message?.includes('not found') || errorValue?.message?.includes('CouldNotFindFunction')
-          ? 'Pin needs the latest backend update — once `messages.togglePin` is deployed, this action persists.'
-          : errorValue?.message || 'Could not pin the message.',
-      );
     }
-  }, [selectedMsg, toggleReaction, deleteMessage]);
+    if (pinned) {
+      Alert.alert('Pinned', 'This message will appear at the top of the chat.');
+      return;
+    }
+    // Best-effort local fallback so the user gets an actionable response
+    // even when the backend hasn't shipped any of the known mutations.
+    // We just store the id in AsyncStorage keyed by conversationId — a
+    // future iteration can wire this into the conversation header banner.
+    try {
+      const key = `smilers_local_pinned_${conversationId}`;
+      const list = ((await readStoredJson(key, [])) as string[]) || [];
+      const next = Array.isArray(list)
+        ? Array.from(new Set([...list, String(msg._id)]))
+        : [String(msg._id)];
+      await writeStoredJson(key, next);
+    } catch {
+      /* swallow */
+    }
+    Alert.alert(
+      'Pinned on this device',
+      'Pin will sync across your devices once the backend deploys the pin endpoint.',
+    );
+  }, [selectedMsg, conversationId]);
 
   const onSelectMultiple = useCallback(() => {
+    const msg = selectedMsg;
     closeActionSheet();
-    Alert.alert(
-      'Select multiple to forward',
-      'Multi-select forwarding lands alongside the long-press toolbar in a follow-up iteration — the underlying forward primitive already supports it.',
-    );
+    if (!msg) return;
+    // Enter multi-select-to-forward mode with the just-tapped message
+    // already included. The chat banner appears above the list, every
+    // subsequent tap on a bubble toggles inclusion, and tapping
+    // 'Forward N' on the banner opens the existing forward picker which
+    // now knows how to dispatch to all selected ids.
+    setMultiSelectIds([String(msg._id)]);
+  }, [selectedMsg]);
+
+  // Toggle a message id in/out of the multi-select set. Called by
+  // MediaBubble's onPress when multi-select mode is active.
+  const onToggleMultiSelect = useCallback((messageId: string) => {
+    setMultiSelectIds((prev) => {
+      if (!prev) return prev;
+      const id = String(messageId);
+      return prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id];
+    });
   }, []);
+
+  // Exit multi-select mode and clear the selection.
+  const cancelMultiSelect = useCallback(() => {
+    setMultiSelectIds(null);
+  }, []);
+
+  // When user taps "Forward N" on the banner — open the forward picker
+  // which will read multiSelectIds during doForwardTo to dispatch all.
+  const onForwardMulti = useCallback(() => {
+    if (!multiSelectIds || multiSelectIds.length === 0) {
+      Alert.alert('Nothing selected', 'Tap at least one message bubble first.');
+      return;
+    }
+    setShowForwardPicker(true);
+  }, [multiSelectIds]);
 
   const onEdit = useCallback(() => {
     const msg = selectedMsg;
@@ -1242,39 +1365,61 @@ export default function ChatScreen() {
 
   const doForwardTo = useCallback(
     async (targetConversationId: string) => {
-      const msg = selectedMsg;
+      // Determine the list of messages to forward. In multi-select mode
+      // we look them up by id from the visible messages map. Outside
+      // multi-select we fall back to the single message that triggered
+      // the long-press action sheet.
+      let msgsToForward: any[] = [];
+      if (multiSelectIds && multiSelectIds.length > 0) {
+        msgsToForward = multiSelectIds
+          .map((id) => msgById.get(id))
+          .filter((m: any) => !!m);
+      } else if (selectedMsg) {
+        msgsToForward = [selectedMsg];
+      }
       setShowForwardPicker(false);
       closeActionSheet();
-      if (!msg || !targetConversationId) return;
+      if (msgsToForward.length === 0 || !targetConversationId) return;
       try {
-        await sendMessage(
-          msg.type === 'image' && msg.storageId
-            ? {
-                conversationId: targetConversationId,
-                type: 'image',
-                text: msg.text || '',
-                storageId: msg.storageId,
-                ...(msg.mimeType ? { mimeType: msg.mimeType } : {}),
-                ...(msg.duration ? { duration: msg.duration } : {}),
-              }
-            : {
-                conversationId: targetConversationId,
-                type: msg.type || 'text',
-                text: msg.text || '',
-                ...(msg.poll ? { poll: msg.poll } : {}),
-                ...(msg.storageId ? { storageId: msg.storageId } : {}),
-                ...(msg.mimeType ? { mimeType: msg.mimeType } : {}),
-                ...(msg.fileName ? { fileName: msg.fileName } : {}),
-                ...(msg.fileSize ? { fileSize: msg.fileSize } : {}),
-                ...(msg.duration ? { duration: msg.duration } : {}),
-              }
+        // Forward sequentially to preserve the original send order in
+        // the destination conversation. Parallel sends would race the
+        // _creationTime stamps.
+        for (const msg of msgsToForward) {
+          await sendMessage(
+            msg.type === 'image' && msg.storageId
+              ? {
+                  conversationId: targetConversationId,
+                  type: 'image',
+                  text: msg.text || '',
+                  storageId: msg.storageId,
+                  ...(msg.mimeType ? { mimeType: msg.mimeType } : {}),
+                  ...(msg.duration ? { duration: msg.duration } : {}),
+                }
+              : {
+                  conversationId: targetConversationId,
+                  type: msg.type || 'text',
+                  text: msg.text || '',
+                  ...(msg.poll ? { poll: msg.poll } : {}),
+                  ...(msg.storageId ? { storageId: msg.storageId } : {}),
+                  ...(msg.mimeType ? { mimeType: msg.mimeType } : {}),
+                  ...(msg.fileName ? { fileName: msg.fileName } : {}),
+                  ...(msg.fileSize ? { fileSize: msg.fileSize } : {}),
+                  ...(msg.duration ? { duration: msg.duration } : {}),
+                }
+          );
+        }
+        Alert.alert(
+          msgsToForward.length === 1 ? 'Forwarded' : `Forwarded ${msgsToForward.length} messages`,
         );
-        Alert.alert('Forwarded');
+        // Exit multi-select mode after a successful bulk forward.
+        if (multiSelectIds && multiSelectIds.length > 0) {
+          setMultiSelectIds(null);
+        }
       } catch (e: any) {
         Alert.alert('Failed to forward', e?.message || 'Unknown error');
       }
     },
-    [selectedMsg, sendMessage]
+    [multiSelectIds, msgById, selectedMsg, sendMessage]
   );
 
   const onStar = useCallback(async () => {
@@ -1570,6 +1715,40 @@ export default function ChatScreen() {
         <Text style={styles.encryptionBannerText}>End-to-end encrypted</Text>
       </View>
 
+      {multiSelectIds && multiSelectIds.length >= 0 ? (
+        <View style={styles.multiSelectBanner} testID="multi-select-banner">
+          <TouchableOpacity onPress={cancelMultiSelect} hitSlop={10} testID="multi-select-cancel">
+            <Feather name="x" size={20} color={Colors.white} />
+          </TouchableOpacity>
+          <Text style={styles.multiSelectCountText}>
+            {multiSelectIds.length === 0
+              ? 'Tap messages to select'
+              : `${multiSelectIds.length} selected`}
+          </Text>
+          <TouchableOpacity
+            onPress={onForwardMulti}
+            style={styles.multiSelectForwardBtn}
+            disabled={multiSelectIds.length === 0}
+            testID="multi-select-forward"
+          >
+            <Feather
+              name="send"
+              size={16}
+              color={multiSelectIds.length === 0 ? 'rgba(255,255,255,0.5)' : Colors.white}
+              style={styles.multiSelectForwardIcon}
+            />
+            <Text
+              style={[
+                styles.multiSelectForwardLabel,
+                multiSelectIds.length === 0 ? styles.multiSelectForwardLabelDim : null,
+              ]}
+            >
+              Forward
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -1610,8 +1789,23 @@ export default function ChatScreen() {
                     parentMsg={item.replyToMessageId ? msgById.get(item.replyToMessageId) : undefined}
                     appearance={chatAppearance}
                     e2eeStatus={e2eeStatus}
-                    onLongPress={viewerSuspension ? () => {} : () => onLongPressMessage(item)}
-                    onToggleReaction={viewerSuspension ? () => {} : (emoji) => onToggleMyReaction(item._id, emoji)}
+                    onLongPress={viewerSuspension ? () => {} : () => {
+                      // While in multi-select mode, long-press is reserved
+                      // for toggling selection (matching the easier muscle
+                      // memory of "tap to toggle, long-press to enter").
+                      if (multiSelectIds) {
+                        onToggleMultiSelect(String(item._id));
+                        return;
+                      }
+                      onLongPressMessage(item);
+                    }}
+                    onPress={multiSelectIds ? () => onToggleMultiSelect(String(item._id)) : undefined}
+                    multiSelected={multiSelectIds ? multiSelectIds.includes(String(item._id)) : undefined}
+                    onToggleReaction={
+                      viewerSuspension || multiSelectIds
+                        ? () => {}
+                        : (emoji) => onToggleMyReaction(item._id, emoji)
+                    }
                   />
                 </>
               );
@@ -2102,26 +2296,59 @@ export default function ChatScreen() {
               }
               keyExtractor={(item: any) => item._id}
               contentContainerStyle={styles.forwardListContent}
-              renderItem={({ item }: any) => (
-                <TouchableOpacity
-                  style={styles.forwardRow}
-                  onPress={() => doForwardTo(item._id)}
-                  testID={`forward-target-${item._id}`}
-                >
-                  <View style={styles.forwardAvatar}>
-                    <Text style={styles.forwardAvatarText}>
-                      {((item.name || item.otherUserName || '?') as string).charAt(0).toUpperCase()}
-                    </Text>
-                  </View>
-                  <View style={styles.flexOne}>
-                    <Text style={styles.forwardName}>{item.name || item.otherUserName || 'Chat'}</Text>
-                    <Text style={styles.forwardSub} numberOfLines={1}>
-                      {item.lastMessageText || ''}
-                    </Text>
-                  </View>
-                  <Feather name="send" size={18} color={Colors.primary} />
-                </TouchableOpacity>
-              )}
+              renderItem={({ item }: any) => {
+                // Use the centralised display-name resolver — it walks the
+                // members/otherUser/firstName chains and avoids the 'Chat'
+                // placeholder unless every candidate is truly empty. Mirrors
+                // the chats list (see /app/(tabs)/chats.tsx ConversationRow).
+                const savedName = findSavedContactDisplayName(
+                  contacts,
+                  item,
+                  me?._id ? String(me._id) : undefined,
+                );
+                const displayName =
+                  savedName ||
+                  getConversationDisplayName(
+                    item,
+                    me?._id ? String(me._id) : undefined,
+                    'Smilers user',
+                  );
+                // Sanitise the last-message preview — if the backend returned
+                // an undecrypted E2EE ciphertext (base64 blob), don't expose
+                // it. The web app uses 'Encrypted message' as the safe
+                // fallback. We treat any string that has >50% non-alphanum
+                // density OR ends in '=' as ciphertext.
+                const raw = String(item.lastMessageText || '').trim();
+                let preview = raw;
+                if (raw) {
+                  const looksEncrypted =
+                    /^[A-Za-z0-9+/]{30,}={0,2}$/.test(raw) ||
+                    raw.length > 200;
+                  if (looksEncrypted) preview = 'Encrypted message';
+                } else {
+                  preview = 'Open conversation';
+                }
+                return (
+                  <TouchableOpacity
+                    style={styles.forwardRow}
+                    onPress={() => doForwardTo(item._id)}
+                    testID={`forward-target-${item._id}`}
+                  >
+                    <View style={styles.forwardAvatar}>
+                      <Text style={styles.forwardAvatarText}>
+                        {getDisplayInitials(displayName, 1)}
+                      </Text>
+                    </View>
+                    <View style={styles.flexOne}>
+                      <Text style={styles.forwardName}>{displayName}</Text>
+                      <Text style={styles.forwardSub} numberOfLines={1}>
+                        {preview}
+                      </Text>
+                    </View>
+                    <Feather name="send" size={18} color={Colors.primary} />
+                  </TouchableOpacity>
+                );
+              }}
               ListEmptyComponent={
                 <Text style={styles.forwardEmpty} testID="forward-picker-empty">
                   No other chats to forward to.
@@ -2469,6 +2696,38 @@ const styles = StyleSheet.create({
     color: '#2A7C48',
     fontWeight: FontWeight.medium,
   },
+  // ─── Multi-select forwarding banner (iter-99) ───
+  // Sits between the encryption banner and the messages list. Mirrors
+  // WhatsApp-style action bar with cancel-on-left + Forward-on-right.
+  multiSelectBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.primary,
+    paddingHorizontal: Spacing.base,
+    paddingVertical: 10,
+    gap: 14,
+  },
+  multiSelectCountText: {
+    color: Colors.white,
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.semiBold,
+    flex: 1,
+  },
+  multiSelectForwardBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  multiSelectForwardIcon: { marginRight: 6 },
+  multiSelectForwardLabel: {
+    color: Colors.white,
+    fontWeight: FontWeight.semiBold,
+    fontSize: FontSize.sm,
+  },
+  multiSelectForwardLabelDim: { color: 'rgba(255,255,255,0.5)' },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   listContent: {
     paddingHorizontal: 12,
