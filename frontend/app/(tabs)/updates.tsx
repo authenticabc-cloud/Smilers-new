@@ -105,26 +105,6 @@ export default function StatusScreen() {
             {others.length > 0 && <Text style={styles.section}>RECENT UPDATES</Text>}
           </>
         }
-        ListFooterComponent={
-          // Devotional broadcasts entry — sits at the bottom of the
-          // updates feed as a discoverable card. Tapping opens the
-          // dedicated /devotionals stack (feed + compose + preferences).
-          <TouchableOpacity
-            style={styles.devotionalCard}
-            onPress={() => router.push('/devotionals' as any)}
-            testID="devotional-broadcast-entry"
-            activeOpacity={0.8}
-          >
-            <View style={styles.devotionalIcon}>
-              <MaterialCommunityIcons name="hands-pray" size={22} color={Colors.white} />
-            </View>
-            <View style={styles.rowMid}>
-              <Text style={styles.rowName}>Devotional broadcasts</Text>
-              <Text style={styles.rowSub}>Share & receive devotions in text, voice, or video</Text>
-            </View>
-            <Feather name="chevron-right" size={20} color={Colors.textMuted} />
-          </TouchableOpacity>
-        }
         renderItem={({ item }) => (
           <TouchableOpacity
             style={styles.row}

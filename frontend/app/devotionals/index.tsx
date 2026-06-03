@@ -29,6 +29,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useMutation, useQuery } from 'convex/react';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 
 import { api } from '../../src/convexApi';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../src/theme';
@@ -36,6 +37,13 @@ import { chooseDisplayText, readNoTranslateLangs } from '../../src/lib/devotiona
 import { getLanguageByCode } from '../../src/lib/languages';
 import { getDisplayInitials } from '../../src/lib/displayName';
 import DevotionalMediaPlayer from '../../src/components/DevotionalMediaPlayer';
+
+// Yellow accent matching the web app's devotional CTA + play button colour
+// (iter-102). Used for FAB, play button, active filter highlight, and the
+// "Save Preferences" button. Kept local because it's specific to this
+// feature\u2019s brand palette \u2014 doesn't pollute the global theme.
+const DEVOTION_ACCENT = '#FACC15';
+const DEVOTION_ACCENT_DARK = '#EAB308';
 
 type DevotionalItem = {
   _id: string;
@@ -160,14 +168,14 @@ export default function DevotionalsFeedScreen() {
         noTranslateLangs,
       });
       const authorInitials = getDisplayInitials(item.authorName || 'User', 1);
-      const sentAt = item._creationTime
-        ? new Date(item._creationTime).toLocaleString([], {
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-          })
-        : '';
+      // Relative time ("3 hours ago") to match the web app's caption.
+      const sentAt = item._creationTime ? formatRelativeTime(item._creationTime) : '';
+      const typeIconName: any =
+        item.type === 'voice'
+          ? 'microphone'
+          : item.type === 'video'
+            ? 'video'
+            : 'text-box-outline';
 
       return (
         <View style={styles.card} testID={`devotional-card-${item._id}`}>
@@ -179,30 +187,24 @@ export default function DevotionalsFeedScreen() {
               <Text style={styles.authorName} numberOfLines={1}>
                 {item.authorName || 'User'}
               </Text>
-              <Text style={styles.sentAt}>{sentAt}</Text>
-            </View>
-            <View style={styles.typeBadge}>
-              <MaterialCommunityIcons
-                name={
-                  item.type === 'voice'
-                    ? 'microphone-outline'
-                    : item.type === 'video'
-                      ? 'video-outline'
-                      : 'text-box-outline'
-                }
-                size={14}
-                color={Colors.primary}
-              />
-              <Text style={styles.typeBadgeText}>{item.type}</Text>
+              <View style={styles.metaRow}>
+                <MaterialCommunityIcons
+                  name={typeIconName}
+                  size={13}
+                  color={Colors.textMuted}
+                  style={styles.metaIcon}
+                />
+                <Text style={styles.sentAt}>{sentAt}</Text>
+              </View>
             </View>
             {isMine ? (
               <TouchableOpacity
                 onPress={() => onDelete(item)}
                 hitSlop={12}
-                style={styles.deleteBtn}
-                testID={`devotional-delete-${item._id}`}
+                style={styles.menuBtn}
+                testID={`devotional-menu-${item._id}`}
               >
-                <Feather name="trash-2" size={16} color={Colors.danger} />
+                <Feather name="more-vertical" size={18} color={Colors.textMuted} />
               </TouchableOpacity>
             ) : null}
           </View>
@@ -216,6 +218,7 @@ export default function DevotionalsFeedScreen() {
               type={item.type}
               durationSec={item.duration}
               mimeType={item.mimeType}
+              accentColor={DEVOTION_ACCENT}
             />
           ) : null}
 
@@ -237,23 +240,35 @@ export default function DevotionalsFeedScreen() {
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
-      <View style={styles.header}>
+      {/* Dark brown gradient header — matches the web app design exactly
+          (iter-102 user screenshot). Includes back arrow + title +
+          subtitle on left, and the filter funnel icon on the right. */}
+      <LinearGradient
+        colors={[Colors.devotionHeaderTop, Colors.devotionHeaderBottom]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.header}
+      >
         <TouchableOpacity
           onPress={() => router.back()}
           hitSlop={12}
           testID="devotionals-back"
         >
-          <Feather name="arrow-left" size={22} color={Colors.textPrimary} />
+          <Feather name="arrow-left" size={22} color="#FFFFFF" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Devotionals</Text>
+        <View style={styles.headerTextWrap}>
+          <Text style={styles.headerTitle}>Devotionals</Text>
+          <Text style={styles.headerSubtitle}>Share and receive daily inspiration</Text>
+        </View>
         <TouchableOpacity
           onPress={onPreferences}
           hitSlop={12}
           testID="devotionals-preferences"
+          style={styles.headerActionBtn}
         >
-          <Feather name="sliders" size={20} color={Colors.textPrimary} />
+          <Feather name="filter" size={18} color="#FFFFFF" />
         </TouchableOpacity>
-      </View>
+      </LinearGradient>
 
       <FlatList
         data={items}
@@ -263,7 +278,7 @@ export default function DevotionalsFeedScreen() {
         ListEmptyComponent={
           isLoading ? (
             <View style={styles.emptyWrap} testID="devotionals-loading">
-              <ActivityIndicator color={Colors.primary} />
+              <ActivityIndicator color={DEVOTION_ACCENT} />
             </View>
           ) : (
             <View style={styles.emptyWrap} testID="devotionals-empty">
@@ -277,30 +292,83 @@ export default function DevotionalsFeedScreen() {
         }
       />
 
+      {/* Yellow FAB to match web design (replaces the green primary FAB
+          we shipped in iter-100). */}
       <TouchableOpacity
         onPress={onCompose}
         style={styles.fab}
         testID="devotionals-compose-fab"
       >
-        <Feather name="plus" size={26} color={Colors.white} />
+        <Feather name="plus" size={26} color="#1F1208" />
       </TouchableOpacity>
     </SafeAreaView>
   );
 }
 
+/**
+ * Format a timestamp into a "X minutes/hours/days ago" string that
+ * matches the web app's caption ("about 3 hours ago"). Falls back to
+ * a localised date/time when older than 7 days so it doesn't say
+ * "about 47 days ago".
+ */
+function formatRelativeTime(ms: number): string {
+  const diff = Date.now() - ms;
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diff < minute) return 'just now';
+  if (diff < hour) {
+    const m = Math.round(diff / minute);
+    return `${m} ${m === 1 ? 'minute' : 'minutes'} ago`;
+  }
+  if (diff < day) {
+    const h = Math.round(diff / hour);
+    return `about ${h} ${h === 1 ? 'hour' : 'hours'} ago`;
+  }
+  if (diff < 7 * day) {
+    const d = Math.round(diff / day);
+    return `${d} ${d === 1 ? 'day' : 'days'} ago`;
+  }
+  return new Date(ms).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: Colors.background },
+  // Dark brown gradient header — matches web app exactly. White text +
+  // white icons. The headerTextWrap consumes the middle space so the
+  // filter button sits flush against the right edge.
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: Spacing.base,
-    paddingVertical: 12,
-    backgroundColor: Colors.white,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    paddingTop: 14,
+    paddingBottom: 18,
+    gap: 14,
   },
-  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  headerTextWrap: { flex: 1 },
+  headerTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: '#FFFFFF',
+  },
+  headerSubtitle: {
+    marginTop: 2,
+    fontSize: FontSize.xs,
+    color: 'rgba(255, 255, 255, 0.78)',
+  },
+  headerActionBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   listContent: { padding: Spacing.base, paddingBottom: 80 },
   card: {
     backgroundColor: Colors.white,
@@ -311,28 +379,26 @@ const styles = StyleSheet.create({
   },
   cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
   avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: Colors.primary,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: DEVOTION_ACCENT,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarText: { color: Colors.white, fontWeight: FontWeight.bold },
-  authorName: { fontSize: FontSize.base, fontWeight: FontWeight.semiBold, color: Colors.textPrimary },
-  sentAt: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2 },
-  typeBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 12,
-    backgroundColor: '#E6F8EC',
+  avatarText: { color: '#1F1208', fontWeight: FontWeight.bold, fontSize: FontSize.base },
+  authorName: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
+  metaIcon: { marginRight: 2 },
+  sentAt: { fontSize: FontSize.xs, color: Colors.textMuted },
+  menuBtn: { padding: 4, marginLeft: 4 },
+  cardTitle: {
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+    marginTop: 4,
+    marginBottom: 6,
   },
-  typeBadgeText: { fontSize: FontSize.xs, color: Colors.primary, textTransform: 'capitalize' },
-  deleteBtn: { marginLeft: 4, padding: 4 },
-  cardTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semiBold, color: Colors.textPrimary, marginBottom: 6 },
   cardBody: { fontSize: FontSize.base, color: Colors.textPrimary, lineHeight: 22, marginTop: 8 },
   translatedPill: {
     flexDirection: 'row',
@@ -361,7 +427,7 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: Colors.primary,
+    backgroundColor: DEVOTION_ACCENT,
     alignItems: 'center',
     justifyContent: 'center',
     ...Shadow.lg,

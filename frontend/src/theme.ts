@@ -16,6 +16,12 @@ export const Colors = {
   aiBadgeDark: '#7C3AED',
   chatOnce: '#F97316',
   chatOnceDark: '#EA580C',
+  // Devotional broadcast — teal/sage to match web app design (iter-102).
+  devotion: '#14B8A6',
+  devotionDark: '#0D9488',
+  // Devotion screen brown gradient header (iter-102 web parity).
+  devotionHeaderTop: '#3D2A0F',
+  devotionHeaderBottom: '#2A1B07',
   border: '#E5E7EB',
   borderLight: '#F3F4F6',
   iconBg: '#FEF3C7',

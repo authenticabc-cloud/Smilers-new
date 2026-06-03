@@ -115,6 +115,20 @@ export default function ChatsScreen() {
               onPress={() => router.push('/ai-chat' as any)}
               testID="chat-ai"
             />
+            {/* Devotion entry pinned at top of chats (iter-102 web parity).
+                Sits between Smilers AI and Chat Once. Teal/sage colour
+                matches the web app's design language. */}
+            <PinnedRow
+              iconBg={Colors.devotion}
+              iconBgDark={Colors.devotionDark}
+              icon={<MaterialCommunityIcons name="book-open-page-variant-outline" size={22} color={Colors.white} />}
+              title="Devotion"
+              subtitle="Share and receive devotional broadcasts"
+              badge="Broadcast"
+              badgeColor={Colors.devotion}
+              onPress={() => router.push('/devotionals' as any)}
+              testID="chat-devotion"
+            />
             <PinnedRow
               iconBg={Colors.chatOnce}
               iconBgDark={Colors.chatOnceDark}
