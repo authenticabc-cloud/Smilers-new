@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery_experimental } from 'convex/react';
+import { errorToMessage, safeString } from '../lib/safeString';
 
 /**
  * useReactiveSafeConvexQuery — like `useQuery` from convex/react but:
@@ -48,20 +49,30 @@ export function useReactiveSafeConvexQuery<T>(
 
   // Log "CouldNotFindFunction…" / not-found errors once per session so we
   // don't spam the console on every re-render.
+  //
+  // iter-105 Hermes-safety: use `safeString` / `errorToMessage` from
+  // src/lib/safeString.ts INSTEAD of bare String(...). Hermes throws
+  // `TypeError: Cannot determine default value of object` when String()
+  // is called on a Convex error object or an anyApi proxy — that's the
+  // crash that prevented the Devotionals feed from loading on the user's
+  // device. The safe helpers prefer typed `.message` / `.udfPath` string
+  // fields and fall back to JSON.stringify / a constant, never throwing.
   const [loggedError, setLoggedError] = useState<string | null>(null);
   useEffect(() => {
     if (result.status === 'error') {
-      const message = String(result.error?.message || result.error || '');
+      const message = errorToMessage(result.error);
       if (message && message !== loggedError) {
-        const path = String((queryRef as any)?.udfPath || 'unknown');
+        const path = safeString((queryRef as any)?.udfPath, 'unknown') || 'unknown';
         const isMissing =
           message.includes('CouldNotFindFunction') ||
           message.toLowerCase().includes('not found') ||
           message.toLowerCase().includes('no function');
         if (isMissing) {
           // Silent — the backend just hasn't shipped this endpoint yet.
+          // eslint-disable-next-line no-console
           console.info(`[useReactiveSafeConvexQuery] ${path} not deployed yet`);
         } else {
+          // eslint-disable-next-line no-console
           console.warn(`[useReactiveSafeConvexQuery] ${path} failed:`, message);
         }
         setLoggedError(message);

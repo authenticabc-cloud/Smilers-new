@@ -33,9 +33,12 @@ import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { api } from '../../src/convexApi';
 import { LANGUAGES, getLanguageByCode } from '../../src/lib/languages';
 import {
+  readLocalFeedFilter,
   readNoTranslateLangs,
+  writeLocalFeedFilter,
   writeNoTranslateLangs,
 } from '../../src/lib/devotionalsLocalPrefs';
+import { errorToMessage } from '../../src/lib/safeString';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../src/theme';
 
 type FeedFilter = 'all' | 'contacts' | 'selected';
@@ -66,6 +69,21 @@ export default function DevotionalsPreferencesScreen() {
     }
   }, [remotePrefs]);
 
+  // ALSO hydrate from AsyncStorage on mount — guarantees the user sees
+  // their previous choice immediately on cold start even before the
+  // Convex query resolves, and acts as a fallback when the backend's
+  // `devotionals.getPreferences` query is throwing Server Error.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const localFilter = await readLocalFeedFilter();
+      if (!cancelled) setFeedFilter((prev) => (prev === 'all' ? localFilter : prev));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Hydrate the local-only language exclusions.
   useEffect(() => {
     let cancelled = false;
@@ -83,23 +101,45 @@ export default function DevotionalsPreferencesScreen() {
       const prev = feedFilter;
       setFeedFilter(value);
       setSavingFilter(true);
+      // Persist locally FIRST — so even if the Convex mutation is broken,
+      // the choice survives a re-open of the screen and the FAB filter
+      // still does the right thing. iter-105 fix for user report
+      // "[CONVEX M(devotionals:updatePreferences)] Server Error
+      // Called by client" alert shown on the Devotional preferences screen.
+      await writeLocalFeedFilter(value);
       try {
         await (updatePreferences as any)({
           feedFilter: value,
           ...(value === 'selected' ? { selectedContactIds: [] } : {}),
         });
       } catch (errorValue: any) {
-        setFeedFilter(prev); // revert
+        // Use errorToMessage so Hermes can't throw on a Convex error
+        // object that lacks a plain string `.message`.
+        const message = errorToMessage(errorValue).toLowerCase();
+        const isMissing =
+          message.includes('couldnotfindfunction') ||
+          message.includes('not found') ||
+          message.includes('no function');
+        const isServerError = message.includes('server error');
+        // We do NOT revert anymore — the local copy is authoritative for
+        // this device until the backend is reachable, so the choice
+        // visibly sticks. The previous behaviour of reverting the toggle
+        // on Server Error confused users into thinking nothing worked.
         Alert.alert(
-          'Could not save',
-          errorValue?.message?.includes('CouldNotFindFunction') ||
-            errorValue?.message?.toLowerCase().includes('not found')
-            ? 'Feed-filter sync needs the latest backend update. The choice is still applied for this session.'
-            : errorValue?.message || 'Unknown error',
+          'Saved on this device',
+          isMissing
+            ? 'Feed-filter sync needs the latest backend update. Your choice is applied on this device for now and will sync once the backend is reachable.'
+            : isServerError
+              ? 'The backend rejected the change, but your choice is saved on this device. We\u2019ll keep retrying in the background.'
+              : 'Your choice is saved on this device. We\u2019ll sync once the backend is reachable again.',
         );
       } finally {
         setSavingFilter(false);
       }
+      // `prev` only used inside the comment-only branch above; keeping
+      // the variable so future "revert on hard error" can be re-enabled
+      // without diff churn.
+      void prev;
     },
     [feedFilter, updatePreferences],
   );

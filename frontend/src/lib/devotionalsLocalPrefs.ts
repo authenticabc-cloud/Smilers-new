@@ -19,14 +19,22 @@ import { readStoredJson, writeStoredJson } from './settingsStorage';
 // AsyncStorage key. Bumping the suffix (e.g. ...v2) is the way to do
 // schema migrations if the shape ever changes.
 const NO_TRANSLATE_KEY = 'smilers_devotionals_no_translate_langs_v1';
+const FEED_FILTER_KEY = 'smilers_devotionals_feed_filter_v1';
+
+export type DevotionalFeedFilter = 'all' | 'contacts' | 'selected';
 
 export interface DevotionalsLocalPrefs {
   /** ISO 639-1 codes of source languages we should display in original. */
   noTranslateLangs: string[];
+  /** Local mirror of the feed filter — used as fallback when the backend
+   *  `devotionals.updatePreferences` mutation can't be reached (e.g.
+   *  Server Error). The choice still applies to THIS device. */
+  feedFilter: DevotionalFeedFilter;
 }
 
 const DEFAULT_PREFS: DevotionalsLocalPrefs = {
   noTranslateLangs: [],
+  feedFilter: 'all',
 };
 
 export async function readNoTranslateLangs(): Promise<string[]> {
@@ -42,6 +50,31 @@ export async function readNoTranslateLangs(): Promise<string[]> {
 export async function writeNoTranslateLangs(langs: string[]): Promise<void> {
   const deduped = Array.from(new Set(langs.filter((lang) => typeof lang === 'string' && lang.length > 0)));
   await writeStoredJson(NO_TRANSLATE_KEY, deduped);
+}
+
+/**
+ * Persist the chosen feed filter locally as a graceful-degradation
+ * fallback. The Convex backend mutation `devotionals.updatePreferences`
+ * is the source of truth when it succeeds, but on Server Error / missing-
+ * function we still want the choice to stick within this device so the
+ * user isn't left with a "did my tap do anything?" feeling.
+ */
+export async function readLocalFeedFilter(): Promise<DevotionalFeedFilter> {
+  try {
+    const raw = (await readStoredJson(FEED_FILTER_KEY, DEFAULT_PREFS.feedFilter)) as unknown;
+    if (raw === 'all' || raw === 'contacts' || raw === 'selected') return raw;
+    return DEFAULT_PREFS.feedFilter;
+  } catch {
+    return DEFAULT_PREFS.feedFilter;
+  }
+}
+
+export async function writeLocalFeedFilter(filter: DevotionalFeedFilter): Promise<void> {
+  try {
+    await writeStoredJson(FEED_FILTER_KEY, filter);
+  } catch {
+    /* swallow — non-fatal */
+  }
 }
 
 /**
