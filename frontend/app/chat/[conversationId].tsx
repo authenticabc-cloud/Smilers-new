@@ -35,6 +35,7 @@ import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { recordDiagnostic } from '../../src/lib/diagnostics';
 import { errorToMessage } from '../../src/lib/safeString';
+import { scanMessage, explainScanResult } from '../../src/lib/securityScanner';
 import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
 import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
 import { getLanguageByCode } from '../../src/lib/languages';
@@ -2552,6 +2553,62 @@ function MessageBubble({
     return Array.from(map.values());
   }, [msg.reactions, myUserId]);
 
+  // iter-107: client-side security scan. Runs heuristic checks on every
+  // rendered message — IP-host URLs, brand typosquatting, deceptive
+  // user-info, Punycode look-alikes, phishing keywords, dangerous file
+  // extensions — and if anything is flagged BLOCK we replace the entire
+  // bubble with the same "Deleted" treatment used elsewhere, but with
+  // the label "Deleted for security reasons". The raw `msg` is left
+  // untouched in the database; this is a render-time guard only so
+  // moderators can still audit the original payload server-side.
+  //
+  // Memoised on the precise fields the scanner reads — avoids re-scanning
+  // on every render of an unchanged message.
+  const securityScan = useMemo(() => {
+    if (msg.deletedAt) return null; // already deleted — no need to scan
+    try {
+      return scanMessage({
+        body: typeof msg.text === 'string' ? msg.text : '',
+        attachment: msg.fileName || msg.storageId || msg.mimeType
+          ? { fileName: msg.fileName, mimeType: msg.mimeType, storageId: msg.storageId }
+          : null,
+      });
+    } catch {
+      // Scanner must never throw — fall back to safe.
+      return null;
+    }
+  }, [msg.deletedAt, msg.text, msg.fileName, msg.storageId, msg.mimeType]);
+
+  if (securityScan?.shouldHide) {
+    const blockedTimeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const why = explainScanResult(securityScan);
+    return (
+      <View style={[styles.bubbleRow, isMine ? styles.bubbleRowMine : styles.bubbleRowOther]}>
+        <View
+          style={[
+            styles.bubble,
+            isMine ? styles.bubbleMine : styles.bubbleOther,
+            styles.deletedBubble,
+          ]}
+          testID={`message-bubble-security-blocked-${msg._id}`}
+        >
+          <View style={styles.securityRow}>
+            <Feather name="shield" size={14} color={Colors.textMuted} />
+            <Text style={[styles.bubbleText, styles.deletedText]}>Deleted for security reasons</Text>
+          </View>
+          {why ? (
+            <Text style={styles.securityReasonText} numberOfLines={2}>
+              {why}
+            </Text>
+          ) : null}
+          <View style={styles.bubbleMeta}>
+            <Text style={[styles.bubbleTime, styles.deletedTimeText]}>{blockedTimeStr}</Text>
+          </View>
+        </View>
+      </View>
+    );
+  }
+
   if (msg.deletedAt) {
     // Web-app parity (iter-98 screenshot): "This message was deleted"
     // italic + timestamp on the right inside a faded bubble. Mirrors the
@@ -3332,6 +3389,19 @@ const styles = StyleSheet.create({
   // deletedTimeText — italic + slightly muted to match the web app's
   // "This message was deleted  6:45 PM" timestamp on the right.
   deletedTimeText: { fontStyle: 'italic', opacity: 0.85, color: Colors.textMuted },
+  // iter-107 — security-block bubble. Same visual treatment as the
+  // "This message was deleted" bubble (italic + muted text + opacity-
+  // dimmed background) so users instantly recognise it as a "missing"
+  // message, BUT preceded with a small shield icon so they understand
+  // it was removed for SAFETY rather than by the sender.
+  securityRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  securityReasonText: {
+    fontSize: FontSize.xs,
+    fontStyle: 'italic',
+    color: Colors.textMuted,
+    marginTop: 4,
+    lineHeight: 16,
+  },
   // editedBadge — italic "edited HH:MM" rendered before the real time
   // stamp inside the bubble meta row. Per web-app design parity.
   editedBadge: { fontStyle: 'italic', marginRight: 6, opacity: 0.85 },

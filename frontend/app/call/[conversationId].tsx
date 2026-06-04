@@ -1405,6 +1405,26 @@ function CallScreenInner() {
 
   const showVideo = callType === 'video' && isActive && RTCViewImpl != null;
 
+  // iter-107: during an OUTGOING VIDEO call that's still ringing, show the
+  // local camera feed as a full-screen background instead of the static
+  // gradient + initial-letter avatar. Matches WhatsApp / FaceTime UX —
+  // the caller sees themselves while they wait for the callee to answer,
+  // which confirms that the camera is actually live (and gives the
+  // "this is a video call without a video" complaint a proper fix).
+  //
+  // We keep showing the avatar + name + "Ringing…" chip on top via a
+  // dark translucent overlay so the screen remains readable.
+  //
+  // We DON'T do this for incoming ringing (callee hasn't accepted yet,
+  // so streaming their preview before they tap Answer would feel
+  // surprising / privacy-invasive).
+  const showRingingPreview =
+    callType === 'video' &&
+    isOutgoingRinging &&
+    !!localStreamURL &&
+    !cameraOff &&
+    RTCViewImpl != null;
+
   // Play the caller's selected ringtone while dialing, and the callee's while receiving.
   // Screen-only mode never rings — it's a silent system-share session.
   useRingtonePlayer(
@@ -1463,7 +1483,24 @@ function CallScreenInner() {
           </SafeAreaView>
         </View>
       ) : (
-        <LinearGradient colors={gradientColors as any} style={StyleSheet.absoluteFill}>
+        <View style={StyleSheet.absoluteFill}>
+          {showRingingPreview ? (
+            // Local-camera-as-background — caller sees themselves while
+            // dialing on a video call. The local stream is mirrored
+            // (selfie convention) and a translucent dark overlay keeps
+            // the avatar/name/status readable on top.
+            <>
+              <RTCViewImpl
+                streamURL={localStreamURL}
+                style={StyleSheet.absoluteFill}
+                objectFit="cover"
+                mirror
+              />
+              <View style={styles.ringingPreviewScrim} pointerEvents="none" />
+            </>
+          ) : (
+            <LinearGradient colors={gradientColors as any} style={StyleSheet.absoluteFill} />
+          )}
           <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
             <View style={[styles.topArea, compactCallLayout ? styles.topAreaCompact : null]}>
               <View style={[styles.topUtilityRow, compactCallLayout ? styles.topUtilityRowCompact : null]}>
@@ -1517,7 +1554,7 @@ function CallScreenInner() {
             {/* Bottom controls */}
             <View style={[styles.controls, compactCallLayout ? styles.controlsCompact : null]}>{renderControls()}</View>
           </SafeAreaView>
-        </LinearGradient>
+        </View>
       )}
 
       {showAddToCall ? (
@@ -2626,6 +2663,15 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#000',
     position: 'relative',
+  },
+  // iter-107: dark translucent scrim placed OVER the local-camera-as-
+  // background during outgoing video-call ringing so the avatar / name /
+  // "Ringing…" chip text remain readable on top of the live preview.
+  // Slightly stronger than the gradient overlay (0.55) because phone
+  // cameras often pick up bright backgrounds.
+  ringingPreviewScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15, 7, 0, 0.55)',
   },
   pipWrap: {
     position: 'absolute',
