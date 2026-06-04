@@ -1,13 +1,19 @@
 /**
  * DevotionalMediaPlayer — inline player for voice / video devotionals.
  *
- * Resolves the storageId to a URL via api.files.getUrl (the same
- * mechanism MediaBubble uses) and renders either:
- *   - voice  : an audio play/pause control with elapsed-time read-out
- *   - video  : an expo-video VideoView with native controls
+ * iter-106 SWITCHOVER: the Convex `api.files.getUrl` endpoint is NOT
+ * deployed on this app's backend (the `messages.list` query already
+ * server-side-resolves storage IDs into a `mediaUrl` field — see
+ * src/hooks/useResolvedStorageUrl.ts). Calling `files.getUrl` from
+ * the device returned `[CONVEX Q(files:getUrl)] Server Error` →
+ * "Media couldn't load" red bubble in screenshot from user.
  *
- * Designed for the devotionals feed list — it tears down the
- * audio player on unmount so scrolling away kills any active playback.
+ * Devotional feed items already carry the resolved URL on at least
+ * one of `mediaUrl` / `fileUrl` / `url` (depending on backend
+ * version). This component now reads THAT field directly and only
+ * shows the "Media unavailable" placeholder when NO URL field
+ * exists at all — which is the only situation that's actually
+ * unrecoverable from the client.
  *
  * NOTE on imports: `expo-audio` and `expo-video` are required LAZILY
  * (inside the sub-components, not at module top-level). If a native
@@ -18,15 +24,16 @@
  * render normally.
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 
-import { api } from '../convexApi';
 import { Colors, FontSize, FontWeight, Radius } from '../theme';
-import { useReactiveSafeConvexQuery } from '../hooks/useReactiveSafeConvexQuery';
 
 interface Props {
-  storageId: string;
+  /** Optional — the raw storage ID. Kept for backwards compat / logs. */
+  storageId?: string;
+  /** Pre-resolved playable URL from the backend (`mediaUrl` / `fileUrl`). */
+  mediaUrl?: string | null;
   type: 'voice' | 'video';
   durationSec?: number;
   mimeType?: string;
@@ -71,54 +78,24 @@ function loadExpoVideo(): any {
   }
 }
 
-export default function DevotionalMediaPlayer({ storageId, type, durationSec, accentColor }: Props) {
-  // Defensive — never call the query with an empty/bogus storageId, which
-  // would surface a Convex validator error and could blow up the feed.
-  const safeStorageId = typeof storageId === 'string' && storageId.length > 0 ? storageId : null;
-  // Use a NON-THROWING safe query wrapper. Convex's vanilla `useQuery`
-  // throws synchronously on a Server Error (which is what happened on
-  // user device at iter-103 — the backend's files.getUrl returned
-  // [CONVEX Q(files:getUrl)] Server Error, which propagated to the
-  // ErrorBoundary and killed the whole Devotionals screen). With
-  // useReactiveSafeConvexQuery the error becomes a value (`error`) and
-  // we render an inline 'Media unavailable' placeholder instead of
-  // crashing — the rest of the feed keeps working.
-  const { data: mediaUrl, loading: mediaLoading, error: mediaError } = useReactiveSafeConvexQuery<string | null>(
-    (api as any).files?.getUrl,
-    safeStorageId ? { storageId: safeStorageId } : undefined,
-    null,
-    Boolean(safeStorageId),
-  );
+export default function DevotionalMediaPlayer({ mediaUrl, type, durationSec, accentColor }: Props) {
+  // The backend's `devotionals.getFeed` resolves storage IDs into a
+  // `mediaUrl` field. Some older deployments may use `fileUrl` or `url`
+  // — we accept any of them at the call site via the union type.
+  const resolved = typeof mediaUrl === 'string' && mediaUrl.length > 0 ? mediaUrl : null;
 
-  if (!safeStorageId) {
+  if (!resolved) {
     return (
-      <View style={styles.errorWrap}>
+      <View style={styles.errorWrap} testID="devotional-media-unavailable">
         <Feather name="alert-circle" size={16} color={Colors.danger} />
-        <Text style={styles.errorText}>Missing media</Text>
-      </View>
-    );
-  }
-  if (mediaLoading) {
-    return (
-      <View style={styles.loadingWrap}>
-        <ActivityIndicator color={accentColor || Colors.primary} />
-      </View>
-    );
-  }
-  if (mediaError || !mediaUrl) {
-    return (
-      <View style={styles.errorWrap}>
-        <Feather name="alert-circle" size={16} color={Colors.danger} />
-        <Text style={styles.errorText}>
-          {mediaError ? 'Media couldn\u2019t load' : 'Media unavailable'}
-        </Text>
+        <Text style={styles.errorText}>Media unavailable</Text>
       </View>
     );
   }
   if (type === 'video') {
-    return <DevotionalVideo url={mediaUrl as string} />;
+    return <DevotionalVideo url={resolved} />;
   }
-  return <DevotionalVoice url={mediaUrl as string} durationSec={durationSec} accentColor={accentColor} />;
+  return <DevotionalVoice url={resolved} durationSec={durationSec} accentColor={accentColor} />;
 }
 
 function DevotionalVoice({
@@ -279,12 +256,6 @@ function DevotionalVideo({ url }: { url: string }) {
 }
 
 const styles = StyleSheet.create({
-  loadingWrap: {
-    backgroundColor: Colors.background,
-    paddingVertical: 18,
-    borderRadius: Radius.md,
-    alignItems: 'center',
-  },
   errorWrap: {
     flexDirection: 'row',
     alignItems: 'center',

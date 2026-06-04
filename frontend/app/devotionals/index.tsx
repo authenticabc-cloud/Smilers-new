@@ -71,6 +71,12 @@ type DevotionalItem = {
   text?: string;
   title?: string;
   storageId?: string;
+  // The backend's getFeed query server-side resolves storage IDs into
+  // playable URLs and surfaces them as one of these fields (varies by
+  // deployment version). The native UI just reads whichever is present.
+  mediaUrl?: string;
+  fileUrl?: string;
+  url?: string;
   duration?: number;
   mimeType?: string;
   fileSize?: number;
@@ -261,10 +267,11 @@ export default function DevotionalsFeedScreen() {
 
           {item.title ? <Text style={styles.cardTitle}>{item.title}</Text> : null}
 
-          {(item.type === 'voice' || item.type === 'video') && item.storageId ? (
+          {(item.type === 'voice' || item.type === 'video') ? (
             <DevotionalMediaPlayer
               key={`${item._id}-media`}
               storageId={item.storageId}
+              mediaUrl={item.mediaUrl || item.fileUrl || item.url || null}
               type={item.type}
               durationSec={item.duration}
               mimeType={item.mimeType}

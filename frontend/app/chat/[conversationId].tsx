@@ -33,6 +33,8 @@ import MediaBubble from '../../src/components/MediaBubble';
 import PollComposer from '../../src/components/PollComposer';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
+import { recordDiagnostic } from '../../src/lib/diagnostics';
+import { errorToMessage } from '../../src/lib/safeString';
 import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
 import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
 import { getLanguageByCode } from '../../src/lib/languages';
@@ -599,14 +601,32 @@ export default function ChatScreen() {
         // app/scheduled.tsx call site (which omits conversationId). We
         // still log the conversation hint into the recipient label so
         // the Scheduled Messages inbox stays usable.
-        await createScheduledMessage({
+        //
+        // iter-106 diag: capture the EXACT args we're sending so the
+        // backend-side breadcrumb tells us what the server didn't like.
+        const scheduleArgs = {
           recipient: recipientLabel,
           message: draft,
           date,
           time,
           repeat: repeatMapped,
           active: true,
-        });
+        };
+        try {
+          recordDiagnostic({
+            tag: 'NET',
+            source: 'chat/scheduleMessageMobile',
+            message: `→ args recipient="${String(scheduleArgs.recipient).slice(0, 40)}" date=${scheduleArgs.date} time=${scheduleArgs.time} repeat=${scheduleArgs.repeat} active=${scheduleArgs.active} message.len=${String(scheduleArgs.message).length}`,
+          });
+        } catch {}
+        await createScheduledMessage(scheduleArgs);
+        try {
+          recordDiagnostic({
+            tag: 'NET',
+            source: 'chat/scheduleMessageMobile',
+            message: '← ok (mutation accepted)',
+          });
+        } catch {}
 
         // Reset composer + close sheet.
         setText('');
@@ -616,10 +636,24 @@ export default function ChatScreen() {
           `It will be sent on ${when.toLocaleString()}${selection.recurring ? ` (repeating ${selection.frequency}).` : '.'} Find it in Settings → Scheduled Messages.`,
         );
       } catch (errorValue: any) {
-        const message = String(errorValue?.message || errorValue || '');
+        // iter-106: use Hermes-safe error extraction (no bare String()
+        // on a Convex error object — that throws "Cannot determine
+        // default value of object" on Android per iter-105). Also
+        // capture the full error breadcrumb so the next failure tells
+        // us EXACTLY what the backend rejected.
+        const message = errorToMessage(errorValue);
+        try {
+          recordDiagnostic({
+            tag: 'ERR',
+            source: 'chat/scheduleMessageMobile',
+            message: `× ${message.slice(0, 300)}`,
+            stack: (typeof errorValue?.stack === 'string' ? errorValue.stack : '').slice(0, 1200),
+          });
+        } catch {}
+        const lower = message.toLowerCase();
         const isMissing =
-          message.includes('CouldNotFindFunction') ||
-          message.toLowerCase().includes('not found');
+          lower.includes('couldnotfindfunction') || lower.includes('not found');
+        const isServerError = lower.includes('server error');
 
         // Gracefully degrade — persist the scheduled message 100% locally
         // so the user never dead-ends on a backend error. Once the web team

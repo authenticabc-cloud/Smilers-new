@@ -12,6 +12,10 @@ export const Colors = {
   danger: '#EF4444',
   dangerDark: '#DC2626',
   success: '#10B981',
+  // Warning (amber) — used by sync banners, "Saved on this device" badges, etc.
+  warning: '#F59E0B',
+  warningLight: '#FEF3C7',
+  warningDark: '#92400E',
   aiBadge: '#A855F7',
   aiBadgeDark: '#7C3AED',
   chatOnce: '#F97316',

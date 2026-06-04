@@ -1,6 +1,6 @@
 // Scheduled Messages — backed by `api.scheduledMessages.*`.
 
-import React, { useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -25,6 +25,8 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+import { readStoredJson, writeStoredJson } from '../src/lib/settingsStorage';
+import { errorToMessage } from '../src/lib/safeString';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/theme';
 
 type Repeat = 'once' | 'daily' | 'weekly' | 'monthly';
@@ -47,6 +49,25 @@ function nowHM() { const d = new Date(); return `${pad2(d.getHours())}:${pad2(d.
 function parseYMD(s: string) { const [y, m, d] = s.split('-').map(Number); const dt = new Date(); dt.setFullYear(y, (m || 1) - 1, d || 1); dt.setHours(0, 0, 0, 0); return dt; }
 function parseHM(s: string) { const [h, m] = s.split(':').map(Number); const dt = new Date(); dt.setHours(h || 0, m || 0, 0, 0); return dt; }
 
+// Local-only scheduled messages saved by the chat composer when the
+// Convex `scheduling.scheduleMessageMobile` mutation throws Server
+// Error. Key MUST match the one used in /app/frontend/app/chat/
+// [conversationId].tsx (see the saveScheduled callback). iter-106:
+// surface these in the list AND drive the sync banner colour from
+// the unsynced-count instead of hard-coding "Synced with Smilers
+// cloud" — which was misleading the user after every failed save.
+const LOCAL_SCHEDULES_KEY = 'smilers_local_scheduled_messages';
+type LocalScheduleDraft = {
+  localId: string;
+  conversationId?: string;
+  recipient?: string;
+  message: string;
+  whenMs: number;
+  recurring?: boolean;
+  frequency?: string | null;
+  savedAt?: number;
+};
+
 export default function ScheduledScreen() {
   const router = useRouter();
   const { data: items, loading } = useSafeConvexQuery<Schedule[]>(api.scheduledMessages.listMine, {}, []);
@@ -56,16 +77,90 @@ export default function ScheduledScreen() {
   const setActiveSchedule = useMutation(api.scheduledMessages.setActive);
   const [editing, setEditing] = useState<Schedule | null>(null);
   const [showCompose, setShowCompose] = useState(false);
+  const [localDrafts, setLocalDrafts] = useState<LocalScheduleDraft[]>([]);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSyncError, setLastSyncError] = useState<string | null>(null);
+
+  // Load local drafts on mount AND every time the server query resolves
+  // (a fresh server snapshot may have superseded some local entries).
+  const reloadLocalDrafts = useCallback(async () => {
+    try {
+      const raw = (await readStoredJson(LOCAL_SCHEDULES_KEY, [])) as any;
+      const arr: LocalScheduleDraft[] = Array.isArray(raw) ? raw : [];
+      // Drop entries whose scheduled time is in the past — they're stale
+      // and the backend wouldn't accept them now anyway.
+      const now = Date.now();
+      const live = arr.filter((d) => typeof d?.whenMs === 'number' && d.whenMs > now - 60_000);
+      setLocalDrafts(live);
+      if (live.length !== arr.length) {
+        try { await writeStoredJson(LOCAL_SCHEDULES_KEY, live); } catch {}
+      }
+    } catch {
+      setLocalDrafts([]);
+    }
+  }, []);
+  useEffect(() => { void reloadLocalDrafts(); }, [reloadLocalDrafts]);
+  useEffect(() => { if (!loading) void reloadLocalDrafts(); }, [items, loading, reloadLocalDrafts]);
+
+  /**
+   * Manually push every local draft to the Convex backend, one at a time,
+   * removing successful ones from local storage. Stops on the first hard
+   * failure so we don't hammer the server with the same broken payload.
+   */
+  const syncLocalDrafts = useCallback(async () => {
+    if (syncing || localDrafts.length === 0) return;
+    setSyncing(true);
+    setLastSyncError(null);
+    const remaining: LocalScheduleDraft[] = [];
+    let firstError: string | null = null;
+    for (const draft of localDrafts) {
+      try {
+        const when = new Date(draft.whenMs);
+        const date = `${when.getFullYear()}-${pad2(when.getMonth() + 1)}-${pad2(when.getDate())}`;
+        const time = `${pad2(when.getHours())}:${pad2(when.getMinutes())}`;
+        await createSchedule({
+          recipient: draft.recipient || 'Conversation',
+          message: draft.message,
+          date,
+          time,
+          repeat: 'once',
+          active: true,
+        });
+        // success — drop from local
+      } catch (errorValue: any) {
+        if (!firstError) firstError = errorToMessage(errorValue).slice(0, 240);
+        remaining.push(draft);
+      }
+    }
+    try { await writeStoredJson(LOCAL_SCHEDULES_KEY, remaining); } catch {}
+    setLocalDrafts(remaining);
+    setLastSyncError(firstError);
+    setSyncing(false);
+    if (remaining.length === 0) {
+      Alert.alert('All synced', 'All saved-on-device scheduled messages have been pushed to the Smilers cloud.');
+    } else if (firstError) {
+      Alert.alert(
+        'Couldn\u2019t sync everything',
+        `${remaining.length} message${remaining.length === 1 ? '' : 's'} still saved on this device. Reason: ${firstError}`,
+      );
+    }
+  }, [createSchedule, localDrafts, syncing]);
+
+  const removeLocalDraft = useCallback(async (localId: string) => {
+    const next = localDrafts.filter((d) => d.localId !== localId);
+    setLocalDrafts(next);
+    try { await writeStoredJson(LOCAL_SCHEDULES_KEY, next); } catch {}
+  }, [localDrafts]);
 
   const onToggleActive = useCallback(async (schedule: Schedule) => {
     try { await setActiveSchedule({ scheduleId: schedule._id as any, active: !schedule.active }); }
-    catch (errorValue: any) { Alert.alert('Failed', errorValue?.message || 'Unknown error'); }
+    catch (errorValue: any) { Alert.alert('Failed', errorToMessage(errorValue) || 'Unknown error'); }
   }, [setActiveSchedule]);
 
   const onDelete = useCallback((schedule: Schedule) => {
-    Alert.alert('Delete scheduled message?', `"${schedule.message.slice(0, 60)}${schedule.message.length > 60 ? '…' : ''}"`, [
+    Alert.alert('Delete scheduled message?', `"${schedule.message.slice(0, 60)}${schedule.message.length > 60 ? '\u2026' : ''}"`, [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => { try { await removeSchedule({ scheduleId: schedule._id as any }); } catch (errorValue: any) { Alert.alert('Failed', errorValue?.message || 'Unknown error'); } } },
+      { text: 'Delete', style: 'destructive', onPress: async () => { try { await removeSchedule({ scheduleId: schedule._id as any }); } catch (errorValue: any) { Alert.alert('Failed', errorToMessage(errorValue) || 'Unknown error'); } } },
     ]);
   }, [removeSchedule]);
 
@@ -77,7 +172,7 @@ export default function ScheduledScreen() {
         await createSchedule({ recipient: draft.recipient, message: draft.message, date: draft.date, time: draft.time, repeat: draft.repeat, active: draft.active });
       }
       setEditing(null); setShowCompose(false);
-    } catch (errorValue: any) { Alert.alert('Failed', errorValue?.message || 'Unknown error'); }
+    } catch (errorValue: any) { Alert.alert('Failed', errorToMessage(errorValue) || 'Unknown error'); }
   }, [createSchedule, updateSchedule]);
 
   if (loading) {
@@ -90,18 +185,104 @@ export default function ScheduledScreen() {
   }
 
   const list = Array.isArray(items) ? items : [];
+  const hasLocalDrafts = localDrafts.length > 0;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="scheduled-screen">
       <Header title="Scheduled" showBack onBack={() => router.back()} variant="dark" />
-      <View style={styles.heroBanner} testID="scheduled-sync-banner">
-        <MaterialCommunityIcons name="cloud-check" size={20} color={Colors.primary} />
-        <Text style={styles.heroText} testID="scheduled-status-note">Synced with Smilers cloud</Text>
-      </View>
+      {/*
+        Sync banner — driven by actual sync state, not hardcoded.
+        • Green "Synced" when there are 0 local drafts (everything has
+          made it to the Smilers cloud).
+        • Amber "N saved on this device" with a Sync now button when
+          there are pending local drafts. Tapping the button pushes them
+          one at a time and shows a result alert.
+      */}
+      {hasLocalDrafts ? (
+        <View style={[styles.heroBanner, styles.heroBannerWarn]} testID="scheduled-sync-banner">
+          <MaterialCommunityIcons name="cloud-alert" size={20} color={Colors.warning || Colors.primary} />
+          <Text style={[styles.heroText, styles.heroTextWarn]} testID="scheduled-status-note">
+            {localDrafts.length} saved on this device — {lastSyncError ? 'last sync failed' : 'tap to push to cloud'}
+          </Text>
+          <TouchableOpacity
+            onPress={syncLocalDrafts}
+            disabled={syncing}
+            style={styles.syncBtn}
+            testID="scheduled-sync-now-btn"
+          >
+            {syncing ? (
+              <ActivityIndicator size="small" color={Colors.white} />
+            ) : (
+              <Text style={styles.syncBtnText}>Sync now</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View style={styles.heroBanner} testID="scheduled-sync-banner">
+          <MaterialCommunityIcons name="cloud-check" size={20} color={Colors.primary} />
+          <Text style={styles.heroText} testID="scheduled-status-note">Synced with Smilers cloud</Text>
+        </View>
+      )}
       <FlatList
         data={list}
         keyExtractor={(schedule: Schedule) => schedule._id}
         contentContainerStyle={{ paddingBottom: 120, paddingTop: Spacing.md }}
+        ListHeaderComponent={
+          hasLocalDrafts ? (
+            <View style={styles.localSection} testID="scheduled-local-section">
+              <Text style={styles.localSectionTitle}>Saved on this device</Text>
+              {localDrafts.map((draft) => {
+                const when = new Date(draft.whenMs);
+                const dateLabel = `${when.getFullYear()}-${pad2(when.getMonth() + 1)}-${pad2(when.getDate())}`;
+                const timeLabel = `${pad2(when.getHours())}:${pad2(when.getMinutes())}`;
+                return (
+                  <View key={draft.localId} style={[styles.card, styles.cardLocal]} testID={`local-${draft.localId}`}>
+                    <View style={styles.cardTopRow}>
+                      <MaterialCommunityIcons name="cloud-off-outline" size={16} color={Colors.warning || Colors.primary} />
+                      <Text style={styles.cardRecipient} numberOfLines={1}>{draft.recipient || 'Conversation'}</Text>
+                      <View style={styles.flexOne} />
+                      <View style={styles.localBadge}>
+                        <Text style={styles.localBadgeText}>Local</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.cardMessage} numberOfLines={2}>{draft.message}</Text>
+                    <View style={styles.cardMeta}>
+                      <Feather name="calendar" size={14} color={Colors.textMuted} />
+                      <Text style={styles.cardMetaText}>{dateLabel} at {timeLabel}</Text>
+                      {draft.recurring ? (
+                        <>
+                          <Text style={styles.cardMetaDot}>·</Text>
+                          <Feather name="repeat" size={14} color={Colors.textMuted} />
+                          <Text style={styles.cardMetaText}>{draft.frequency || 'recurring'}</Text>
+                        </>
+                      ) : null}
+                    </View>
+                    <View style={styles.cardActions}>
+                      <TouchableOpacity
+                        style={styles.cardActionBtn}
+                        onPress={syncLocalDrafts}
+                        disabled={syncing}
+                        testID={`local-sync-${draft.localId}`}
+                      >
+                        <Feather name="upload-cloud" size={14} color={Colors.primary} />
+                        <Text style={styles.cardActionText}>{syncing ? 'Syncing\u2026' : 'Sync'}</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.cardActionBtn, { borderColor: Colors.danger }]}
+                        onPress={() => removeLocalDraft(draft.localId)}
+                        testID={`local-delete-${draft.localId}`}
+                      >
+                        <Feather name="trash-2" size={14} color={Colors.danger} />
+                        <Text style={[styles.cardActionText, { color: Colors.danger }]}>Delete</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              })}
+              {list.length > 0 ? <Text style={styles.localSectionTitle}>Synced</Text> : null}
+            </View>
+          ) : null
+        }
         renderItem={({ item }) => (
           <View style={styles.card} testID={`schedule-${item._id}`}>
             <View style={styles.cardTopRow}>
@@ -275,7 +456,25 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   heroBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: Spacing.base, marginTop: Spacing.md, padding: 12, backgroundColor: Colors.primaryLight, borderRadius: Radius.md },
-  heroText: { color: Colors.textPrimary, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  heroBannerWarn: { backgroundColor: '#FEF3C7' }, // amber-100 — signals partial-sync state
+  heroText: { color: Colors.textPrimary, fontSize: FontSize.sm, fontWeight: FontWeight.semibold, flex: 1 },
+  heroTextWarn: { color: '#92400E' /* amber-800 */ },
+  syncBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: Radius.pill, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center', minWidth: 88 },
+  syncBtnText: { color: '#3D2A00', fontWeight: FontWeight.bold, fontSize: FontSize.sm },
+  localSection: { paddingTop: Spacing.sm },
+  localSectionTitle: {
+    marginTop: Spacing.md,
+    marginHorizontal: Spacing.base,
+    marginBottom: Spacing.sm,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.bold,
+    color: Colors.textMuted,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  cardLocal: { borderWidth: 1, borderColor: '#FDE68A' /* amber-200 */ },
+  localBadge: { backgroundColor: '#FEF3C7', paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.pill },
+  localBadgeText: { color: '#92400E', fontWeight: FontWeight.bold, fontSize: FontSize.xs },
   card: { marginHorizontal: Spacing.base, marginBottom: Spacing.base, padding: Spacing.base, backgroundColor: Colors.surface, borderRadius: Radius.lg, ...Shadow.sm },
   cardTopRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   dot: { width: 10, height: 10, borderRadius: 5 },
