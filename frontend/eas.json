@@ -28,6 +28,11 @@
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "android": {
+        "//note": "FCM v1 service account JSON is referenced here so EAS automatically uploads it as the FCM v1 push credential for project com.smilers.app. The same file is what Expo's push server uses when forwarding pushes to Firebase Cloud Messaging. Generated from Firebase Console → Project Settings → Service Accounts → Generate new private key for project smilers-a4e07.",
+        "serviceAccountKeyPath": "./google-service-account.json"
+      }
+    }
   }
 }
