@@ -36,6 +36,7 @@ import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { recordDiagnostic } from '../../src/lib/diagnostics';
 import { errorToMessage } from '../../src/lib/safeString';
 import { scanMessage, explainScanResult } from '../../src/lib/securityScanner';
+import { appendDiaryEntry, chatMessageToDiaryEntry } from '../../src/lib/diaryStore';
 import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
 import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
 import { getLanguageByCode } from '../../src/lib/languages';
@@ -111,16 +112,17 @@ export default function ChatScreen() {
   const router = useRouter();
   const convex = useConvex();
   const insets = useSafeAreaInsets();
-  const { conversationId, mode } = useLocalSearchParams<{ conversationId: string; mode?: string }>();
+  const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
   const { isAuthenticated } = useAuth();
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [replyTo, setReplyTo] = useState<any | null>(null);
-  // iter-109: in-chat message search overlay. Driven by a single string
-  // state — when non-null the search bar is visible and the message list
-  // gets client-side filtered. The Diary screen calls this "Search diary
-  // messages…"; regular chats just say "Search messages…".
+  // iter-109 → iter-111: in-chat message search overlay. Originally
+  // introduced as part of the Diary feature, but kept here as a
+  // benign general-purpose search since it doesn't depend on diary
+  // mode and works for every conversation. When non-null the search
+  // bar is visible and the message list gets client-side filtered.
   const [chatSearchQuery, setChatSearchQuery] = useState<string | null>(null);
   const [selectedMsg, setSelectedMsg] = useState<any | null>(null);
   // Tri-state delete-mode sheet: when set, prompts WhatsApp-style "Delete for me /
@@ -269,9 +271,6 @@ export default function ChatScreen() {
   }, [conversationId]);
 
   const sendMessage = useMutation(api.messages.send);
-  // iter-109: getOrCreateDirect — used by the Diary entry in the forward
-  // sheet to (lazily) provision the self-conversation on first save.
-  const getOrCreateDirect = useMutation((api as any).conversations.getOrCreateDirect);
   const setTyping = useMutation(api.typing.setTyping);
   const markDelivered = useMutation((api as any).messages.markDelivered);
   const markRead = useMutation(api.messages.markRead);
@@ -1608,38 +1607,17 @@ export default function ChatScreen() {
     }),
     [hydratedConversation, savedContactRecord],
   );
-  // iter-109: Diary detection — TRUE when the chat is the user's
-  // self-conversation. We accept TWO signals:
-  //   (a) explicit `?mode=diary` URL param (set by /app/diary.tsx),
-  //   (b) any conversation whose "other user" is the current user
-  //       (fallback so opening the self-conversation from the chats
-  //        list also lands in diary mode without needing the param).
-  const isDiary = useMemo(() => {
-    if (mode === 'diary') return true;
-    const myId = me?._id ? String(me._id) : null;
-    if (!myId) return false;
-    const otherUserId =
-      (hydratedConversation as any)?.otherUser?._id ||
-      (hydratedConversation as any)?.otherUserId ||
-      null;
-    if (otherUserId && String(otherUserId) === myId) return true;
-    // Member-list heuristic: solo conversation with only self in members.
-    const members: any[] = Array.isArray((hydratedConversation as any)?.members)
-      ? (hydratedConversation as any).members
-      : [];
-    if (members.length > 0 && members.every((m: any) => String(m?._id || m?.userId || m) === myId)) {
-      return true;
-    }
-    return false;
-  }, [mode, me?._id, hydratedConversation]);
+  // iter-111: isDiary detection REMOVED. Diary is now a fully separate
+  // local-only screen (/app/diary.tsx) — the chat screen no longer has
+  // any awareness of Diary mode. This eliminates the iter-109 leak
+  // where a heuristic ("any conversation whose otherUserId equals me")
+  // could falsely tag a regular chat as Diary and apply diary chrome.
 
   const title =
-    isDiary
-      ? 'Diary'
-      : savedContactTitle ||
-        getConversationDisplayName(hydratedConversation, me?._id ? String(me._id) : undefined, 'Chat');
+    savedContactTitle ||
+    getConversationDisplayName(hydratedConversation, me?._id ? String(me._id) : undefined, 'Chat');
   const isMineSelected = selectedMsg && me && selectedMsg.senderId === me._id;
-  const subtitle = isDiary ? 'Your personal notes' : formatPresenceSubtitle(mergedPresenceSource);
+  const subtitle = formatPresenceSubtitle(mergedPresenceSource);
   const avatarInitial = getDisplayInitials(title);
 
   // Slice B of Groups spec — when the current user is suspended in this
@@ -1758,14 +1736,8 @@ export default function ChatScreen() {
             }}
             testID="chat-header-identity"
           >
-            <View style={[styles.headerAvatar, isDiary ? styles.headerAvatarDiary : null]} testID="chat-header-avatar">
-              {isDiary ? (
-                // iter-109 Diary mode: use a book icon instead of the
-                // contact's initial — matches the web app's pinned-tile
-                // and chat-header treatment (blue circle + book icon).
-                <MaterialCommunityIcons name="book-account-outline" size={20} color={Colors.white} />
-              ) : (
-                (() => {
+            <View style={styles.headerAvatar} testID="chat-header-avatar">
+              {(() => {
                 const headerAvatarUri =
                   (hydratedConversation?.otherUser as any)?.avatar ||
                   (hydratedConversation?.otherUser as any)?.avatarUrl ||
@@ -1781,8 +1753,7 @@ export default function ChatScreen() {
                   );
                 }
                 return <Text style={styles.headerAvatarText}>{avatarInitial}</Text>;
-              })()
-              )}
+              })()}
             </View>
             <View style={styles.headerTextWrap}>
               <Text style={styles.chatHeaderTitle} numberOfLines={1} testID="chat-header-title">{title}</Text>
@@ -1792,78 +1763,57 @@ export default function ChatScreen() {
         </View>
 
         <View style={styles.chatHeaderActions}>
-          {isDiary ? (
-            // iter-109 Diary mode: replace the call/video/timer/encryption/
-            // menu cluster with a single Search icon. Tapping it toggles
-            // the in-chat search overlay; tapping again (X) closes it.
-            <TouchableOpacity
-              testID="chat-search-toggle-btn"
-              onPress={() =>
-                setChatSearchQuery((q) => (q === null ? '' : null))
-              }
-              style={styles.headerIconButton}
-            >
-              <Feather
-                name={chatSearchQuery === null ? 'search' : 'x'}
-                size={20}
-                color={Colors.white}
-              />
-            </TouchableOpacity>
-          ) : (
-            <>
-              <TouchableOpacity
-                testID="chat-search-toggle-btn"
-                onPress={() =>
-                  setChatSearchQuery((q) => (q === null ? '' : null))
-                }
-                style={styles.headerIconButton}
-              >
-                <Feather
-                  name={chatSearchQuery === null ? 'search' : 'x'}
-                  size={18}
-                  color={Colors.white}
-                />
-              </TouchableOpacity>
-              <TouchableOpacity
-                testID="call-btn"
-                onPress={() => router.push(`/call/${conversationId}?type=voice&displayName=${encodeURIComponent(title)}` as any)}
-                style={styles.headerIconButton}
-              >
-                <Ionicons name="call-outline" size={18} color={Colors.white} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                testID="video-btn"
-                onPress={() => router.push(`/call/${conversationId}?type=video&displayName=${encodeURIComponent(title)}` as any)}
-                style={styles.headerIconButton}
-              >
-                <Ionicons name="videocam-outline" size={19} color={Colors.white} />
-              </TouchableOpacity>
-              <TouchableOpacity testID="chat-disappearing-btn" onPress={() => setShowDisappearingSheet(true)} style={styles.headerIconButton}>
-                <Ionicons name="time-outline" size={18} color={Colors.white} />
-              </TouchableOpacity>
-              <TouchableOpacity testID="chat-encryption-btn" onPress={() => router.push('/encryption' as any)} style={styles.headerIconButton}>
-                <Ionicons name="shield-checkmark-outline" size={18} color={Colors.white} />
-              </TouchableOpacity>
-              <TouchableOpacity testID="chat-menu-btn" onPress={() => setShowOptionsMenu(true)} style={styles.headerIconButton}>
-                <Feather name="more-vertical" size={18} color={Colors.white} />
-              </TouchableOpacity>
-            </>
-          )}
+          {/* Search toggle — kept from iter-109 (originally introduced for Diary
+              but useful for every chat). Tapping toggles the search input bar
+              below the header. */}
+          <TouchableOpacity
+            testID="chat-search-toggle-btn"
+            onPress={() =>
+              setChatSearchQuery((q) => (q === null ? '' : null))
+            }
+            style={styles.headerIconButton}
+          >
+            <Feather
+              name={chatSearchQuery === null ? 'search' : 'x'}
+              size={18}
+              color={Colors.white}
+            />
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="call-btn"
+            onPress={() => router.push(`/call/${conversationId}?type=voice&displayName=${encodeURIComponent(title)}` as any)}
+            style={styles.headerIconButton}
+          >
+            <Ionicons name="call-outline" size={18} color={Colors.white} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="video-btn"
+            onPress={() => router.push(`/call/${conversationId}?type=video&displayName=${encodeURIComponent(title)}` as any)}
+            style={styles.headerIconButton}
+          >
+            <Ionicons name="videocam-outline" size={19} color={Colors.white} />
+          </TouchableOpacity>
+          <TouchableOpacity testID="chat-disappearing-btn" onPress={() => setShowDisappearingSheet(true)} style={styles.headerIconButton}>
+            <Ionicons name="time-outline" size={18} color={Colors.white} />
+          </TouchableOpacity>
+          <TouchableOpacity testID="chat-encryption-btn" onPress={() => router.push('/encryption' as any)} style={styles.headerIconButton}>
+            <Ionicons name="shield-checkmark-outline" size={18} color={Colors.white} />
+          </TouchableOpacity>
+          <TouchableOpacity testID="chat-menu-btn" onPress={() => setShowOptionsMenu(true)} style={styles.headerIconButton}>
+            <Feather name="more-vertical" size={18} color={Colors.white} />
+          </TouchableOpacity>
         </View>
       </View>
 
-      {/* Diary mode hides the "End-to-end encrypted" banner — talking
-          to yourself doesn't need an encryption reminder. */}
-      {!isDiary ? (
-        <View style={styles.encryptionBanner} testID="chat-encryption-banner">
-          <Ionicons name="shield-checkmark-outline" size={16} color="#2A7C48" />
-          <Text style={styles.encryptionBannerText}>End-to-end encrypted</Text>
-        </View>
-      ) : null}
+      <View style={styles.encryptionBanner} testID="chat-encryption-banner">
+        <Ionicons name="shield-checkmark-outline" size={16} color="#2A7C48" />
+        <Text style={styles.encryptionBannerText}>End-to-end encrypted</Text>
+      </View>
 
-      {/* iter-109: in-chat search bar — slides in below the header when
-          the search button is tapped. Live-filters the message list by
-          case-insensitive substring match against the message text. */}
+      {/* iter-109 → iter-111: in-chat search bar — slides in below the
+          header when the search button is tapped. Live-filters the
+          message list by case-insensitive substring match. Kept as a
+          general-purpose feature even after Diary was decoupled. */}
       {chatSearchQuery !== null ? (
         <View style={styles.searchBar} testID="chat-search-bar">
           <Feather name="search" size={16} color={Colors.textMuted} />
@@ -1871,7 +1821,7 @@ export default function ChatScreen() {
             style={styles.searchInput}
             value={chatSearchQuery}
             onChangeText={setChatSearchQuery}
-            placeholder={isDiary ? 'Search diary messages…' : 'Search messages…'}
+            placeholder="Search messages…"
             placeholderTextColor={Colors.textMuted}
             autoFocus
             returnKeyType="search"
@@ -2148,7 +2098,7 @@ export default function ChatScreen() {
                 ref={messageInputRef}
                 value={text}
                 onChangeText={handleTyping}
-                placeholder={isDiary ? 'Write a note…' : 'Type your message…'}
+                placeholder="Type your message…"
                 placeholderTextColor={Colors.textMuted}
                 style={[
                   styles.input,
@@ -2474,58 +2424,87 @@ export default function ChatScreen() {
             <FlatList
               data={
                 (Array.isArray(conversationsForForward) ? conversationsForForward : []).filter(
-                  (item: any) => item._id !== conversationId &&
-                    // Exclude any existing diary/self conversation from the
-                    // main list — we always render Diary at the top via
-                    // ListHeaderComponent so it doesn't appear twice.
-                    !(
-                      me?._id &&
-                      String(
-                        item?.otherUser?._id || item?.otherUserId || '',
-                      ) === String(me._id)
-                    )
+                  (item: any) => item._id !== conversationId,
                 )
               }
               keyExtractor={(item: any) => item._id}
               contentContainerStyle={styles.forwardListContent}
               ListHeaderComponent={
-                // iter-109 Diary pinned at the TOP of the forward list,
-                // matching the web app screenshot — amber book tile +
-                // "Save to your personal diary" subtitle.
-                !isDiary ? (
-                  <TouchableOpacity
-                    style={[styles.forwardRow, styles.forwardRowDiary]}
-                    onPress={async () => {
-                      try {
-                        const result: any = await getOrCreateDirect({ otherUserId: me?._id });
-                        const diaryId = result?._id || result?.conversationId || result;
-                        if (typeof diaryId === 'string') {
-                          await doForwardTo(diaryId);
-                        }
-                      } catch (errorValue: any) {
-                        Alert.alert(
-                          'Could not save to Diary',
-                          errorToMessage(errorValue) || 'Please try again.',
-                        );
+                // iter-111: Diary pinned at the TOP — now saves the
+                // forwarded message to the LOCAL diary store via
+                // diaryStore.appendDiaryEntry. Never touches the Convex
+                // backend, so it's safe to surface in every chat without
+                // any cross-user contamination risk.
+                <TouchableOpacity
+                  style={[styles.forwardRow, styles.forwardRowDiary]}
+                  onPress={async () => {
+                    try {
+                      // Determine which messages we're forwarding — mirror
+                      // the doForwardTo logic so multi-select also flows.
+                      let targets: any[] = [];
+                      if (multiSelectIds && multiSelectIds.length > 0) {
+                        targets = multiSelectIds
+                          .map((id) => msgById.get(id))
+                          .filter((m: any) => !!m);
+                      } else if (selectedMsg) {
+                        targets = [selectedMsg];
                       }
-                    }}
-                    testID="forward-target-diary"
-                  >
-                    <View style={[styles.forwardAvatar, styles.forwardAvatarDiary]}>
-                      <MaterialCommunityIcons
-                        name="book-account-outline"
-                        size={20}
-                        color={Colors.warningDark}
-                      />
-                    </View>
-                    <View style={styles.flexOne}>
-                      <Text style={styles.forwardName} numberOfLines={1}>Diary</Text>
-                      <Text style={styles.forwardPreview} numberOfLines={1}>
-                        Save to your personal diary
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                ) : null
+                      if (targets.length === 0) {
+                        setShowForwardPicker(false);
+                        return;
+                      }
+                      const sourceConversationName =
+                        savedContactTitle ||
+                        getConversationDisplayName(
+                          hydratedConversation,
+                          me?._id ? String(me._id) : undefined,
+                          'Chat',
+                        );
+                      for (const m of targets) {
+                        const senderName =
+                          m?.senderName ||
+                          m?.sender?.name ||
+                          (me?._id && m?.senderId === me._id ? 'You' : 'a contact');
+                        const entry = chatMessageToDiaryEntry(m, {
+                          conversationId: conversationId as string,
+                          conversationName: sourceConversationName,
+                          originalSenderName: senderName,
+                          originalMessageId: m?._id || null,
+                          originalCreationTime: m?._creationTime || null,
+                        });
+                        // eslint-disable-next-line no-await-in-loop
+                        await appendDiaryEntry(me?._id ? String(me._id) : null, entry);
+                      }
+                      setShowForwardPicker(false);
+                      setMultiSelectIds(null);
+                      closeActionSheet();
+                      Alert.alert(
+                        targets.length === 1 ? 'Saved to Diary' : `${targets.length} notes saved`,
+                        'Open Diary from the Chats tab to see your saved notes.',
+                      );
+                    } catch (errorValue: any) {
+                      Alert.alert(
+                        'Could not save to Diary',
+                        errorToMessage(errorValue) || 'Please try again.',
+                      );
+                    }
+                  }}
+                  testID="forward-target-diary"
+                >
+                  <View style={[styles.forwardAvatar, styles.forwardAvatarDiary]}>
+                    <MaterialCommunityIcons
+                      name="book-account-outline"
+                      size={20}
+                      color={Colors.warningDark}
+                    />
+                  </View>
+                  <View style={styles.flexOne}>
+                    <Text style={styles.forwardName} numberOfLines={1}>Diary</Text>
+                    <Text style={styles.forwardPreview} numberOfLines={1}>
+                      Save to your personal diary
+                    </Text>
+                  </View>
+                </TouchableOpacity>
               }
               renderItem={({ item }: any) => {
                 // Use the centralised display-name resolver — it walks the

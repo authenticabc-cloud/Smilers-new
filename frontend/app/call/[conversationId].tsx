@@ -516,10 +516,25 @@ function CallScreenInner() {
   // ====== Build & tear down peer connection when call becomes active ======
   const startPeerConnection = useCallback(
     async (asCaller: boolean) => {
-      if (!callId || initStartedRef.current || !CallSessionCtor) {
+      // iter-111 — REMOVED `initStartedRef.current` from the bail check.
+      //
+      // Why: in iter-104 we moved the slot-claim (`initStartedRef.current = true`)
+      // INTO the useEffect, BEFORE calling startPeerConnection. That fixed the
+      // duplicate-PC race, but left this internal bail check still reading
+      // `initStartedRef.current` — which is now ALWAYS true by the time
+      // startPeerConnection runs. The function then bailed with
+      //   "startPeerConnection skipped (callId=true alreadyInit=true ctor=true)"
+      // — exactly the symptom in the user's diagnostic. Result: no PC ever
+      // created → no SDP exchange → no audio / no video / no screen share.
+      //
+      // The correct internal idempotency guard is `sessionRef.current` — the
+      // PC actually exists. The useEffect already gates the "should we start
+      // at all" question; this check only needs to guard against a literal
+      // duplicate call after a PC is alive.
+      if (!callId || sessionRef.current || !CallSessionCtor) {
         callDebug.push(
           'CALL',
-          `startPeerConnection skipped (callId=${!!callId} alreadyInit=${initStartedRef.current} ctor=${!!CallSessionCtor})`,
+          `startPeerConnection skipped (callId=${!!callId} session=${!!sessionRef.current} ctor=${!!CallSessionCtor})`,
         );
         return;
       }
@@ -527,15 +542,8 @@ function CallScreenInner() {
         callDebug.push('CALL', 'startPeerConnection skipped: web preview');
         return; // skip on web preview
       }
-      // ⚡ CRITICAL: claim the slot IMMEDIATELY, before any other guards.
-      // The previous version set this AFTER the `!activeCall` / `!remoteUserId`
-      // bails — meaning if those bails fired (e.g. activeCall query returns
-      // null due to a transient Server Error from the safe-query wrapper),
-      // the ref stayed false. On the next heartbeat re-emit (every 10s) the
-      // useEffect re-fired and the function entered AGAIN, leaving a sea of
-      // 'startPeerConnection asCaller=true' log entries with no PC events
-      // afterward (exactly what iteration-81's debug overlay revealed).
-      initStartedRef.current = true;
+      // useEffect already set initStartedRef.current = true synchronously before
+      // calling us, so we don't need to claim it here.
 
       callDebug.push(
         'CALL',
