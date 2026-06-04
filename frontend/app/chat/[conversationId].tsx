@@ -595,13 +595,33 @@ export default function ChatScreen() {
         const time = `${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`;
 
         // Choose a recipient label that the existing Scheduled inbox can
-        // render — uses the raw conversation record (available early in
-        // the component) before the hydrated display name resolves.
+        // render — must be a HUMAN-READABLE STRING, NOT a Convex Id.
+        //
+        // iter-112 bug fix: the previous fallback chain ended in
+        // `conversationId` (a raw 32-char Convex `Id<'conversations'>`)
+        // whenever `conversation.title` / `conversation.name` were
+        // empty — which is ALWAYS the case for direct (1-on-1) chats
+        // because those fields are only populated on group conversations.
+        // The diagnostic captured this exact failure:
+        //   `[NET] recipient="jd78xmfq8scjj0w9ddyhah4v0985w5wp"`
+        //                     ^^^ a Convex Id, not a name → backend
+        //                         strict validator rejects → Server Error.
+        //
+        // Fix: resolve through `getConversationDisplayName` (same helper
+        // used to compute the chat header title) which knows to pull the
+        // OTHER user's display name on direct chats and the group name
+        // on group chats. Fall back to "Chat" as a friendly last resort
+        // string — never an Id, never the conversationId.
+        const myIdForRecipient = me?._id ? String(me._id) : undefined;
         const recipientLabel =
+          getConversationDisplayName(
+            hydratedConversation || conversation,
+            myIdForRecipient,
+            'Chat',
+          ) ||
           (typeof (conversation as any)?.title === 'string' && (conversation as any).title.trim()) ||
           (typeof (conversation as any)?.name === 'string' && (conversation as any).name.trim()) ||
-          conversationId ||
-          'Conversation';
+          'Chat';
 
         // The deployed Convex schema only supports 'once' | 'daily' |
         // 'weekly' | 'monthly'. Map the richer client choices (hourly /
