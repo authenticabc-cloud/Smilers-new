@@ -16,6 +16,13 @@ export const Colors = {
   warning: '#F59E0B',
   warningLight: '#FEF3C7',
   warningDark: '#92400E',
+  // Diary tile (iter-109 — "personal notes" pinned conversation between
+  // Smilers AI and Devotion). Indigo/blue palette per web app design.
+  diary: '#3B82F6',
+  diaryDark: '#2563EB',
+  diaryLight: '#DBEAFE',
+  diaryBadge: '#EEF2FF', // lavender-50, matches the "You" badge background
+  diaryBadgeText: '#4338CA', // indigo-700, matches the "You" badge text
   aiBadge: '#A855F7',
   aiBadgeDark: '#7C3AED',
   chatOnce: '#F97316',

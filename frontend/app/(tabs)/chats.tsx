@@ -115,6 +115,20 @@ export default function ChatsScreen() {
               onPress={() => router.push('/ai-chat' as any)}
               testID="chat-ai"
             />
+            {/* Diary — personal-notes self-conversation (iter-109 web parity).
+                Sits between Smilers AI and Devotion in the pinned-row stack.
+                Blue/indigo palette + "You" badge mirrors the web app screenshot. */}
+            <PinnedRow
+              iconBg={Colors.diary}
+              iconBgDark={Colors.diaryDark}
+              icon={<MaterialCommunityIcons name="book-account-outline" size={22} color={Colors.white} />}
+              title="Diary"
+              subtitle="Save notes, files, and forwarded messages"
+              badge="You"
+              badgeColor={Colors.diary}
+              onPress={() => router.push('/diary' as any)}
+              testID="chat-diary"
+            />
             {/* Devotion entry pinned at top of chats (iter-102 web parity).
                 Sits between Smilers AI and Chat Once. Teal/sage colour
                 matches the web app's design language. */}

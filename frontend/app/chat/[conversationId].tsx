@@ -111,12 +111,17 @@ export default function ChatScreen() {
   const router = useRouter();
   const convex = useConvex();
   const insets = useSafeAreaInsets();
-  const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
+  const { conversationId, mode } = useLocalSearchParams<{ conversationId: string; mode?: string }>();
   const { isAuthenticated } = useAuth();
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [replyTo, setReplyTo] = useState<any | null>(null);
+  // iter-109: in-chat message search overlay. Driven by a single string
+  // state — when non-null the search bar is visible and the message list
+  // gets client-side filtered. The Diary screen calls this "Search diary
+  // messages…"; regular chats just say "Search messages…".
+  const [chatSearchQuery, setChatSearchQuery] = useState<string | null>(null);
   const [selectedMsg, setSelectedMsg] = useState<any | null>(null);
   // Tri-state delete-mode sheet: when set, prompts WhatsApp-style "Delete for me /
   // for receiver / for everyone" (sent) or "Delete for me / ask sender" (received).
@@ -264,6 +269,9 @@ export default function ChatScreen() {
   }, [conversationId]);
 
   const sendMessage = useMutation(api.messages.send);
+  // iter-109: getOrCreateDirect — used by the Diary entry in the forward
+  // sheet to (lazily) provision the self-conversation on first save.
+  const getOrCreateDirect = useMutation((api as any).conversations.getOrCreateDirect);
   const setTyping = useMutation(api.typing.setTyping);
   const markDelivered = useMutation((api as any).messages.markDelivered);
   const markRead = useMutation(api.messages.markRead);
@@ -332,6 +340,23 @@ export default function ChatScreen() {
     const cutoff = Date.now() - ttlMs;
     return decryptedMessages.filter((message) => Number(message?._creationTime || 0) >= cutoff);
   }, [disappearingMode, decryptedMessages]);
+
+  // iter-109: in-chat search filter — applied AFTER the disappearing-mode
+  // filter so the user only sees results that are still visible per the
+  // conversation's TTL. Matches both the message text AND attachment
+  // filenames (case-insensitive substring). When the query is empty
+  // OR null we return visibleMessages unchanged — zero overhead.
+  const searchFilteredMessages = useMemo(() => {
+    const q = (chatSearchQuery || '').trim().toLowerCase();
+    if (!q) return visibleMessages;
+    return visibleMessages.filter((message: any) => {
+      const text: string =
+        (typeof message?.text === 'string' ? message.text : '') ||
+        (typeof message?.fileName === 'string' ? message.fileName : '');
+      if (!text) return false;
+      return text.toLowerCase().includes(q);
+    });
+  }, [visibleMessages, chatSearchQuery]);
 
   const preferredLanguage = typeof me?.preferredLanguage === 'string' ? me.preferredLanguage : '';
   const preferredLanguageLabel = getLanguageByCode(preferredLanguage)?.name || preferredLanguage;
@@ -414,12 +439,12 @@ export default function ChatScreen() {
   }, [conversationId]);
 
   const displayMessages = useMemo(
-    () => visibleMessages.map((message) => (
+    () => searchFilteredMessages.map((message) => (
       translatedMessageMap[message._id]
         ? { ...message, text: translatedMessageMap[message._id], originalText: message.text }
         : message
     )),
-    [translatedMessageMap, visibleMessages],
+    [translatedMessageMap, searchFilteredMessages],
   );
 
   const msgById = useMemo(() => {
@@ -1583,11 +1608,38 @@ export default function ChatScreen() {
     }),
     [hydratedConversation, savedContactRecord],
   );
+  // iter-109: Diary detection — TRUE when the chat is the user's
+  // self-conversation. We accept TWO signals:
+  //   (a) explicit `?mode=diary` URL param (set by /app/diary.tsx),
+  //   (b) any conversation whose "other user" is the current user
+  //       (fallback so opening the self-conversation from the chats
+  //        list also lands in diary mode without needing the param).
+  const isDiary = useMemo(() => {
+    if (mode === 'diary') return true;
+    const myId = me?._id ? String(me._id) : null;
+    if (!myId) return false;
+    const otherUserId =
+      (hydratedConversation as any)?.otherUser?._id ||
+      (hydratedConversation as any)?.otherUserId ||
+      null;
+    if (otherUserId && String(otherUserId) === myId) return true;
+    // Member-list heuristic: solo conversation with only self in members.
+    const members: any[] = Array.isArray((hydratedConversation as any)?.members)
+      ? (hydratedConversation as any).members
+      : [];
+    if (members.length > 0 && members.every((m: any) => String(m?._id || m?.userId || m) === myId)) {
+      return true;
+    }
+    return false;
+  }, [mode, me?._id, hydratedConversation]);
+
   const title =
-    savedContactTitle ||
-    getConversationDisplayName(hydratedConversation, me?._id ? String(me._id) : undefined, 'Chat');
+    isDiary
+      ? 'Diary'
+      : savedContactTitle ||
+        getConversationDisplayName(hydratedConversation, me?._id ? String(me._id) : undefined, 'Chat');
   const isMineSelected = selectedMsg && me && selectedMsg.senderId === me._id;
-  const subtitle = formatPresenceSubtitle(mergedPresenceSource);
+  const subtitle = isDiary ? 'Your personal notes' : formatPresenceSubtitle(mergedPresenceSource);
   const avatarInitial = getDisplayInitials(title);
 
   // Slice B of Groups spec — when the current user is suspended in this
@@ -1706,8 +1758,14 @@ export default function ChatScreen() {
             }}
             testID="chat-header-identity"
           >
-            <View style={styles.headerAvatar} testID="chat-header-avatar">
-              {(() => {
+            <View style={[styles.headerAvatar, isDiary ? styles.headerAvatarDiary : null]} testID="chat-header-avatar">
+              {isDiary ? (
+                // iter-109 Diary mode: use a book icon instead of the
+                // contact's initial — matches the web app's pinned-tile
+                // and chat-header treatment (blue circle + book icon).
+                <MaterialCommunityIcons name="book-account-outline" size={20} color={Colors.white} />
+              ) : (
+                (() => {
                 const headerAvatarUri =
                   (hydratedConversation?.otherUser as any)?.avatar ||
                   (hydratedConversation?.otherUser as any)?.avatarUrl ||
@@ -1723,7 +1781,8 @@ export default function ChatScreen() {
                   );
                 }
                 return <Text style={styles.headerAvatarText}>{avatarInitial}</Text>;
-              })()}
+              })()
+              )}
             </View>
             <View style={styles.headerTextWrap}>
               <Text style={styles.chatHeaderTitle} numberOfLines={1} testID="chat-header-title">{title}</Text>
@@ -1733,36 +1792,102 @@ export default function ChatScreen() {
         </View>
 
         <View style={styles.chatHeaderActions}>
-          <TouchableOpacity
-            testID="call-btn"
-            onPress={() => router.push(`/call/${conversationId}?type=voice&displayName=${encodeURIComponent(title)}` as any)}
-            style={styles.headerIconButton}
-          >
-            <Ionicons name="call-outline" size={18} color={Colors.white} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            testID="video-btn"
-            onPress={() => router.push(`/call/${conversationId}?type=video&displayName=${encodeURIComponent(title)}` as any)}
-            style={styles.headerIconButton}
-          >
-            <Ionicons name="videocam-outline" size={19} color={Colors.white} />
-          </TouchableOpacity>
-          <TouchableOpacity testID="chat-disappearing-btn" onPress={() => setShowDisappearingSheet(true)} style={styles.headerIconButton}>
-            <Ionicons name="time-outline" size={18} color={Colors.white} />
-          </TouchableOpacity>
-          <TouchableOpacity testID="chat-encryption-btn" onPress={() => router.push('/encryption' as any)} style={styles.headerIconButton}>
-            <Ionicons name="shield-checkmark-outline" size={18} color={Colors.white} />
-          </TouchableOpacity>
-          <TouchableOpacity testID="chat-menu-btn" onPress={() => setShowOptionsMenu(true)} style={styles.headerIconButton}>
-            <Feather name="more-vertical" size={18} color={Colors.white} />
-          </TouchableOpacity>
+          {isDiary ? (
+            // iter-109 Diary mode: replace the call/video/timer/encryption/
+            // menu cluster with a single Search icon. Tapping it toggles
+            // the in-chat search overlay; tapping again (X) closes it.
+            <TouchableOpacity
+              testID="chat-search-toggle-btn"
+              onPress={() =>
+                setChatSearchQuery((q) => (q === null ? '' : null))
+              }
+              style={styles.headerIconButton}
+            >
+              <Feather
+                name={chatSearchQuery === null ? 'search' : 'x'}
+                size={20}
+                color={Colors.white}
+              />
+            </TouchableOpacity>
+          ) : (
+            <>
+              <TouchableOpacity
+                testID="chat-search-toggle-btn"
+                onPress={() =>
+                  setChatSearchQuery((q) => (q === null ? '' : null))
+                }
+                style={styles.headerIconButton}
+              >
+                <Feather
+                  name={chatSearchQuery === null ? 'search' : 'x'}
+                  size={18}
+                  color={Colors.white}
+                />
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="call-btn"
+                onPress={() => router.push(`/call/${conversationId}?type=voice&displayName=${encodeURIComponent(title)}` as any)}
+                style={styles.headerIconButton}
+              >
+                <Ionicons name="call-outline" size={18} color={Colors.white} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="video-btn"
+                onPress={() => router.push(`/call/${conversationId}?type=video&displayName=${encodeURIComponent(title)}` as any)}
+                style={styles.headerIconButton}
+              >
+                <Ionicons name="videocam-outline" size={19} color={Colors.white} />
+              </TouchableOpacity>
+              <TouchableOpacity testID="chat-disappearing-btn" onPress={() => setShowDisappearingSheet(true)} style={styles.headerIconButton}>
+                <Ionicons name="time-outline" size={18} color={Colors.white} />
+              </TouchableOpacity>
+              <TouchableOpacity testID="chat-encryption-btn" onPress={() => router.push('/encryption' as any)} style={styles.headerIconButton}>
+                <Ionicons name="shield-checkmark-outline" size={18} color={Colors.white} />
+              </TouchableOpacity>
+              <TouchableOpacity testID="chat-menu-btn" onPress={() => setShowOptionsMenu(true)} style={styles.headerIconButton}>
+                <Feather name="more-vertical" size={18} color={Colors.white} />
+              </TouchableOpacity>
+            </>
+          )}
         </View>
       </View>
 
-      <View style={styles.encryptionBanner} testID="chat-encryption-banner">
-        <Ionicons name="shield-checkmark-outline" size={16} color="#2A7C48" />
-        <Text style={styles.encryptionBannerText}>End-to-end encrypted</Text>
-      </View>
+      {/* Diary mode hides the "End-to-end encrypted" banner — talking
+          to yourself doesn't need an encryption reminder. */}
+      {!isDiary ? (
+        <View style={styles.encryptionBanner} testID="chat-encryption-banner">
+          <Ionicons name="shield-checkmark-outline" size={16} color="#2A7C48" />
+          <Text style={styles.encryptionBannerText}>End-to-end encrypted</Text>
+        </View>
+      ) : null}
+
+      {/* iter-109: in-chat search bar — slides in below the header when
+          the search button is tapped. Live-filters the message list by
+          case-insensitive substring match against the message text. */}
+      {chatSearchQuery !== null ? (
+        <View style={styles.searchBar} testID="chat-search-bar">
+          <Feather name="search" size={16} color={Colors.textMuted} />
+          <TextInput
+            style={styles.searchInput}
+            value={chatSearchQuery}
+            onChangeText={setChatSearchQuery}
+            placeholder={isDiary ? 'Search diary messages…' : 'Search messages…'}
+            placeholderTextColor={Colors.textMuted}
+            autoFocus
+            returnKeyType="search"
+            testID="chat-search-input"
+          />
+          {chatSearchQuery.length > 0 ? (
+            <TouchableOpacity
+              onPress={() => setChatSearchQuery('')}
+              hitSlop={8}
+              testID="chat-search-clear"
+            >
+              <Feather name="x-circle" size={16} color={Colors.textMuted} />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
 
       {multiSelectIds && multiSelectIds.length >= 0 ? (
         <View style={styles.multiSelectBanner} testID="multi-select-banner">
@@ -2023,7 +2148,7 @@ export default function ChatScreen() {
                 ref={messageInputRef}
                 value={text}
                 onChangeText={handleTyping}
-                placeholder="Type your message…"
+                placeholder={isDiary ? 'Write a note…' : 'Type your message…'}
                 placeholderTextColor={Colors.textMuted}
                 style={[
                   styles.input,
@@ -2349,11 +2474,59 @@ export default function ChatScreen() {
             <FlatList
               data={
                 (Array.isArray(conversationsForForward) ? conversationsForForward : []).filter(
-                  (item: any) => item._id !== conversationId
+                  (item: any) => item._id !== conversationId &&
+                    // Exclude any existing diary/self conversation from the
+                    // main list — we always render Diary at the top via
+                    // ListHeaderComponent so it doesn't appear twice.
+                    !(
+                      me?._id &&
+                      String(
+                        item?.otherUser?._id || item?.otherUserId || '',
+                      ) === String(me._id)
+                    )
                 )
               }
               keyExtractor={(item: any) => item._id}
               contentContainerStyle={styles.forwardListContent}
+              ListHeaderComponent={
+                // iter-109 Diary pinned at the TOP of the forward list,
+                // matching the web app screenshot — amber book tile +
+                // "Save to your personal diary" subtitle.
+                !isDiary ? (
+                  <TouchableOpacity
+                    style={[styles.forwardRow, styles.forwardRowDiary]}
+                    onPress={async () => {
+                      try {
+                        const result: any = await getOrCreateDirect({ otherUserId: me?._id });
+                        const diaryId = result?._id || result?.conversationId || result;
+                        if (typeof diaryId === 'string') {
+                          await doForwardTo(diaryId);
+                        }
+                      } catch (errorValue: any) {
+                        Alert.alert(
+                          'Could not save to Diary',
+                          errorToMessage(errorValue) || 'Please try again.',
+                        );
+                      }
+                    }}
+                    testID="forward-target-diary"
+                  >
+                    <View style={[styles.forwardAvatar, styles.forwardAvatarDiary]}>
+                      <MaterialCommunityIcons
+                        name="book-account-outline"
+                        size={20}
+                        color={Colors.warningDark}
+                      />
+                    </View>
+                    <View style={styles.flexOne}>
+                      <Text style={styles.forwardName} numberOfLines={1}>Diary</Text>
+                      <Text style={styles.forwardPreview} numberOfLines={1}>
+                        Save to your personal diary
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ) : null
+              }
               renderItem={({ item }: any) => {
                 // Use the centralised display-name resolver — it walks the
                 // members/otherUser/firstName chains and avoids the 'Chat'
@@ -2771,6 +2944,10 @@ const styles = StyleSheet.create({
     marginHorizontal: 8,
     overflow: 'hidden',
   },
+  // iter-109 Diary mode — blue avatar circle housing the book icon.
+  headerAvatarDiary: {
+    backgroundColor: Colors.diary,
+  },
   headerAvatarImage: {
     width: 40,
     height: 40,
@@ -2804,6 +2981,29 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
+  },
+  // iter-109 in-chat search bar — yellow-bordered input under the
+  // header. Matches the web app's "Search diary messages…" look.
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: Colors.white,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: FontSize.base,
+    color: Colors.textPrimary,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: '#E4B53B',
+    backgroundColor: '#FFFCF4',
   },
   encryptionBannerText: {
     fontSize: 12,
@@ -3323,8 +3523,25 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   forwardAvatarText: { color: Colors.primary, fontWeight: FontWeight.bold },
+  // iter-109 — Diary tile pinned at the TOP of the forward sheet.
+  // Amber palette per web app screenshot so it visually pairs with the
+  // existing "saved on this device" badges + warning Colors block.
+  forwardRowDiary: {
+    backgroundColor: '#FFFBEB', // amber-50 — soft highlight
+    borderBottomColor: 'transparent',
+    marginBottom: 4,
+    borderRadius: Radius.md,
+    paddingHorizontal: 12,
+  },
+  forwardAvatarDiary: {
+    backgroundColor: Colors.warningLight, // amber-100 — pairs with the book icon below
+  },
   forwardName: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   forwardSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
+  // forwardPreview — same visual treatment as forwardSub, kept as a
+  // separate style so the Diary "Save to your personal diary" subtitle
+  // can be tweaked independently later without touching every chat row.
+  forwardPreview: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
   forwardEmpty: { textAlign: 'center', color: Colors.textMuted, paddingVertical: Spacing.lg },
   forwardSheet: { maxHeight: '70%' },
   disappearingSheet: { paddingHorizontal: 16, paddingBottom: 24 },
