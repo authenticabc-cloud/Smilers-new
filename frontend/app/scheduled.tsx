@@ -123,6 +123,8 @@ export default function ScheduledScreen() {
         const date = `${when.getFullYear()}-${pad2(when.getMonth() + 1)}-${pad2(when.getDate())}`;
         const time = `${pad2(when.getHours())}:${pad2(when.getMinutes())}`;
         // iter-113: defensive arg coercion + dual-endpoint probe
+        // iter-120: fallback now uses NEW `scheduledMessages.create`
+        // schema per backend agent: { recipient, text, scheduledAt }.
         const args = {
           recipient: String(draft.recipient || 'Conversation').slice(0, 200),
           message: String(draft.message || '').slice(0, 5000),
@@ -131,12 +133,17 @@ export default function ScheduledScreen() {
           repeat: 'once' as const,
           active: true,
         };
+        const argsNew = {
+          recipient: String(draft.recipient || 'Conversation').slice(0, 200),
+          text: String(draft.message || '').slice(0, 5000),
+          scheduledAt: when.toISOString(),
+        };
         try {
           await createSchedule(args);
         } catch (primaryErr: any) {
-          // Try legacy endpoint as fallback
+          // Try new scheduledMessages.create schema as fallback
           if (typeof createScheduleLegacy === 'function') {
-            await (createScheduleLegacy as any)(args);
+            await (createScheduleLegacy as any)(argsNew);
           } else {
             throw primaryErr;
           }
@@ -184,20 +191,61 @@ export default function ScheduledScreen() {
       if (draft._id) {
         await updateSchedule({ scheduleId: draft._id as any, recipient: draft.recipient, message: draft.message, date: draft.date, time: draft.time, repeat: draft.repeat, active: draft.active });
       } else {
-        // iter-113: dual-endpoint probe — primary, then legacy fallback.
+        // iter-120: UX sanity guard — the backend agent caught real
+        // payloads where users had typed the FULL MESSAGE TEXT into
+        // the recipient field by mistake (e.g. `recipient="Please good
+        // morning Queeny my lovely…"`). The backend rejects these
+        // (no matching contact name) but the user just sees "Server
+        // Error". Guard before we ship: if recipient > 80 chars and
+        // contains whitespace AND looks like a sentence, refuse.
+        const rTrim = String(draft.recipient || '').trim();
+        if (rTrim.length > 80 && /[.!?,]/.test(rTrim)) {
+          throw new Error(
+            'The recipient field looks like a message body. ' +
+            'Please put only the contact NAME in the "Recipient" field ' +
+            '(e.g. "Angela Yeboah"), and the message text in the ' +
+            '"Message" field below.'
+          );
+        }
+        if (rTrim.length === 0) {
+          throw new Error(
+            'Please enter the recipient\u2019s name (e.g. "Angela Yeboah").'
+          );
+        }
+        // iter-120: dual-shape probe — primary keeps the legacy
+        // scheduleMessageMobile shape (still accepted server-side),
+        // fallback uses the NEW scheduledMessages.create schema
+        // { recipient, text, scheduledAt } per backend agent.
         const args = {
-          recipient: String(draft.recipient || '').slice(0, 200),
+          recipient: rTrim.slice(0, 200),
           message: String(draft.message || '').slice(0, 5000),
           date: draft.date,
           time: draft.time,
           repeat: draft.repeat,
           active: draft.active,
         };
+        // Compose the ISO scheduledAt from the user-picked date+time
+        // fields. Using local-time interpretation matches the rest of
+        // the app's scheduling UX (when the user picks 7:21 they mean
+        // 7:21 in THEIR timezone). new Date('YYYY-MM-DDTHH:MM') parses
+        // as local time.
+        const scheduledAtIso = (() => {
+          try {
+            return new Date(`${draft.date}T${draft.time}`).toISOString();
+          } catch {
+            return new Date().toISOString();
+          }
+        })();
+        const argsNew = {
+          recipient: rTrim.slice(0, 200),
+          text: String(draft.message || '').slice(0, 5000),
+          scheduledAt: scheduledAtIso,
+        };
         try {
           await createSchedule(args);
         } catch (primaryErr: any) {
           if (typeof createScheduleLegacy === 'function') {
-            await (createScheduleLegacy as any)(args);
+            await (createScheduleLegacy as any)(argsNew);
           } else {
             throw primaryErr;
           }
