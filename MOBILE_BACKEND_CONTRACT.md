@@ -630,16 +630,163 @@ ai.chat.generateResponse({ conversationId, prompt }) → string
 ai.chat.getMessages({ conversationId, paginationOpts }) → PaginatedAIMessages
 ```
 
-### 34. `diary.*` — DEPRECATED on backend per iter-110
+### 34. `diary.*` — Personal notes (RESURRECTED in iter-117 with proper isolation)
 
-**Status**: Mobile no longer calls these endpoints. iter-110 moved the
-Diary feature to 100% local AsyncStorage to prevent the cross-chat data
-leak caused by `getOrCreateDirect({ otherUserId: myUserId })`. The
-following endpoints can be REMOVED from the backend if they exist (they
-were never finalized):
+**Status**: User has asked for cloud sync of the Diary feature (so notes
+move between web app + mobile app + multiple mobile devices for the
+same user). iter-110 had ripped this out due to a cross-user data leak
+caused by `getOrCreateDirect({ otherUserId: myUserId })`. iter-117
+re-introduces it through a DEDICATED, PROPERLY-ISOLATED `diary.*`
+namespace.
 
-- `diary.appendEntry`
-- `diary.listEntries`
+**🚨 CRITICAL ISOLATION REQUIREMENT 🚨**: Every diary query/mutation
+MUST derive `userId` from the auth context (`getCurrentUserId(ctx)`).
+The handler must NEVER accept a `userId` arg from the client side.
+Without this, the cross-user leak that broke iter-110 reproduces.
+
+**Schema**:
+
+```ts
+// convex/schema.ts (add to existing schema)
+diaryEntries: defineTable({
+  userId: v.id("users"),                    // OWNER — set by handler from auth context
+  kind: v.union(                            // entry kind
+    v.literal("text"),
+    v.literal("image"),
+    v.literal("video"),
+    v.literal("audio"),
+    v.literal("file"),
+    v.literal("gif"),
+  ),
+  text: v.optional(v.union(v.string(), v.null())),
+  attachment: v.optional(v.union(           // forwarded attachment metadata
+    v.object({
+      storageId: v.optional(v.union(v.id("_storage"), v.string(), v.null())),
+      mediaUrl: v.optional(v.union(v.string(), v.null())),
+      fileUrl: v.optional(v.union(v.string(), v.null())),
+      fileName: v.optional(v.union(v.string(), v.null())),
+      mimeType: v.optional(v.union(v.string(), v.null())),
+      fileSize: v.optional(v.union(v.number(), v.null())),
+      audioDuration: v.optional(v.union(v.number(), v.null())),
+      thumbnailUrl: v.optional(v.union(v.string(), v.null())),
+    }),
+    v.null(),
+  )),
+  forwardedFrom: v.optional(v.union(        // provenance when forwarded
+    v.object({
+      conversationId: v.optional(v.union(v.string(), v.null())),
+      conversationName: v.optional(v.union(v.string(), v.null())),
+      originalSenderName: v.optional(v.union(v.string(), v.null())),
+      originalMessageId: v.optional(v.union(v.string(), v.null())),
+      originalCreationTime: v.optional(v.union(v.number(), v.null())),
+    }),
+    v.null(),
+  )),
+  clientCreationTime: v.optional(v.number()), // for migration of offline drafts
+}).index("by_user_and_creation", ["userId", "_creationTime"]),
+```
+
+**Required handlers**:
+
+```ts
+// convex/diary.ts
+import { v } from "convex/values";
+import { mutation, query } from "./_generated/server";
+import { getCurrentUserId } from "./auth"; // your existing helper
+
+export const listEntries = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getCurrentUserId(ctx);
+    if (!userId) return [];
+    // Order newest-LAST (matches mobile's chat-bubble newest-at-bottom convention).
+    const entries = await ctx.db
+      .query("diaryEntries")
+      .withIndex("by_user_and_creation", q => q.eq("userId", userId))
+      .order("asc")
+      .collect();
+    // Return shape MUST match mobile DiaryEntry interface (see
+    // /app/frontend/src/lib/diaryStore.ts:DiaryEntry).
+    return entries.map(e => ({
+      _id: e._id,
+      _creationTime: e._creationTime,
+      kind: e.kind,
+      text: e.text ?? null,
+      attachment: e.attachment ?? null,
+      forwardedFrom: e.forwardedFrom ?? null,
+    }));
+  },
+});
+
+export const appendEntry = mutation({
+  args: {
+    kind: v.union(
+      v.literal("text"),
+      v.literal("image"),
+      v.literal("video"),
+      v.literal("audio"),
+      v.literal("file"),
+      v.literal("gif"),
+    ),
+    text: v.optional(v.union(v.string(), v.null())),
+    attachment: v.optional(v.union(v.any(), v.null())),
+    forwardedFrom: v.optional(v.union(v.any(), v.null())),
+    clientCreationTime: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getCurrentUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const entryId = await ctx.db.insert("diaryEntries", {
+      userId,           // ← derived from auth context — NEVER from args
+      kind: args.kind,
+      text: args.text ?? null,
+      attachment: args.attachment ?? null,
+      forwardedFrom: args.forwardedFrom ?? null,
+      clientCreationTime: args.clientCreationTime,
+    });
+    return entryId;
+  },
+});
+
+export const deleteEntry = mutation({
+  args: { entryId: v.id("diaryEntries") },
+  handler: async (ctx, args) => {
+    const userId = await getCurrentUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const entry = await ctx.db.get(args.entryId);
+    if (!entry || entry.userId !== userId) {
+      // SECURITY: deny silently rather than reveal existence.
+      throw new Error("Not found");
+    }
+    await ctx.db.delete(args.entryId);
+  },
+});
+
+export const clearDiary = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getCurrentUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const all = await ctx.db
+      .query("diaryEntries")
+      .withIndex("by_user_and_creation", q => q.eq("userId", userId))
+      .collect();
+    for (const e of all) await ctx.db.delete(e._id);
+  },
+});
+```
+
+**Mobile behavior when these endpoints are deployed**:
+- `app/diary.tsx` probes `api.diary.listEntries({})` via `useSafeConvexQuery`
+- If the query returns an array, mobile flips to cloud-mode → header subtitle changes from "Saved on this device" → "Synced with Smilers cloud"
+- Any locally-saved entries (from offline use) get flushed to cloud via `appendEntry` on first successful list, then removed from local AsyncStorage
+- All new writes (send, delete, clear) hit the cloud first; local AsyncStorage is the fallback
+- Long-press on any entry → Copy / Forward to a chat / Delete (added in iter-117)
+
+**Mobile behavior when these endpoints are NOT deployed**:
+- `useSafeConvexQuery` catches the `CouldNotFindFunction` and returns `null`
+- Mobile stays in local-only mode (identical to iter-111 behavior)
+- No crashes, no error toasts, graceful degradation
 
 ---
 

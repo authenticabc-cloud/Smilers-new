@@ -1,34 +1,46 @@
 /**
- * Diary screen — LOCAL-ONLY personal notes (iter-111).
+ * Diary screen — personal notes with OPTIONAL cloud sync.
  *
- * ⚠ PRIVACY-CRITICAL DESIGN ⚠
+ * iter-117 update: ADDED an opportunistic backend sync probe.
  *
- * Diary used to route through `/chat/<id>?mode=diary` and back itself
- * with a server-side self-conversation. On the current backend, that
- * resulted in cross-user data leakage (one user's Diary view contained
- * another user's PDFs/videos — see screenshot from 2026-06-04 14:08).
+ *   - On mount, mobile probes `api.diary.listEntries({})` via
+ *     `useSafeConvexQuery`. If the backend exposes that endpoint AND
+ *     returns an array, those cloud entries become the SOURCE OF TRUTH
+ *     (merged with any unsync'd local drafts).
+ *   - All NEW writes (send + delete + clear) try the backend first;
+ *     local AsyncStorage is the fallback if the endpoint is missing or
+ *     the call fails.
+ *   - On first successful list-from-cloud, any local-only entries are
+ *     "flushed" to the cloud one-by-one (so previously-saved offline
+ *     notes don't get lost when the backend ships).
+ *   - If the backend endpoints DON'T exist yet, behavior is identical
+ *     to iter-111 — 100% local AsyncStorage, no risk of cross-user
+ *     contamination.
  *
- * iter-111 rewrites Diary as a 100% LOCAL screen that:
- *   - Reads/writes ONLY from AsyncStorage via /src/lib/diaryStore.ts
- *   - NEVER calls a Convex mutation or query
- *   - NEVER mounts the regular chat screen so there's zero risk of
- *     diary chrome leaking onto another conversation's data
- *   - Per-user storage key (`smilers.diary.<userId>.entries.v1`) so
- *     multi-account devices don't cross-contaminate
+ * iter-117 also ADDS long-press → Copy / Forward / Delete menu:
+ *   - Copy: copies the entry's text (or fileName if no text) to the
+ *     system clipboard via expo-clipboard.
+ *   - Forward: opens a "Forward to" sheet listing the user's
+ *     conversations; on tap, sends the entry's content as a new
+ *     message via `messages.send`. Works for text and for attachments
+ *     (attachments forward by including the mediaUrl as a fileUrl).
  *
- * Functionality on parity with the web app spec (per user screenshots):
- *   ✓ Blue book avatar + "Diary / Your personal notes" header
- *   ✓ Search icon → "Search diary messages…" overlay with live filter
- *   ✓ Composer "Write a note…" + send → appends to local store
- *   ✓ Renders forwarded messages with their source attribution
- *   ✓ Long-press to delete a single entry
- *   ✓ Header menu → "Clear all entries" with confirmation
+ * iter-117 backend contract: see /app/MOBILE_BACKEND_CONTRACT.md
+ * Section 34 for the exact `diary.*` endpoints the backend agent must
+ * provide.
  *
- * Re-enabling cloud sync is a backend dependency, NOT a code dependency:
- * once `api.diary.appendEntry` / `api.diary.listEntries` exist with a
- * per-user isolated table, swap `appendDiaryEntry` / `readDiaryEntries`
- * for Convex mutations + reactive queries here. No call-site changes
- * needed elsewhere.
+ * ⚠ PRIVACY-CRITICAL DESIGN (CARRIED FORWARD FROM iter-111) ⚠
+ *
+ * If the backend `diary.*` namespace is wired with PROPER per-user
+ * scoping (every query/mutation derives userId from the auth context,
+ * never accepts a userId arg from the client), this is safe. If the
+ * backend agent EVER accepts a `userId` parameter from the client side
+ * for diary operations, that's a cross-user data leak vector — flag
+ * IMMEDIATELY and revert to local-only.
+ *
+ * The web app and mobile app share the same Convex deployment. The
+ * sync key is the AUTHENTICATED USER ID — same user across devices
+ * sees the same diary.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -49,8 +61,11 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useQuery } from 'convex/react';
+import { useMutation, useQuery } from 'convex/react';
+import * as Clipboard from 'expo-clipboard';
 import { api } from '../src/convexApi';
+import Avatar from '../src/components/Avatar';
+import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import {
   appendDiaryEntry,
   clearDiary,
@@ -91,46 +106,145 @@ interface RenderItem {
   key: string;
 }
 
+/**
+ * Merge cloud + local diary entries by `_id`, with cloud entries
+ * winning on conflict (cloud is the source of truth once we're
+ * connected). Stable sort by `_creationTime` ascending so the
+ * newest-at-bottom convention is preserved.
+ */
+function mergeEntries(cloud: DiaryEntry[], local: DiaryEntry[]): DiaryEntry[] {
+  const byId = new Map<string, DiaryEntry>();
+  // Local first, cloud overrides.
+  for (const e of local) byId.set(e._id, e);
+  for (const e of cloud) byId.set(e._id, e);
+  return Array.from(byId.values()).sort((a, b) => a._creationTime - b._creationTime);
+}
+
 export default function DiaryScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const me = useQuery(api.users.getCurrentUser);
   const myUserId = me?._id ? String(me._id) : null;
-  const [entries, setEntries] = useState<DiaryEntry[]>([]);
+
+  // ─── Cloud sync probe ──────────────────────────────────────────
+  // If `api.diary.listEntries` exists, this returns the cloud entries.
+  // If not, `data` stays `[]` and we operate from local AsyncStorage.
+  const cloudEntriesQuery = useSafeConvexQuery<DiaryEntry[] | null>(
+    (api as any).diary?.listEntries,
+    {},
+    null,
+    !!myUserId,
+  );
+  // Reactive: if the backend ships diary support later in this session,
+  // the data will flow in WITHOUT a page reload.
+  const cloudReady = Array.isArray(cloudEntriesQuery.data);
+  const cloudEntries = useMemo<DiaryEntry[]>(
+    () => (cloudReady ? (cloudEntriesQuery.data as DiaryEntry[]) : []),
+    [cloudReady, cloudEntriesQuery.data],
+  );
+
+  // Cloud write mutations (resolved lazily — if undefined, we skip).
+  const appendEntryCloud = useMutation((api as any).diary?.appendEntry);
+  const deleteEntryCloud = useMutation((api as any).diary?.deleteEntry);
+  const clearDiaryCloud = useMutation((api as any).diary?.clearDiary);
+  // Forward-target write — same mutation the rest of the app uses.
+  const sendMessage = useMutation((api as any).messages.send);
+
+  // Forward picker: list of conversations to forward to. Cheap to
+  // always keep this loaded so the picker opens snappily.
+  const { data: conversationsForForward } = useSafeConvexQuery<any[]>(
+    (api as any).conversations.listConversations,
+    {},
+    [],
+    true,
+  );
+
+  // ─── Local store (still primary when cloud unavailable) ──────
+  const [localEntries, setLocalEntries] = useState<DiaryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showMenu, setShowMenu] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [actionEntry, setActionEntry] = useState<DiaryEntry | null>(null);
+  const [showForwardSheet, setShowForwardSheet] = useState(false);
+  const [forwardSource, setForwardSource] = useState<DiaryEntry | null>(null);
+  const localFlushedRef = useRef(false);
   const listRef = useRef<FlatList<RenderItem> | null>(null);
 
-  // Initial load.
+  // Initial local load.
   useEffect(() => {
     if (!myUserId) return;
     let cancelled = false;
     (async () => {
       const data = await readDiaryEntries(myUserId);
       if (!cancelled) {
-        setEntries(data);
+        setLocalEntries(data);
         setLoading(false);
       }
     })();
     return () => { cancelled = true; };
   }, [myUserId]);
 
+  // ─── Local-only-to-cloud flush ────────────────────────────────
+  // Once cloud is ready AND we have local entries that aren't yet on
+  // cloud, push them up so the user's offline notes don't get lost.
+  // Only happens ONCE per session via localFlushedRef.
+  useEffect(() => {
+    if (localFlushedRef.current) return;
+    if (!cloudReady) return;
+    if (!appendEntryCloud) return;
+    if (!myUserId) return;
+    if (localEntries.length === 0) return;
+
+    const cloudIds = new Set(cloudEntries.map((e) => e._id));
+    const orphans = localEntries.filter((e) => !cloudIds.has(e._id));
+    if (orphans.length === 0) {
+      localFlushedRef.current = true;
+      return;
+    }
+    localFlushedRef.current = true;
+    (async () => {
+      for (const entry of orphans) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await (appendEntryCloud as any)({
+            kind: entry.kind,
+            text: entry.text,
+            attachment: entry.attachment,
+            forwardedFrom: entry.forwardedFrom,
+            clientCreationTime: entry._creationTime,
+          });
+          // On success, drop the local copy so we don't double-show
+          // after the cloud query refreshes.
+          // eslint-disable-next-line no-await-in-loop
+          await deleteDiaryEntry(myUserId, entry._id);
+        } catch {
+          // Best-effort — leave the orphan local; next session retries.
+        }
+      }
+      setLocalEntries(await readDiaryEntries(myUserId));
+    })();
+  }, [cloudReady, cloudEntries, localEntries, myUserId, appendEntryCloud]);
+
+  // ─── Display entries: cloud if ready, else local ──────────────
+  const allEntries = useMemo<DiaryEntry[]>(() => {
+    if (cloudReady) return mergeEntries(cloudEntries, localEntries);
+    return localEntries;
+  }, [cloudReady, cloudEntries, localEntries]);
+
   const visibleEntries = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return entries;
-    return entries.filter((e) => {
+    if (!q) return allEntries;
+    return allEntries.filter((e) => {
       const text = (e.text || '').toLowerCase();
       const fileName = (e.attachment?.fileName || '').toLowerCase();
       const forwardedFromName = (e.forwardedFrom?.conversationName || '').toLowerCase();
       return text.includes(q) || fileName.includes(q) || forwardedFromName.includes(q);
     });
-  }, [entries, searchQuery]);
+  }, [allEntries, searchQuery]);
 
-  // Build display rows with day separators. Newest-at-bottom convention.
   const rows: RenderItem[] = useMemo(() => {
     const sorted = [...visibleEntries].sort((a, b) => a._creationTime - b._creationTime);
     const out: RenderItem[] = [];
@@ -146,28 +260,63 @@ export default function DiaryScreen() {
     return out;
   }, [visibleEntries]);
 
+  // ─── Send a new diary note ─────────────────────────────────────
   const handleSend = useCallback(async () => {
     const text = draft.trim();
     if (!text || !myUserId) return;
     setDraft('');
+    // Try cloud first; fall back to local.
+    if (cloudReady && typeof appendEntryCloud === 'function') {
+      try {
+        await (appendEntryCloud as any)({
+          kind: 'text',
+          text,
+          attachment: null,
+          forwardedFrom: null,
+        });
+        // Cloud query will refresh reactively.
+        requestAnimationFrame(() => {
+          try { listRef.current?.scrollToEnd({ animated: true }); } catch {}
+        });
+        return;
+      } catch {
+        // Fall through to local.
+      }
+    }
     const entry = await appendDiaryEntry(myUserId, { kind: 'text', text });
-    setEntries((prev) => [...prev, entry]);
+    setLocalEntries((prev) => [...prev, entry]);
     requestAnimationFrame(() => {
       try { listRef.current?.scrollToEnd({ animated: true }); } catch {}
     });
-  }, [draft, myUserId]);
+  }, [draft, myUserId, cloudReady, appendEntryCloud]);
 
+  // ─── Delete one entry ─────────────────────────────────────────
   const handleDelete = useCallback(async (entryId: string) => {
     if (!myUserId) return;
-    await deleteDiaryEntry(myUserId, entryId);
-    setEntries((prev) => prev.filter((e) => e._id !== entryId));
+    // Cloud delete (if the entry is cloud-resident).
+    const isCloudEntry = cloudEntries.some((e) => e._id === entryId);
+    if (isCloudEntry && typeof deleteEntryCloud === 'function') {
+      try {
+        await (deleteEntryCloud as any)({ entryId });
+      } catch (errorValue: any) {
+        Alert.alert('Failed to delete', String(errorValue?.message || errorValue));
+        return;
+      }
+    } else {
+      await deleteDiaryEntry(myUserId, entryId);
+      setLocalEntries((prev) => prev.filter((e) => e._id !== entryId));
+    }
     setPendingDeleteId(null);
-  }, [myUserId]);
+    setActionEntry(null);
+  }, [myUserId, cloudEntries, deleteEntryCloud]);
 
+  // ─── Clear all entries ─────────────────────────────────────────
   const handleClearAll = useCallback(() => {
     Alert.alert(
       'Clear all diary entries?',
-      'This will permanently remove every note you\u2019ve saved to Diary on THIS device. This cannot be undone.',
+      'This will permanently remove every note you\u2019ve saved to Diary' +
+        (cloudReady ? ', across all your devices.' : ' on THIS device.') +
+        ' This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -175,15 +324,84 @@ export default function DiaryScreen() {
           style: 'destructive',
           onPress: async () => {
             if (!myUserId) return;
+            if (cloudReady && typeof clearDiaryCloud === 'function') {
+              try {
+                await (clearDiaryCloud as any)({});
+              } catch (errorValue: any) {
+                Alert.alert('Failed', String(errorValue?.message || errorValue));
+                setShowMenu(false);
+                return;
+              }
+            }
             await clearDiary(myUserId);
-            setEntries([]);
+            setLocalEntries([]);
             setShowMenu(false);
           },
         },
       ],
     );
-  }, [myUserId]);
+  }, [myUserId, cloudReady, clearDiaryCloud]);
 
+  // ─── Copy an entry's content to clipboard ─────────────────────
+  const handleCopy = useCallback(async (entry: DiaryEntry) => {
+    try {
+      const payload =
+        (entry.text && entry.text.trim()) ||
+        entry.attachment?.fileName ||
+        entry.attachment?.mediaUrl ||
+        '';
+      if (!payload) {
+        Alert.alert('Nothing to copy', 'This note has no text content.');
+        setActionEntry(null);
+        return;
+      }
+      await Clipboard.setStringAsync(payload);
+      setActionEntry(null);
+      // Subtle confirmation — same pattern used in chat copy.
+      Alert.alert('Copied', payload.length > 80 ? `${payload.slice(0, 80)}…` : payload);
+    } catch (errorValue: any) {
+      Alert.alert('Copy failed', String(errorValue?.message || errorValue));
+    }
+  }, []);
+
+  // ─── Forward an entry to a chat ───────────────────────────────
+  const handleForward = useCallback((entry: DiaryEntry) => {
+    setForwardSource(entry);
+    setShowForwardSheet(true);
+    setActionEntry(null);
+  }, []);
+
+  const doForwardToConversation = useCallback(
+    async (targetConvId: string) => {
+      const entry = forwardSource;
+      if (!entry) return;
+      setShowForwardSheet(false);
+      setForwardSource(null);
+      try {
+        // Build a message payload that mirrors what the chat composer
+        // sends. Text and attachment metadata are both handled.
+        const args: any = {
+          conversationId: targetConvId,
+          text: entry.text || '',
+        };
+        if (entry.attachment) {
+          if (entry.attachment.storageId) args.attachmentStorageId = entry.attachment.storageId;
+          if (entry.attachment.mediaUrl) args.mediaUrl = entry.attachment.mediaUrl;
+          if (entry.attachment.fileName) args.fileName = entry.attachment.fileName;
+          if (entry.attachment.mimeType) args.mimeType = entry.attachment.mimeType;
+          if (entry.attachment.fileSize) args.fileSize = entry.attachment.fileSize;
+          if (entry.attachment.audioDuration) args.audioDuration = entry.attachment.audioDuration;
+        }
+        await (sendMessage as any)(args);
+        Alert.alert('Forwarded', 'Note sent to the selected chat.');
+      } catch (errorValue: any) {
+        Alert.alert('Forward failed', String(errorValue?.message || errorValue));
+      }
+    },
+    [forwardSource, sendMessage],
+  );
+
+  // ─── Render one entry bubble ──────────────────────────────────
   const renderItem = useCallback(({ item }: { item: RenderItem }) => {
     if (item.type === 'day') {
       return (
@@ -196,7 +414,7 @@ export default function DiaryScreen() {
     const time = formatTime(entry._creationTime);
     return (
       <Pressable
-        onLongPress={() => setPendingDeleteId(entry._id)}
+        onLongPress={() => setActionEntry(entry)}
         delayLongPress={350}
         style={styles.bubbleRow}
       >
@@ -249,6 +467,14 @@ export default function DiaryScreen() {
     );
   }, []);
 
+  // ─── Sync status indicator (cloud/local) ──────────────────────
+  const syncBadge = useMemo(() => {
+    if (cloudReady) {
+      return { text: 'Synced with Smilers cloud', color: Colors.diaryDark, icon: 'cloud-check' as const };
+    }
+    return { text: 'Saved on this device', color: Colors.textMuted, icon: 'cloud-off-outline' as const };
+  }, [cloudReady]);
+
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="diary-screen">
       <View style={[styles.header, { paddingTop: 8 }]} testID="diary-header">
@@ -267,7 +493,10 @@ export default function DiaryScreen() {
         </View>
         <View style={styles.headerTextWrap}>
           <Text style={styles.headerTitle} numberOfLines={1}>Diary</Text>
-          <Text style={styles.headerSubtitle} numberOfLines={1}>Your personal notes</Text>
+          <Text style={styles.headerSubtitle} numberOfLines={1}>
+            <MaterialCommunityIcons name={syncBadge.icon} size={12} color={Colors.white} />
+            {'  '}{syncBadge.text}
+          </Text>
         </View>
         <TouchableOpacity
           onPress={() => {
@@ -330,7 +559,9 @@ export default function DiaryScreen() {
             <Text style={styles.emptyBody}>
               {searchQuery
                 ? 'Try a different search term.'
-                : 'Notes you save here stay private to this device. Forward any message from a chat to save it here.'}
+                : cloudReady
+                  ? 'Notes you save here sync across all your devices. Forward any message from a chat to save it here.'
+                  : 'Notes you save here stay private to this device. Forward any message from a chat to save it here.'}
             </Text>
           </View>
         ) : (
@@ -368,7 +599,51 @@ export default function DiaryScreen() {
         </View>
       </KeyboardAvoidingView>
 
-      {/* Delete-entry confirmation sheet */}
+      {/* ─── Long-press action menu (Copy / Forward / Delete) ─── */}
+      <Modal
+        transparent
+        visible={!!actionEntry}
+        animationType="fade"
+        onRequestClose={() => setActionEntry(null)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setActionEntry(null)}>
+          <Pressable style={styles.menuSheet}>
+            <Text style={styles.actionMenuTitle} numberOfLines={2}>
+              {actionEntry?.text || actionEntry?.attachment?.fileName || 'Diary note'}
+            </Text>
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => actionEntry && handleCopy(actionEntry)}
+              testID="diary-action-copy"
+            >
+              <Feather name="copy" size={16} color={Colors.textPrimary} />
+              <Text style={styles.menuItemText}>Copy</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => actionEntry && handleForward(actionEntry)}
+              testID="diary-action-forward"
+            >
+              <Feather name="corner-up-right" size={16} color={Colors.textPrimary} />
+              <Text style={styles.menuItemText}>Forward to a chat</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => {
+                if (!actionEntry) return;
+                setPendingDeleteId(actionEntry._id);
+                setActionEntry(null);
+              }}
+              testID="diary-action-delete"
+            >
+              <Feather name="trash-2" size={16} color={Colors.danger} />
+              <Text style={[styles.menuItemText, { color: Colors.danger }]}>Delete</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ─── Delete-entry confirmation sheet ────────────────────── */}
       <Modal
         transparent
         visible={!!pendingDeleteId}
@@ -379,7 +654,7 @@ export default function DiaryScreen() {
           <Pressable style={styles.confirmSheet}>
             <Text style={styles.confirmTitle}>Delete this note?</Text>
             <Text style={styles.confirmBody}>
-              The note will be permanently removed from your Diary on this device.
+              The note will be permanently removed from your Diary{cloudReady ? ', across all devices.' : ' on this device.'}
             </Text>
             <View style={styles.confirmRow}>
               <TouchableOpacity
@@ -399,7 +674,7 @@ export default function DiaryScreen() {
         </Pressable>
       </Modal>
 
-      {/* Header overflow menu */}
+      {/* ─── Header overflow menu ───────────────────────────────── */}
       <Modal
         transparent
         visible={showMenu}
@@ -412,6 +687,60 @@ export default function DiaryScreen() {
               <Feather name="trash-2" size={16} color={Colors.danger} />
               <Text style={[styles.menuItemText, { color: Colors.danger }]}>Clear all entries</Text>
             </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ─── Forward-to-chat picker ────────────────────────────── */}
+      <Modal
+        transparent
+        visible={showForwardSheet}
+        animationType="slide"
+        onRequestClose={() => { setShowForwardSheet(false); setForwardSource(null); }}
+      >
+        <Pressable
+          style={styles.modalBackdrop}
+          onPress={() => { setShowForwardSheet(false); setForwardSource(null); }}
+        >
+          <Pressable style={styles.forwardSheet}>
+            <View style={styles.forwardSheetHandle} />
+            <Text style={styles.forwardSheetTitle}>Forward to</Text>
+            <FlatList
+              data={Array.isArray(conversationsForForward) ? conversationsForForward : []}
+              keyExtractor={(item: any) => String(item._id)}
+              contentContainerStyle={{ paddingBottom: insets.bottom + 16 }}
+              renderItem={({ item }) => {
+                const label =
+                  item?.name ||
+                  item?.otherUserName ||
+                  item?.title ||
+                  'Chat';
+                return (
+                  <TouchableOpacity
+                    style={styles.forwardRow}
+                    onPress={() => doForwardToConversation(item._id)}
+                    testID={`diary-forward-target-${item._id}`}
+                  >
+                    <Avatar name={label} size={40} />
+                    <View style={styles.forwardRowText}>
+                      <Text style={styles.forwardRowName} numberOfLines={1}>{label}</Text>
+                      {item?.lastMessageText ? (
+                        <Text style={styles.forwardRowSubtitle} numberOfLines={1}>
+                          {item.lastMessageText}
+                        </Text>
+                      ) : null}
+                    </View>
+                  </TouchableOpacity>
+                );
+              }}
+              ListEmptyComponent={
+                <View style={{ padding: Spacing.lg, alignItems: 'center' }}>
+                  <Text style={{ color: Colors.textMuted }}>
+                    No conversations to forward to yet.
+                  </Text>
+                </View>
+              }
+            />
           </Pressable>
         </Pressable>
       </Modal>
@@ -569,9 +898,49 @@ const styles = StyleSheet.create({
     borderRadius: Radius.lg,
     paddingVertical: Spacing.sm,
     width: '100%',
-    maxWidth: 280,
+    maxWidth: 320,
     ...Shadow.lg,
+  },
+  actionMenuTitle: {
+    fontSize: FontSize.sm,
+    color: Colors.textMuted,
+    fontWeight: FontWeight.semibold,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
   },
   menuItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
   menuItemText: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  forwardSheet: {
+    position: 'absolute',
+    left: 0, right: 0, bottom: 0,
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: Radius.lg,
+    borderTopRightRadius: Radius.lg,
+    paddingTop: Spacing.sm,
+    paddingHorizontal: Spacing.base,
+    maxHeight: '70%',
+  },
+  forwardSheetHandle: {
+    alignSelf: 'center',
+    width: 36, height: 4, borderRadius: 2,
+    backgroundColor: Colors.border,
+    marginBottom: Spacing.sm,
+  },
+  forwardSheetTitle: {
+    fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary,
+    marginBottom: Spacing.sm,
+  },
+  forwardRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 10,
+    gap: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  forwardRowText: { flex: 1 },
+  forwardRowName: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  forwardRowSubtitle: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2 },
 });

@@ -112,18 +112,20 @@ function getDisplayNameFromPayload(payload: NotificationPayload, fallbackBody?: 
   );
 }
 
-// iter-116: Expected projectId for the Smilers Expo project (slug
-// `smilers`, owner `abcsimplesend`). This matches `extra.eas.projectId`
-// in app.json AND the Expo dashboard project at
-// https://expo.dev/accounts/abcsimplesend/projects/smilers where the
-// FCM V1 service-account key is uploaded.
+// iter-117: CORRECTED expected projectId. The actual projectId Expo
+// uses for slug `smilers` under owner `abcsimplesend` is
+// `e43b472f-8131-468e-b17b-ed0bfbf0800d` (where the FCM v1 service
+// account is uploaded). The previous value `8b742de6-...` was a stale
+// app.json entry from a different / renamed Expo project that no
+// longer holds credentials. Updated both app.json and this constant
+// in lock-step.
 //
 // If the runtime projectId differs from this constant, the installed
 // APK was built against a DIFFERENT Expo project and Expo's push
 // servers won't find FCM credentials for it ("Unable to retrieve the
 // FCM server key for the recipient's app"). The fix is always: fresh
 // EAS build + uninstall old APK + install new APK.
-const EXPECTED_PROJECT_ID = '8b742de6-a156-453c-8e54-16070577d2b7';
+const EXPECTED_PROJECT_ID = 'e43b472f-8131-468e-b17b-ed0bfbf0800d';
 
 function getProjectId() {
   return (Constants.expoConfig as any)?.extra?.eas?.projectId || (Constants.easConfig as any)?.projectId || undefined;
