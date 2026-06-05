@@ -85,9 +85,12 @@ credentials.json
 *.pem
 *.key
 .credentials
--e 
-# Credential files (do NOT block .env — Emergent deployment requires those)
-credentials.json
-*.pem
-*.key
-.credentials
+
+# Server-side credentials that must NEVER ship in the deployed image.
+# These are kept locally for tooling (e.g., `eas credentials` upload to
+# Expo's push backend) but excluded from BOTH git AND the docker
+# build context (.dockerignore). If you need to re-upload, restore
+# from your secure store — they should NOT be in source control.
+frontend/google-service-account.json
+google-service-account.json
+**/google-service-account*.json

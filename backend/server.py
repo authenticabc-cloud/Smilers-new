@@ -116,7 +116,14 @@ async def create_status_check(input: StatusCheckCreate):
 
 @api_router.get("/status", response_model=List[StatusCheck])
 async def get_status_checks():
-    status_checks = await db.status_checks.find().to_list(1000)
+    # iter-118 (deployment hardening): bounded scan with projection so a
+    # large status_checks collection in production can't time out the
+    # request. We never need _id (Mongo internal) on the wire; surface
+    # only the fields StatusCheck expects to hydrate.
+    status_checks = await db.status_checks.find(
+        {},
+        {"_id": False, "id": True, "client_name": True, "timestamp": True},
+    ).limit(100).to_list(100)
     return [StatusCheck(**status_check) for status_check in status_checks]
 
 

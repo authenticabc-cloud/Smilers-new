@@ -1,0 +1,141 @@
+# =============================================================================
+# .dockerignore — Smilers Chat Mobile
+#
+# Purpose: drastically reduce the Cloud Build context size shipped to the
+# Emergent deployment pipeline. Without this file, EVERY commit shipped
+# 650MB+ of Expo node_modules + cached build artifacts into the
+# `COPY . /app` step, causing slow push, oversized layer rejections at
+# the registry ("manifest invalid: Request contains an invalid argument"
+# observed 2026-06-05), and leaking a server-side Firebase Admin SDK
+# private key into the container image.
+#
+# After this file lands, build context drops to a few MB and pushes
+# become reliable.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1) Node / Expo / Metro
+# -----------------------------------------------------------------------------
+# 641MB of frontend deps — installed inside the container, never copied
+# from host. The backend container doesn't need them at all (FastAPI
+# service); the frontend is built/served via EAS, not this image.
+**/node_modules/
+**/.npm/
+**/.yarn/cache/
+**/.yarn/install-state.gz
+**/.pnp/
+**/.pnp.js
+
+# Expo development caches
+**/.expo/
+**/.expo-shared/
+**/metro-cache/
+**/.metro-cache/
+
+# Built web bundle output (regenerated at deploy time if needed)
+frontend/dist/
+frontend/dist-android-check/
+frontend/web-build/
+
+# -----------------------------------------------------------------------------
+# 2) Sensitive credentials
+# -----------------------------------------------------------------------------
+# Firebase Admin SDK service-account key — server-side Firebase
+# credentials. Already uploaded to Expo's push credentials section
+# (https://expo.dev/accounts/abcsimplesend/projects/smilers/credentials)
+# so it's NOT needed in the deployed container. Including it would
+# leak a private key with full Firebase project authority.
+frontend/google-service-account.json
+**/google-service-account*.json
+
+# Test/dev credentials (already in .gitignore but belt-and-suspenders)
+memory/test_credentials.md
+memory/test_credentials*.md
+
+# Generic key/secret/cert file patterns
+*.pem
+*.key
+*.p12
+*.p8
+*.keystore
+credentials.json
+token.json
+
+# -----------------------------------------------------------------------------
+# 3) Version control / IDE / OS / docs
+# -----------------------------------------------------------------------------
+.git/
+.gitignore
+.github/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Markdown docs — except the contract doc which is intentionally
+# shipped so backend agent can read it from any deployment.
+README.md
+**/CHANGELOG.md
+
+# -----------------------------------------------------------------------------
+# 4) Python build artifacts
+# -----------------------------------------------------------------------------
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/venv/
+**/.venv/
+
+# -----------------------------------------------------------------------------
+# 5) Logs / temp / scratch
+# -----------------------------------------------------------------------------
+**/*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+dump.rdb
+**/tmp/
+**/.tmp/
+
+# Large archive blobs (any zip/tar in the tree is almost certainly a
+# build artifact, not a source file)
+**/*.zip
+**/*.tar.gz
+**/*.tar
+**/*.tgz
+**/*.pack
+**/*.deb
+**/*.dylib
+
+# -----------------------------------------------------------------------------
+# 6) Local-only Android SDK / Gradle (for `expo prebuild` users)
+# -----------------------------------------------------------------------------
+frontend/android/
+frontend/ios/
+**/android-sdk/
+**/.gradle/
+
+# -----------------------------------------------------------------------------
+# 7) Test / coverage outputs
+# -----------------------------------------------------------------------------
+**/coverage/
+**/.nyc_output/
+**/junit.xml
+test_result.md
+
+# -----------------------------------------------------------------------------
+# Explicit ALLOW (overrides the rules above)
+# -----------------------------------------------------------------------------
+# We DO need the public Firebase client config (NOT a secret — it's
+# embedded in every Android APK and is meant to be public per Google
+# docs). Don't let the wildcard above accidentally exclude it.
+!frontend/google-services.json
+
+# Allow .env files — Emergent deployment pipeline reads these for
+# runtime configuration (backend MONGO_URL, frontend EXPO_PUBLIC_*).
+!**/.env
