@@ -359,31 +359,241 @@ export function scanMessage(input: {
 }
 
 /**
+ * Extract URLs from a free-form text. Exported for callers that want to
+ * pass URLs into `enrichScanWithRemoteAPI` themselves.
+ */
+export function extractUrls(text: string): string[] {
+  if (typeof text !== 'string' || text.length === 0) return [];
+  const matches = text.match(URL_REGEX) || [];
+  // Normalise: strip trailing punctuation that frequently glues to URLs
+  // in chat ("hey http://x.com." or "see http://x.com,?"). Keeps the URL
+  // recognisable to Safe Browsing's matcher.
+  const cleaned = matches.map((m) => m.replace(/[.,;:!?)\]>}'"]+$/, ''));
+  // De-dup
+  return Array.from(new Set(cleaned));
+}
+
+// ─── Google Safe Browsing v4 integration ──────────────────────────────
+//
+// iter-121: replaced the no-op stub with a real Lookup-API call.
+// The free tier gives 10k requests/day per API key, auto-resets at
+// midnight Pacific. We aggressively cache results for 10 minutes to
+// stay well under quota even on a chatty user — same URL won't be
+// re-queried within a session.
+//
+// Key restrictions are configured server-side via Google Cloud Console
+// (Smilers Safe Browsing key, restricted to Safe Browsing API only).
+// If the key is invalid, missing, or quota is exceeded, we silently
+// fall back to "safe" — the heuristic layer in `scanText` / `scanUrl`
+// is still authoritative for offline correctness.
+
+const SAFE_BROWSING_ENDPOINT =
+  'https://safebrowsing.googleapis.com/v4/threatMatches:find';
+const SAFE_BROWSING_CLIENT_ID = 'smilers-mobile';
+const SAFE_BROWSING_CLIENT_VERSION = '1.0.0';
+const SAFE_BROWSING_TIMEOUT_MS = 5_000;
+const SAFE_BROWSING_CACHE_TTL_MS = 10 * 60 * 1_000; // 10 minutes
+const SAFE_BROWSING_CACHE_MAX_ENTRIES = 500;
+
+// Diagnostic counters — surfaced via `getSafeBrowsingStats()` so the
+// chat-debug overlay can show how many calls succeeded / were cached /
+// returned a threat / failed open.
+const sbStats = {
+  hits: 0,        // returned from in-memory cache
+  ok: 0,          // successful HTTP 200 from Google
+  blocked: 0,    // total threat matches reported
+  skipped: 0,    // no key configured, skipped
+  errors: 0,     // HTTP error / timeout / parse error
+};
+
+// In-memory LRU cache: URL → { result, expiresAt }.
+// Map preserves insertion order so we can evict the oldest entry when
+// we hit `SAFE_BROWSING_CACHE_MAX_ENTRIES`.
+type SbCacheValue = { result: ScanFinding | null; expiresAt: number };
+const sbCache = new Map<string, SbCacheValue>();
+
+function sbCacheGet(url: string): SbCacheValue | undefined {
+  const entry = sbCache.get(url);
+  if (!entry) return undefined;
+  if (entry.expiresAt < Date.now()) {
+    sbCache.delete(url);
+    return undefined;
+  }
+  // Touch (move to most-recently-used end of the Map).
+  sbCache.delete(url);
+  sbCache.set(url, entry);
+  return entry;
+}
+
+function sbCacheSet(url: string, value: SbCacheValue): void {
+  if (sbCache.has(url)) sbCache.delete(url);
+  sbCache.set(url, value);
+  // Evict oldest if over cap.
+  while (sbCache.size > SAFE_BROWSING_CACHE_MAX_ENTRIES) {
+    const firstKey = sbCache.keys().next().value;
+    if (firstKey === undefined) break;
+    sbCache.delete(firstKey);
+  }
+}
+
+/** Expose counters so the diagnostic UI can render them. */
+export function getSafeBrowsingStats(): Readonly<typeof sbStats> & {
+  cacheSize: number;
+} {
+  return { ...sbStats, cacheSize: sbCache.size };
+}
+
+/** Test-only: clear the in-memory cache + counters. */
+export function _resetSafeBrowsingForTesting(): void {
+  sbCache.clear();
+  sbStats.hits = 0;
+  sbStats.ok = 0;
+  sbStats.blocked = 0;
+  sbStats.skipped = 0;
+  sbStats.errors = 0;
+}
+
+/**
+ * Map Google's threatType strings to a human-readable reason that
+ * matches the tone of our local heuristic findings.
+ */
+function reasonForThreatType(threatType: string): string {
+  switch (threatType) {
+    case 'MALWARE':
+      return 'Google Safe Browsing flagged this link as a known malware-distribution site.';
+    case 'SOCIAL_ENGINEERING':
+      return 'Google Safe Browsing flagged this link as a known phishing / social-engineering site.';
+    case 'UNWANTED_SOFTWARE':
+      return 'Google Safe Browsing flagged this link as a known unwanted-software / scareware site.';
+    case 'POTENTIALLY_HARMFUL_APPLICATION':
+      return 'Google Safe Browsing flagged this link as a known harmful-app distribution site.';
+    default:
+      return `Google Safe Browsing flagged this link as a threat (${threatType}).`;
+  }
+}
+
+/**
  * Plug-in seam for a remote URL-reputation API.
  *
- * USAGE (future):
- *   const result = scanMessage({ body, attachment });
- *   if (result.severity !== 'block') {
- *     const enriched = await enrichScanWithRemoteAPI(extractUrls(body));
- *     if (enriched.severity === 'block') return enriched;
- *   }
+ * Sends a `threatMatches:find` request to Google Safe Browsing v4 with
+ * all the provided URLs. Returns an aggregated ScanResult where every
+ * matched URL contributes a `block`-severity finding. If the API key
+ * isn't configured, the call short-circuits to "safe".
  *
- * Today it's a no-op so the heuristic-only path stays fast and offline-
- * friendly. Set EXPO_PUBLIC_GOOGLE_SAFE_BROWSING_API_KEY in your .env
- * to activate (you'll also need to flip the `enabled` check inside).
+ * NEVER throws — failures degrade silently to "safe" so the caller
+ * always gets a usable result.
  */
 export async function enrichScanWithRemoteAPI(urls: string[]): Promise<ScanResult> {
-  // Placeholder — returns "safe" until the API key is wired up.
-  void urls;
-  const apiKey = (process as any)?.env?.EXPO_PUBLIC_GOOGLE_SAFE_BROWSING_API_KEY;
-  if (!apiKey || typeof apiKey !== 'string' || apiKey.length < 10) {
+  if (!Array.isArray(urls) || urls.length === 0) {
     return { severity: 'safe', findings: [], shouldHide: false };
   }
-  // TODO: implement POST to https://safebrowsing.googleapis.com/v4/threatMatches:find
-  // with retries + timeout. Returning safe for now to keep the heuristic
-  // path purely synchronous; the renderer can still call this in a
-  // useEffect to upgrade a warn → block.
-  return { severity: 'safe', findings: [], shouldHide: false };
+
+  const apiKey = (process as any)?.env?.EXPO_PUBLIC_GOOGLE_SAFE_BROWSING_API_KEY;
+  if (!apiKey || typeof apiKey !== 'string' || apiKey.length < 10) {
+    sbStats.skipped += urls.length;
+    return { severity: 'safe', findings: [], shouldHide: false };
+  }
+
+  // 1) Partition URLs into cached vs. needs-lookup.
+  const findings: ScanFinding[] = [];
+  const needsLookup: string[] = [];
+  for (const u of urls) {
+    const cached = sbCacheGet(u);
+    if (cached) {
+      sbStats.hits += 1;
+      if (cached.result) findings.push(cached.result);
+    } else {
+      needsLookup.push(u);
+    }
+  }
+
+  if (needsLookup.length === 0) {
+    return summarise(findings);
+  }
+
+  // 2) Build the API request body. Google accepts up to 500 URLs per
+  //    call; we have a much smaller batch in practice.
+  const requestBody = {
+    client: {
+      clientId: SAFE_BROWSING_CLIENT_ID,
+      clientVersion: SAFE_BROWSING_CLIENT_VERSION,
+    },
+    threatInfo: {
+      threatTypes: [
+        'MALWARE',
+        'SOCIAL_ENGINEERING',
+        'UNWANTED_SOFTWARE',
+        'POTENTIALLY_HARMFUL_APPLICATION',
+      ],
+      platformTypes: ['ANY_PLATFORM'],
+      threatEntryTypes: ['URL'],
+      threatEntries: needsLookup.map((url) => ({ url })),
+    },
+  };
+
+  // 3) Fire with 5s timeout. AbortController works in RN 0.71+.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SAFE_BROWSING_TIMEOUT_MS);
+  let json: any = null;
+  try {
+    const res = await fetch(
+      `${SAFE_BROWSING_ENDPOINT}?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      },
+    );
+    if (!res.ok) {
+      sbStats.errors += 1;
+      // Cache the "safe" result for failures too so we don't hammer
+      // a 4xx-returning endpoint on every keystroke.
+      const expiresAt = Date.now() + SAFE_BROWSING_CACHE_TTL_MS;
+      for (const u of needsLookup) sbCacheSet(u, { result: null, expiresAt });
+      return summarise(findings);
+    }
+    json = await res.json();
+    sbStats.ok += 1;
+  } catch {
+    sbStats.errors += 1;
+    return summarise(findings);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  // 4) Process matches. Google returns `{ matches: [{threat: {url}, threatType}, ...] }`
+  //    OR `{}` (no key in the response) when there are no matches.
+  const matches: any[] = Array.isArray(json?.matches) ? json.matches : [];
+  const matchedUrls = new Map<string, string>(); // url → threatType
+  for (const m of matches) {
+    const matchedUrl = m?.threat?.url;
+    const threatType = String(m?.threatType || 'UNKNOWN');
+    if (typeof matchedUrl === 'string' && matchedUrl.length > 0) {
+      matchedUrls.set(matchedUrl, threatType);
+    }
+  }
+
+  const expiresAt = Date.now() + SAFE_BROWSING_CACHE_TTL_MS;
+  for (const u of needsLookup) {
+    const threatType = matchedUrls.get(u);
+    if (threatType) {
+      const finding: ScanFinding = {
+        severity: 'block',
+        code: 'URL_GOOGLE_SAFE_BROWSING',
+        category: 'url',
+        reason: reasonForThreatType(threatType),
+        evidence: redact(u),
+      };
+      sbCacheSet(u, { result: finding, expiresAt });
+      findings.push(finding);
+      sbStats.blocked += 1;
+    } else {
+      sbCacheSet(u, { result: null, expiresAt });
+    }
+  }
+
+  return summarise(findings);
 }
 
 /**

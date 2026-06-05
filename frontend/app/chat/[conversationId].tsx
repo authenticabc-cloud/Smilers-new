@@ -35,7 +35,7 @@ import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { recordDiagnostic } from '../../src/lib/diagnostics';
 import { errorToMessage } from '../../src/lib/safeString';
-import { scanMessage, explainScanResult } from '../../src/lib/securityScanner';
+import { scanMessage, explainScanResult, extractUrls, enrichScanWithRemoteAPI } from '../../src/lib/securityScanner';
 import { appendDiaryEntry, chatMessageToDiaryEntry } from '../../src/lib/diaryStore';
 import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
 import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
@@ -2856,6 +2856,14 @@ function MessageBubble({
   //
   // Memoised on the precise fields the scanner reads — avoids re-scanning
   // on every render of an unchanged message.
+  //
+  // iter-121: also kicks off an ASYNC Google Safe Browsing v4 lookup if
+  // the message body contains URLs. The result, if it upgrades the
+  // verdict, is stored in `remoteScan` state and merged into the
+  // displayed verdict below. Heuristic-only result is shown immediately
+  // (no UI blocking) and the remote enrichment may flip a `warn` →
+  // `block` once Google responds. If Google is down/key invalid/quota
+  // exhausted, the heuristic verdict stands.
   const securityScan = useMemo(() => {
     if (msg.deletedAt) return null; // already deleted — no need to scan
     try {
@@ -2871,9 +2879,48 @@ function MessageBubble({
     }
   }, [msg.deletedAt, msg.text, msg.fileName, msg.storageId, msg.mimeType]);
 
-  if (securityScan?.shouldHide) {
+  // iter-121: remote Safe Browsing enrichment. Fires when the heuristic
+  // verdict is not already `block` (no need to double-block) AND there
+  // are URLs in the text. Stores upgrade findings in state. Cancels on
+  // unmount via the cancelled flag pattern.
+  const [remoteFindings, setRemoteFindings] = useState<null | ReturnType<typeof scanMessage>>(null);
+  useEffect(() => {
+    if (msg.deletedAt) return;
+    if (!securityScan) return;
+    if (securityScan.severity === 'block') return; // heuristic already enough
+    const urls = extractUrls(typeof msg.text === 'string' ? msg.text : '');
+    if (urls.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const enriched = await enrichScanWithRemoteAPI(urls);
+        if (cancelled) return;
+        if (enriched && enriched.severity === 'block') {
+          setRemoteFindings(enriched);
+        }
+      } catch {
+        // Never throw — Safe Browsing failure should not break rendering.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [msg.deletedAt, msg.text, securityScan]);
+
+  // Effective verdict = heuristic merged with any remote upgrade.
+  const effectiveScan = useMemo(() => {
+    if (!securityScan) return null;
+    if (remoteFindings && remoteFindings.severity === 'block') {
+      return {
+        severity: 'block' as const,
+        findings: [...securityScan.findings, ...remoteFindings.findings],
+        shouldHide: true,
+      };
+    }
+    return securityScan;
+  }, [securityScan, remoteFindings]);
+
+  if (effectiveScan?.shouldHide) {
     const blockedTimeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const why = explainScanResult(securityScan);
+    const why = explainScanResult(effectiveScan);
     return (
       <View style={[styles.bubbleRow, isMine ? styles.bubbleRowMine : styles.bubbleRowOther]}>
         <View
