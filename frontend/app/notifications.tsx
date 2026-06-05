@@ -9,6 +9,7 @@ import { useMutation } from 'convex/react';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { requestPushDiagnosticsRetry, usePushDiagnostics } from '../src/push/pushDiagnostics';
+import { describePushProjectMismatch } from '../src/push/usePushNotifications';
 import { safeMutation } from '../src/lib/safeMutation';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/theme';
 
@@ -34,6 +35,11 @@ export default function NotificationsScreen() {
   const [runningRemoteTest, setRunningRemoteTest] = useState(false);
   const [localTestResult, setLocalTestResult] = useState('Not run yet');
   const [remoteTestResult, setRemoteTestResult] = useState('Not run yet');
+  // iter-116: prominent warning shown if the runtime projectId baked
+  // into the installed APK doesn't match the Expo project where the
+  // FCM v1 credentials are uploaded. Caught instantly without needing
+  // the user to share screenshots / share Expo Receipt error text.
+  const projectMismatchWarning = useMemo(() => describePushProjectMismatch(), []);
 
   const toggle = useCallback(
     async (key: string, value: boolean) => {
@@ -225,6 +231,17 @@ export default function NotificationsScreen() {
             </TouchableOpacity>
           </View>
 
+          {/* iter-116: projectId mismatch warning — surfaced PROMINENTLY at the
+              top of the diagnostics card so the user instantly sees when an
+              FCM remote self-test failure is caused by a build/credentials
+              project mismatch (vs. a real FCM config issue). */}
+          {projectMismatchWarning ? (
+            <View style={styles.warningBanner} testID="push-diagnostics-project-mismatch">
+              <Ionicons name="warning" size={20} color="#8B5A00" style={{ marginRight: 8 }} />
+              <Text style={styles.warningBannerText}>{projectMismatchWarning}</Text>
+            </View>
+          ) : null}
+
           <TouchableOpacity
             style={styles.copyButton}
             onPress={copyDiagnostics}
@@ -323,6 +340,22 @@ const styles = StyleSheet.create({
     padding: Spacing.base,
     marginBottom: Spacing.lg,
     ...Shadow.sm,
+  },
+  warningBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#FFF4D6',
+    borderColor: '#E4B53B',
+    borderWidth: 1,
+    borderRadius: Radius.md,
+    padding: Spacing.sm,
+    marginBottom: Spacing.sm,
+  },
+  warningBannerText: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    color: '#3D2A00',
+    lineHeight: 18,
   },
   diagnosticsHeaderRow: {
     flexDirection: 'row',

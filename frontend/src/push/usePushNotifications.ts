@@ -112,8 +112,48 @@ function getDisplayNameFromPayload(payload: NotificationPayload, fallbackBody?: 
   );
 }
 
+// iter-116: Expected projectId for the Smilers Expo project (slug
+// `smilers`, owner `abcsimplesend`). This matches `extra.eas.projectId`
+// in app.json AND the Expo dashboard project at
+// https://expo.dev/accounts/abcsimplesend/projects/smilers where the
+// FCM V1 service-account key is uploaded.
+//
+// If the runtime projectId differs from this constant, the installed
+// APK was built against a DIFFERENT Expo project and Expo's push
+// servers won't find FCM credentials for it ("Unable to retrieve the
+// FCM server key for the recipient's app"). The fix is always: fresh
+// EAS build + uninstall old APK + install new APK.
+const EXPECTED_PROJECT_ID = '8b742de6-a156-453c-8e54-16070577d2b7';
+
 function getProjectId() {
   return (Constants.expoConfig as any)?.extra?.eas?.projectId || (Constants.easConfig as any)?.projectId || undefined;
+}
+
+/**
+ * iter-116: returns a human-readable warning if the runtime projectId
+ * doesn't match the project where FCM V1 credentials are uploaded.
+ * Surfaced in the Push Diagnostics panel so the user can immediately
+ * tell whether a "Remote self-test failed: Unable to retrieve FCM server
+ * key" is a project-mismatch problem (fix = rebuild) vs. a real FCM
+ * config problem.
+ */
+export function describePushProjectMismatch() {
+  const runtimeId = getProjectId();
+  if (!runtimeId) {
+    return 'Runtime projectId is missing — the build is misconfigured.';
+  }
+  if (runtimeId === EXPECTED_PROJECT_ID) {
+    return '';
+  }
+  return (
+    `Runtime projectId is ${runtimeId} but Smilers FCM credentials are uploaded on ` +
+    `Expo project ${EXPECTED_PROJECT_ID}. The currently installed APK was built ` +
+    `against a different Expo project — Expo's push server cannot find FCM ` +
+    `credentials for it. Fix: trigger a fresh EAS Android build (the new APK ` +
+    `will embed the correct projectId), UNINSTALL the old APK from the device, ` +
+    `then install the new APK. Reopening / clearing data is NOT enough — the ` +
+    `projectId is baked in at build time.`
+  );
 }
 
 function getAppVersion() {
