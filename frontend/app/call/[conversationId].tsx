@@ -944,9 +944,53 @@ function CallScreenInner() {
   }, [isCaller, isActive, callId, remoteResolved]);
 
   // ====== Screen-only mode: bootstrap peer-connection directly ======
+  //
+  // iter-112 — SPLIT into TWO effects to eliminate a critical race that was
+  // breaking screen sharing entirely.
+  //
+  // The previous single-effect version did:
+  //   1. setCallId(conversationId)      — schedules state update
+  //   2. initStartedRef.current = true  — synchronous
+  //   3. startPeerConnectionRef.current(asCaller) — SYNCHRONOUS invocation
+  //
+  // The problem: React state updates are async. The closure inside
+  // `startPeerConnectionRef.current` was created on the previous render where
+  // `callId === null`. So step 3 invokes that stale closure, which immediately
+  // bails out at the internal guard `if (!callId || sessionRef.current || …)`.
+  // Meanwhile `initStartedRef.current` is now `true` and the useEffect's deps
+  // don't include `callId`, so it never re-fires after the state update
+  // propagates → PC is NEVER created → no offer, no track, no media.
+  //
+  // The symptom users saw: "Screen sharing not working" — the sender's screen
+  // never broadcasts, the receiver sits forever on "Connecting to screen…".
+  //
+  // Fix: split into two effects. Effect A sets `callId` to the session id.
+  // Effect B fires AFTER `callId === conversationId` (i.e. the state update
+  // has propagated and `startPeerConnectionRef.current` has been refreshed by
+  // the ref-sync useEffect above), THEN claims the slot and kicks off the PC.
+
+  // Effect A: ensure callId is set to the screen-share session id when we
+  // enter screen-only mode.
   useEffect(() => {
     if (!isScreenOnly) return;
     if (!conversationId) return;
+    if (callId === conversationId) return;
+    setCallId(conversationId);
+    callDebug.push(
+      'CALL',
+      `screen-only setCallId(${String(conversationId).slice(0, 8)}…)`,
+    );
+  }, [isScreenOnly, conversationId, callId]);
+
+  // Effect B: kick off the peer connection ONLY after callId has actually
+  // been committed to React state (callId === conversationId). At that point
+  // the ref-sync useEffect has already refreshed `startPeerConnectionRef.current`
+  // with a closure that captures the up-to-date `callId`, so the function
+  // body won't bail out at `if (!callId …)`.
+  useEffect(() => {
+    if (!isScreenOnly) return;
+    if (!conversationId) return;
+    if (callId !== conversationId) return; // wait for Effect A
     if (!peerUserIdParam) {
       callDebug.push(
         'ERR',
@@ -961,8 +1005,7 @@ function CallScreenInner() {
         `screen-only mount role=${isScreenOnlyReceiver ? 'viewer' : 'sharer'} ` +
           `sessionId=${String(conversationId).slice(0, 8)}… peer=${String(peerUserIdParam).slice(0, 8)}…`,
       );
-      setCallId(conversationId);
-      initStartedRef.current = true; // claim BEFORE the await
+      initStartedRef.current = true; // claim BEFORE the async kick-off
       if (isScreenOnlyReceiver) {
         void startPeerConnectionRef.current(false);
       } else {
@@ -970,9 +1013,11 @@ function CallScreenInner() {
       }
     } catch (errorValue: any) {
       callDebug.push('ERR', `screen-only bootstrap: ${errorValue?.message}`);
+      // Release the slot so a future state change can retry.
+      initStartedRef.current = false;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isScreenOnly, isScreenOnlyReceiver, conversationId, peerUserIdParam]);
+  }, [isScreenOnly, isScreenOnlyReceiver, conversationId, peerUserIdParam, callId]);
 
   // ====== Heartbeat — REQUIRED by the backend's expireDeadCalls cron ======
   //
