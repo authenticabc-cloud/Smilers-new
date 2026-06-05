@@ -112,30 +112,31 @@ function getDisplayNameFromPayload(payload: NotificationPayload, fallbackBody?: 
   );
 }
 
-// iter-122: CORRECTED again. EAS Cloud Build hard-resolves
-// `owner+slug → projectId` from Expo's project registry at build time;
-// `extra.eas.projectId` in app.json is only used as a runtime hint and
-// is OVERRIDDEN by the registry-resolved id. Empirical proof: every
-// build of the `abcsimplesend/smilers` slug, regardless of the
-// `extra.eas.projectId` value we set in app.json (`8b742de6-...` or
-// `e43b472f-...`), produces an APK whose runtime
-// `Constants.expoConfig.extra.eas.projectId` reads
-// `e43b472f-8131-468e-b17b-ed0bfbf0800d`. That IS the canonical
-// projectId of the Expo project at
-// https://expo.dev/accounts/abcsimplesend/projects/smilers — which is
-// also where the FCM v1 service-account key was uploaded (verified by
-// the user's earlier dashboard screenshot showing
-// firebase-adminsdk-fbsvc@smilers-a4e07.iam.gserviceaccount.com on
-// that exact project credentials page).
+// iter-123: REAL projectId discovered via direct Expo GraphQL API query.
+// Logged in as user `abcsimplesend` (account id c5cc0608-...) and ran
+// `query { meActor { accounts { appsPaginated } } }` — the account's
+// `smilers` slug app has projectId `aff3eee0-0f42-475a-bd4c-a6d39d9b2f7b`,
+// NOT `e43b472f-...` (which is a project owned by a DIFFERENT Expo
+// account that abcsimplesend can't even read) and NOT `8b742de6-...`
+// (which doesn't exist).
 //
-// So this constant must match the registry id, not any historical
-// app.json value. If push still fails with "Unable to retrieve the
-// FCM server key" while runtime matches expected, the failure is on
-// the FCM credential storage side (re-upload required, OR Firebase
-// Cloud Messaging API disabled in Google Cloud, OR Firebase project
-// id mismatch between google-services.json and the uploaded service
-// account).
-const EXPECTED_PROJECT_ID = 'e43b472f-8131-468e-b17b-ed0bfbf0800d';
+// How we got into this mess: an earlier agent put `e43b472f-...` in
+// app.json (likely copy-pasted from another tutorial / repo). EAS
+// Build USES `extra.eas.projectId` verbatim at build time — it does
+// NOT re-resolve from owner+slug if a projectId is present. So every
+// build embedded the wrong id, and the runtime push token was issued
+// against that wrong project — which is why Expo's push API returned
+// `InvalidCredentials`: it couldn't find FCM credentials for a project
+// that doesn't belong to the user.
+//
+// FCM v1 service account key is uploaded to project `aff3eee0-...`
+// (verified via the user's dashboard screenshots showing the upload
+// at https://expo.dev/accounts/abcsimplesend/projects/smilers — which
+// is the URL for project id `aff3eee0-...`). So after the next build,
+// runtime projectId will be `aff3eee0-...`, Expo's push backend will
+// look up FCM credentials for `aff3eee0-...`, find the uploaded
+// service account, and successfully deliver to FCM.
+const EXPECTED_PROJECT_ID = 'aff3eee0-0f42-475a-bd4c-a6d39d9b2f7b';
 
 function getProjectId() {
   return (Constants.expoConfig as any)?.extra?.eas?.projectId || (Constants.easConfig as any)?.projectId || undefined;
