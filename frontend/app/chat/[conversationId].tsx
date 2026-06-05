@@ -285,6 +285,12 @@ export default function ChatScreen() {
   const editTextMutation = useMutation((api as any).messages.editText);
   const toggleStar = useMutation(api.messages.toggleStar);
   const createScheduledMessage = useMutation((api as any).scheduling.scheduleMessageMobile);
+  // iter-113: alternative scheduling mutations. Some Convex deployments
+  // expose `scheduledMessages.create` (legacy from the web app) instead of
+  // `scheduling.scheduleMessageMobile` (newer mobile name). We try the
+  // primary first, then fall back to the legacy on validator failure so a
+  // schema-rename on the backend doesn't dead-end the user.
+  const createScheduledLegacy = useMutation((api as any).scheduledMessages?.create);
 
   // When the user taps "Edit" on an existing message, we capture its id so
   // the composer's next "Send" becomes an edit instead of a brand-new
@@ -649,11 +655,24 @@ export default function ChatScreen() {
         //
         // iter-106 diag: capture the EXACT args we're sending so the
         // backend-side breadcrumb tells us what the server didn't like.
+        //
+        // iter-113 hardening: aggressively coerce every arg to its
+        // primitive form right before sending — guards against any
+        // future regression where a Convex object/proxy/null slips into
+        // the payload and trips the strict validator with a misleading
+        // "Server Error" instead of a useful ArgumentValidationError.
+        const safeRecipient =
+          typeof recipientLabel === 'string' && recipientLabel.trim().length > 0
+            ? recipientLabel.trim().slice(0, 200)
+            : 'Chat';
+        const safeMessage = String(draft || '').slice(0, 5000);
+        const safeDate = String(date || '');
+        const safeTime = String(time || '');
         const scheduleArgs = {
-          recipient: recipientLabel,
-          message: draft,
-          date,
-          time,
+          recipient: safeRecipient,
+          message: safeMessage,
+          date: safeDate,
+          time: safeTime,
           repeat: repeatMapped,
           active: true,
         };
@@ -661,10 +680,76 @@ export default function ChatScreen() {
           recordDiagnostic({
             tag: 'NET',
             source: 'chat/scheduleMessageMobile',
-            message: `→ args recipient="${String(scheduleArgs.recipient).slice(0, 40)}" date=${scheduleArgs.date} time=${scheduleArgs.time} repeat=${scheduleArgs.repeat} active=${scheduleArgs.active} message.len=${String(scheduleArgs.message).length}`,
+            message: `→ args recipient="${safeRecipient.slice(0, 40)}" date=${safeDate} time=${safeTime} repeat=${repeatMapped} active=true message.len=${safeMessage.length}`,
           });
         } catch {}
-        await createScheduledMessage(scheduleArgs);
+        // iter-113: primary attempt → scheduling.scheduleMessageMobile.
+        // On failure, fall back to scheduledMessages.create (legacy
+        // endpoint) before giving up. This matches the multi-endpoint
+        // probe pattern used elsewhere (e.g. pin / edit mutations) so
+        // a backend schema-rename can't dead-end the user.
+        let primaryError: any = null;
+        try {
+          await createScheduledMessage(scheduleArgs);
+        } catch (primaryFailure: any) {
+          primaryError = primaryFailure;
+          // Capture the FULL error data field from Convex —
+          // ArgumentValidationError details land here and explain
+          // exactly which arg the validator rejected.
+          try {
+            let dataStr = '';
+            try {
+              const dataValue = (primaryFailure as any)?.data;
+              if (dataValue !== undefined && dataValue !== null) {
+                dataStr =
+                  typeof dataValue === 'string'
+                    ? dataValue
+                    : JSON.stringify(dataValue);
+              }
+            } catch {
+              dataStr = '[unstringifiable]';
+            }
+            const codeStr =
+              typeof (primaryFailure as any)?.code === 'string'
+                ? (primaryFailure as any).code
+                : '';
+            const nameStr =
+              typeof (primaryFailure as any)?.name === 'string'
+                ? (primaryFailure as any).name
+                : '';
+            recordDiagnostic({
+              tag: 'NET',
+              source: 'chat/scheduleMessageMobile',
+              message: `↻ primary failed name=${nameStr} code=${codeStr} data=${dataStr.slice(0, 400)} — trying scheduledMessages.create fallback`,
+            });
+          } catch {}
+          // Try the legacy endpoint name if it's wired in this build.
+          if (typeof createScheduledLegacy === 'function') {
+            try {
+              await (createScheduledLegacy as any)(scheduleArgs);
+              primaryError = null; // fallback succeeded
+              try {
+                recordDiagnostic({
+                  tag: 'NET',
+                  source: 'chat/scheduleMessageMobile',
+                  message: '← ok via scheduledMessages.create fallback',
+                });
+              } catch {}
+            } catch (legacyFailure: any) {
+              // Both endpoints failed — keep the primary error as
+              // the canonical one (it's more likely to be the real
+              // validator complaint) but log the legacy failure too.
+              try {
+                recordDiagnostic({
+                  tag: 'NET',
+                  source: 'chat/scheduleMessageMobile',
+                  message: `× legacy fallback also failed: ${errorToMessage(legacyFailure).slice(0, 200)}`,
+                });
+              } catch {}
+            }
+          }
+          if (primaryError) throw primaryError;
+        }
         try {
           recordDiagnostic({
             tag: 'NET',
@@ -686,12 +771,31 @@ export default function ChatScreen() {
         // default value of object" on Android per iter-105). Also
         // capture the full error breadcrumb so the next failure tells
         // us EXACTLY what the backend rejected.
+        //
+        // iter-113: ALSO capture errorValue.data (Convex puts
+        // ArgumentValidationError details there, NOT in .message)
+        // and the deps array values via a JSON.stringify wrapped in
+        // try/catch (defensive against circular refs / Proxies).
         const message = errorToMessage(errorValue);
+        let errorData = '';
+        try {
+          const dataValue = (errorValue as any)?.data;
+          if (dataValue !== undefined && dataValue !== null) {
+            errorData =
+              typeof dataValue === 'string' ? dataValue : JSON.stringify(dataValue);
+          }
+        } catch {
+          errorData = '[unstringifiable]';
+        }
+        const errorCode =
+          typeof (errorValue as any)?.code === 'string' ? (errorValue as any).code : '';
+        const errorName =
+          typeof (errorValue as any)?.name === 'string' ? (errorValue as any).name : '';
         try {
           recordDiagnostic({
             tag: 'ERR',
             source: 'chat/scheduleMessageMobile',
-            message: `× ${message.slice(0, 300)}`,
+            message: `× name=${errorName} code=${errorCode} msg=${message.slice(0, 200)} data=${errorData.slice(0, 400)}`,
             stack: (typeof errorValue?.stack === 'string' ? errorValue.stack : '').slice(0, 1200),
           });
         } catch {}

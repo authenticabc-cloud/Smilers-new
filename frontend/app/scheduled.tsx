@@ -72,6 +72,10 @@ export default function ScheduledScreen() {
   const router = useRouter();
   const { data: items, loading } = useSafeConvexQuery<Schedule[]>(api.scheduledMessages.listMine, {}, []);
   const createSchedule = useMutation(api.scheduling.scheduleMessageMobile);
+  // iter-113: alt path — some deployments expose scheduledMessages.create
+  // instead. We probe it as a fallback when the primary throws Server
+  // Error. Safe no-op when the function isn't deployed (anyApi proxy).
+  const createScheduleLegacy = useMutation((api as any).scheduledMessages?.create);
   const updateSchedule = useMutation(api.scheduledMessages.update);
   const removeSchedule = useMutation(api.scheduledMessages.remove);
   const setActiveSchedule = useMutation(api.scheduledMessages.setActive);
@@ -118,14 +122,25 @@ export default function ScheduledScreen() {
         const when = new Date(draft.whenMs);
         const date = `${when.getFullYear()}-${pad2(when.getMonth() + 1)}-${pad2(when.getDate())}`;
         const time = `${pad2(when.getHours())}:${pad2(when.getMinutes())}`;
-        await createSchedule({
-          recipient: draft.recipient || 'Conversation',
-          message: draft.message,
+        // iter-113: defensive arg coercion + dual-endpoint probe
+        const args = {
+          recipient: String(draft.recipient || 'Conversation').slice(0, 200),
+          message: String(draft.message || '').slice(0, 5000),
           date,
           time,
-          repeat: 'once',
+          repeat: 'once' as const,
           active: true,
-        });
+        };
+        try {
+          await createSchedule(args);
+        } catch (primaryErr: any) {
+          // Try legacy endpoint as fallback
+          if (typeof createScheduleLegacy === 'function') {
+            await (createScheduleLegacy as any)(args);
+          } else {
+            throw primaryErr;
+          }
+        }
         // success — drop from local
       } catch (errorValue: any) {
         if (!firstError) firstError = errorToMessage(errorValue).slice(0, 240);
@@ -169,11 +184,28 @@ export default function ScheduledScreen() {
       if (draft._id) {
         await updateSchedule({ scheduleId: draft._id as any, recipient: draft.recipient, message: draft.message, date: draft.date, time: draft.time, repeat: draft.repeat, active: draft.active });
       } else {
-        await createSchedule({ recipient: draft.recipient, message: draft.message, date: draft.date, time: draft.time, repeat: draft.repeat, active: draft.active });
+        // iter-113: dual-endpoint probe — primary, then legacy fallback.
+        const args = {
+          recipient: String(draft.recipient || '').slice(0, 200),
+          message: String(draft.message || '').slice(0, 5000),
+          date: draft.date,
+          time: draft.time,
+          repeat: draft.repeat,
+          active: draft.active,
+        };
+        try {
+          await createSchedule(args);
+        } catch (primaryErr: any) {
+          if (typeof createScheduleLegacy === 'function') {
+            await (createScheduleLegacy as any)(args);
+          } else {
+            throw primaryErr;
+          }
+        }
       }
       setEditing(null); setShowCompose(false);
     } catch (errorValue: any) { Alert.alert('Failed', errorToMessage(errorValue) || 'Unknown error'); }
-  }, [createSchedule, updateSchedule]);
+  }, [createSchedule, createScheduleLegacy, updateSchedule]);
 
   if (loading) {
     return (
