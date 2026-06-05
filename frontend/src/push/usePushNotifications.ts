@@ -112,20 +112,30 @@ function getDisplayNameFromPayload(payload: NotificationPayload, fallbackBody?: 
   );
 }
 
-// iter-119: CONFIRMED FINAL projectId per user. The Smilers Expo
-// project where the FCM V1 service-account key is uploaded is
-// `8b742de6-a156-453c-8e54-16070577d2b7`. This MUST match
-// `extra.eas.projectId` in app.json — if the installed APK reports a
-// different runtime projectId, the device was built against an
-// out-of-date app.json and needs a fresh EAS build + UNINSTALL of the
-// old APK before installing the new one (projectId is baked into the
-// binary at build time; clearing app data is NOT enough).
+// iter-122: CORRECTED again. EAS Cloud Build hard-resolves
+// `owner+slug → projectId` from Expo's project registry at build time;
+// `extra.eas.projectId` in app.json is only used as a runtime hint and
+// is OVERRIDDEN by the registry-resolved id. Empirical proof: every
+// build of the `abcsimplesend/smilers` slug, regardless of the
+// `extra.eas.projectId` value we set in app.json (`8b742de6-...` or
+// `e43b472f-...`), produces an APK whose runtime
+// `Constants.expoConfig.extra.eas.projectId` reads
+// `e43b472f-8131-468e-b17b-ed0bfbf0800d`. That IS the canonical
+// projectId of the Expo project at
+// https://expo.dev/accounts/abcsimplesend/projects/smilers — which is
+// also where the FCM v1 service-account key was uploaded (verified by
+// the user's earlier dashboard screenshot showing
+// firebase-adminsdk-fbsvc@smilers-a4e07.iam.gserviceaccount.com on
+// that exact project credentials page).
 //
-// If the runtime projectId differs from this constant, Expo's push
-// servers will reject the send with "Unable to retrieve the FCM
-// server key for the recipient's app" because no FCM credentials
-// exist on the project the APK is reporting.
-const EXPECTED_PROJECT_ID = '8b742de6-a156-453c-8e54-16070577d2b7';
+// So this constant must match the registry id, not any historical
+// app.json value. If push still fails with "Unable to retrieve the
+// FCM server key" while runtime matches expected, the failure is on
+// the FCM credential storage side (re-upload required, OR Firebase
+// Cloud Messaging API disabled in Google Cloud, OR Firebase project
+// id mismatch between google-services.json and the uploaded service
+// account).
+const EXPECTED_PROJECT_ID = 'e43b472f-8131-468e-b17b-ed0bfbf0800d';
 
 function getProjectId() {
   return (Constants.expoConfig as any)?.extra?.eas?.projectId || (Constants.easConfig as any)?.projectId || undefined;
