@@ -3,9 +3,9 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons, Feather } from '@expo/vector-icons';
-import { useQuery } from 'convex/react';
 import Avatar from '../src/components/Avatar';
 import { api } from '../src/convexApi';
+import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { Colors, FontSize, FontWeight, Spacing, Radius } from '../src/theme';
 
 function relTime(iso?: string) {
@@ -24,11 +24,33 @@ function relTime(iso?: string) {
 
 export default function ArchivedScreen() {
   const router = useRouter();
-  // Try a few possible Convex function names; useQuery accepts anyApi paths.
-  let archived: any = useQuery(api.conversations.listArchived as any, {});
-  if (archived && (archived as any).error) archived = null;
+  // iter-115: switched from raw useQuery to useSafeConvexQuery. The raw
+  // hook throws a SYNCHRONOUS error during render when the backend
+  // endpoint is missing (CouldNotFindFunction), which crashed the entire
+  // app ("Smilers has stopped") the moment the user tapped Archived
+  // Chats. The safe variant degrades to an empty list + empty-state UI
+  // when the backend doesn't expose `conversations.listArchived` yet.
+  //
+  // Also probe two endpoint name variants so a backend rename doesn't
+  // dead-end us:
+  //   1. `conversations.listArchived`  (preferred / mobile-spec)
+  //   2. `conversations.getArchived`   (web-app legacy name)
+  const primaryArchived = useSafeConvexQuery<any[] | null>(
+    (api as any).conversations?.listArchived,
+    {},
+    null,
+    true,
+  );
+  const legacyArchived = useSafeConvexQuery<any[] | null>(
+    (api as any).conversations?.getArchived,
+    {},
+    null,
+    primaryArchived.data === null,
+  );
+
+  const archived = primaryArchived.data ?? legacyArchived.data;
+  const loading = primaryArchived.loading && legacyArchived.loading;
   const list: any[] = Array.isArray(archived) ? archived : [];
-  const loading = archived === undefined;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -57,7 +79,7 @@ export default function ArchivedScreen() {
       ) : (
         <FlatList
           data={list}
-          keyExtractor={(item: any) => item._id}
+          keyExtractor={(item: any) => String(item._id ?? Math.random())}
           contentContainerStyle={{ paddingVertical: Spacing.sm }}
           renderItem={({ item }) => (
             <TouchableOpacity
