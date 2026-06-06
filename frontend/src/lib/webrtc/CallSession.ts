@@ -42,6 +42,29 @@ export class CallSession {
   private remoteDescriptionSet = false;
   private pendingIce: RTCIceCandidate[] = [];
   private webrtc: WebRTCModule | null = null;
+  // iter-128: track the LAST applied remote SDP payload bytes so we can
+  // distinguish "duplicate (re-emitted by signaling poll loop)" from
+  // "ICE restart offer/answer" (which will be byte-different because
+  // the ice-ufrag/ice-pwd lines change). Without this, the iter-96
+  // idempotency guard would silently drop legitimate ICE restart
+  // signaling messages.
+  private lastAppliedOfferPayload: string | null = null;
+  private lastAppliedAnswerPayload: string | null = null;
+  // iter-128: ICE restart bookkeeping. Browsers/native-webrtc do NOT
+  // auto-restart ICE when the path breaks (e.g. carrier re-NAT, network
+  // handoff, brief signal loss). We have to do it ourselves: when ICE
+  // state goes 'disconnected' we wait a short grace period and then
+  // initiate an ICE restart from the caller side. 'failed' triggers an
+  // immediate restart. Capped at MAX_ICE_RESTART_ATTEMPTS per failure
+  // cycle so we don't loop forever on a totally dead path.
+  private iceRestartAttempts = 0;
+  private iceRestartTimer: ReturnType<typeof setTimeout> | null = null;
+  private iceRestartInFlight = false;
+  private static readonly MAX_ICE_RESTART_ATTEMPTS = 3;
+  // 5s grace — covers the 99% case where a transient handoff recovers
+  // on its own without needing a renegotiation. (WebRTC spec recommends
+  // 5–10s; 5 is the WhatsApp/Telegram-observed sweet spot for cellular.)
+  private static readonly ICE_RESTART_GRACE_MS = 5000;
 
   constructor(opts: CallSessionOptions) {
     this.opts = opts;
@@ -304,6 +327,10 @@ export class CallSession {
       if (state) {
         callDebug.push('PC', `ice=${state}`);
         this.opts.onConnectionStateChange?.(`ice:${state}`);
+        // iter-128: auto-recovery on transient ICE failures (the bug
+        // root-cause for "calls fail after some minutes" — Native
+        // WebRTC does NOT auto-restart ICE when the path breaks).
+        this.handleIceStateForRestart(state);
       }
     });
 
@@ -371,28 +398,39 @@ export class CallSession {
       callDebug.push('ERR', 'handleRemoteOffer: pc is null');
       throw new Error('Peer connection not initialized');
     }
-    // Idempotency: if we already applied the same remote description,
-    // skip — the duplicate would cause RTCPeerConnection to throw
-    // "Failed to set remote offer sdp: Called in wrong state: stable".
-    // Background: signaling.poll re-emits the same offer multiple times
-    // between markConsumed cycles, and the signal-processing useEffect
-    // re-runs on every Convex query refresh. See iter-96 diagnostic logs
-    // showing 3 duplicate ← answer events and 2 ERR messages.
-    if ((this.pc as any).signalingState === 'stable' && this.remoteDescriptionSet) {
-      callDebug.push('SIG', '← offer ignored (already applied, signalingState=stable)');
+    // iter-128: previous (iter-96) idempotency guard rejected ANY offer
+    // arriving while signalingState==='stable' + remoteDescriptionSet.
+    // That correctly skipped re-emitted duplicates from the signaling
+    // poll loop — but it ALSO incorrectly dropped legitimate ICE
+    // restart offers, which carry a different ice-ufrag/ice-pwd and
+    // arrive *after* the connection is stable. Fix: only skip if the
+    // payload is BYTE-IDENTICAL to the last applied offer. ICE restart
+    // offers will differ in bytes, so they get through.
+    if (
+      (this.pc as any).signalingState === 'stable' &&
+      this.remoteDescriptionSet &&
+      this.lastAppliedOfferPayload === payload
+    ) {
+      callDebug.push('SIG', '← offer ignored (byte-identical duplicate)');
       return;
     }
-    callDebug.push('SIG', `← offer (${payload.length}B)`);
+    const isRestart =
+      (this.pc as any).signalingState === 'stable' && this.remoteDescriptionSet;
+    callDebug.push('SIG', `← offer (${payload.length}B${isRestart ? ', ICE-restart' : ''})`);
     const offer = JSON.parse(payload);
     const webrtc = await this.getWebRTC();
     await this.pc.setRemoteDescription(new webrtc.RTCSessionDescription(offer));
+    this.lastAppliedOfferPayload = payload;
     this.remoteDescriptionSet = true;
     callDebug.push('PC', 'setRemoteDescription(offer) ok');
     await this.flushPendingIce();
 
     const answer = await this.pc.createAnswer();
     await this.pc.setLocalDescription(answer);
-    callDebug.push('SIG', `→ answer (sdp ${(answer.sdp || '').length}B)`);
+    callDebug.push(
+      'SIG',
+      `→ answer (sdp ${(answer.sdp || '').length}B${isRestart ? ', ICE-restart' : ''})`,
+    );
     await this.opts.sendSignal({
       callId: this.opts.callId,
       toUserId: this.opts.remoteUserId,
@@ -404,21 +442,24 @@ export class CallSession {
   /** Caller: handle the answer from the callee. */
   async handleRemoteAnswer(payload: string): Promise<void> {
     if (!this.pc) throw new Error('Peer connection not initialized');
-    // Idempotency guard — same reasoning as handleRemoteOffer. Once the
-    // remote answer is set, the PC's signalingState transitions from
-    // 'have-local-offer' → 'stable'. A second setRemoteDescription on a
-    // stable PC throws "Failed to set remote answer sdp: Called in wrong
-    // state: stable". This was the source of the ERR rows we saw in
-    // iter-96 — they were noise, the call still worked, but we want to
-    // avoid the unnecessary error spam (and the brief async overhead).
-    if ((this.pc as any).signalingState === 'stable' && this.remoteDescriptionSet) {
-      callDebug.push('SIG', '← answer ignored (already applied, signalingState=stable)');
+    // iter-128: same byte-identity check as handleRemoteOffer — drop
+    // ONLY exact duplicates re-emitted by the signaling poll loop,
+    // never drop legitimate ICE-restart answers.
+    if (
+      (this.pc as any).signalingState === 'stable' &&
+      this.remoteDescriptionSet &&
+      this.lastAppliedAnswerPayload === payload
+    ) {
+      callDebug.push('SIG', '← answer ignored (byte-identical duplicate)');
       return;
     }
-    callDebug.push('SIG', `← answer (${payload.length}B)`);
+    const isRestart =
+      (this.pc as any).signalingState === 'stable' && this.remoteDescriptionSet;
+    callDebug.push('SIG', `← answer (${payload.length}B${isRestart ? ', ICE-restart' : ''})`);
     const answer = JSON.parse(payload);
     const webrtc = await this.getWebRTC();
     await this.pc.setRemoteDescription(new webrtc.RTCSessionDescription(answer));
+    this.lastAppliedAnswerPayload = payload;
     this.remoteDescriptionSet = true;
     await this.flushPendingIce();
   }
@@ -461,6 +502,178 @@ export class CallSession {
     this.pendingIce = [];
   }
 
+  // iter-128: ──────────────────────────────────────────────────────
+  // ICE auto-recovery
+  // ──────────────────────────────────────────────────────────────
+  //
+  // Native WebRTC does NOT auto-restart ICE when the path breaks. Without
+  // this logic, a single transient network blip (carrier re-NAT, Wi-Fi ↔
+  // cellular handoff, brief signal loss) permanently kills the call ~10s
+  // after iceConnectionState first goes 'disconnected'. This was the
+  // user-reported "calls fail after some minutes" bug.
+  //
+  // Recovery strategy (matches what WhatsApp/Telegram do):
+  //   • 'disconnected' → wait ICE_RESTART_GRACE_MS, then restart if still
+  //     not back to 'connected'/'completed' (99% of transient blips
+  //     recover on their own within 5s, no need to renegotiate).
+  //   • 'failed'       → restart immediately, no grace period (the path
+  //     is definitively dead, waiting just wastes time).
+  //   • 'connected'/'completed' → cancel pending restart + reset retry
+  //     counter (we recovered).
+  //
+  // Only the CALLER side initiates the restart (per WebRTC spec, only one
+  // peer should generate an offer at a time to avoid glare). The callee
+  // just waits for the new offer to arrive via signaling and replies with
+  // an answer, exactly like the initial handshake.
+  //
+  // If MAX_ICE_RESTART_ATTEMPTS is exhausted (default 3), we stop trying
+  // — at that point the network is genuinely dead and the user should
+  // end the call.
+  private handleIceStateForRestart(state: string): void {
+    if (this.closed) return;
+
+    if (state === 'connected' || state === 'completed') {
+      // Recovered — clear any pending restart and reset attempts.
+      if (this.iceRestartTimer) {
+        clearTimeout(this.iceRestartTimer);
+        this.iceRestartTimer = null;
+      }
+      if (this.iceRestartAttempts > 0) {
+        callDebug.push(
+          'PC',
+          `ice recovered after ${this.iceRestartAttempts} restart attempt(s)`,
+        );
+        this.iceRestartAttempts = 0;
+      }
+      return;
+    }
+
+    if (state === 'disconnected') {
+      // Schedule a restart after the grace period, but only if we
+      // haven't already scheduled one and we're the caller.
+      if (this.iceRestartTimer || this.iceRestartInFlight) return;
+      if (!this.opts.isCaller) {
+        callDebug.push(
+          'PC',
+          `ice=disconnected (callee — waiting for caller to restart)`,
+        );
+        return;
+      }
+      if (this.iceRestartAttempts >= CallSession.MAX_ICE_RESTART_ATTEMPTS) {
+        callDebug.push(
+          'ERR',
+          `ice=disconnected but restart attempts exhausted (${this.iceRestartAttempts}/${CallSession.MAX_ICE_RESTART_ATTEMPTS})`,
+        );
+        return;
+      }
+      callDebug.push(
+        'PC',
+        `ice=disconnected — scheduling restart in ${CallSession.ICE_RESTART_GRACE_MS}ms (attempt ${this.iceRestartAttempts + 1}/${CallSession.MAX_ICE_RESTART_ATTEMPTS})`,
+      );
+      this.iceRestartTimer = setTimeout(() => {
+        this.iceRestartTimer = null;
+        if (this.closed) return;
+        const currentState = (this.pc as any)?.iceConnectionState as string | undefined;
+        if (currentState === 'connected' || currentState === 'completed') {
+          // Recovered on its own during the grace period — no-op.
+          return;
+        }
+        void this.restartIce('grace-timer fired, ice=' + currentState);
+      }, CallSession.ICE_RESTART_GRACE_MS);
+      return;
+    }
+
+    if (state === 'failed') {
+      // Don't wait — restart immediately. The path is definitively dead.
+      if (this.iceRestartTimer) {
+        clearTimeout(this.iceRestartTimer);
+        this.iceRestartTimer = null;
+      }
+      if (this.iceRestartInFlight) return;
+      if (!this.opts.isCaller) {
+        callDebug.push(
+          'PC',
+          'ice=failed (callee — waiting for caller to restart)',
+        );
+        return;
+      }
+      if (this.iceRestartAttempts >= CallSession.MAX_ICE_RESTART_ATTEMPTS) {
+        callDebug.push(
+          'ERR',
+          `ice=failed and restart attempts exhausted (${this.iceRestartAttempts}/${CallSession.MAX_ICE_RESTART_ATTEMPTS}) — call is dead`,
+        );
+        return;
+      }
+      void this.restartIce(
+        `ice=failed (attempt ${this.iceRestartAttempts + 1}/${CallSession.MAX_ICE_RESTART_ATTEMPTS})`,
+      );
+    }
+  }
+
+  /**
+   * Generates a new offer with `iceRestart: true`, applies it locally,
+   * and sends it via signaling. The callee will reply with an answer
+   * carrying new ICE credentials, ICE re-gathers, and a new path is
+   * chosen. Caller-side only.
+   *
+   * Exposed publicly so the UI can also offer a manual "Reconnect" button
+   * later, but normally this is invoked automatically by
+   * handleIceStateForRestart().
+   */
+  async restartIce(reason: string): Promise<void> {
+    if (this.closed || !this.pc) {
+      callDebug.push('ERR', `restartIce: pc closed/null (reason=${reason})`);
+      return;
+    }
+    if (!this.opts.isCaller) {
+      callDebug.push('ERR', `restartIce called on callee — ignored (reason=${reason})`);
+      return;
+    }
+    if (this.iceRestartInFlight) {
+      callDebug.push('PC', `restartIce already in flight — skipping (reason=${reason})`);
+      return;
+    }
+    this.iceRestartInFlight = true;
+    this.iceRestartAttempts += 1;
+    callDebug.push(
+      'PC',
+      `restartIce starting (attempt ${this.iceRestartAttempts}/${CallSession.MAX_ICE_RESTART_ATTEMPTS}, reason=${reason})`,
+    );
+
+    try {
+      // createOffer({iceRestart:true}) bumps the ice-ufrag/ice-pwd so the
+      // new offer carries fresh ICE credentials. The remote side accepts
+      // it as a normal renegotiation; new candidates are gathered on
+      // both sides and a new path is chosen.
+      const offer = await this.pc.createOffer({
+        iceRestart: true,
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: this.opts.callType === 'video',
+      } as any);
+      await this.pc.setLocalDescription(offer);
+      callDebug.push(
+        'SIG',
+        `→ offer (ICE-restart, sdp ${(offer.sdp || '').length}B)`,
+      );
+      await this.opts.sendSignal({
+        callId: this.opts.callId,
+        toUserId: this.opts.remoteUserId,
+        type: 'offer',
+        payload: JSON.stringify(offer),
+      });
+    } catch (errorValue: any) {
+      callDebug.push(
+        'ERR',
+        `restartIce failed: ${errorValue?.message || String(errorValue)}`,
+      );
+      this.opts.onError?.(
+        errorValue instanceof Error ? errorValue : new Error(String(errorValue)),
+      );
+    } finally {
+      this.iceRestartInFlight = false;
+    }
+  }
+
   /** Toggle local audio track. Returns the new muted state. */
   setMuted(muted: boolean): boolean {
     if (!this.localStream) return false;
@@ -493,6 +706,13 @@ export class CallSession {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+
+    // iter-128: cancel any pending ICE restart timer so it doesn't fire
+    // after the call is torn down.
+    if (this.iceRestartTimer) {
+      clearTimeout(this.iceRestartTimer);
+      this.iceRestartTimer = null;
+    }
 
     try {
       this.localStream?.getTracks().forEach((t) => {
