@@ -10,6 +10,8 @@ import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { requestPushDiagnosticsRetry, usePushDiagnostics } from '../src/push/pushDiagnostics';
 import { describePushProjectMismatch } from '../src/push/usePushNotifications';
+import { triggerEmergentSelfTestPush } from '../src/push/useEmergentPush';
+import { useAuth } from '../src/providers/AuthProvider';
 import { safeMutation } from '../src/lib/safeMutation';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/theme';
 
@@ -24,6 +26,7 @@ const ITEMS = [
 
 export default function NotificationsScreen() {
   const router = useRouter();
+  const { userInfo } = useAuth();
   const { data: me, refetch } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null);
   const updateProfile = useMutation(api.users.updateProfile);
   const pushDiagnostics = usePushDiagnostics();
@@ -123,70 +126,42 @@ export default function NotificationsScreen() {
   }, []);
 
   const runRemoteSelfTest = useCallback(async () => {
-    if (!pushDiagnostics.expoPushToken) {
-      setRemoteTestResult('Remote self-test unavailable: no Expo push token yet.');
+    // iter-127: Self-test now routes through the Emergent-managed push
+    // relay (FastAPI /api/self-test-push → Emergent → FCM/APNs) instead
+    // of the legacy Expo push endpoint. This validates the ENTIRE new
+    // pipeline end-to-end:
+    //   1. FastAPI auth (EMERGENT_PUSH_KEY) — fails fast with a clear
+    //      "missing or invalid" error if the deployer hasn't injected
+    //      the real key yet.
+    //   2. Emergent relay → FCM/APNs delivery to THIS device's native
+    //      token (registered earlier by useEmergentPush).
+    //   3. Notification arrival on the device.
+    const targetUserId = userInfo?.sub;
+    if (!targetUserId) {
+      setRemoteTestResult(
+        'Remote self-test unavailable: not signed in (no OIDC subject available).',
+      );
       return;
     }
 
     setRunningRemoteTest(true);
+    setRemoteTestResult('Sending self-test push via Emergent relay…');
     try {
-      const sendResponse = await fetch('https://exp.host/--/api/v2/push/send', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          to: pushDiagnostics.expoPushToken,
-          title: 'Smilers remote self-test',
-          body: 'If this arrives, Expo delivery works and the remaining issue is backend sending.',
-          data: { type: 'diagnostic-remote-test' },
-          sound: 'default',
-          channelId: 'messages',
-          priority: 'high',
-          ttl: 3600,
-          _displayInForeground: true,
-        }),
-      });
-
-      const sendPayload = await sendResponse.json();
-      const ticketId = sendPayload?.data?.id;
-      if (!ticketId) {
-        const errorMessage = sendPayload?.errors?.[0]?.message || sendPayload?.data?.message || 'Ticket was not created.';
-        setRemoteTestResult(`Remote self-test send failed: ${errorMessage}`);
-        return;
-      }
-
-      setRemoteTestResult(`Remote self-test ticket created: ${ticketId}. Checking Expo receipt…`);
-      await new Promise((resolve) => setTimeout(resolve, 4000));
-
-      const receiptResponse = await fetch('https://exp.host/--/api/v2/push/getReceipts', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ ids: [ticketId] }),
-      });
-      const receiptPayload = await receiptResponse.json();
-      const receipt = receiptPayload?.data?.[ticketId];
-
-      if (!receipt) {
-        setRemoteTestResult(`Remote self-test ticket ${ticketId} created, but no receipt yet. Check whether the notification arrived.`);
-        return;
-      }
-
-      if (receipt.status === 'ok') {
-        setRemoteTestResult('Expo receipt is OK. If you still did not see the notification, rendering/display behavior is the blocker.');
-        return;
-      }
-
-      const detailText = receipt?.details ? JSON.stringify(receipt.details) : receipt?.message || 'Unknown Expo receipt error';
-      setRemoteTestResult(`Expo receipt error: ${detailText}`);
+      await triggerEmergentSelfTestPush(targetUserId);
+      setRemoteTestResult(
+        'Self-test sent. If the notification arrives within ~5s, end-to-end Emergent push delivery is working. If it does NOT arrive: (a) check the device is online, (b) check the EMERGENT_PUSH_KEY was injected at deploy (the placeholder key fails with HTTP 500), (c) ensure native token registration succeeded above.',
+      );
     } catch (errorValue: any) {
-      setRemoteTestResult(`Remote self-test failed: ${errorValue?.message || 'Unknown error'}`);
+      setRemoteTestResult(
+        `Self-test failed: ${errorValue?.message || 'Unknown error'}.\n` +
+          'If the error mentions EMERGENT_PUSH_KEY: the deployer has not injected the real key yet — re-trigger an Emergent Publish build.\n' +
+          'If the error mentions 401/403: the INTERNAL_PUSH_TOKEN secret is mismatched between FastAPI and Convex.\n' +
+          'If the error mentions 502/503: the Emergent push relay is temporarily unreachable.',
+      );
     } finally {
       setRunningRemoteTest(false);
     }
-  }, [pushDiagnostics.expoPushToken]);
+  }, [userInfo?.sub]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="notifications-screen">

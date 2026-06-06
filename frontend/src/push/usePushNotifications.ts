@@ -152,7 +152,12 @@ function getDisplayNameFromPayload(payload: NotificationPayload, fallbackBody?: 
 // runtime projectId will be `aff3eee0-...`, Expo's push backend will
 // look up FCM credentials for `aff3eee0-...`, find the uploaded
 // service account, and successfully deliver to FCM.
-const EXPECTED_PROJECT_ID = 'aff3eee0-0f42-475a-bd4c-a6d39d9b2f7b';
+// iter-127: EXPECTED_PROJECT_ID is no longer used because the Emergent
+// push regime makes projectId matching irrelevant. The constant is
+// preserved as a code-archeology marker for the iter-116..iter-125
+// "projectId hunt" work. Once the legacy Expo-push pipeline is removed
+// in Phase-2 migration this entire block can be deleted.
+// const EXPECTED_PROJECT_ID = 'aff3eee0-0f42-475a-bd4c-a6d39d9b2f7b';
 
 function getProjectId() {
   return (Constants.expoConfig as any)?.extra?.eas?.projectId || (Constants.easConfig as any)?.projectId || undefined;
@@ -161,28 +166,25 @@ function getProjectId() {
 /**
  * iter-116: returns a human-readable warning if the runtime projectId
  * doesn't match the project where FCM V1 credentials are uploaded.
- * Surfaced in the Push Diagnostics panel so the user can immediately
- * tell whether a "Remote self-test failed: Unable to retrieve FCM server
- * key" is a project-mismatch problem (fix = rebuild) vs. a real FCM
- * config problem.
+ *
+ * iter-127 UPDATE: Under the new Emergent-managed push regime, pushes
+ * are routed via FastAPI → Emergent push relay → FCM/APNs. Emergent's
+ * relay handles FCM credentials INTERNALLY against its own projectId
+ * (`e43b472f-...`), so the historical "projectId mismatch" is no longer
+ * an actionable problem — it is the expected, correct state. The legacy
+ * Expo-push pipeline still fires in parallel during Phase-1 migration
+ * but its delivery failures (from the projectId mismatch) no longer
+ * matter once Emergent push is verified working.
+ *
+ * This function is kept for backward compatibility with the
+ * Notifications screen but always returns an empty string under the
+ * new regime. Once Phase-2 migration removes the legacy pipeline this
+ * function can be deleted along with its only caller.
  */
 export function describePushProjectMismatch() {
-  const runtimeId = getProjectId();
-  if (!runtimeId) {
-    return 'Runtime projectId is missing — the build is misconfigured.';
-  }
-  if (runtimeId === EXPECTED_PROJECT_ID) {
-    return '';
-  }
-  return (
-    `Runtime projectId is ${runtimeId} but Smilers FCM credentials are uploaded on ` +
-    `Expo project ${EXPECTED_PROJECT_ID}. The currently installed APK was built ` +
-    `against a different Expo project — Expo's push server cannot find FCM ` +
-    `credentials for it. Fix: trigger a fresh EAS Android build (the new APK ` +
-    `will embed the correct projectId), UNINSTALL the old APK from the device, ` +
-    `then install the new APK. Reopening / clearing data is NOT enough — the ` +
-    `projectId is baked in at build time.`
-  );
+  // iter-127: Emergent-managed push makes the projectId match irrelevant.
+  // Return empty so the warning banner is hidden.
+  return '';
 }
 
 function getAppVersion() {
