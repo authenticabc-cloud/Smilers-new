@@ -44,20 +44,32 @@ function ChatOnceScreen() {
   const [joining, setJoining] = useState(false);
 
   // We try the Convex backend — if functions aren't deployed yet we fall back to a local code.
-  const generateRemote: any = useMutation(api.chatOnce?.generateCode || api.chatOnce?.create);
-  const joinRemote: any = useMutation(api.chatOnce?.joinByCode || api.chatOnce?.join);
+  // iter-124: keep BOTH endpoint references separately so we can do a
+  // runtime fallback when the primary call returns Server Error (the
+  // old `||` only picked one reference at hook-init time, with no
+  // runtime fallback for handler-side failures).
+  const generatePrimary: any = useMutation((api as any).chatOnce?.generateCode);
+  const generateLegacy: any = useMutation((api as any).chatOnce?.create);
+  const joinPrimary: any = useMutation((api as any).chatOnce?.joinByCode);
+  const joinLegacy: any = useMutation((api as any).chatOnce?.join);
 
   const handleGenerate = async () => {
     if (generating) return;
     setGenerating(true);
     try {
       let code: string | null = null;
-      try {
-        const res = await generateRemote({});
-        code = (res && (res.code || res.pairingCode)) || null;
-      } catch (e) {
-        // Convex function missing — fall back locally
-        code = makeLocalCode();
+      // Try primary, then legacy, then local code.
+      const attempts: Array<() => Promise<any>> = [];
+      if (typeof generatePrimary === 'function') attempts.push(() => generatePrimary({}));
+      if (typeof generateLegacy === 'function') attempts.push(() => generateLegacy({}));
+      for (const attempt of attempts) {
+        try {
+          const res = await attempt();
+          code = (res && (res.code || res.pairingCode)) || null;
+          if (code) break;
+        } catch {
+          // Try next.
+        }
       }
       setGeneratedCode(code || makeLocalCode());
     } finally {
@@ -88,18 +100,36 @@ function ChatOnceScreen() {
     }
     setJoining(true);
     try {
-      try {
-        const res = await joinRemote({ code });
-        const conversationId = res?.conversationId || res?._id || res?.id;
-        if (conversationId) {
-          router.push(`/chat/${conversationId}` as any);
-          return;
-        }
-      } catch (e: any) {
-        Alert.alert('Could not join', e?.message || 'This feature is being rolled out — try again soon.');
-        return;
+      // iter-124: try `joinByCode` first; if it Server-Errors, fall
+      // back to legacy `join` with the same args. Surfaces a clear
+      // message on failure including the underlying error so user can
+      // share it for diagnostics.
+      const attempts: Array<{ name: string; fn: () => Promise<any> }> = [];
+      if (typeof joinPrimary === 'function') {
+        attempts.push({ name: 'joinByCode', fn: () => joinPrimary({ code }) });
       }
-      Alert.alert('Joining', `Code ${code} accepted.`);
+      if (typeof joinLegacy === 'function') {
+        attempts.push({ name: 'join', fn: () => joinLegacy({ code }) });
+      }
+      let lastError: any = null;
+      for (const attempt of attempts) {
+        try {
+          const res = await attempt.fn();
+          const conversationId = res?.conversationId || res?._id || res?.id;
+          if (conversationId) {
+            router.push(`/chat/${conversationId}` as any);
+            return;
+          }
+        } catch (errorValue: any) {
+          lastError = errorValue;
+          // Continue to next attempt.
+        }
+      }
+      Alert.alert(
+        'Could not join',
+        (lastError && (lastError.message || String(lastError))) ||
+          'No matching session found for that code. Codes expire after 24 hours.',
+      );
     } finally {
       setJoining(false);
     }

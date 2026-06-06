@@ -792,7 +792,55 @@ export const clearDiary = mutation({
 
 ## 📋 ACTION ITEMS FOR BACKEND AGENT
 
-Priority order:
+> 🆕 **iter-124 updates** — the user is hitting 2 new Server-Error endpoints
+> that need backend handler fixes:
+
+### 🔴 P0 — `chatOnce.joinByCode` throws Server Error
+
+The user reports `[CONVEX M(chatOnce:joinByCode)] Server Error` when joining
+with a valid 6-character code that another user just generated via
+`chatOnce.create` from the web app. The function exists but the handler is
+throwing. Mobile sends EXACTLY:
+```ts
+joinByCode({ code: "XXXXXX" })   // 6-char uppercase alphanumeric
+```
+
+Likely candidates for the bug:
+- Strict argument validator rejecting the case (only accepts lowercase?)
+- Throwing when the matching session is already joined by 2 participants
+- Throwing on missing required user-side state (premium check?)
+- Reading from a missing index on the chatOnce table
+
+Mobile has been hardened in iter-124 to ALSO try `chatOnce.join({ code })`
+as a fallback (legacy/alias name) — please confirm at least ONE of these
+two endpoints works with `{ code: string }`.
+
+### 🔴 P0 — `scheduledMessages.setActive` throws Server Error
+
+User reports `[CONVEX M(scheduledMessages:setActive)] Server Error` when
+tapping the toggle switch on a scheduled message. The function exists per
+iter-120 backend update, but the handler errors. Mobile sends:
+```ts
+setActive({ scheduleId: Id<"scheduledMessages">, active: boolean })
+```
+
+Mobile iter-124 falls back to `scheduledMessages.update` with the full
+payload + flipped `active` flag if `setActive` fails — please confirm
+either path works.
+
+### 🟠 P1 — `scheduledMessages.listMine` returns empty on mobile but populated on web
+
+User has Angela Yeboah's "Happy birthday" schedule visible on the WEB app
+but not on the MOBILE app's `/scheduled` screen, even though both share the
+same Convex deployment and same auth identity. Likely cause: the handler
+uses a different field name to scope user (`createdBy` vs `userId`) AND
+mobile + web are inserting with different field names, OR the auth context
+identity differs between platforms. Please verify the same handler returns
+the same set for the same authenticated user regardless of platform.
+
+---
+
+### Earlier action items (still relevant):
 
 1. **🔴 Fix `scheduling.scheduleMessageMobile` AND `scheduledMessages.create`** —
    inspect the validator, share the rejection details OR fix the

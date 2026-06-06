@@ -175,9 +175,36 @@ export default function ScheduledScreen() {
   }, [localDrafts]);
 
   const onToggleActive = useCallback(async (schedule: Schedule) => {
-    try { await setActiveSchedule({ scheduleId: schedule._id as any, active: !schedule.active }); }
-    catch (errorValue: any) { Alert.alert('Failed', errorToMessage(errorValue) || 'Unknown error'); }
-  }, [setActiveSchedule]);
+    // iter-124: dual-endpoint probe — backend agent added
+    // `scheduledMessages.create` + `listMine` in iter-120 but `setActive`
+    // may not yet exist; fall back to `update` with the full schedule
+    // payload + the flipped active flag if `setActive` returns Server
+    // Error.
+    const desired = !schedule.active;
+    try {
+      await setActiveSchedule({ scheduleId: schedule._id as any, active: desired });
+      return;
+    } catch (primaryErr: any) {
+      // Fall through to update-based fallback.
+      try {
+        await updateSchedule({
+          scheduleId: schedule._id as any,
+          recipient: schedule.recipient,
+          message: schedule.message,
+          date: schedule.date,
+          time: schedule.time,
+          repeat: schedule.repeat,
+          active: desired,
+        });
+        return;
+      } catch (fallbackErr: any) {
+        Alert.alert(
+          'Couldn\u2019t toggle',
+          errorToMessage(primaryErr) || errorToMessage(fallbackErr) || 'Unknown error',
+        );
+      }
+    }
+  }, [setActiveSchedule, updateSchedule]);
 
   const onDelete = useCallback((schedule: Schedule) => {
     Alert.alert('Delete scheduled message?', `"${schedule.message.slice(0, 60)}${schedule.message.length > 60 ? '\u2026' : ''}"`, [
