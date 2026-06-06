@@ -26,15 +26,24 @@ if (Platform.OS !== 'web') {
 const CALL_CATEGORY = 'incoming-call';
 const BACKGROUND_NOTIFICATION_TASK = 'smilers-background-notification-task';
 const CALLS_CHANNEL = 'calls';
-const MESSAGES_CHANNEL = 'messages';
-// iter-126: bumped from 'default' → 'default-v2'. Android caches a
-// notification channel's importance once it's been created and ignores
-// subsequent `setNotificationChannelAsync` importance updates (only
-// the user can change importance from system settings). Using a fresh
-// channel id forces the OS to create a new channel at HIGH importance
-// so dashboard-test-pushes (which route through the default channel)
-// finally pop a banner + wake the screen.
-const DEFAULT_CHANNEL = 'default-v2';
+// iter-127: bumped channel ids again. Android caches importance per
+// channel id forever (immutable post-creation). To upgrade
+// HIGH → MAX (the only level that wakes the screen on Android 8+), we
+// need to create FRESH channels at MAX importance. Previous ids stay
+// behind harmlessly; the OS just lists them as unused.
+//
+// MAX importance gives us:
+//   - Heads-up banner (same as HIGH)
+//   - Full-screen wake on lock screen
+//   - System wakes display from doze
+//   - Vibration + sound
+//
+// HIGH only does the banner + sound. The user reported "notification
+// arrives but screen doesn't wake" — that's the exact HIGH-vs-MAX
+// behavioral diff documented at
+// https://developer.android.com/training/notify-user/channels#importance
+const MESSAGES_CHANNEL = 'messages-v2';
+const DEFAULT_CHANNEL = 'default-v3';
 const RINGTONE_PREFS_KEY = 'smilers_ringtone_prefs';
 
 const backgroundNotificationKeys: Set<string> = new Set();
