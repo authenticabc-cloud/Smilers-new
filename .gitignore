@@ -94,3 +94,8 @@ credentials.json
 frontend/google-service-account.json
 google-service-account.json
 **/google-service-account*.json
+
+
+# Firebase Admin SDK service account (iter-129)
+backend/firebase-admin-sdk.json
+**/firebase-admin-sdk*.json

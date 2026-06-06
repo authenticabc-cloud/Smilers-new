@@ -236,8 +236,21 @@ export function useEmergentPush() {
 /**
  * Trigger a self-test push for the currently-signed-in user. Used by the
  * Notifications diagnostics screen.
+ *
+ * iter-129: backend now returns a structured FCM v1 delivery result so
+ * the diagnostic UI can show definitive success/error per token, not
+ * just an opaque "queued" message.
  */
-export async function triggerEmergentSelfTestPush(userId: string): Promise<void> {
+export async function triggerEmergentSelfTestPush(userId: string): Promise<{
+  status: string;
+  fcm?: {
+    attempted: boolean;
+    token_count?: number;
+    success_count?: number;
+    error_count?: number;
+    errors?: string[];
+  };
+}> {
   if (!BACKEND_URL) {
     throw new Error('EXPO_PUBLIC_BACKEND_URL is not configured.');
   }
@@ -246,14 +259,15 @@ export async function triggerEmergentSelfTestPush(userId: string): Promise<void>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ user_id: userId }),
   });
+  let body: any = null;
+  try {
+    body = await resp.json();
+  } catch {}
   if (!resp.ok) {
-    let detail = '';
-    try {
-      const json = await resp.json();
-      detail = (json && (json.detail || json.message)) || '';
-    } catch {}
+    const detail = (body && (body.detail || body.message)) || '';
     throw new Error(
       `self-test-push HTTP ${resp.status}${detail ? `: ${detail}` : ''}`,
     );
   }
+  return body || { status: 'accepted' };
 }

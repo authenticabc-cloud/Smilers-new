@@ -254,18 +254,47 @@ export default function NotificationsScreen() {
     }
 
     setRunningRemoteTest(true);
-    setRemoteTestResult('Sending self-test push via Emergent relay…');
+    setRemoteTestResult('Sending self-test push via FCM v1 (primary) + Emergent relay (backup)…');
     try {
-      await triggerEmergentSelfTestPush(targetUserId);
-      setRemoteTestResult(
-        'Self-test sent. If the notification arrives within ~5s, end-to-end Emergent push delivery is working. If it does NOT arrive: (a) check the device is online, (b) check the EMERGENT_PUSH_KEY was injected at deploy (the placeholder key fails with HTTP 500), (c) ensure native token registration succeeded above.',
-      );
+      const result = await triggerEmergentSelfTestPush(targetUserId);
+      const fcm = result?.fcm;
+      if (fcm && fcm.attempted) {
+        const lines: string[] = [];
+        lines.push(
+          `FCM v1: ${fcm.success_count}/${fcm.token_count} device(s) delivered`,
+        );
+        if (fcm.success_count && fcm.success_count > 0) {
+          lines.push('✓ Notification should arrive on this device within ~3s.');
+        }
+        if (fcm.errors && fcm.errors.length > 0) {
+          lines.push(`✗ Errors: ${fcm.errors.slice(0, 2).join('; ')}`);
+          // Token rotation hint
+          if (
+            fcm.errors.some(
+              (e) =>
+                e.includes('registration token is not a valid') ||
+                e.includes('NotFound') ||
+                e.includes('Unregistered'),
+            )
+          ) {
+            lines.push(
+              '→ Token rotated — kill + reopen the app to refresh, then retry.',
+            );
+          }
+        }
+        setRemoteTestResult(lines.join('\n'));
+      } else {
+        setRemoteTestResult(
+          'FCM v1 not attempted — no device tokens registered in backend yet.\n' +
+            '→ Make sure you signed in AFTER installing this build (iter-129+). The native token register only fires after auth completes.',
+        );
+      }
     } catch (errorValue: any) {
       setRemoteTestResult(
-        `Self-test failed: ${errorValue?.message || 'Unknown error'}.\n` +
-          'If the error mentions EMERGENT_PUSH_KEY: the deployer has not injected the real key yet — re-trigger an Emergent Publish build.\n' +
-          'If the error mentions 401/403: the INTERNAL_PUSH_TOKEN secret is mismatched between FastAPI and Convex.\n' +
-          'If the error mentions 502/503: the Emergent push relay is temporarily unreachable.',
+        `Self-test request failed: ${errorValue?.message || 'Unknown error'}.\n` +
+          'If 401/403 → INTERNAL_PUSH_TOKEN mismatch between FastAPI and the deployer.\n' +
+          'If 502/503 → backend is unreachable.\n' +
+          'If HTTP 500 with EMERGENT_PUSH_KEY → relay creds not injected (FCM v1 path is independent and should still work).',
       );
     } finally {
       setRunningRemoteTest(false);

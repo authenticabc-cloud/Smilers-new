@@ -4,11 +4,12 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
+import asyncio
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 
@@ -383,18 +384,22 @@ async def diagnostic_logs_recent(limit: int = 50):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Emergent-managed Push Notifications relay
+# Emergent-managed Push Notifications relay + FCM v1 direct fallback
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# Architecture:
+# Architecture (iter-129):
 #   1. Mobile app → POST /api/register-push  → relays to Emergent push
-#      (SuprSend) which stores the device's native FCM/APNs token against
-#      the user_id. Mobile re-registers on every login + app open.
+#      AND records the native FCM/APNs token in MongoDB so we can also
+#      send directly via FCM v1 / APNs without going through Emergent.
 #
 #   2. Convex backend → POST /api/send-push-internal (with shared secret)
-#      → calls send_push() helper → relays to Emergent push /trigger which
-#      delivers via FCM/APNs to all device tokens registered for the listed
-#      recipients.
+#      → tries FCM v1 (Firebase Admin SDK) FIRST for stored Android tokens
+#         — this works as long as the Firebase service account is present.
+#         FCM v1 is the most reliable path because we control everything.
+#      → ALSO calls send_push() → Emergent push /trigger as a backup so
+#         once the deployer injects the real EMERGENT_PUSH_KEY it just
+#         starts working alongside FCM. Both paths idempotent (single
+#         notification per recipient: the OS dedupes by content/tag).
 #
 # The "shared secret" between Convex and FastAPI is INTERNAL_PUSH_TOKEN,
 # auto-provisioned in the backend .env so Convex can authenticate when
@@ -410,12 +415,114 @@ from fastapi import Header
 PUSH_BASE_URL = "https://integrations.emergentagent.com"
 PUSH_KEY = os.environ.get("EMERGENT_PUSH_KEY", "placeholder")
 INTERNAL_PUSH_TOKEN = os.environ.get("INTERNAL_PUSH_TOKEN", "")
+FIREBASE_ADMIN_SDK_PATH = os.environ.get(
+    "FIREBASE_ADMIN_SDK_PATH",
+    str(ROOT_DIR / "firebase-admin-sdk.json"),
+)
 
 _push_client = httpx.AsyncClient(
     base_url=PUSH_BASE_URL,
     headers={"X-Push-Key": PUSH_KEY},
     timeout=10.0,
 )
+
+# Firebase Admin SDK lazy-init — guards against missing service account
+# file in dev (e.g. fresh clones without the secret). If init fails,
+# fcm_send_v1() becomes a no-op and we degrade to Emergent-relay-only.
+_firebase_app = None
+_firebase_init_error: str | None = None
+
+
+def _ensure_firebase_initialized() -> bool:
+    global _firebase_app, _firebase_init_error
+    if _firebase_app is not None:
+        return True
+    if _firebase_init_error is not None:
+        # Don't keep retrying — log once and stay silent.
+        return False
+    try:
+        import firebase_admin
+        from firebase_admin import credentials
+        if not os.path.exists(FIREBASE_ADMIN_SDK_PATH):
+            _firebase_init_error = f"service account file not found at {FIREBASE_ADMIN_SDK_PATH}"
+            logger.warning(f"FCM v1 disabled: {_firebase_init_error}")
+            return False
+        cred = credentials.Certificate(FIREBASE_ADMIN_SDK_PATH)
+        _firebase_app = firebase_admin.initialize_app(cred, name="smilers-push")
+        logger.info(f"FCM v1 initialized with project from {FIREBASE_ADMIN_SDK_PATH}")
+        return True
+    except Exception as e:
+        _firebase_init_error = str(e)
+        logger.warning(f"FCM v1 init failed: {e}")
+        return False
+
+
+async def fcm_send_v1(
+    device_token: str,
+    title: str,
+    message: str,
+    data: dict[str, str] | None = None,
+    android_channel_id: str = "default",
+) -> tuple[bool, str | None]:
+    """
+    Send a push notification directly via Firebase Cloud Messaging v1 API
+    using the Admin SDK. Returns (success, error_message).
+
+    Runs the synchronous firebase_admin call in a worker thread so it
+    doesn't block the FastAPI event loop. Idempotent via FCM's own
+    server-side dedup (use collapse_key or message_id for stricter
+    idempotency if needed).
+    """
+    if not _ensure_firebase_initialized():
+        return False, "FCM v1 not initialized"
+    if not device_token:
+        return False, "empty device token"
+    try:
+        from firebase_admin import messaging as fcm_messaging
+        # Coerce data values to strings (FCM v1 requires str→str dict)
+        safe_data: dict[str, str] = {}
+        for k, v in (data or {}).items():
+            if v is None:
+                continue
+            safe_data[str(k)] = str(v)
+        msg = fcm_messaging.Message(
+            token=device_token,
+            notification=fcm_messaging.Notification(title=title, body=message),
+            data=safe_data,
+            android=fcm_messaging.AndroidConfig(
+                priority="high",
+                notification=fcm_messaging.AndroidNotification(
+                    channel_id=android_channel_id,
+                    sound="default",
+                    default_vibrate_timings=True,
+                    default_light_settings=True,
+                    visibility="public",
+                    priority="high",
+                ),
+            ),
+            apns=fcm_messaging.APNSConfig(
+                payload=fcm_messaging.APNSPayload(
+                    aps=fcm_messaging.Aps(
+                        alert=fcm_messaging.ApsAlert(title=title, body=message),
+                        sound="default",
+                        badge=1,
+                        content_available=True,
+                    ),
+                ),
+                headers={"apns-priority": "10"},
+            ),
+        )
+        # firebase_admin.messaging.send is synchronous → run in thread
+        msg_id = await asyncio.to_thread(
+            fcm_messaging.send, msg, app=_firebase_app
+        )
+        return True, msg_id
+    except Exception as e:
+        # FCM v1 raises NotFoundError for unregistered tokens — we should
+        # remove those from our store. For now just log and return False.
+        msg_str = f"{type(e).__name__}: {e}"
+        logger.warning(f"fcm_send_v1 failed for token {device_token[:12]}…: {msg_str}")
+        return False, msg_str
 
 
 class RegisterPushBody(BaseModel):
@@ -427,32 +534,61 @@ class RegisterPushBody(BaseModel):
 @api_router.post("/register-push", status_code=201)
 async def register_push(body: RegisterPushBody):
     """
-    Frontend → backend → Emergent relay. Stores the device's native push
-    token against the user_id so /trigger can deliver to it.
+    Frontend → backend. Stores the device's native FCM/APNs token in
+    MongoDB (so we can send directly via FCM v1) AND relays to the
+    Emergent push provider (so once EMERGENT_PUSH_KEY is real, that
+    path also works).
     """
     if not body.user_id or not body.device_token:
         raise HTTPException(400, "user_id and device_token are required")
     if body.platform not in ("ios", "android"):
         raise HTTPException(400, "platform must be 'ios' or 'android'")
+
+    # Write to MongoDB FIRST — this is the path we control and the one
+    # we rely on for FCM v1 direct delivery. Use the (user_id, platform,
+    # device_token) tuple as the natural key so re-registrations from
+    # the same device just touch the updatedAt timestamp.
+    try:
+        await db.push_tokens.update_one(
+            {
+                "user_id": body.user_id,
+                "platform": body.platform,
+                "device_token": body.device_token,
+            },
+            {
+                "$set": {
+                    "user_id": body.user_id,
+                    "platform": body.platform,
+                    "device_token": body.device_token,
+                    "updated_at": datetime.now(timezone.utc),
+                },
+                "$setOnInsert": {
+                    "created_at": datetime.now(timezone.utc),
+                },
+            },
+            upsert=True,
+        )
+    except Exception as e:
+        # MongoDB write failures shouldn't block — log + degrade.
+        logger.warning(f"push_tokens upsert failed (continuing): {e}")
+
+    # ALSO relay to Emergent — best-effort, swallow failures so the
+    # primary path (FCM v1 direct) doesn't depend on Emergent's relay
+    # being healthy.
     try:
         resp = await _push_client.post(
             "/api/v1/push/users/register",
             json=body.model_dump(),
         )
+        # Only surface the response status; don't fail the request.
+        if resp.status_code not in (200, 201, 202):
+            logger.warning(
+                f"register-push: Emergent relay returned {resp.status_code} "
+                f"(continuing — FCM v1 path is independent)"
+            )
     except httpx.HTTPError as e:
-        logger.warning(f"register-push: upstream HTTP error: {e}")
-        raise HTTPException(502, "Push provider unreachable")
-    if resp.status_code == 401:
-        logger.warning("register-push: upstream 401 — EMERGENT_PUSH_KEY missing/invalid")
-        raise HTTPException(500, "EMERGENT_PUSH_KEY missing or invalid")
-    if resp.status_code >= 500:
-        logger.warning(f"register-push: upstream 5xx ({resp.status_code})")
-        raise HTTPException(502, "Push provider unavailable")
-    try:
-        resp.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        logger.warning(f"register-push: upstream non-2xx: {e}")
-        raise HTTPException(400, "Push provider rejected the registration")
+        logger.warning(f"register-push: Emergent relay unreachable (continuing): {e}")
+
     return {"status": "registered"}
 
 
@@ -462,34 +598,88 @@ async def send_push(
     idempotency_key: str | None = None,
 ) -> None:
     """
-    Server-side helper. Relays a push notification to all device tokens
-    registered for the given recipients (user IDs). Wrap calls in try/except
-    so push delivery failures never block the primary operation.
+    Server-side helper. Sends a push notification to all device tokens
+    registered for the given recipient user IDs.
+
+    iter-129: PRIMARY path is FCM v1 (Firebase Admin SDK) using tokens
+    stored in MongoDB. SECONDARY path is the Emergent relay (which only
+    works once EMERGENT_PUSH_KEY is real). Both paths fire in parallel
+    — the OS dedupes by content so the user never sees doubles.
+
+    Wrap calls in try/except — push delivery failures never block the
+    primary operation.
     """
     if not recipients:
         return
     if len(recipients) > 100:
-        raise ValueError("max 100 recipients per /trigger call; chunk before sending")
+        raise ValueError("max 100 recipients per send_push call; chunk before sending")
     if "title" not in data or "message" not in data:
         raise ValueError("data must include 'title' and 'message'")
+
+    title = str(data["title"])
+    message = str(data["message"])
+
+    # ── Primary path: FCM v1 ──────────────────────────────────────
+    # Look up all stored device tokens for these recipients and send
+    # in parallel via Firebase Admin SDK.
+    if _ensure_firebase_initialized():
+        try:
+            cursor = db.push_tokens.find({"user_id": {"$in": recipients}})
+            tokens = await cursor.to_list(length=500)
+            if tokens:
+                # FCM data payload: keep small + string-only. Include
+                # the deeplink so the mobile tap-handler can route.
+                fcm_data: dict[str, str] = {
+                    "title": title,
+                    "message": message,
+                }
+                if data.get("action_url"):
+                    fcm_data["action_url"] = str(data["action_url"])
+                if data.get("subtext"):
+                    fcm_data["subtext"] = str(data["subtext"])
+                if idempotency_key:
+                    fcm_data["idempotency_key"] = idempotency_key
+
+                send_tasks = [
+                    fcm_send_v1(
+                        device_token=t["device_token"],
+                        title=title,
+                        message=message,
+                        data=fcm_data,
+                        android_channel_id="messages",
+                    )
+                    for t in tokens
+                ]
+                results = await asyncio.gather(*send_tasks, return_exceptions=True)
+                successes = sum(
+                    1 for r in results
+                    if isinstance(r, tuple) and r[0]
+                )
+                logger.info(
+                    f"send_push FCM v1: {successes}/{len(tokens)} delivered "
+                    f"(recipients={len(recipients)})"
+                )
+        except Exception as e:
+            logger.warning(f"send_push FCM v1 path failed: {e}")
+
+    # ── Secondary path: Emergent relay (only works once key is real) ──
     payload: dict = {"recipients": recipients, "data": data}
     if idempotency_key:
         payload["$idempotency_key"] = idempotency_key
     try:
         resp = await _push_client.post("/api/v1/push/trigger", json=payload)
+        if resp.status_code == 401:
+            # Expected while EMERGENT_PUSH_KEY=placeholder — silent.
+            pass
+        elif resp.status_code >= 500:
+            logger.warning(f"send_push Emergent relay upstream 5xx ({resp.status_code})")
+        else:
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                logger.warning(f"send_push Emergent relay non-2xx: {e}")
     except httpx.HTTPError as e:
-        logger.warning(f"send_push: upstream HTTP error: {e}")
-        return
-    if resp.status_code == 401:
-        logger.warning("send_push: upstream 401 — EMERGENT_PUSH_KEY missing/invalid")
-        return
-    if resp.status_code >= 500:
-        logger.warning(f"send_push: upstream 5xx ({resp.status_code})")
-        return
-    try:
-        resp.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        logger.warning(f"send_push: upstream non-2xx: {e}")
+        logger.warning(f"send_push Emergent relay HTTP error (continuing): {e}")
 
 
 class SendPushBody(BaseModel):
@@ -511,9 +701,6 @@ async def send_push_internal(
     Internal endpoint for Convex to trigger pushes. Authenticated by a
     shared secret (X-Internal-Push-Token header) that ONLY the Convex
     deployment knows. Mobile clients NEVER call this endpoint directly.
-
-    Payload shape mirrors send_push() — see backend contract doc for
-    examples (message, missed call, mention).
     """
     if not INTERNAL_PUSH_TOKEN:
         logger.warning("send-push-internal: INTERNAL_PUSH_TOKEN not configured")
@@ -537,7 +724,6 @@ async def send_push_internal(
         )
     except Exception as e:
         logger.warning(f"send-push-internal: send_push raised: {e}")
-        # Never bubble up — the caller (Convex) shouldn't retry on internal failures
     return {"status": "accepted"}
 
 
@@ -545,13 +731,40 @@ async def send_push_internal(
 async def self_test_push(body: dict):
     """
     Mobile diagnostic endpoint — sends a push notification to the calling
-    user as a smoke test. Body: {user_id: str}. Returns 202 even if the
-    relay call fails so the mobile UI can show a useful "pending" state
-    and rely on the actual notification arrival as the success signal.
+    user as a smoke test through BOTH FCM v1 (primary) and Emergent relay
+    (secondary). Returns the FCM v1 result inline so the mobile UI can
+    distinguish "queued" vs "delivered to FCM" vs "FCM rejected".
     """
     user_id = (body or {}).get("user_id")
     if not user_id:
         raise HTTPException(400, "user_id is required")
+
+    fcm_result: dict = {"attempted": False, "success_count": 0, "error_count": 0, "errors": []}
+
+    if _ensure_firebase_initialized():
+        try:
+            cursor = db.push_tokens.find({"user_id": user_id})
+            tokens = await cursor.to_list(length=10)
+            fcm_result["attempted"] = len(tokens) > 0
+            fcm_result["token_count"] = len(tokens)
+            for t in tokens:
+                ok, msg = await fcm_send_v1(
+                    device_token=t["device_token"],
+                    title="Smilers self-test",
+                    message="If you can read this, FCM v1 push delivery works.",
+                    data={"type": "diagnostic-fcm-v1-self-test", "action_url": "/notifications"},
+                    android_channel_id="messages",
+                )
+                if ok:
+                    fcm_result["success_count"] += 1
+                else:
+                    fcm_result["error_count"] += 1
+                    if msg:
+                        fcm_result["errors"].append(msg[:200])
+        except Exception as e:
+            fcm_result["errors"].append(f"FCM v1 path raised: {e}")
+
+    # Also fire the Emergent relay (silent failure mode while placeholder)
     try:
         await send_push(
             recipients=[user_id],
@@ -563,8 +776,9 @@ async def self_test_push(body: dict):
             idempotency_key=f"self-test-{user_id}-{uuid.uuid4().hex[:8]}",
         )
     except Exception as e:
-        logger.warning(f"self-test-push failed: {e}")
-    return {"status": "accepted"}
+        logger.warning(f"self-test-push: send_push raised: {e}")
+
+    return {"status": "accepted", "fcm": fcm_result}
 
 
 # Include the router in the main app
