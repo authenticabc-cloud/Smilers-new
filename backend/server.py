@@ -382,6 +382,191 @@ async def diagnostic_logs_recent(limit: int = 50):
     return {"items": items, "count": len(items)}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Emergent-managed Push Notifications relay
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Architecture:
+#   1. Mobile app → POST /api/register-push  → relays to Emergent push
+#      (SuprSend) which stores the device's native FCM/APNs token against
+#      the user_id. Mobile re-registers on every login + app open.
+#
+#   2. Convex backend → POST /api/send-push-internal (with shared secret)
+#      → calls send_push() helper → relays to Emergent push /trigger which
+#      delivers via FCM/APNs to all device tokens registered for the listed
+#      recipients.
+#
+# The "shared secret" between Convex and FastAPI is INTERNAL_PUSH_TOKEN,
+# auto-provisioned in the backend .env so Convex can authenticate when
+# triggering pushes for messages/missed calls/mentions.
+#
+# NOTE: EMERGENT_PUSH_KEY = "placeholder" in dev/.env — it is REPLACED at
+# deploy time by the Emergent deployer with the real key. DO NOT edit
+# the .env value yourself.
+
+import httpx
+from fastapi import Header
+
+PUSH_BASE_URL = "https://integrations.emergentagent.com"
+PUSH_KEY = os.environ.get("EMERGENT_PUSH_KEY", "placeholder")
+INTERNAL_PUSH_TOKEN = os.environ.get("INTERNAL_PUSH_TOKEN", "")
+
+_push_client = httpx.AsyncClient(
+    base_url=PUSH_BASE_URL,
+    headers={"X-Push-Key": PUSH_KEY},
+    timeout=10.0,
+)
+
+
+class RegisterPushBody(BaseModel):
+    user_id: str
+    platform: str  # "android" | "ios"
+    device_token: str
+
+
+@api_router.post("/register-push", status_code=201)
+async def register_push(body: RegisterPushBody):
+    """
+    Frontend → backend → Emergent relay. Stores the device's native push
+    token against the user_id so /trigger can deliver to it.
+    """
+    if not body.user_id or not body.device_token:
+        raise HTTPException(400, "user_id and device_token are required")
+    if body.platform not in ("ios", "android"):
+        raise HTTPException(400, "platform must be 'ios' or 'android'")
+    try:
+        resp = await _push_client.post(
+            "/api/v1/push/users/register",
+            json=body.model_dump(),
+        )
+    except httpx.HTTPError as e:
+        logger.warning(f"register-push: upstream HTTP error: {e}")
+        raise HTTPException(502, "Push provider unreachable")
+    if resp.status_code == 401:
+        logger.warning("register-push: upstream 401 — EMERGENT_PUSH_KEY missing/invalid")
+        raise HTTPException(500, "EMERGENT_PUSH_KEY missing or invalid")
+    if resp.status_code >= 500:
+        logger.warning(f"register-push: upstream 5xx ({resp.status_code})")
+        raise HTTPException(502, "Push provider unavailable")
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        logger.warning(f"register-push: upstream non-2xx: {e}")
+        raise HTTPException(400, "Push provider rejected the registration")
+    return {"status": "registered"}
+
+
+async def send_push(
+    recipients: list[str],
+    data: dict,
+    idempotency_key: str | None = None,
+) -> None:
+    """
+    Server-side helper. Relays a push notification to all device tokens
+    registered for the given recipients (user IDs). Wrap calls in try/except
+    so push delivery failures never block the primary operation.
+    """
+    if not recipients:
+        return
+    if len(recipients) > 100:
+        raise ValueError("max 100 recipients per /trigger call; chunk before sending")
+    if "title" not in data or "message" not in data:
+        raise ValueError("data must include 'title' and 'message'")
+    payload: dict = {"recipients": recipients, "data": data}
+    if idempotency_key:
+        payload["$idempotency_key"] = idempotency_key
+    try:
+        resp = await _push_client.post("/api/v1/push/trigger", json=payload)
+    except httpx.HTTPError as e:
+        logger.warning(f"send_push: upstream HTTP error: {e}")
+        return
+    if resp.status_code == 401:
+        logger.warning("send_push: upstream 401 — EMERGENT_PUSH_KEY missing/invalid")
+        return
+    if resp.status_code >= 500:
+        logger.warning(f"send_push: upstream 5xx ({resp.status_code})")
+        return
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        logger.warning(f"send_push: upstream non-2xx: {e}")
+
+
+class SendPushBody(BaseModel):
+    recipients: List[str]
+    title: str
+    message: str
+    subtext: str | None = None
+    image_url: str | None = None
+    action_url: str | None = None
+    idempotency_key: str | None = None
+
+
+@api_router.post("/send-push-internal", status_code=202)
+async def send_push_internal(
+    body: SendPushBody,
+    x_internal_push_token: str | None = Header(default=None),
+):
+    """
+    Internal endpoint for Convex to trigger pushes. Authenticated by a
+    shared secret (X-Internal-Push-Token header) that ONLY the Convex
+    deployment knows. Mobile clients NEVER call this endpoint directly.
+
+    Payload shape mirrors send_push() — see backend contract doc for
+    examples (message, missed call, mention).
+    """
+    if not INTERNAL_PUSH_TOKEN:
+        logger.warning("send-push-internal: INTERNAL_PUSH_TOKEN not configured")
+        raise HTTPException(503, "Push trigger endpoint not configured")
+    if not x_internal_push_token or x_internal_push_token != INTERNAL_PUSH_TOKEN:
+        raise HTTPException(401, "Invalid internal push token")
+
+    data: dict = {"title": body.title, "message": body.message}
+    if body.subtext:
+        data["subtext"] = body.subtext
+    if body.image_url:
+        data["image_url"] = body.image_url
+    if body.action_url:
+        data["action_url"] = body.action_url
+
+    try:
+        await send_push(
+            recipients=body.recipients,
+            data=data,
+            idempotency_key=body.idempotency_key,
+        )
+    except Exception as e:
+        logger.warning(f"send-push-internal: send_push raised: {e}")
+        # Never bubble up — the caller (Convex) shouldn't retry on internal failures
+    return {"status": "accepted"}
+
+
+@api_router.post("/self-test-push", status_code=202)
+async def self_test_push(body: dict):
+    """
+    Mobile diagnostic endpoint — sends a push notification to the calling
+    user as a smoke test. Body: {user_id: str}. Returns 202 even if the
+    relay call fails so the mobile UI can show a useful "pending" state
+    and rely on the actual notification arrival as the success signal.
+    """
+    user_id = (body or {}).get("user_id")
+    if not user_id:
+        raise HTTPException(400, "user_id is required")
+    try:
+        await send_push(
+            recipients=[user_id],
+            data={
+                "title": "Smilers self-test",
+                "message": "If you can read this, push notifications are working on this device.",
+                "action_url": "/notifications",
+            },
+            idempotency_key=f"self-test-{user_id}-{uuid.uuid4().hex[:8]}",
+        )
+    except Exception as e:
+        logger.warning(f"self-test-push failed: {e}")
+    return {"status": "accepted"}
+
+
 # Include the router in the main app
 app.include_router(api_router)
 

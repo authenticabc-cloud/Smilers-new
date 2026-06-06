@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { Platform, View } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import * as Notifications from 'expo-notifications';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as SplashScreen from 'expo-splash-screen';
@@ -17,6 +18,7 @@ import { AuthProvider } from '../src/providers/AuthProvider';
 import { ConvexClientProvider } from '../src/providers/ConvexClientProvider';
 import { useMessageNotificationSound } from '../src/lib/notification/useMessageNotificationSound';
 import { usePushNotifications } from '../src/push/usePushNotifications';
+import { useEmergentPush } from '../src/push/useEmergentPush';
 import AppLockGate from '../src/components/AppLockGate';
 import VoiceCommandLauncher from '../src/components/VoiceCommandLauncher';
 import IncomingScreenShareModal from '../src/components/IncomingScreenShareModal';
@@ -29,6 +31,28 @@ import {
   recordDiagnostic,
 } from '../src/lib/diagnostics';
 import { Colors } from '../src/theme';
+
+// ⚡ Per the Emergent push playbook, the Android 'default' channel MUST
+// be created at MODULE SCOPE (before any component mounts) so it exists
+// before any incoming push fires. Without this, the first push after a
+// fresh install can race the channel creation and land silently.
+// We DO NOT replace the channels created inside usePushNotifications
+// (messages-v2 / calls / default-v3); those are kept for legacy/Convex
+// notifications. The 'default' channel is the catch-all the Emergent
+// relay's notification payloads land in when no explicit channelId is
+// provided.
+if (Platform.OS === 'android') {
+  Notifications.setNotificationChannelAsync('default', {
+    name: 'Default',
+    importance: Notifications.AndroidImportance.MAX,
+    sound: 'default',
+    vibrationPattern: [0, 250, 250, 250],
+    lightColor: '#E4B53B',
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+    enableVibrate: true,
+    showBadge: true,
+  }).catch(() => {});
+}
 
 // ⚡ Initialize Sentry as early as possible — this MUST happen at the very
 // top of the JS bundle (before any other code runs) so it can install its
@@ -110,6 +134,12 @@ function GlobalNotificationSound() {
 
 function GlobalNotificationServices() {
   usePushNotifications();
+  // ⚡ Emergent-managed push registration runs alongside the legacy
+  // Convex push pipeline. They use different transports (native FCM/APNs
+  // direct via Emergent relay vs Expo wrapper via Convex). Once the
+  // backend agent disables the Convex pipeline, this hook becomes the
+  // sole registration path.
+  useEmergentPush();
   return null;
 }
 

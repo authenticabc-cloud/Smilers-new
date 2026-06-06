@@ -1,0 +1,45 @@
+{
+  "summary": "Path B Emergent push backend + frontend smoke test PASSED. All 15 push-specific backend tests + 4 existing core API tests pass (19/19 = 100%). /api/register-push correctly surfaces upstream 401 as HTTP 500 with detail 'EMERGENT_PUSH_KEY missing or invalid' when EMERGENT_PUSH_KEY=placeholder. /api/send-push-internal correctly gates on X-Internal-Push-Token header (401 missing/wrong, 202 valid). /api/self-test-push returns 202 even with placeholder upstream key. send_push() helper raises ValueError on >100 recipients and on missing title/message, and returns silently on empty recipients. Frontend: useEmergentPush + triggerEmergentSelfTestPush exports verified; _layout.tsx wires useEmergentPush() inside GlobalNotificationServices alongside usePushNotifications(); Notifications.setNotificationChannelAsync('default', ...) is at MODULE SCOPE with AndroidImportance.MAX. google-services.json present with project_id 'smilers-a4e07', wired into app.json android.googleServicesFile. expo-notifications plugin has sounds config. Sign-In screen renders cleanly at http://localhost:3000 with ZERO console errors, Sentry init succeeded.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {
+        "component": "expo-av (dependency only)",
+        "issue": "expo-av ^16.0.8 still listed in /app/frontend/package.json but no source file imports it (grep -rn \"from 'expo-av'\" src app => empty). Codebase has fully migrated to expo-audio + expo-video. Safe to remove from package.json to drop the deprecation warning surface area. NOT a blocker for the Path B push notifications work. Reference: /app/frontend/package.json line containing \"expo-av\""
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_push_notifications.py",
+    "/app/backend/tests/pytest.ini",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/test_reports/iter45_signin_boot.jpeg"
+  ],
+  "action_items": [
+    "(Optional cleanup, not blocking) Remove unused 'expo-av' dependency from /app/frontend/package.json — codebase has fully migrated to expo-audio + expo-video. Run yarn install to refresh lockfile.",
+    "Reminder for production: EMERGENT_PUSH_KEY=placeholder in /app/backend/.env is correct for dev. Emergent deployer replaces it at EAS build time. Push delivery end-to-end can only be validated by user on a real device after a fresh EAS build via Emergent Publish (web preview + Expo Go cannot exercise getDevicePushTokenAsync() / FCM / APNs)."
+  ],
+  "critical_code_review_comments": [
+    "/api/register-push correctly distinguishes upstream 401 (=> 500 with EMERGENT_PUSH_KEY detail) from 5xx (=> 502) from non-2xx (=> 400). Contract matches the playbook.",
+    "send_push() helper guards correctly: empty recipients short-circuits BEFORE the data validation, so callers with no recipients never get a ValueError even if their data dict is incomplete. Confirmed by unit test test_send_push_empty_recipients_returns_silently.",
+    "/api/send-push-internal swallows send_push() exceptions internally so Convex never sees a 5xx for a transient push failure — return value is always 202 once auth passes. This is intentional per the backend contract.",
+    "useEmergentPush has 3 trigger paths (auth ready, push token rotation listener, AppState foreground) and a 5-min throttle on identical user+token re-registrations — matches playbook §4.",
+    "Notifications.setNotificationChannelAsync('default', ...) is correctly at module scope (line 45 of _layout.tsx), NOT inside useEffect/component body. AndroidImportance.MAX is used. The other channels (messages-v2/calls/default-v3) live inside usePushNotifications and are intentionally preserved for the legacy Convex pipeline."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_push_notifications.py (new — 15 tests)",
+    "/app/backend/tests/pytest.ini (new — enables asyncio_mode=auto)"
+  ],
+  "success_rate": {"backend": "100% (19/19 pytest)", "frontend": "100% smoke (bundle loads, 0 console errors, structural checks pass)"},
+  "seed_data_creation": "None. Tests use TEST_ prefixed ephemeral IDs that never reach the placeholder relay (upstream returns 401 before any persistence). No cleanup required.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Push delivery end-to-end (FCM/APNs) CANNOT be tested on web — the EMERGENT_PUSH_KEY in /app/backend/.env is intentionally 'placeholder' and gets replaced at EAS build time. getDevicePushTokenAsync only works on a real device. The 500 returned by /api/register-push in dev is the EXPECTED behavior; tests verify the error detail contains 'EMERGENT_PUSH_KEY' or equivalent. INTERNAL_PUSH_TOKEN is read from /app/backend/.env at test time via dotenv_values. test_push_notifications.py has both HTTP-level tests and direct async unit tests for send_push() (imports backend.server). pytest.ini sets asyncio_mode=auto.",
+  "rca_of_issue": "N/A — no bugs found. All 9 review-request acceptance criteria validated and passing."
+}
