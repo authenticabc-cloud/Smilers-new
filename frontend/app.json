@@ -20,6 +20,7 @@
         "NSLocationWhenInUseUsageDescription": "Share your location in chats",
         "NSFaceIDUsageDescription": "Unlock Smilers securely with Face ID",
         "NSContactsUsageDescription": "Find friends who use Smilers",
+        "NSPhotoLibraryAddUsageDescription": "Save photos and videos from chats to your gallery",
         "UIBackgroundModes": [
           "audio",
           "remote-notification"
@@ -158,6 +159,14 @@
         }
       ],
       "@react-native-community/datetimepicker",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Save photos and videos from chats to your gallery",
+          "savePhotosPermission": "Save photos and videos from chats to your gallery",
+          "isAccessMediaLocationEnabled": false
+        }
+      ],
       [
         "expo-build-properties",
         {

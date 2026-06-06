@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Dimensions,
   Image,
   Modal,
@@ -10,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import {
   createAudioPlayer,
@@ -38,6 +40,12 @@ import { getMessageDurationSec } from '../hooks/useResolvedStorageUrl';
 import { useDecryptedMediaUrl } from '../hooks/useDecryptedMediaUrl';
 import type { E2EEStatus } from '../hooks/useConversationE2EE';
 import { getCachedTranscription, type CachedTranscription, type TranscriptionSegment } from '../lib/triggerTranscription';
+// iter-125: full-screen photo viewer toolbar helpers
+import {
+  saveMessageMediaToGallery,
+  shareMessage,
+  setMessageImageAsProfilePhoto,
+} from '../lib/messageMedia';
 
 // Module-level "currently playing" audio singleton — guarantees only one
 // voice message plays at a time. Uses expo-audio's AudioPlayer (expo-av
@@ -397,12 +405,93 @@ function ImageMessage({ msg, timeStr, textStyle, e2eeStatus }: { msg: any; timeS
         </View>
         {msg.text ? <RichMessageText text={msg.text} textStyle={[textStyle, styles.imageCaption]} /> : null}
       </TouchableOpacity>
-      <ImageViewer visible={open} onClose={() => setOpen(false)} uri={src} />
+      <ImageViewer visible={open} onClose={() => setOpen(false)} uri={src} msg={msg} />
     </>
   );
 }
 
-function ImageViewer({ visible, onClose, uri }: { visible: boolean; onClose: () => void; uri: string }) {
+/**
+ * ImageViewer — full-screen photo viewer with a bottom action toolbar.
+ *
+ * iter-125: added Download / Share / Set as profile photo per the
+ * web-parity spec. Helpers (download to cache, request permissions,
+ * call backend mutation) live in /app/frontend/src/lib/messageMedia.ts.
+ *
+ * All three actions are GUARDED by the message kind:
+ *   - Download / Share: visible when the message has any media URL.
+ *   - Set as profile photo: only for messages whose kind === 'image'.
+ *
+ * Failures surface via Alert.alert from the helper; we never crash the
+ * viewer.
+ */
+function ImageViewer({
+  visible,
+  onClose,
+  uri,
+  msg,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  uri: string;
+  msg?: any;
+}) {
+  const convex = useConvex();
+  const insets = useSafeAreaInsets();
+  const [busyAction, setBusyAction] = useState<null | 'download' | 'share' | 'profile'>(null);
+
+  const isImage =
+    msg?.kind === 'image' ||
+    msg?.type === 'image' ||
+    (typeof msg?.mimeType === 'string' && msg.mimeType.startsWith('image/'));
+
+  const handleDownload = useCallback(async () => {
+    if (busyAction) return;
+    setBusyAction('download');
+    try {
+      const ok = await saveMessageMediaToGallery({ client: convex as any, message: msg });
+      if (ok) Alert.alert('Saved', 'Photo saved to your gallery.');
+    } finally {
+      setBusyAction(null);
+    }
+  }, [busyAction, convex, msg]);
+
+  const handleShare = useCallback(async () => {
+    if (busyAction) return;
+    setBusyAction('share');
+    try {
+      await shareMessage({ client: convex as any, message: msg });
+    } finally {
+      setBusyAction(null);
+    }
+  }, [busyAction, convex, msg]);
+
+  const handleSetProfile = useCallback(() => {
+    if (busyAction) return;
+    if (!isImage) return;
+    Alert.alert(
+      'Use as profile photo?',
+      'Replace your current profile photo with this image.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Use photo',
+          onPress: async () => {
+            setBusyAction('profile');
+            try {
+              const ok = await setMessageImageAsProfilePhoto({
+                client: convex as any,
+                message: msg,
+              });
+              if (ok) Alert.alert('Updated', 'Profile photo updated.');
+            } finally {
+              setBusyAction(null);
+            }
+          },
+        },
+      ],
+    );
+  }, [busyAction, convex, msg, isImage]);
+
   return (
     <Modal visible={visible} transparent={false} animationType="fade" onRequestClose={onClose}>
       <View style={styles.viewerWrap} testID="media-viewer">
@@ -412,6 +501,59 @@ function ImageViewer({ visible, onClose, uri }: { visible: boolean; onClose: () 
         <TouchableOpacity style={styles.viewerClose} onPress={onClose} hitSlop={12} testID="media-viewer-close">
           <Feather name="x" size={28} color={Colors.white} />
         </TouchableOpacity>
+
+        {/* Bottom action toolbar — iter-125 */}
+        {msg ? (
+          <View
+            style={[
+              styles.viewerToolbar,
+              { paddingBottom: Math.max(12, insets.bottom + 8) },
+            ]}
+            testID="media-viewer-toolbar"
+          >
+            <TouchableOpacity
+              style={styles.viewerAction}
+              onPress={handleDownload}
+              disabled={!!busyAction}
+              testID="media-viewer-download"
+            >
+              {busyAction === 'download' ? (
+                <ActivityIndicator size="small" color={Colors.white} />
+              ) : (
+                <Feather name="download" size={22} color={Colors.white} />
+              )}
+              <Text style={styles.viewerActionLabel}>Save</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.viewerAction}
+              onPress={handleShare}
+              disabled={!!busyAction}
+              testID="media-viewer-share"
+            >
+              {busyAction === 'share' ? (
+                <ActivityIndicator size="small" color={Colors.white} />
+              ) : (
+                <Feather name="share-2" size={22} color={Colors.white} />
+              )}
+              <Text style={styles.viewerActionLabel}>Share</Text>
+            </TouchableOpacity>
+            {isImage ? (
+              <TouchableOpacity
+                style={styles.viewerAction}
+                onPress={handleSetProfile}
+                disabled={!!busyAction}
+                testID="media-viewer-profile"
+              >
+                {busyAction === 'profile' ? (
+                  <ActivityIndicator size="small" color={Colors.white} />
+                ) : (
+                  <Feather name="user" size={22} color={Colors.white} />
+                )}
+                <Text style={styles.viewerActionLabel}>Use as profile</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ) : null}
       </View>
     </Modal>
   );
@@ -1255,6 +1397,33 @@ const styles = StyleSheet.create({
   viewerImage: { width: '100%', height: '100%' },
   viewerVideo: { width: '100%', height: '100%' },
   viewerClose: { position: 'absolute', top: 48, right: 16, padding: 8, backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 20 },
+  // iter-125: bottom action toolbar for full-screen photo viewer
+  viewerToolbar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    paddingHorizontal: 24,
+    paddingTop: 16,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  viewerAction: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 8,
+    minHeight: 48,
+  },
+  viewerActionLabel: {
+    color: Colors.white,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+    textAlign: 'center',
+  },
 
   /* ── Time-synced video captions ── */
   videoCaptionWrap: {

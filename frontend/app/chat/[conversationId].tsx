@@ -36,6 +36,7 @@ import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { recordDiagnostic } from '../../src/lib/diagnostics';
 import { errorToMessage } from '../../src/lib/safeString';
 import { scanMessage, explainScanResult, extractUrls, enrichScanWithRemoteAPI } from '../../src/lib/securityScanner';
+import { shareMessage } from '../../src/lib/messageMedia';
 import { appendDiaryEntry, chatMessageToDiaryEntry } from '../../src/lib/diaryStore';
 import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
 import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
@@ -1337,6 +1338,23 @@ export default function ChatScreen() {
     setShowForwardPicker(true);
   }, []);
 
+  // iter-125: native Share — uses the device's share sheet (WhatsApp /
+  // SMS / Mail / Other Apps / Smilers in-app). Text-only messages share
+  // their text; media messages download to cache and share the file
+  // URI via expo-sharing for the best UX (proper mime-type, dialog
+  // title, no broken https links in receivers like SMS).
+  const onShare = useCallback(async () => {
+    const msg = selectedMsg;
+    if (!msg) return;
+    closeActionSheet();
+    try {
+      await shareMessage({ client: convex as any, message: msg });
+    } catch (errorValue: any) {
+      // Helper handles its own Alerts — only log unexpected re-throws.
+      console.warn('[chat] share failed', errorValue?.message);
+    }
+  }, [selectedMsg, convex, closeActionSheet]);
+
   const onMoreReactions = useCallback(() => {
     const msg = selectedMsg;
     if (!msg) return;
@@ -2428,6 +2446,7 @@ export default function ChatScreen() {
                 <ActionRow icon="edit-2" lib="feather" label="Edit" onPress={onEdit} />
               ) : null}
               <ActionRow icon="corner-up-right" lib="feather" label="Forward" onPress={onForward} />
+              <ActionRow icon="share-2" lib="feather" label="Share" onPress={onShare} />
               <ActionRow icon="check-square" lib="feather" label="Select multiple to forward" onPress={onSelectMultiple} />
               <ActionRow
                 icon="star"
