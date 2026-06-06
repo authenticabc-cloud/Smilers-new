@@ -27,7 +27,14 @@ const CALL_CATEGORY = 'incoming-call';
 const BACKGROUND_NOTIFICATION_TASK = 'smilers-background-notification-task';
 const CALLS_CHANNEL = 'calls';
 const MESSAGES_CHANNEL = 'messages';
-const DEFAULT_CHANNEL = 'default';
+// iter-126: bumped from 'default' → 'default-v2'. Android caches a
+// notification channel's importance once it's been created and ignores
+// subsequent `setNotificationChannelAsync` importance updates (only
+// the user can change importance from system settings). Using a fresh
+// channel id forces the OS to create a new channel at HIGH importance
+// so dashboard-test-pushes (which route through the default channel)
+// finally pop a banner + wake the screen.
+const DEFAULT_CHANNEL = 'default-v2';
 const RINGTONE_PREFS_KEY = 'smilers_ringtone_prefs';
 
 const backgroundNotificationKeys: Set<string> = new Set();
@@ -364,9 +371,20 @@ async function setupCategoriesAndChannels(prefs?: { ringtone?: string | null; no
     });
     await Notifications.setNotificationChannelAsync(DEFAULT_CHANNEL, {
       name: 'General',
-      importance: Notifications.AndroidImportance.DEFAULT,
+      // iter-126: bumped from DEFAULT → HIGH. Dashboard-sent test
+      // pushes and any server-side send that omits `channelId` route
+      // through this channel. On Android 8+, DEFAULT importance shows
+      // the notification silently in the tray (no banner pop, no
+      // screen wake) — exactly the symptom the user reported. HIGH
+      // makes the OS pop a banner + light the screen, matching the
+      // 'messages' channel behavior.
+      importance: Notifications.AndroidImportance.HIGH,
       sound: 'default',
+      vibrationPattern: [0, 250, 250, 250],
       lightColor: '#E4B53B',
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+      enableVibrate: true,
+      showBadge: true,
     });
   }
 }
