@@ -38,6 +38,15 @@ export default function NotificationsScreen() {
   const [runningRemoteTest, setRunningRemoteTest] = useState(false);
   const [localTestResult, setLocalTestResult] = useState('Not run yet');
   const [remoteTestResult, setRemoteTestResult] = useState('Not run yet');
+  // iter-128b: independent legacy-path diagnostic. Bypasses our FastAPI
+  // + Emergent relay entirely and hits Expo's exp.host directly with
+  // the device's Expo push token. This is the EXACT path Emergent
+  // Support's "we uploaded FCM credentials" fix targets, so a green
+  // result here means their fix took effect. Critical for diagnosing
+  // DeviceNotRegistered / InvalidCredentials / MismatchSenderId errors
+  // without me having to run curl from a terminal.
+  const [runningLegacyTest, setRunningLegacyTest] = useState(false);
+  const [legacyTestResult, setLegacyTestResult] = useState('Not run yet');
   // iter-116: prominent warning shown if the runtime projectId baked
   // into the installed APK doesn't match the Expo project where the
   // FCM v1 credentials are uploaded. Caught instantly without needing
@@ -125,8 +134,108 @@ export default function NotificationsScreen() {
     }
   }, []);
 
+  // iter-128b: Direct legacy-path self-test. Hits Expo's exp.host
+  // directly with the device's Expo push token, then fetches the
+  // receipt. This is the ENTIRE path Emergent Support's "we uploaded
+  // FCM credentials" fix targets, so it's the definitive test of
+  // whether their fix took effect. Surfaces the EXACT upstream error
+  // (DeviceNotRegistered / InvalidCredentials / MismatchSenderId)
+  // so the user can forward it to Emergent Support if needed.
+  const runLegacySelfTest = useCallback(async () => {
+    if (!pushDiagnostics.expoPushToken) {
+      setLegacyTestResult(
+        'Legacy self-test unavailable: no Expo push token yet — wait for native registration to complete.',
+      );
+      return;
+    }
+
+    setRunningLegacyTest(true);
+    setLegacyTestResult('Sending direct to Expo (exp.host)…');
+    try {
+      const sendResponse = await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: pushDiagnostics.expoPushToken,
+          title: 'Smilers legacy-path probe',
+          body: 'If you see this, Expo→FCM delivery is working. Emergent Support credential upload took effect.',
+          data: { type: 'diagnostic-legacy-probe' },
+          sound: 'default',
+          channelId: 'messages',
+          priority: 'high',
+          ttl: 600,
+          _displayInForeground: true,
+        }),
+      });
+      const sendPayload = await sendResponse.json();
+      const ticketId =
+        sendPayload?.data?.id ||
+        (Array.isArray(sendPayload?.data) ? sendPayload.data[0]?.id : null);
+      if (!ticketId) {
+        const errorMessage =
+          sendPayload?.errors?.[0]?.message ||
+          sendPayload?.data?.message ||
+          'Expo did not return a ticket id.';
+        setLegacyTestResult(`Send rejected by Expo: ${errorMessage}`);
+        return;
+      }
+
+      setLegacyTestResult(
+        `Expo ticket ${ticketId} created. Waiting 4s for receipt…`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 4000));
+
+      const receiptResponse = await fetch(
+        'https://exp.host/--/api/v2/push/getReceipts',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: [ticketId] }),
+        },
+      );
+      const receiptPayload = await receiptResponse.json();
+      const receipt = receiptPayload?.data?.[ticketId];
+
+      if (!receipt) {
+        setLegacyTestResult(
+          `Ticket ${ticketId} created but no receipt yet from Expo. If notification did NOT arrive, the channel/credentials are probably broken — try again in 30s.`,
+        );
+        return;
+      }
+
+      if (receipt.status === 'ok') {
+        setLegacyTestResult(
+          `✓ Expo receipt: OK. Legacy path WORKS — Emergent Support's FCM credential upload is in effect. If you did NOT see a banner on screen, the device's Notification Settings for Smilers are silenced (Settings → Apps → Smilers → Notifications).\n\nTicket: ${ticketId}`,
+        );
+        return;
+      }
+
+      // Common errors with diagnostic guidance
+      const errCode = receipt?.details?.error || receipt?.message || 'unknown';
+      let hint = '';
+      if (errCode === 'DeviceNotRegistered') {
+        hint =
+          '\n→ Likely cause: the Expo token stored on this device was issued under a DIFFERENT Firebase configuration than the FCM credentials Emergent Support uploaded. Either (a) the package name mismatch (your APK = app.emergent.smilersmobiled270e79f vs Emergent\'s FCM registration), or (b) the token rotated after install but Convex still has the old one. Action: forward this exact error to Emergent Support.';
+      } else if (errCode === 'InvalidCredentials') {
+        hint =
+          '\n→ Likely cause: Emergent Support uploaded the wrong FCM credential format (legacy server key vs FCM v1 service account). Expo requires FCM V1 since June 2024.';
+      } else if (errCode === 'MismatchSenderId') {
+        hint =
+          '\n→ Likely cause: Emergent uploaded FCM creds from a DIFFERENT Firebase project than the one this APK was built against. Sender IDs must match.';
+      }
+      setLegacyTestResult(
+        `✗ Expo receipt error: ${errCode}.\nMessage: ${receipt?.message || 'no message'}${hint}\n\nTicket: ${ticketId}`,
+      );
+    } catch (errorValue: any) {
+      setLegacyTestResult(
+        `Legacy self-test failed (network): ${errorValue?.message || 'Unknown error'}`,
+      );
+    } finally {
+      setRunningLegacyTest(false);
+    }
+  }, [pushDiagnostics.expoPushToken]);
+
   const runRemoteSelfTest = useCallback(async () => {
-    // iter-127: Self-test now routes through the Emergent-managed push
     // relay (FastAPI /api/self-test-push → Emergent → FCM/APNs) instead
     // of the legacy Expo push endpoint. This validates the ENTIRE new
     // pipeline end-to-end:
@@ -241,12 +350,22 @@ export default function NotificationsScreen() {
               disabled={runningRemoteTest}
               testID="push-diagnostics-remote-test-button"
             >
-              {runningRemoteTest ? <ActivityIndicator size="small" color={Colors.primary} /> : <Text style={styles.secondaryButtonText}>Test remote self-push</Text>}
+              {runningRemoteTest ? <ActivityIndicator size="small" color={Colors.primary} /> : <Text style={styles.secondaryButtonText}>Test remote self-push (Emergent)</Text>}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.secondaryButton}
+              onPress={runLegacySelfTest}
+              disabled={runningLegacyTest}
+              testID="push-diagnostics-legacy-test-button"
+            >
+              {runningLegacyTest ? <ActivityIndicator size="small" color={Colors.primary} /> : <Text style={styles.secondaryButtonText}>Test direct (Expo/FCM)</Text>}
             </TouchableOpacity>
           </View>
 
           <DiagnosticRow label="Local test" value={localTestResult} testID="push-diagnostics-local-test-result" multiline />
-          <DiagnosticRow label="Remote self-test" value={remoteTestResult} testID="push-diagnostics-remote-test-result" multiline />
+          <DiagnosticRow label="Remote self-test (Emergent)" value={remoteTestResult} testID="push-diagnostics-remote-test-result" multiline />
+          <DiagnosticRow label="Direct test (Expo/FCM)" value={legacyTestResult} testID="push-diagnostics-legacy-test-result" multiline />
 
           <DiagnosticRow label="Status" value={pushDiagnostics.registrationStatus} testID="push-diagnostics-status" />
           <DiagnosticRow label="Auth session" value={pushDiagnostics.authSessionReady ? 'ready' : 'missing'} testID="push-diagnostics-auth-session" />
