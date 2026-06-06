@@ -684,27 +684,11 @@ export default function ChatScreen() {
             message: `→ args recipient="${safeRecipient.slice(0, 40)}" date=${safeDate} time=${safeTime} repeat=${repeatMapped} active=true message.len=${safeMessage.length}`,
           });
         } catch {}
-        // iter-113: primary attempt → scheduling.scheduleMessageMobile.
-        // On failure, fall back to scheduledMessages.create.
-        //
-        // iter-120: the backend agent shipped a NEW
-        // `convex/scheduledMessages.ts` with a different arg shape than
-        // the legacy `scheduling.scheduleMessageMobile`. Per backend
-        // agent's contract update:
-        //   scheduledMessages.create({
-        //     recipient: string (contact name),
-        //     text:      string (message body — NOT `message`),
-        //     scheduledAt: string (ISO timestamp — NOT date+time),
-        //   })
-        // We build the new-shape payload separately so the fallback
-        // actually matches the new schema. The primary path still
-        // sends the legacy shape (which the backend kept working).
-        const scheduledAtIso = when.toISOString();
-        const scheduleArgsNew = {
-          recipient: safeRecipient,
-          text: safeMessage,
-          scheduledAt: scheduledAtIso,
-        };
+        // iter-126: Backend confirmed the EXACT contract — primary +
+        // fallback now both send the SAME confirmed payload
+        // { recipient, message, date, time, repeat, active }.
+        // The dual-endpoint probe is kept as belt-and-suspenders in case
+        // one endpoint is briefly redeployed without the other.
         let primaryError: any = null;
         try {
           await createScheduledMessage(scheduleArgs);
@@ -737,19 +721,19 @@ export default function ChatScreen() {
             recordDiagnostic({
               tag: 'NET',
               source: 'chat/scheduleMessageMobile',
-              message: `↻ primary failed name=${nameStr} code=${codeStr} data=${dataStr.slice(0, 400)} — trying scheduledMessages.create fallback (new schema)`,
+              message: `↻ primary failed name=${nameStr} code=${codeStr} data=${dataStr.slice(0, 400)} — trying scheduledMessages.create fallback (same payload)`,
             });
           } catch {}
-          // Try the new-shape endpoint as fallback.
+          // Try the alternate endpoint with the SAME confirmed payload.
           if (typeof createScheduledLegacy === 'function') {
             try {
-              await (createScheduledLegacy as any)(scheduleArgsNew);
+              await (createScheduledLegacy as any)(scheduleArgs);
               primaryError = null; // fallback succeeded
               try {
                 recordDiagnostic({
                   tag: 'NET',
                   source: 'chat/scheduleMessageMobile',
-                  message: `← ok via scheduledMessages.create (new schema, scheduledAt=${scheduledAtIso})`,
+                  message: '← ok via scheduledMessages.create (same payload)',
                 });
               } catch {}
             } catch (legacyFailure: any) {
@@ -760,7 +744,7 @@ export default function ChatScreen() {
                 recordDiagnostic({
                   tag: 'NET',
                   source: 'chat/scheduleMessageMobile',
-                  message: `× scheduledMessages.create (new schema) also failed: ${errorToMessage(legacyFailure).slice(0, 200)}`,
+                  message: `× scheduledMessages.create also failed: ${errorToMessage(legacyFailure).slice(0, 200)}`,
                 });
               } catch {}
             }

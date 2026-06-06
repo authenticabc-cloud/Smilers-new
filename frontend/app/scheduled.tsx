@@ -122,9 +122,11 @@ export default function ScheduledScreen() {
         const when = new Date(draft.whenMs);
         const date = `${when.getFullYear()}-${pad2(when.getMonth() + 1)}-${pad2(when.getDate())}`;
         const time = `${pad2(when.getHours())}:${pad2(when.getMinutes())}`;
-        // iter-113: defensive arg coercion + dual-endpoint probe
-        // iter-120: fallback now uses NEW `scheduledMessages.create`
-        // schema per backend agent: { recipient, text, scheduledAt }.
+        // iter-126: Backend confirmed BOTH endpoints accept the EXACT
+        // same payload: { recipient, message, date, time, repeat, active }.
+        // We keep the dual-endpoint probe as belt-and-suspenders (in case
+        // one endpoint is briefly redeployed without the other) but the
+        // fallback now sends the SAME confirmed payload — no schema drift.
         const args = {
           recipient: String(draft.recipient || 'Conversation').slice(0, 200),
           message: String(draft.message || '').slice(0, 5000),
@@ -133,17 +135,11 @@ export default function ScheduledScreen() {
           repeat: 'once' as const,
           active: true,
         };
-        const argsNew = {
-          recipient: String(draft.recipient || 'Conversation').slice(0, 200),
-          text: String(draft.message || '').slice(0, 5000),
-          scheduledAt: when.toISOString(),
-        };
         try {
           await createSchedule(args);
         } catch (primaryErr: any) {
-          // Try new scheduledMessages.create schema as fallback
           if (typeof createScheduleLegacy === 'function') {
-            await (createScheduleLegacy as any)(argsNew);
+            await (createScheduleLegacy as any)(args);
           } else {
             throw primaryErr;
           }
@@ -166,7 +162,7 @@ export default function ScheduledScreen() {
         `${remaining.length} message${remaining.length === 1 ? '' : 's'} still saved on this device. Reason: ${firstError}`,
       );
     }
-  }, [createSchedule, localDrafts, syncing]);
+  }, [createSchedule, createScheduleLegacy, localDrafts, syncing]);
 
   const removeLocalDraft = useCallback(async (localId: string) => {
     const next = localDrafts.filter((d) => d.localId !== localId);
@@ -239,10 +235,9 @@ export default function ScheduledScreen() {
             'Please enter the recipient\u2019s name (e.g. "Angela Yeboah").'
           );
         }
-        // iter-120: dual-shape probe — primary keeps the legacy
-        // scheduleMessageMobile shape (still accepted server-side),
-        // fallback uses the NEW scheduledMessages.create schema
-        // { recipient, text, scheduledAt } per backend agent.
+        // iter-126: Backend confirmed both endpoints accept the EXACT
+        // same payload — fallback uses the SAME schema (just alternate
+        // endpoint name). No more schema-drift guessing.
         const args = {
           recipient: rTrim.slice(0, 200),
           message: String(draft.message || '').slice(0, 5000),
@@ -251,28 +246,11 @@ export default function ScheduledScreen() {
           repeat: draft.repeat,
           active: draft.active,
         };
-        // Compose the ISO scheduledAt from the user-picked date+time
-        // fields. Using local-time interpretation matches the rest of
-        // the app's scheduling UX (when the user picks 7:21 they mean
-        // 7:21 in THEIR timezone). new Date('YYYY-MM-DDTHH:MM') parses
-        // as local time.
-        const scheduledAtIso = (() => {
-          try {
-            return new Date(`${draft.date}T${draft.time}`).toISOString();
-          } catch {
-            return new Date().toISOString();
-          }
-        })();
-        const argsNew = {
-          recipient: rTrim.slice(0, 200),
-          text: String(draft.message || '').slice(0, 5000),
-          scheduledAt: scheduledAtIso,
-        };
         try {
           await createSchedule(args);
         } catch (primaryErr: any) {
           if (typeof createScheduleLegacy === 'function') {
-            await (createScheduleLegacy as any)(argsNew);
+            await (createScheduleLegacy as any)(args);
           } else {
             throw primaryErr;
           }
