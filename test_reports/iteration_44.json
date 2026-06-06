@@ -1,0 +1,29 @@
+{
+  "summary": "iter-125 static-code + bundle-health smoke test. All 7 checks passed: messageMedia.ts exports the 3 required helpers with graceful fallback to fileUrl/mediaUrl when getMediaUrl endpoint is not deployed; MediaBubble ImageViewer toolbar wires Save/Share/Use-as-profile buttons with correct icons (download/share-2/user); chat onShare handler and action-sheet Share row (share-2) are wired; app.json has NSPhotoLibraryAddUsageDescription and WRITE_EXTERNAL_STORAGE; package.json has expo-sharing, expo-media-library, expo-file-system; web bundle compiled cleanly (Bundled in ~1.3s) and Sign-In screen rendered with Smilers logo + Sign In button + Terms/Privacy text and ZERO JS console errors. Native share/save flows cannot be exercised on web preview (require native build) — verified via static review only as instructed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "expo-av", "issue": "Deprecated package 'expo-av' present in package.json (v16.0.8). Should migrate to expo-audio (already added) and expo-video (already added). Reference: /app/frontend/package.json:41. Likely retained for legacy code paths — confirm and remove if no longer imported."}
+    ]
+  },
+  "test_report_links": ["/app/test_reports/iter44_signin.jpeg"],
+  "action_items": [
+    "Optional cleanup: migrate any remaining expo-av imports to expo-audio/expo-video and remove expo-av from package.json (deprecated).",
+    "When backend deploys api.messages.getMediaUrl + setMediaAsProfilePhoto, re-run a native build smoke test on iOS/Android device — web preview cannot exercise expo-sharing / expo-media-library flows."
+  ],
+  "critical_code_review_comments": [
+    "messageMedia.ts: well structured, swallows endpoint-missing errors and falls back to fallbackMsg.fileUrl/mediaUrl as specified. Error surfacing via Alert.alert is consistent across all 3 helpers.",
+    "ImageViewer (MediaBubble.tsx:427-560): properly guards 'Use as profile' to image-kind messages only; uses busyAction state to disable concurrent actions; ActivityIndicator shown per-button while busy — good UX.",
+    "chat/[conversationId].tsx:1346 onShare correctly closes the action sheet BEFORE invoking shareMessage so the native share sheet is not obscured. Helper's own Alert handles errors; chat just logs unexpected re-throws."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a", "frontend": "100%"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "iter-125 Share + Photo Viewer actions are native-only (expo-sharing + expo-media-library). Web preview can only verify bundle health + sign-in screen. To exercise share/save flows a native (EAS) build is required and an authenticated chat session with at least one image/video/file message. Backend endpoints api.messages.getMediaUrl and api.messages.setMediaAsProfilePhoto may not be deployed yet — the helpers in /app/frontend/src/lib/messageMedia.ts intentionally swallow that failure and fall back to message.fileUrl / message.mediaUrl, so the share/save path still works on legacy messages.",
+  "rca_of_issue": "n/a — no issues detected."
+}
