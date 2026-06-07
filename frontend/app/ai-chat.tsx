@@ -1,6 +1,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -40,7 +41,20 @@ export default function AiChatScreen() {
       await generate({ prompt: text });
       await refetchMessages();
     } catch (errorValue: any) {
+      // iter-131: previously swallowed silently → user saw "nothing happens"
+      // and assumed AI was broken. Now surface the actual reason + restore
+      // the input so they don't lose their question.
       console.warn('AI chat error', errorValue);
+      setInput(text);
+      const raw = String(errorValue?.message || errorValue || 'Unknown error');
+      const friendly = raw.includes('Server Error')
+        ? 'The AI backend isn\'t configured yet (Convex action ai.chat.generateResponse returned Server Error). Please ask the backend agent to wire up the Hercules AI integration.'
+        : raw.includes('Network') || raw.includes('fetch')
+          ? 'Network problem — check your connection and try again.'
+          : raw.length > 220
+            ? raw.slice(0, 220) + '…'
+            : raw;
+      Alert.alert('AI assistant unavailable', friendly);
     } finally {
       setBusy(false);
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);

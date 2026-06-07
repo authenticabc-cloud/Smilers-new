@@ -1787,7 +1787,30 @@ export default function ChatScreen() {
           });
           break;
         case 'location':
-          Alert.alert('Request live location', 'Live location sharing is being rolled out. We\'ll notify you when it\'s ready in this chat.');
+          // iter-131: previously a placeholder Alert. Now sends a real
+          // "live location request" text message via the existing
+          // messages.send mutation — recipient sees a clear request in
+          // the chat and can tap their own 📎 → Location to share back.
+          // A dedicated `kind: "live_location_request"` message + reply
+          // flow can be added by the backend agent later (see contract);
+          // this version uses plain text so it works without ANY backend
+          // change.
+          (async () => {
+            try {
+              await sendMessage({
+                conversationId: cid as any,
+                kind: 'text',
+                body:
+                  '📍 I\'ve requested your live location. ' +
+                  'Tap the 📎 attach button → Location to share with me.',
+              } as any);
+            } catch (err: any) {
+              Alert.alert(
+                'Could not send live-location request',
+                String(err?.message || err || 'Unknown error'),
+              );
+            }
+          })();
           break;
         case 'sendMoney':
           router.push('/send-money' as any);
