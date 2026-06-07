@@ -98,8 +98,37 @@ export class CallSession {
       this.opts.onLocalStream?.(screenStream);
       return screenStream;
     }
+    // iter-133: explicit audio constraints. Previously we passed
+    // `audio: true` which uses platform defaults — on Android those
+    // defaults can leave AEC (acoustic echo cancellation), NS (noise
+    // suppression), and AGC (auto gain control) DISABLED depending
+    // on the device, the audio source, and the system audio mode.
+    // The user reported echo on speakerphone — that's the AEC=off
+    // signature. Explicitly requesting all three telephony DSPs +
+    // forcing the audio source to VOICE_COMMUNICATION (the only mode
+    // where Android's hardware AEC kicks in reliably) fixes echo.
     const constraints: any = {
-      audio: true,
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        // Hint to react-native-webrtc to set the AudioRecord source to
+        // VOICE_COMMUNICATION (Android MediaRecorder.AudioSource = 7)
+        // instead of the default MIC source — VOICE_COMMUNICATION is
+        // the source that gets hardware AEC + NS on most Android
+        // chipsets (Qualcomm/MediaTek/Samsung).
+        sourceId: 'default',
+        mandatory: {
+          googEchoCancellation: true,
+          googEchoCancellation2: true,
+          googAutoGainControl: true,
+          googAutoGainControl2: true,
+          googNoiseSuppression: true,
+          googNoiseSuppression2: true,
+          googHighpassFilter: true,
+          googTypingNoiseDetection: true,
+        },
+      },
       video:
         this.opts.callType === 'video'
           ? {

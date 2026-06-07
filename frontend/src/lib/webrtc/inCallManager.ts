@@ -138,13 +138,47 @@ export function setSpeakerOn(on: boolean) {
 /**
  * Try to route audio through a paired Bluetooth headset (if present).
  * Falls back silently to the earpiece if no Bluetooth device is available.
+ *
+ * iter-133: Android needs the system audio mode to be MODE_IN_COMMUNICATION
+ * BEFORE Bluetooth SCO can be started, AND the SCO link itself has to be
+ * explicitly initiated for bidirectional audio (otherwise the headset
+ * gets A2DP — output-only, no mic, which is exactly the "I can't hear
+ * and the other side can't hear me" symptom the user reported).
+ *
+ * The library's `chooseAudioRoute('BLUETOOTH')` is SUPPOSED to do both
+ * but on some devices/Android versions it skips the SCO start when the
+ * audio session isn't already in MODE_IN_COMMUNICATION. We defensively
+ * call start() (which is idempotent — safe to call when session is
+ * already running) before the route switch, then we re-call the route
+ * after a tiny delay so the BT stack has time to bind.
  */
-export function setBluetoothOn() {
+export function setBluetoothOn(media: 'audio' | 'video' = 'audio') {
   const native = getNative();
   if (!native) return;
   safeCall(() => {
+    // 1. Ensure audio session is started — sets system audio mode to
+    //    MODE_IN_COMMUNICATION which is a precondition for SCO.
+    try {
+      native.start({ media, auto: false });
+    } catch {}
     if (typeof native.chooseAudioRoute === 'function') {
+      // 2. First call — tells the audio service to prepare BT routing.
       native.chooseAudioRoute('BLUETOOTH');
+      // 3. Re-issue after 250ms — workaround for Android Audio Service
+      //    occasionally rejecting the first route switch because SCO
+      //    isn't connected yet at that exact tick. Calling twice with
+      //    a small delay is the recommended pattern (mirrors what
+      //    Telegram & Signal do in their native code).
+      setTimeout(() => {
+        try {
+          native.chooseAudioRoute?.('BLUETOOTH');
+        } catch {}
+      }, 250);
+    } else {
+      // Older react-native-incall-manager versions lacked chooseAudioRoute
+      // — there's no clean BT path on those, but we at least don't crash.
+      native.setForceSpeakerphoneOn(false);
+      native.setSpeakerphoneOn(false);
     }
   }, 'setBluetoothOn');
 }
