@@ -666,10 +666,6 @@ export class CallSession {
     );
 
     try {
-      // createOffer({iceRestart:true}) bumps the ice-ufrag/ice-pwd so the
-      // new offer carries fresh ICE credentials. The remote side accepts
-      // it as a normal renegotiation; new candidates are gathered on
-      // both sides and a new path is chosen.
       const offer = await this.pc.createOffer({
         iceRestart: true,
         offerToReceiveAudio: true,
@@ -686,6 +682,38 @@ export class CallSession {
         type: 'offer',
         payload: JSON.stringify(offer),
       });
+
+      // iter-132b: schedule an answer-timeout. If we don't get an
+      // answer to the ICE-restart offer within 12 seconds (typically
+      // because the callee's app was killed, or the callee's APK
+      // doesn't have iter-128's idempotency fix and silently drops the
+      // offer as a duplicate), trigger another restart attempt. This
+      // is the only way the call self-heals when the peer is in a
+      // bad state — without it the state machine just sits at 'failed'
+      // forever.
+      if (this.iceRestartTimer) {
+        clearTimeout(this.iceRestartTimer);
+      }
+      this.iceRestartTimer = setTimeout(() => {
+        this.iceRestartTimer = null;
+        if (this.closed) return;
+        const currentState = (this.pc as any)?.iceConnectionState as string | undefined;
+        if (currentState === 'connected' || currentState === 'completed') {
+          return; // answer arrived, ICE recovered — no-op
+        }
+        callDebug.push(
+          'PC',
+          `restartIce answer-timeout fired (state=${currentState}) — escalating to attempt ${this.iceRestartAttempts + 1}`,
+        );
+        if (this.iceRestartAttempts < CallSession.MAX_ICE_RESTART_ATTEMPTS) {
+          void this.restartIce(`answer-timeout, state=${currentState}`);
+        } else {
+          callDebug.push(
+            'ERR',
+            `answer-timeout but attempts exhausted (${this.iceRestartAttempts}/${CallSession.MAX_ICE_RESTART_ATTEMPTS}) — call is dead. Common cause: peer's APK doesn't have iter-128's idempotency fix.`,
+          );
+        }
+      }, 12_000);
     } catch (errorValue: any) {
       callDebug.push(
         'ERR',
