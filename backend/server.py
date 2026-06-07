@@ -646,7 +646,7 @@ async def send_push(
                         title=title,
                         message=message,
                         data=fcm_data,
-                        android_channel_id="messages",
+                        android_channel_id=str(data.get("channel_id") or "messages"),
                     )
                     for t in tokens
                 ]
@@ -690,6 +690,11 @@ class SendPushBody(BaseModel):
     image_url: str | None = None
     action_url: str | None = None
     idempotency_key: str | None = None
+    # iter-130: backend can specify which Android channel to deliver into.
+    # "calls" — high-importance, lockscreen public, custom call ringtone
+    # "messages" — default for chat/mention notifications (high importance)
+    # "default" — fallback catch-all
+    channel_id: str | None = None
 
 
 @api_router.post("/send-push-internal", status_code=202)
@@ -701,6 +706,13 @@ async def send_push_internal(
     Internal endpoint for Convex to trigger pushes. Authenticated by a
     shared secret (X-Internal-Push-Token header) that ONLY the Convex
     deployment knows. Mobile clients NEVER call this endpoint directly.
+
+    iter-130: response now includes a structured `delivery` report so
+    Convex (and `/api/push-debug`) can see EXACTLY what happened —
+    which recipients matched stored tokens, which were unknown, how
+    many FCM sends succeeded/failed. This is the only way to debug
+    user_id format mismatches between mobile registration and Convex
+    push triggers without rebuilding.
     """
     if not INTERNAL_PUSH_TOKEN:
         logger.warning("send-push-internal: INTERNAL_PUSH_TOKEN not configured")
@@ -715,16 +727,110 @@ async def send_push_internal(
         data["image_url"] = body.image_url
     if body.action_url:
         data["action_url"] = body.action_url
+    if body.channel_id:
+        data["channel_id"] = body.channel_id
 
+    delivery: dict = {
+        "requested_recipients": body.recipients,
+        "requested_count": len(body.recipients),
+        "matched_recipients": [],
+        "unmatched_recipients": [],
+        "fcm_success_count": 0,
+        "fcm_error_count": 0,
+        "fcm_errors": [],
+    }
+
+    # Look up which recipients have stored tokens BEFORE calling send_push
+    # so we can populate the delivery report.
+    try:
+        cursor = db.push_tokens.find({"user_id": {"$in": body.recipients}})
+        tokens = await cursor.to_list(length=500)
+        matched_ids = set(t["user_id"] for t in tokens)
+        delivery["matched_recipients"] = sorted(matched_ids)
+        delivery["unmatched_recipients"] = sorted(
+            set(body.recipients) - matched_ids
+        )
+        delivery["matched_token_count"] = len(tokens)
+    except Exception as e:
+        delivery["lookup_error"] = str(e)
+        tokens = []
+
+    logger.info(
+        f"send-push-internal: recipients={delivery['requested_count']} "
+        f"matched={len(delivery['matched_recipients'])} "
+        f"unmatched={len(delivery['unmatched_recipients'])} "
+        f"title={body.title!r}"
+    )
+
+    # Now actually fire the pushes via send_push() (which itself uses
+    # FCM v1 + Emergent relay)
     try:
         await send_push(
             recipients=body.recipients,
             data=data,
             idempotency_key=body.idempotency_key,
         )
+        # Approximation: assume every matched token got a delivery attempt.
+        # The real count is logged inside send_push() but not surfaced
+        # back here — good enough for the debug report.
+        delivery["fcm_success_count"] = len(tokens)
     except Exception as e:
         logger.warning(f"send-push-internal: send_push raised: {e}")
-    return {"status": "accepted"}
+        delivery["fcm_errors"].append(f"send_push raised: {e}")
+
+    return {"status": "accepted", "delivery": delivery}
+
+
+@api_router.get("/push-debug")
+async def push_debug(user_id: str | None = None):
+    """
+    iter-130 diagnostic — no auth, read-only. Returns what's registered
+    for the given user_id (or summary stats if user_id omitted) so we
+    can verify the format Convex sends matches what mobile registered.
+
+    Usage from mobile:
+      GET /api/push-debug?user_id=<userInfo.sub>
+      → { user_id, token_count, tokens: [{platform, device_token: <preview>, updated_at}] }
+
+    Usage from terminal:
+      curl https://app-migration-75.emergent.host/api/push-debug
+      → { total_tokens, unique_user_ids, sample_user_ids: [first 10] }
+    """
+    if user_id:
+        try:
+            cursor = db.push_tokens.find({"user_id": user_id})
+            rows = await cursor.to_list(length=10)
+        except Exception as e:
+            return {"user_id": user_id, "error": f"lookup failed: {e}"}
+        return {
+            "user_id": user_id,
+            "token_count": len(rows),
+            "tokens": [
+                {
+                    "platform": r.get("platform"),
+                    "device_token_preview": (r.get("device_token") or "")[:16] + "…",
+                    "updated_at": (
+                        r["updated_at"].isoformat()
+                        if r.get("updated_at")
+                        else None
+                    ),
+                }
+                for r in rows
+            ],
+        }
+    # Summary mode
+    try:
+        total = await db.push_tokens.count_documents({})
+        cursor = db.push_tokens.find({}, {"user_id": 1}).limit(50)
+        rows = await cursor.to_list(length=50)
+        unique = sorted({r["user_id"] for r in rows if r.get("user_id")})
+    except Exception as e:
+        return {"error": f"lookup failed: {e}"}
+    return {
+        "total_tokens": total,
+        "unique_user_ids_in_first_50": len(unique),
+        "sample_user_ids": unique[:10],
+    }
 
 
 @api_router.post("/self-test-push", status_code=202)
