@@ -131,28 +131,53 @@ export class CallSession {
   private async captureScreen(): Promise<MediaStream> {
     const webrtc = await this.getWebRTC();
     const md: any = webrtc.mediaDevices as any;
+    callDebug.push('PC', 'captureScreen: starting (will trigger system MediaProjection picker)');
     if (typeof md.getDisplayMedia !== 'function') {
+      callDebug.push('ERR', 'captureScreen: getDisplayMedia not available in this build');
       throw new Error('Screen capture is not available on this device.');
     }
     try {
+      // iter-132: capture more detail about the getDisplayMedia call so
+      // we can diagnose the "picker no longer appears" regression.
+      // On Android 14+, getDisplayMedia requires the app to start a
+      // foreground service of type `mediaProjection` BEFORE invoking;
+      // react-native-webrtc v124 handles this internally if the
+      // FOREGROUND_SERVICE_MEDIA_PROJECTION permission is declared
+      // (we do declare it in app.json). If the picker doesn't show,
+      // the error text below will tell us exactly which step failed.
       const stream = (await md.getDisplayMedia({ video: true, audio: false })) as MediaStream;
+      callDebug.push('PC', 'captureScreen: getDisplayMedia resolved');
       if (!stream || typeof (stream as any).getVideoTracks !== 'function') {
+        callDebug.push('ERR', 'captureScreen: invalid stream returned');
         throw new Error('Screen capture returned an invalid stream.');
       }
       const videoTracks = stream.getVideoTracks();
       if (!videoTracks || videoTracks.length === 0) {
+        callDebug.push('ERR', 'captureScreen: zero video tracks in stream');
         throw new Error('Screen capture returned no video tracks.');
       }
+      callDebug.push('PC', `captureScreen: success (${videoTracks.length} track(s))`);
       return stream;
     } catch (errorValue: any) {
-      const friendly =
-        errorValue?.message ||
-        errorValue?.name ||
-        'Screen capture failed. Please try again or check screen-recording permissions.';
-      // Re-throw as a regular JS Error so the caller's try/catch can handle
-      // it gracefully (it does — startPeerConnection wraps initLocalMedia
-      // in a try/catch that calls alertScreenShareIOSError on iOS and
-      // setPermissionDenied(true) on Android).
+      const nameStr = errorValue?.name || 'Error';
+      const msgStr = errorValue?.message || String(errorValue);
+      callDebug.push('ERR', `captureScreen failed: ${nameStr}: ${msgStr}`);
+      // Detect common Android-specific failure modes so the user-facing
+      // alert can point at the actual root cause.
+      let friendly = msgStr;
+      if (msgStr.includes('Permission') || nameStr === 'NotAllowedError') {
+        friendly =
+          'Screen-capture permission was denied. Tap the share-screen button again and tap "Start now" on the system prompt.';
+      } else if (msgStr.includes('foreground service') || msgStr.includes('FOREGROUND_SERVICE')) {
+        friendly =
+          'Android blocked screen capture because the foreground service did not start. Tip: close any other screen-recorder apps, restart Smilers, and try again. (FOREGROUND_SERVICE_MEDIA_PROJECTION permission must be granted.)';
+      } else if (msgStr.includes('cancelled') || msgStr.includes('canceled')) {
+        friendly = 'Screen-capture was cancelled. Tap the share button again to retry.';
+      } else if (nameStr === 'NotFoundError') {
+        friendly = 'No screen capture source found. Restart the app and try again.';
+      } else if (nameStr === 'AbortError') {
+        friendly = 'Screen-capture was aborted by the system. Try again, and grant the picker prompt within 5 seconds.';
+      }
       throw new Error(friendly);
     }
   }

@@ -42,7 +42,7 @@ const CALLS_CHANNEL = 'calls';
 // arrives but screen doesn't wake" — that's the exact HIGH-vs-MAX
 // behavioral diff documented at
 // https://developer.android.com/training/notify-user/channels#importance
-const MESSAGES_CHANNEL = 'messages-v2';
+const MESSAGES_CHANNEL = 'messages-v3';
 const DEFAULT_CHANNEL = 'default-v3';
 const RINGTONE_PREFS_KEY = 'smilers_ringtone_prefs';
 

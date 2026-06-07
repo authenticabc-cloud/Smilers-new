@@ -646,7 +646,13 @@ async def send_push(
                         title=title,
                         message=message,
                         data=fcm_data,
-                        android_channel_id=str(data.get("channel_id") or "messages"),
+                        # iter-132: default to "messages-v3" to match mobile's
+                        # MESSAGES_CHANNEL constant. Convex can override per
+                        # call by sending `channel_id: "calls"` for incoming/
+                        # missed-call pushes. Aligning the channel ID is what
+                        # makes Android play the channel-configured custom
+                        # sound (smile beep) instead of the default tone.
+                        android_channel_id=str(data.get("channel_id") or "messages-v3"),
                     )
                     for t in tokens
                 ]

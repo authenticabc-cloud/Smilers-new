@@ -200,17 +200,30 @@ If Hercules AI integration isn't ready, **Emergent's LLM key** is available — 
 
 ---
 
-## 5. Push notification recap (iter-130 reminder)
+## 5. Push notification recap (iter-130/132 reminders — STILL PENDING)
 
-While you're in there, please ALSO apply the two fixes Emergent Support flagged for the push pipeline:
+While you're in there, please ALSO apply ALL of these — they're still pending from the last contract:
 
-1. **`MOBILE_BACKEND_URL`** in Convex env vars should be `https://app-migration-75.emergent.host` (NOT the preview URL).
+1. **`MOBILE_BACKEND_URL`** in Convex env vars must be `https://app-migration-75.emergent.host` (NOT the preview URL). Per Emergent Support's investigation, your actions are still pointing at preview which has zero registered tokens, so every push results in `matched=0` and silent drop.
 2. **Strip OIDC issuer prefix** before sending `recipients`:
    ```ts
    const recipients = participantTokenIdentifiers.map(
      (ti: string) => ti.split("|").pop() ?? ti,
    );
    ```
+3. **iter-132 NEW: use channel_id `"messages-v3"`** (NOT `"messages"`) for chat/mention notifications so Android plays the configured Smile beep+chime sound. Mobile created its messages channel with ID `messages-v3` — without the matching ID, the notification routes to a channel that doesn't exist and Android plays the default tone instead. For calls keep `"calls"`.
+
+Example `notifyNewMessage` action body:
+```ts
+body: JSON.stringify({
+  recipients,
+  title,
+  message: preview,
+  action_url: `/chat/${convo._id}`,
+  channel_id: "messages-v3",            // ← NEW
+  idempotency_key: `msg-${msg._id}`,
+}),
+```
 
 Mobile-side `/api/send-push-internal` will return `{delivery: {matched_recipients, unmatched_recipients, fcm_success_count}}` in the response so you can `console.log` and verify.
 
