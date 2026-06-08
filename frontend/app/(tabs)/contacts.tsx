@@ -17,8 +17,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useMutation } from 'convex/react';
+import { useMutation, useQuery } from 'convex/react';
 import * as Contacts from 'expo-contacts';
+import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js';
 import Header from '../../src/components/Header';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
@@ -47,6 +48,63 @@ function getContactUserId(contact: any): string {
   return typeof candidate === 'string' ? candidate.trim() : '';
 }
 
+/**
+ * iter-138: phone normaliser.
+ *
+ * Convex's `sendRequestByPhone` mutation strictly expects an E.164
+ * number (e.g. `+39328…`). Mobile was previously forwarding the raw
+ * device-contact phone (`"328 074 0584"`) which the backend rejects
+ * with a generic `Server Error / Called by client`. We sanitize here
+ * using `libphonenumber-js` with the user's own phone as the implicit
+ * country hint when the input has no `+`.
+ *
+ * Returns the E.164 string on success or `null` on failure (caller
+ * should surface a clear "Invalid number" alert instead of letting
+ * Convex throw).
+ */
+function normalizePhoneE164(
+  raw: string | null | undefined,
+  defaultCountryCode?: string | null,
+): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  // Fast-path: already starts with `+` and parses cleanly.
+  try {
+    const direct = parsePhoneNumberFromString(trimmed);
+    if (direct?.isValid()) return direct.number;
+  } catch {
+    /* fall through to country-hint parse */
+  }
+
+  // Convert "00XX…" prefix to "+XX…" (common European entry style).
+  const intl00 = trimmed.replace(/^00/, '+');
+  if (intl00.startsWith('+')) {
+    try {
+      const parsed = parsePhoneNumberFromString(intl00);
+      if (parsed?.isValid()) return parsed.number;
+    } catch {
+      /* fall through */
+    }
+  }
+
+  // Try with a country-code hint derived from the user's own phone.
+  const hint: CountryCode | undefined = defaultCountryCode
+    ? (defaultCountryCode.toUpperCase() as CountryCode)
+    : undefined;
+  if (hint) {
+    try {
+      const parsed = parsePhoneNumberFromString(trimmed, hint);
+      if (parsed?.isValid()) return parsed.number;
+    } catch {
+      /* swallow */
+    }
+  }
+
+  return null;
+}
+
 export default function ContactsScreen() {
   const router = useRouter();
   const [tab, setTab] = useState<TabKey>('my');
@@ -71,6 +129,20 @@ export default function ContactsScreen() {
   const acceptRequest = useMutation(api.contacts.acceptRequest);
   const rejectRequest = useMutation(api.contacts.rejectRequest);
   const cancelRequest = useMutation(api.contacts.cancelRequest);
+
+  // iter-138: read the current user so we can derive a default country
+  // hint for phone-number normalization in invite flows.
+  const me = useQuery(api.users.getCurrentUser, {}) as any | undefined;
+  const myDefaultCountry = useMemo<string | null>(() => {
+    const myPhone = typeof me?.phone === 'string' ? me.phone : '';
+    if (!myPhone) return null;
+    try {
+      const parsed = parsePhoneNumberFromString(myPhone);
+      return parsed?.country || null;
+    } catch {
+      return null;
+    }
+  }, [me?.phone]);
 
   const list: any[] = Array.isArray(contactsQuery.data) ? contactsQuery.data : [];
   const pendingList: any[] = Array.isArray(pendingQuery.data) ? pendingQuery.data : [];
@@ -166,31 +238,52 @@ export default function ContactsScreen() {
         Alert.alert('No phone number', 'This device contact has no phone number to invite.');
         return;
       }
+      // iter-138: Convex `sendRequestByPhone` rejects anything that
+      // isn't strict E.164. Raw device-contact phones look like
+      // "328 074 0584" → must become "+39328…". Normalize before send.
+      const e164 = normalizePhoneE164(c.phone, myDefaultCountry);
+      if (!e164) {
+        Alert.alert(
+          'Invalid phone number',
+          `Could not understand the number "${c.phone}". Add the country code (e.g. +39 …) and try again.`,
+        );
+        return;
+      }
       try {
-        await sendRequestByPhone({ phone: c.phone });
+        await sendRequestByPhone({ phone: e164 });
         Alert.alert('Invite sent', `${c.name} will receive an SMS invite to join Smilers.`);
       } catch (errorValue: any) {
         Alert.alert('Could not invite', errorValue?.message || 'Try again later.');
       }
     },
-    [sendRequestByPhone],
+    [sendRequestByPhone, myDefaultCountry],
   );
 
   const onAddByPhone = useCallback(async () => {
-    const phone = phoneInput.trim();
-    if (!phone) return;
+    const raw = phoneInput.trim();
+    if (!raw) return;
+    // iter-138: same E.164 normalization for the manual "Add by phone"
+    // sheet. Surfaces a clear error before hitting Convex.
+    const e164 = normalizePhoneE164(raw, myDefaultCountry);
+    if (!e164) {
+      Alert.alert(
+        'Invalid phone number',
+        'Please enter a valid phone number with country code (e.g. +1 555 123 4567).',
+      );
+      return;
+    }
     setAddingPhone(true);
     try {
-      await sendRequestByPhone({ phone });
+      await sendRequestByPhone({ phone: e164 });
       setPhoneInput('');
       setShowAddByPhone(false);
-      Alert.alert('Request sent', `An invite was sent to ${phone}.`);
+      Alert.alert('Request sent', `An invite was sent to ${e164}.`);
     } catch (errorValue: any) {
       Alert.alert('Could not send invite', errorValue?.message || 'Check the phone number and try again.');
     } finally {
       setAddingPhone(false);
     }
-  }, [phoneInput, sendRequestByPhone]);
+  }, [phoneInput, sendRequestByPhone, myDefaultCountry]);
 
   const myCount = list.length;
   const deviceCount = deviceContacts.length;

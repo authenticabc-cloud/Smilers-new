@@ -434,12 +434,19 @@ function StoryVideo({
   videoPlayerRef: React.MutableRefObject<VideoPlayer | null>;
   onVideoEnd: () => void;
 }) {
-  const player = useVideoPlayer({ uri: src }, (p) => {
+  // iter-138: extra hardening — only build the player once we have a
+  // well-formed source. Empty / non-http(s) sources have been observed
+  // to crash expo-video natively on Android.
+  const safeSrc =
+    typeof src === 'string' && (src.startsWith('http') || src.startsWith('file://') || src.startsWith('content://'))
+      ? src
+      : null;
+  const player = useVideoPlayer(safeSrc ? { uri: safeSrc } : null, (p) => {
     try {
       p.loop = false;
       p.play();
     } catch {
-      /* native player setup may fail with malformed source — caught above */
+      /* native player setup may fail with malformed source — swallow */
     }
   });
 
@@ -456,18 +463,31 @@ function StoryVideo({
 
   // Listen for end-of-playback so the story advances to the next slide.
   useEffect(() => {
-    if (!player) return;
-    const sub = player.addListener('playToEnd', () => {
-      try {
-        onVideoEnd();
-      } catch {}
-    });
+    if (!player || !safeSrc) return;
+    let subscription: { remove?: () => void } | null = null;
+    try {
+      subscription = player.addListener('playToEnd', () => {
+        try {
+          onVideoEnd();
+        } catch {}
+      });
+    } catch {
+      /* older expo-video versions may not expose this event */
+    }
     return () => {
       try {
-        sub.remove();
+        subscription?.remove?.();
       } catch {}
     };
-  }, [player, onVideoEnd]);
+  }, [player, onVideoEnd, safeSrc]);
+
+  if (!safeSrc) {
+    return (
+      <View style={styles.mediaBody}>
+        <ActivityIndicator color="#FFFFFF" size="large" />
+      </View>
+    );
+  }
 
   return (
     <VideoView

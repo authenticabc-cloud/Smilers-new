@@ -130,13 +130,24 @@ export default function TrusteesScreen() {
         Alert.alert('Trustee limit reached', `You can add up to ${MAX_TRUSTEES} trustees.`);
         return;
       }
+      // iter-138: canonical contract → `addTrustee({ trusteeId: Id<"users"> })`.
+      // Mobile was previously sending `{ name, phone, email }` which the
+      // backend handler doesn't accept and throws Server Error on. The
+      // user row id is the contact's `userId` field (when the contact
+      // is a registered Smilers user). If `userId` is missing we can't
+      // add this contact as a trustee — show a clear message instead of
+      // throwing a generic Convex error.
+      const trusteeUserId = contact.userId || (contact as any)?.user?._id;
+      if (!trusteeUserId) {
+        Alert.alert(
+          'Not a Smilers user',
+          'You can only add registered Smilers users as trustees. Ask this contact to install Smilers and accept your invite first.',
+        );
+        return;
+      }
       setSubmittingKey(contactKey);
       try {
-        await addTrustee({
-          name: contact.name || 'Smilers contact',
-          phone: contact.phone || undefined,
-          email: contact.email || undefined,
-        });
+        await addTrustee({ trusteeId: trusteeUserId });
         await refetch();
         setModalOpen(false);
         setSearch('');
