@@ -286,32 +286,39 @@ export default function AdminDashboard() {
     <SafeAreaView style={styles.container} edges={['top']} testID="admin-screen">
       <Header
         title="Admin Dashboard"
-        subtitle={me?.name ? `Signed in as ${me.name}` : 'Admin'}
+        subtitle="Manage your Smilers app"
         showBack
         onBack={() => router.back()}
         variant="dark"
       />
 
-      {/* Tab bar */}
+      {/* Tab bar — iter-137: redesigned to match the web app exactly.
+          Icon sits ABOVE label (vertical stack), active tab is marked
+          with a primary-color underline + tinted icon/text (no pill
+          background). No badges on tabs (web hides them at this level). */}
       <View style={styles.tabBar}>
         {tabs.map((t) => {
           const active = tab === t.key;
           return (
             <TouchableOpacity
               key={t.key}
-              style={[styles.tab, active ? styles.tabActive : null]}
+              style={styles.tab}
               onPress={() => setTab(t.key)}
               testID={`admin-tab-${t.key}`}
+              activeOpacity={0.7}
             >
-              <Ionicons name={t.icon as any} size={18} color={active ? Colors.headerBg : Colors.textSecondary} />
-              <Text style={[styles.tabText, active ? styles.tabTextActive : null]} numberOfLines={1}>
+              <Ionicons
+                name={t.icon as any}
+                size={22}
+                color={active ? Colors.primary : Colors.textSecondary}
+              />
+              <Text
+                style={[styles.tabText, active ? styles.tabTextActive : null]}
+                numberOfLines={1}
+              >
                 {t.label}
               </Text>
-              {typeof t.badge === 'number' && t.badge > 0 ? (
-                <View style={styles.tabBadge}>
-                  <Text style={styles.tabBadgeText}>{t.badge > 99 ? '99+' : t.badge}</Text>
-                </View>
-              ) : null}
+              <View style={[styles.tabUnderline, active ? styles.tabUnderlineActive : null]} />
             </TouchableOpacity>
           );
         })}
@@ -1402,38 +1409,44 @@ const styles = StyleSheet.create({
   },
   deniedBtnText: { color: Colors.white, fontWeight: FontWeight.bold, fontSize: FontSize.base },
 
+  // iter-137: web-style tab bar — icon above label, active = primary
+  // underline. No pill background, no badges (cleaner, matches web).
   tabBar: {
     flexDirection: 'row',
     backgroundColor: Colors.surface,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: Spacing.sm,
-    gap: 6,
+    paddingHorizontal: 0,
+    paddingTop: Spacing.sm,
     borderBottomWidth: 1,
     borderBottomColor: Colors.borderLight,
   },
   tab: {
     flex: 1,
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-end',
     gap: 4,
-    paddingVertical: 8,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.background,
-    minHeight: 38,
+    paddingTop: 8,
+    paddingBottom: 0,
   },
-  tabActive: { backgroundColor: Colors.primary },
-  tabText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.textSecondary },
-  tabTextActive: { color: Colors.headerBg },
-  tabBadge: {
-    backgroundColor: Colors.danger,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 8,
-    minWidth: 16,
-    alignItems: 'center',
+  tabText: {
+    fontSize: 12,
+    fontWeight: FontWeight.medium,
+    color: Colors.textSecondary,
+    marginTop: 2,
+    marginBottom: 8,
   },
-  tabBadgeText: { color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold },
+  tabTextActive: {
+    color: Colors.primary,
+    fontWeight: FontWeight.semibold,
+  },
+  tabUnderline: {
+    height: 2,
+    width: '60%',
+    backgroundColor: 'transparent',
+    borderRadius: 1,
+  },
+  tabUnderlineActive: {
+    backgroundColor: Colors.primary,
+  },
 
   statsGrid: {
     flexDirection: 'row',

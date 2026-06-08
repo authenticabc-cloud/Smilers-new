@@ -500,29 +500,35 @@ function TabBtn({
   lib: 'feather' | 'ion';
 }) {
   const active = tab === activeTab;
+  // iter-137: web-style tab — vertical stack (icon on top, label below),
+  // active state is a primary-color underline + tinted icon/text. No
+  // pill background, mirrors the admin dashboard for consistency.
   return (
     <TouchableOpacity
-      style={[styles.tabBtn, active ? styles.tabBtnActive : null]}
+      style={styles.tabBtn}
       onPress={() => setTab(tab)}
-      activeOpacity={0.85}
+      activeOpacity={0.7}
       testID={`earnings-tab-${tab}`}
     >
       {lib === 'ion' ? (
         <Ionicons
           name={icon}
-          size={16}
-          color={active ? '#3D2A00' : Colors.textSecondary}
+          size={22}
+          color={active ? Colors.primary : Colors.textSecondary}
         />
       ) : (
         <Feather
           name={icon}
-          size={16}
-          color={active ? '#3D2A00' : Colors.textSecondary}
+          size={22}
+          color={active ? Colors.primary : Colors.textSecondary}
         />
       )}
       <Text style={[styles.tabBtnText, active ? styles.tabBtnTextActive : null]}>
         {label}
       </Text>
+      <View
+        style={[styles.tabBtnUnderline, active ? styles.tabBtnUnderlineActive : null]}
+      />
     </TouchableOpacity>
   );
 }
@@ -722,30 +728,43 @@ const styles = StyleSheet.create({
   headerBackBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   headerTitle: { flex: 1, fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white },
 
-  // Tabs
+  // Tabs — iter-137: web-style icon-above-label + underline.
   tabRow: {
     flexDirection: 'row',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingHorizontal: 0,
+    paddingTop: 10,
     backgroundColor: Colors.background,
     borderBottomWidth: 1,
     borderBottomColor: '#EBE5D5',
   },
   tabBtn: {
     flex: 1,
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    borderRadius: Radius.pill,
-    backgroundColor: '#EFE7D6',
+    justifyContent: 'flex-end',
+    gap: 4,
+    paddingTop: 6,
+    paddingBottom: 0,
   },
-  tabBtnActive: { backgroundColor: Colors.primary },
-  tabBtnText: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.semibold },
-  tabBtnTextActive: { color: '#3D2A00', fontWeight: FontWeight.bold },
+  tabBtnText: {
+    fontSize: 12,
+    fontWeight: FontWeight.medium,
+    color: Colors.textSecondary,
+    marginTop: 2,
+    marginBottom: 8,
+  },
+  tabBtnTextActive: {
+    color: Colors.primary,
+    fontWeight: FontWeight.semibold,
+  },
+  tabBtnUnderline: {
+    height: 2,
+    width: '60%',
+    backgroundColor: 'transparent',
+    borderRadius: 1,
+  },
+  tabBtnUnderlineActive: {
+    backgroundColor: Colors.primary,
+  },
 
   scrollContent: { padding: Spacing.lg, gap: Spacing.md },
 
