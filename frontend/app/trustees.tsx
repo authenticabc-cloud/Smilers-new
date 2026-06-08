@@ -130,14 +130,19 @@ export default function TrusteesScreen() {
         Alert.alert('Trustee limit reached', `You can add up to ${MAX_TRUSTEES} trustees.`);
         return;
       }
-      // iter-138: canonical contract → `addTrustee({ trusteeId: Id<"users"> })`.
-      // Mobile was previously sending `{ name, phone, email }` which the
-      // backend handler doesn't accept and throws Server Error on. The
-      // user row id is the contact's `userId` field (when the contact
-      // is a registered Smilers user). If `userId` is missing we can't
-      // add this contact as a trustee — show a clear message instead of
-      // throwing a generic Convex error.
-      const trusteeUserId = contact.userId || (contact as any)?.user?._id;
+      // iter-141: expanded `userId` resolution. Different Convex
+      // contact response shapes have been observed: `userId`,
+      // `user._id`, `contactUserId`, even `targetUserId`. We probe all
+      // common variants so users can be added as trustees regardless
+      // of which field the backend populated for this contact row.
+      const trusteeUserId =
+        (contact as any)?.userId ||
+        (contact as any)?.user?._id ||
+        (contact as any)?.user?.userId ||
+        (contact as any)?.contactUserId ||
+        (contact as any)?.targetUserId ||
+        (contact as any)?.otherUserId ||
+        (contact as any)?.linkedUserId;
       if (!trusteeUserId) {
         Alert.alert(
           'Not a Smilers user',

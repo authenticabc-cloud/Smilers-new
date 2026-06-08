@@ -16,6 +16,12 @@
  */
 import { Alert, Platform, Share } from 'react-native';
 import * as FileSystem from 'expo-file-system';
+// iter-141: expo-file-system v19+ split the API into a new namespace and
+// a legacy compatibility layer. `FileSystem.cacheDirectory` /
+// `downloadAsync` live on the LEGACY module; the new module exposes
+// `Paths.cache` instead. We import both so the helper works regardless
+// of which version is bundled.
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import { ConvexReactClient } from 'convex/react';
@@ -94,8 +100,16 @@ function safeFileName(info: MediaInfo, fallbackExt = '.bin'): string {
 async function downloadToCache(info: MediaInfo): Promise<string | null> {
   if (!info.url) return null;
   const fileName = safeFileName(info);
-  // expo-file-system Paths API (v19+): use the cache directory.
-  const cacheDir = (FileSystem as any).cacheDirectory || (FileSystem as any).documentDirectory;
+  // iter-141: prefer LegacyFileSystem (v19+'s back-compat module) since
+  // its `cacheDirectory` + `downloadAsync` are still the most reliable
+  // way to grab a remote file to a local path on Android. Fall back to
+  // the newer FileSystem module if the legacy import is unavailable.
+  const fs: any = LegacyFileSystem || FileSystem;
+  const cacheDir =
+    fs?.cacheDirectory ||
+    fs?.documentDirectory ||
+    (FileSystem as any).cacheDirectory ||
+    (FileSystem as any).documentDirectory;
   if (!cacheDir) {
     throw new Error('No writable cache directory available on this platform.');
   }
@@ -103,9 +117,13 @@ async function downloadToCache(info: MediaInfo): Promise<string | null> {
   // Remove any stale file at the same path so the download doesn't
   // silently fail on iOS (expo-file-system refuses to overwrite).
   try {
-    await (FileSystem as any).deleteAsync(target, { idempotent: true });
+    await fs.deleteAsync(target, { idempotent: true });
   } catch {}
-  const result = await (FileSystem as any).downloadAsync(info.url, target);
+  const downloadFn = fs.downloadAsync || (FileSystem as any).downloadAsync;
+  if (typeof downloadFn !== 'function') {
+    throw new Error('File download is not supported in this build.');
+  }
+  const result = await downloadFn(info.url, target);
   if (result?.status && result.status >= 400) {
     throw new Error(`Download failed (HTTP ${result.status}).`);
   }

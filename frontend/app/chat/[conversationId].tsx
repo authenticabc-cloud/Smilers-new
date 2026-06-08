@@ -1816,23 +1816,20 @@ export default function ChatScreen() {
           });
           break;
         case 'location':
-          // iter-131: previously a placeholder Alert. Now sends a real
-          // "live location request" text message via the existing
-          // messages.send mutation — recipient sees a clear request in
-          // the chat and can tap their own 📎 → Location to share back.
-          // A dedicated `kind: "live_location_request"` message + reply
-          // flow can be added by the backend agent later (see contract);
-          // this version uses plain text so it works without ANY backend
-          // change.
+          // iter-141: bug fix — previously referenced an undefined `cid`
+          // variable and used the wrong message shape (`kind`/`body`).
+          // Now uses the correct `conversationId` in scope and the
+          // canonical message shape (`type`/`text`) that the rest of
+          // this file uses for `sendMessage`.
           (async () => {
             try {
               await sendMessage({
-                conversationId: cid as any,
-                kind: 'text',
-                body:
+                conversationId,
+                type: 'text',
+                text:
                   '📍 I\'ve requested your live location. ' +
                   'Tap the 📎 attach button → Location to share with me.',
-              } as any);
+              });
             } catch (err: any) {
               Alert.alert(
                 'Could not send live-location request',

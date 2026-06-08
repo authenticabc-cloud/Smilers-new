@@ -17,6 +17,13 @@ export function useSafeConvexQuery<T>(
   const queryPath = queryRef?.udfPath || 'unknown';
   const [data, setData] = useState<T>(fallback);
   const [loading, setLoading] = useState(enabled);
+  // iter-141: only enter the "loading" state on the FIRST fetch.
+  // Subsequent re-fetches (e.g. triggered by transient `enabled=false`
+  // → `true` cycles when `me` reloads) just refresh data silently in
+  // the background. This stops the spinner from blinking on/off on
+  // Admin Reports / Ads tabs where the empty state would otherwise
+  // flash a spinner every few seconds.
+  const hasLoadedOnce = useRef(false);
 
   useEffect(() => {
     convexRef.current = convex;
@@ -67,11 +74,17 @@ export function useSafeConvexQuery<T>(
         return;
       }
 
-      setLoading(true);
+      // iter-141: only show the spinner on the FIRST fetch. Subsequent
+      // re-fetches happen silently in the background so the empty
+      // state doesn't blink between "loading" and "empty" forever.
+      if (!hasLoadedOnce.current) {
+        setLoading(true);
+      }
       try {
         const result = await convexRef.current.query(queryRefRef.current, argsRef.current);
         if (!cancelled) {
           setData((result ?? fallbackRef.current) as T);
+          hasLoadedOnce.current = true;
         }
       } catch (errorValue) {
         console.warn('Convex query failed:', queryPath, errorValue);
