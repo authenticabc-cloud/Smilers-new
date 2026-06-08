@@ -58,7 +58,7 @@ export default function GroupsCreateScreen() {
 
     setCreating(true);
     try {
-      const created: any = await createGroup({ name, memberIds: selectedIds });
+      const created: any = await createGroup({ name, participantIds: selectedIds });
       const conversationId = typeof created === 'string' ? created : created?._id || created?.conversationId;
       if (conversationId) {
         router.replace(`/chat/${conversationId}` as any);

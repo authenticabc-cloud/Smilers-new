@@ -46,7 +46,7 @@ export default function StatusComposeScreen() {
     try {
       await createStatus({
         type: 'text',
-        text: value,
+        content: value,
         backgroundColor: palette.bg,
         textColor: palette.fg,
       });
