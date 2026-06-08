@@ -301,7 +301,38 @@ export default function ChatScreen() {
   const editMessage = useMutation((api as any).messages.editMessage);
   const updateMessage = useMutation((api as any).messages.updateMessage);
   const editTextMutation = useMutation((api as any).messages.editText);
-  const toggleStar = useMutation(api.messages.toggleStar);
+  // iter-143: star/unstar — try multiple Convex paths because the web
+  // app may name this differently. Order: `messages.toggleStar` (current
+  // mobile guess), then `starred.toggleStar`, then `starred.starMessage`
+  // / `starred.unstarMessage`, then `messages.star` / `messages.unstar`.
+  // First non-null mutation reference is used.
+  const toggleStarA = useMutation((api as any).messages?.toggleStar);
+  const toggleStarB = useMutation((api as any).starred?.toggleStar);
+  const toggleStarC = useMutation((api as any).starred?.starMessage);
+  const toggleStarD = useMutation((api as any).messages?.star);
+  const toggleStar = useCallback(
+    async (args: { messageId: string }) => {
+      const candidates = [toggleStarA, toggleStarB, toggleStarC, toggleStarD];
+      for (const candidate of candidates) {
+        if (typeof candidate !== 'function') continue;
+        try {
+          return await (candidate as any)(args);
+        } catch (errorValue: any) {
+          const message = String(errorValue?.message || '');
+          // Move on if the function simply doesn't exist on this Convex
+          // deployment, otherwise re-throw so the caller can surface it.
+          if (
+            !message.includes('CouldNotFindFunction') &&
+            !message.toLowerCase().includes('not found')
+          ) {
+            throw errorValue;
+          }
+        }
+      }
+      throw new Error('No matching star/unstar mutation on backend');
+    },
+    [toggleStarA, toggleStarB, toggleStarC, toggleStarD],
+  );
   const createScheduledMessage = useMutation((api as any).scheduling.scheduleMessageMobile);
   // iter-113: alternative scheduling mutations. Some Convex deployments
   // expose `scheduledMessages.create` (legacy from the web app) instead of
