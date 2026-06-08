@@ -37,7 +37,7 @@ import { useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
 import * as ImagePicker from 'expo-image-picker';
 import { api } from '../src/convexApi';
-import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+import { useFirstSuccessfulConvexQuery } from '../src/hooks/useFirstSuccessfulConvexQuery';
 import { useAuth } from '../src/providers/AuthProvider';
 import { readStoredJson, writeStoredJson } from '../src/lib/settingsStorage';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
@@ -132,16 +132,39 @@ export default function FaceIdScreen() {
   const [localDevices, setLocalDevices] = useState<TrustedDevice[]>([]);
   const [hydratedLocal, setHydratedLocal] = useState(false);
 
-  // Convex queries — safe fallback to empty so a missing endpoint doesn't
-  // crash the screen.
-  const { data: remoteFaces } = useSafeConvexQuery<any[]>(
-    (api as any).faceId?.listMyFaces ?? (api as any).faceId?.list,
+  // Convex queries — iter-135: probe multiple candidate paths because the
+  // web app may use a different name than the mobile previously assumed.
+  // The first one that returns a non-empty array wins; the others are
+  // silently skipped. If NONE returns data we fall back to local
+  // AsyncStorage as before. Once the backend agent confirms the
+  // canonical name we can collapse this list down to one entry.
+  const { data: remoteFaces } = useFirstSuccessfulConvexQuery<any[]>(
+    [
+      { label: 'faceId.listMyFaces', ref: (api as any).faceId?.listMyFaces },
+      { label: 'faceId.getMyFaces',  ref: (api as any).faceId?.getMyFaces },
+      { label: 'faceId.list',        ref: (api as any).faceId?.list },
+      { label: 'faceId.getFaces',    ref: (api as any).faceId?.getFaces },
+      { label: 'faceId.faces',       ref: (api as any).faceId?.faces },
+      { label: 'users.listFaces',    ref: (api as any).users?.listFaces },
+      { label: 'users.getMyFaces',   ref: (api as any).users?.getMyFaces },
+      { label: 'security.listFaces', ref: (api as any).security?.listFaces },
+    ],
     {},
     [],
     isAuthenticated,
   );
-  const { data: remoteDevices } = useSafeConvexQuery<any[]>(
-    (api as any).faceId?.listTrustedDevices ?? (api as any).devices?.listTrustedDevices,
+  const { data: remoteDevices } = useFirstSuccessfulConvexQuery<any[]>(
+    [
+      { label: 'faceId.listTrustedDevices',   ref: (api as any).faceId?.listTrustedDevices },
+      { label: 'faceId.getTrustedDevices',    ref: (api as any).faceId?.getTrustedDevices },
+      { label: 'devices.listTrustedDevices',  ref: (api as any).devices?.listTrustedDevices },
+      { label: 'devices.list',                ref: (api as any).devices?.list },
+      { label: 'devices.getMyDevices',        ref: (api as any).devices?.getMyDevices },
+      { label: 'trustedDevices.list',         ref: (api as any).trustedDevices?.list },
+      { label: 'trustedDevices.listMine',     ref: (api as any).trustedDevices?.listMine },
+      { label: 'security.listTrustedDevices', ref: (api as any).security?.listTrustedDevices },
+      { label: 'users.listTrustedDevices',    ref: (api as any).users?.listTrustedDevices },
+    ],
     {},
     [],
     isAuthenticated,

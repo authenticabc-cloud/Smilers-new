@@ -400,13 +400,63 @@ export default function AdminDashboard() {
 
 /* ──────────────── OVERVIEW TAB ──────────────── */
 function OverviewTab({ stats }: { stats: Stats | undefined }) {
+  // iter-135: mirror the EXACT card grid the web app shows (8 cards),
+  // and use a chain of possible field names per card so the value lights
+  // up regardless of which name the Convex `admin.getStats` actually
+  // returns. This stops the "all dashes" state where the mobile asks
+  // for `activeUsersToday` but the backend returns `onlineNow`.
+  // Until the canonical names are confirmed by the backend agent, we
+  // accept any one of these.
+  const s: any = stats || {};
+  const firstNumber = (...candidates: any[]): number | undefined => {
+    for (const value of candidates) {
+      if (typeof value === 'number' && Number.isFinite(value)) return value;
+    }
+    return undefined;
+  };
   const cards = [
-    { label: 'Total users', value: stats?.totalUsers, icon: 'people-outline', tone: Colors.primary, accent: Colors.primaryLight },
-    { label: 'Active today', value: stats?.activeUsersToday, icon: 'pulse-outline', tone: '#10B981', accent: '#D1FAE5' },
-    { label: 'New this week', value: stats?.newUsersThisWeek, icon: 'person-add-outline', tone: '#0EA5E9', accent: '#DBEAFE' },
-    { label: 'Pending reports', value: stats?.pendingReports, icon: 'flag-outline', tone: Colors.danger, accent: '#FEE2E2' },
-    { label: 'Pending ads', value: stats?.pendingAds, icon: 'megaphone-outline', tone: '#F59E0B', accent: '#FEF3C7' },
-    { label: 'Suspended', value: stats?.suspendedUsers, icon: 'ban-outline', tone: '#6B7280', accent: '#F3F4F6' },
+    {
+      label: 'Total users',
+      value: firstNumber(s.totalUsers, s.users, s.userCount, s.totalUserCount),
+      icon: 'people-outline', tone: Colors.primary, accent: Colors.primaryLight,
+    },
+    {
+      label: 'Online now',
+      // Web shows "Online Now" — matches `onlineNow`, `activeNow`, or the
+      // older mobile name `activeUsersToday`.
+      value: firstNumber(s.onlineNow, s.activeNow, s.activeUsers, s.activeUsersToday, s.activeToday),
+      icon: 'globe-outline', tone: '#10B981', accent: '#D1FAE5',
+    },
+    {
+      label: 'New this week',
+      value: firstNumber(s.newThisWeek, s.newUsersThisWeek, s.newUsers, s.weeklyNewUsers),
+      icon: 'trending-up-outline', tone: '#8B5CF6', accent: '#EDE9FE',
+    },
+    {
+      label: 'Messages (24h)',
+      value: firstNumber(s.messages24h, s.messagesLast24h, s.messagesToday, s.dailyMessages),
+      icon: 'chatbubble-ellipses-outline', tone: '#F59E0B', accent: '#FEF3C7',
+    },
+    {
+      label: 'Total conversations',
+      value: firstNumber(s.totalConversations, s.conversations, s.conversationCount),
+      icon: 'chatbubbles-outline', tone: '#0EA5E9', accent: '#DBEAFE',
+    },
+    {
+      label: 'Group chats',
+      value: firstNumber(s.groupChats, s.groups, s.groupCount, s.totalGroups),
+      icon: 'people-circle-outline', tone: '#EC4899', accent: '#FCE7F3',
+    },
+    {
+      label: 'Pending reports',
+      value: firstNumber(s.pendingReports, s.openReports, s.reportsPending),
+      icon: 'flag-outline', tone: Colors.danger, accent: '#FEE2E2',
+    },
+    {
+      label: 'Communities',
+      value: firstNumber(s.communities, s.totalCommunities, s.communityCount),
+      icon: 'globe-outline', tone: '#14B8A6', accent: '#CCFBF1',
+    },
   ];
   return (
     <View style={{ paddingTop: Spacing.md }}>
@@ -422,14 +472,14 @@ function OverviewTab({ stats }: { stats: Stats | undefined }) {
         ))}
       </View>
 
-      {typeof stats?.adRevenueEur === 'number' ? (
+      {typeof s.adRevenueEur === 'number' ? (
         <View style={styles.revenueCard}>
           <View style={[styles.statIcon, { backgroundColor: Colors.primaryLight }]}>
             <Ionicons name="cash-outline" size={22} color={Colors.primary} />
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.statLabel}>Ad revenue this month</Text>
-            <Text style={styles.statValue}>€{(stats.adRevenueEur || 0).toFixed(2)}</Text>
+            <Text style={styles.statValue}>€{(s.adRevenueEur || 0).toFixed(2)}</Text>
           </View>
         </View>
       ) : null}
