@@ -121,7 +121,12 @@ export default function ChatScreen() {
   // messages, voice notes, and media. Block screenshots/screen recording
   // while the user is reading a conversation. The hook is a no-op on
   // web (preview only) so it remains safe to call here unconditionally.
-  useScreenCaptureProtection('chat-conversation');
+  // iter-140: screen-capture protection on chat conversations was
+  // blocking the user from taking screenshots of errors for debugging.
+  // FLAG_SECURE is now disabled here so the user can capture chat
+  // screens. OTP screens (phone-verify, change-phone-number) still
+  // protect their own OTP code as before.
+  // useScreenCaptureProtection('chat-conversation');
   // iter-137 engagement tracking — fires `api.earnings.trackMessage`
   // after each qualifying outgoing text message (matches the web app's
   // earnings pipeline so the user's totalEngagements actually grows
