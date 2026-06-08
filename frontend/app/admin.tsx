@@ -95,32 +95,49 @@ export default function AdminDashboard() {
     {},
     isAdmin,
   );
+  // iter-140b: canonical admin paths confirmed by the web team.
+  //  - `api.admin.queries.getAllUsers` (NO args — passing { search: '' }
+  //    fails arg validation and returns empty).
+  //  - `api.admin.queries.getAllReports` (NO args).
+  //  - `api.ads.listPending` (top-level, NOT under api.admin.*).
+  // The previous probes (`api.admin.listUsers`, etc.) didn't exist on
+  // the backend — which is why all three tabs showed "No data".
+  // iter-140b: backend doesn't take a search arg, so filtering happens
+  // client-side. State is local to this component.
   const [userSearch, setUserSearch] = useState('');
   const { data: users, refetch: refetchUsers, loading: usersLoading } = useSafeConvexQuery<UserItem[]>(
-    api.admin.listUsers,
-    { search: userSearch.trim() },
+    api.admin.queries.getAllUsers,
+    {},
     [],
     isAdmin,
   );
   const { data: reports, refetch: refetchReports, loading: reportsLoading } = useSafeConvexQuery<ReportItem[]>(
-    api.admin.listReports,
-    { status: 'pending' },
+    api.admin.queries.getAllReports,
+    {},
     [],
     isAdmin,
   );
   const { data: pendingAds, refetch: refetchAds, loading: adsLoading } = useSafeConvexQuery<AdItem[]>(
-    api.ads.listPendingForReview,
+    api.ads.listPending,
     {},
     [],
     isAdmin,
   );
 
-  const setRole = useMutation(api.admin.setRole);
-  const suspendUser = useMutation(api.admin.suspendUser);
-  const unsuspendUser = useMutation(api.admin.unsuspendUser);
-  const resolveReport = useMutation(api.admin.resolveReport);
-  const approveAd = useMutation(api.ads.approveAd);
-  const rejectAd = useMutation(api.ads.rejectAd);
+  // Mutations — iter-140b: canonical names.
+  // `updateUserRole({ userId, role })` replaces the old `setRole`. The
+  // backend exposes a single role-toggle endpoint rather than
+  // suspend/unsuspend (those mutations don't exist server-side). The
+  // mobile suspend UI is therefore wired to flip role between "user"
+  // and "admin" as the closest available equivalent; a future iteration
+  // can swap this for a dedicated suspend endpoint once the backend
+  // exposes one.
+  const setRole = useMutation(api.admin.queries.updateUserRole);
+  const suspendUser = useMutation(api.admin.queries.deleteUser);    // delete-only on backend
+  const unsuspendUser = useMutation(api.admin.queries.updateUserRole); // restore via role
+  const resolveReport = useMutation(api.admin.queries.dismissReport);
+  const approveAd = useMutation(api.ads.approve);
+  const rejectAd = useMutation(api.ads.reject);
 
   const [tab, setTab] = useState<Tab>('overview');
   const [adsSubTab, setAdsSubTab] = useState<AdsSubTab>('review');
@@ -490,6 +507,19 @@ function UsersTab({
   onToggleSuspend: (u: UserItem) => void;
   onToggleAdmin: (u: UserItem) => void;
 }) {
+  // iter-140b: `getAllUsers` returns the full list with no server-side
+  // filter. Filter client-side so the search box still works exactly
+  // like the user expects (and like the web admin).
+  const trimmed = search.trim().toLowerCase();
+  const filtered = trimmed
+    ? users.filter((u) => {
+        return (
+          (u.name || '').toLowerCase().includes(trimmed) ||
+          (u.email || '').toLowerCase().includes(trimmed) ||
+          (u.phone || '').toLowerCase().includes(trimmed)
+        );
+      })
+    : users;
   return (
     <View>
       <View style={styles.searchWrap}>
@@ -511,15 +541,15 @@ function UsersTab({
         ) : null}
       </View>
 
-      {loading && users.length === 0 ? (
+      {loading && filtered.length === 0 ? (
         <View style={styles.loadingWrap}>
           <ActivityIndicator size="small" color={Colors.primary} />
         </View>
-      ) : users.length === 0 ? (
+      ) : filtered.length === 0 ? (
         <EmptyState icon="people-outline" title="No users" body="Try a different search term." />
       ) : (
         <View style={styles.card}>
-          {users.map((u, idx) => (
+          {filtered.map((u, idx) => (
             <View
               key={u._id}
               style={[styles.userRow, idx === users.length - 1 ? styles.rowLast : null]}

@@ -45,6 +45,29 @@ export default function ChatsScreen() {
       <Header
         title="Smilers"
         variant="light"
+        // iter-140b: render the user's profile photo as a tappable
+        // circle on the LEFT side of the header — this is what the web
+        // app shows in the top-left corner of the Chats list. Tapping
+        // it opens the Account screen. Falls back to initials when the
+        // profile photo isn't set yet.
+        leftAction={
+          <TouchableOpacity
+            onPress={() => router.push('/account' as any)}
+            testID="chats-header-avatar"
+            accessibilityLabel="Open account"
+            style={{ marginRight: 12 }}
+          >
+            <Avatar
+              name={(me as any)?.name || (me as any)?.displayName || ''}
+              size={36}
+              uri={
+                (me as any)?.profilePicture ||
+                (me as any)?.avatarUrl ||
+                (me as any)?.avatar
+              }
+            />
+          </TouchableOpacity>
+        }
         right={
           <>
             <TouchableOpacity onPress={() => router.push('/search' as any)} testID="search-btn">
@@ -228,9 +251,37 @@ function PinnedRow({
 function ConversationRow({ item, currentUserId, contacts, onPress }: { item: any; currentUserId?: string; contacts?: any[]; onPress: () => void }) {
   const savedContactName = findSavedContactDisplayName(contacts, item, currentUserId);
   const name = savedContactName || getConversationDisplayName(item, currentUserId, 'Smilers user');
+  // iter-140b: resolve the photo URL from the same sources the web app
+  // uses. Order of precedence:
+  //  1. Conversation-level avatar (group photo or pre-computed
+  //     other-participant photo from `api.conversations.list`).
+  //  2. Other-participant's profilePicture / avatar (DM only).
+  //  3. The saved-contact photo from the user's contacts list.
+  const otherUserPhoto =
+    item?.avatar ||
+    item?.avatarUrl ||
+    item?.photo ||
+    item?.profilePicture ||
+    item?.otherUser?.profilePicture ||
+    item?.otherUser?.avatar ||
+    item?.otherParticipant?.profilePicture ||
+    item?.otherParticipant?.avatar;
+  const contactRecord = (contacts || []).find((c: any) => {
+    const ids = [c?.userId, c?.user?._id, c?._id, c?.contactUserId].filter(Boolean);
+    return (
+      (item?.otherUserId && ids.includes(item.otherUserId)) ||
+      (item?.otherParticipant?._id && ids.includes(item.otherParticipant._id))
+    );
+  });
+  const photoUri: string | undefined =
+    otherUserPhoto ||
+    contactRecord?.profilePicture ||
+    contactRecord?.user?.profilePicture ||
+    contactRecord?.avatar ||
+    contactRecord?.user?.avatar;
   return (
     <TouchableOpacity onPress={onPress} style={styles.row} activeOpacity={0.7} testID={`conv-${item._id}`}>
-      <Avatar name={name} size={52} />
+      <Avatar name={name} size={52} uri={photoUri} />
       <View style={styles.rowMiddle}>
         <Text style={styles.rowTitle}>{name}</Text>
         <Text style={styles.rowSubtitle} numberOfLines={1}>

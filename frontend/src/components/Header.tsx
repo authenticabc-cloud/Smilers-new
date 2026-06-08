@@ -8,11 +8,23 @@ interface HeaderProps {
   showBack?: boolean;
   onBack?: () => void;
   right?: React.ReactNode;
+  // iter-140b: optional custom element on the LEFT side of the header,
+  // mutually exclusive with `showBack`. Used by the Chats tab to show
+  // the current user's profile avatar (matches the web app's layout).
+  leftAction?: React.ReactNode;
   subtitle?: string;
   variant?: 'light' | 'dark';
 }
 
-export default function Header({ title, showBack, onBack, right, subtitle, variant = 'dark' }: HeaderProps) {
+export default function Header({
+  title,
+  showBack,
+  onBack,
+  right,
+  leftAction,
+  subtitle,
+  variant = 'dark',
+}: HeaderProps) {
   const isDark = variant === 'dark';
   const bg = isDark ? Colors.headerBg : Colors.surface;
   const fg = isDark ? Colors.white : Colors.textPrimary;
@@ -24,6 +36,8 @@ export default function Header({ title, showBack, onBack, right, subtitle, varia
           <TouchableOpacity onPress={onBack} style={styles.backBtn} testID="header-back">
             <Ionicons name="arrow-back" size={24} color={fg} />
           </TouchableOpacity>
+        ) : leftAction ? (
+          <View style={styles.leftAction}>{leftAction}</View>
         ) : (
           <View style={styles.sidePad} />
         )}
@@ -59,6 +73,12 @@ const styles = StyleSheet.create({
   },
   sidePad: {
     width: 0,
+  },
+  leftAction: {
+    // iter-140b: matches the standard back-button hit area so the
+    // profile photo aligns with where the back chevron would otherwise
+    // sit. Tap target stays inside the 44pt minimum.
+    paddingRight: Spacing.md,
   },
   titleWrap: {
     flex: 1,
