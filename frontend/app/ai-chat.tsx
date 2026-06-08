@@ -47,8 +47,12 @@ export default function AiChatScreen() {
       console.warn('AI chat error', errorValue);
       setInput(text);
       const raw = String(errorValue?.message || errorValue || 'Unknown error');
+      // iter-134: capture Convex Request ID when present (e.g. "[Request ID: abcd1234]")
+      // so the user can paste it to the backend agent to look up the exact stack.
+      const reqIdMatch = raw.match(/Request ID:\s*([a-f0-9]+)/i);
+      const reqIdLine = reqIdMatch ? `\n\nRequest ID: ${reqIdMatch[1]}` : '';
       const friendly = raw.includes('Server Error')
-        ? 'The AI backend isn\'t configured yet (Convex action ai.chat.generateResponse returned Server Error). Please ask the backend agent to wire up the Hercules AI integration.'
+        ? `The AI backend isn't configured yet (Convex action ai.chat.generateResponse returned Server Error). Please ask the backend agent to wire up the Hercules AI integration.${reqIdLine}`
         : raw.includes('Network') || raw.includes('fetch')
           ? 'Network problem — check your connection and try again.'
           : raw.length > 220

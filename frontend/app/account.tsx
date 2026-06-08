@@ -139,6 +139,25 @@ export default function AccountScreen() {
           </View>
         </View>
 
+        <Text style={styles.sectionLabel}>Account</Text>
+        <TouchableOpacity
+          style={styles.row}
+          activeOpacity={0.7}
+          onPress={() => router.push('/change-phone-number')}
+          testID="account-change-phone"
+        >
+          <View style={[styles.iconWrap, { backgroundColor: '#DBEAFE' }]}>
+            <Ionicons name="call-outline" size={22} color="#2563EB" />
+          </View>
+          <View style={styles.rowMid}>
+            <Text style={styles.rowTitle}>Change phone number</Text>
+            <Text style={styles.rowSub} numberOfLines={1}>
+              {phone === '—' ? 'Add a verified phone number' : `Currently ${phone}`}
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={Colors.textMuted} />
+        </TouchableOpacity>
+
         <Text style={styles.sectionLabel}>Session</Text>
         <TouchableOpacity
           style={styles.row}

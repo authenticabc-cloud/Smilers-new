@@ -20,6 +20,7 @@ import { useAction, useMutation, useQuery } from 'convex/react';
 import { api } from '../src/convexApi';
 import { PHONE_VERIFIED_INSTALL_KEY, readStoredString, writeStoredString } from '../src/lib/settingsStorage';
 import { useAuth } from '../src/providers/AuthProvider';
+import { useScreenCaptureProtection } from '../src/hooks/useScreenCaptureProtection';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/theme';
 
 const RESEND_SECONDS = 30;
@@ -27,6 +28,10 @@ const RESEND_SECONDS = 30;
 export default function PhoneVerifyScreen() {
   const router = useRouter();
   const { signOut, isAuthenticated } = useAuth();
+  // iter-134 security hardening: prevent screenshots/screen recording
+  // while the user is on the OTP step — the 6-digit code on-screen is
+  // an authentication credential.
+  useScreenCaptureProtection('phone-verify');
   const updateCurrentUser = useMutation(api.users.updateCurrentUser);
   // Reactive subscription: any backend change (e.g. verifyOtp -> savePhoneVerified)
   // propagates immediately so we don't need refetches or rely on stale local state.
@@ -329,7 +334,7 @@ export default function PhoneVerifyScreen() {
               </TouchableOpacity>
 
               <View style={styles.resendRow}>
-                <Text style={styles.resendLabel}>Didn't get it?</Text>
+                <Text style={styles.resendLabel}>Didn&apos;t get it?</Text>
                 <TouchableOpacity onPress={handleResend} disabled={resendIn > 0 || submitting}>
                   <Text
                     style={[

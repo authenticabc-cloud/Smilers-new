@@ -21,6 +21,7 @@ import {
 } from 'expo-audio';
 import { useVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
 import * as Linking from 'expo-linking';
+import { router as expoRouter } from 'expo-router';
 import { useConvex, useMutation, useQuery } from 'convex/react';
 import { api } from '../convexApi';
 import {
@@ -306,6 +307,13 @@ function BubbleBody({ msg, timeStr, textStyle, isMine, e2eeStatus }: { msg: any;
 }
 
 function BubbleBodyInner({ msg, timeStr, textStyle, isMine, e2eeStatus }: { msg: any; timeStr: string; textStyle?: any; isMine: boolean; e2eeStatus: E2EEStatus | null }) {
+  // iter-134: Call logs in chat. Backend may surface call history as
+  // virtual messages with either `type: 'call'` or `kind: 'call'`,
+  // so we detect both. The CallLogMessage component is purely
+  // presentational + a tap-to-call-back affordance.
+  if (msg?.type === 'call' || msg?.kind === 'call') {
+    return <CallLogMessage msg={msg} isMine={isMine} />;
+  }
   switch (msg.type) {
     case 'image':
       return <ImageMessage msg={msg} timeStr={timeStr} textStyle={textStyle} e2eeStatus={e2eeStatus} />;
@@ -1262,6 +1270,129 @@ function formatBytes(bytes?: number): string | undefined {
 
 const IMG_W = Math.min(220, Dimensions.get('window').width * 0.6);
 
+/**
+ * CallLogMessage — renders a call history entry inside a chat bubble.
+ *
+ * iter-134: backend (Convex) merges entries from the `callLogs` table
+ * into the messages stream as virtual items with `type: 'call'` (or
+ * `kind: 'call'`). The renderer is defensive about field names since
+ * the backend may use slightly different shapes per call kind. Tapping
+ * the card opens a fresh outgoing call of the same kind to the
+ * conversation (voice/video).
+ *
+ * Supported fields (any of):
+ *   callType | mediaKind | kind       → 'voice' | 'audio' | 'video'
+ *   status   | result    | endReason  → 'missed' | 'answered' | 'completed' | 'declined' | 'rejected' | 'cancelled' | 'no_answer' | 'busy'
+ *   duration | durationSec | durationMs (ms divided by 1000)
+ *   conversationId (required to wire the tap-to-call-back action)
+ *   direction | initiatorId  (optional explicit direction)
+ */
+function CallLogMessage({ msg, isMine }: { msg: any; isMine: boolean }) {
+  // Resolve call media kind (voice vs video). Backends differ in naming.
+  const rawKind = String(
+    msg?.callType || msg?.mediaKind || (msg?.kind && msg.kind !== 'call' ? msg.kind : '') || ''
+  ).toLowerCase();
+  const isVideo = rawKind === 'video';
+
+  // Resolve status — accept several possible field names + variants.
+  const rawStatus = String(msg?.status || msg?.result || msg?.endReason || '').toLowerCase();
+  const isMissed = rawStatus === 'missed' || rawStatus === 'no_answer' || rawStatus === 'no-answer';
+  const isDeclined = rawStatus === 'declined' || rawStatus === 'rejected' || rawStatus === 'busy';
+  const isCancelled = rawStatus === 'cancelled' || rawStatus === 'canceled';
+  const isAnswered =
+    !isMissed && !isDeclined && !isCancelled &&
+    (rawStatus === 'answered' || rawStatus === 'completed' || rawStatus === 'ended' || rawStatus === '' || !!msg?.duration || !!msg?.durationSec || !!msg?.durationMs);
+
+  // Resolve duration in seconds (0 when call never connected).
+  const durationSec: number = (() => {
+    if (typeof msg?.duration === 'number' && Number.isFinite(msg.duration) && msg.duration >= 0) {
+      // Heuristic: values > 86400 are almost certainly ms.
+      return msg.duration > 86400 ? Math.round(msg.duration / 1000) : Math.round(msg.duration);
+    }
+    if (typeof msg?.durationSec === 'number' && Number.isFinite(msg.durationSec)) return Math.max(0, Math.round(msg.durationSec));
+    if (typeof msg?.durationMs === 'number' && Number.isFinite(msg.durationMs)) return Math.max(0, Math.round(msg.durationMs / 1000));
+    return 0;
+  })();
+
+  // Direction. Prefer explicit field; fall back to isMine (senderId === me).
+  const explicitDirection = typeof msg?.direction === 'string' ? msg.direction.toLowerCase() : '';
+  const isOutgoing =
+    explicitDirection === 'outgoing' || explicitDirection === 'out'
+      ? true
+      : explicitDirection === 'incoming' || explicitDirection === 'in'
+        ? false
+        : isMine;
+
+  // Title + subtitle composition (WhatsApp-style).
+  const callLabel = isVideo ? 'Video call' : 'Voice call';
+  let titleText = '';
+  let subtitleText = '';
+  if (isMissed) {
+    titleText = isOutgoing ? `No answer · ${callLabel.toLowerCase()}` : `Missed ${callLabel.toLowerCase()}`;
+    subtitleText = 'Tap to call back';
+  } else if (isDeclined) {
+    titleText = isOutgoing ? `Call declined · ${callLabel.toLowerCase()}` : `Declined ${callLabel.toLowerCase()}`;
+    subtitleText = 'Tap to call back';
+  } else if (isCancelled) {
+    titleText = isOutgoing ? `Cancelled ${callLabel.toLowerCase()}` : `Cancelled ${callLabel.toLowerCase()}`;
+    subtitleText = 'Tap to call back';
+  } else if (isAnswered && durationSec > 0) {
+    titleText = `${isOutgoing ? 'Outgoing' : 'Incoming'} ${callLabel.toLowerCase()}`;
+    subtitleText = fmtDur(durationSec);
+  } else {
+    titleText = `${isOutgoing ? 'Outgoing' : 'Incoming'} ${callLabel.toLowerCase()}`;
+    subtitleText = 'Tap to call back';
+  }
+
+  // Visual flavor: red icon for missed, neutral otherwise.
+  const accentColor = isMissed ? Colors.danger : isVideo ? '#2563EB' : Colors.primary;
+  const directionIcon: 'arrow-down-left' | 'arrow-up-right' = isOutgoing ? 'arrow-up-right' : 'arrow-down-left';
+
+  // Tap behavior: navigate to the call screen and let it auto-initiate
+  // a new outgoing call of the same kind. Falls back gracefully when no
+  // conversationId is attached (we just no-op rather than crash).
+  const onCallBack = useCallback(() => {
+    const convoId = msg?.conversationId;
+    if (!convoId || typeof convoId !== 'string') return;
+    try {
+      // expo-router's imperative router accepts a flexible href shape.
+      expoRouter.push(`/call/${convoId}?type=${isVideo ? 'video' : 'voice'}` as any);
+    } catch (errorValue) {
+      // Defensive no-op — never crash the bubble.
+      console.warn('Call log tap navigation failed', errorValue);
+    }
+  }, [msg?.conversationId, isVideo]);
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.7}
+      onPress={onCallBack}
+      style={styles.callLogRow}
+      testID={`call-log-${msg._id}`}
+      accessibilityRole="button"
+      accessibilityLabel={`${titleText}. ${subtitleText}`}
+    >
+      <View style={[styles.callLogIconWrap, { backgroundColor: `${accentColor}1A` }]}>
+        <Feather name={isVideo ? 'video' : 'phone'} size={18} color={accentColor} />
+        <View style={[styles.callLogDirectionBadge, { backgroundColor: accentColor }]}>
+          <Feather name={directionIcon} size={9} color="#FFFFFF" />
+        </View>
+      </View>
+      <View style={styles.callLogTextWrap}>
+        <Text
+          style={[styles.callLogTitle, isMissed ? { color: Colors.danger } : null]}
+          numberOfLines={1}
+        >
+          {titleText}
+        </Text>
+        <Text style={styles.callLogSubtitle} numberOfLines={1}>
+          {subtitleText}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
 const styles = StyleSheet.create({
   bubbleRow: { marginVertical: 5, flexDirection: 'row', position: 'relative' },
   bubbleRowMine: { justifyContent: 'flex-end' },
@@ -1280,6 +1411,49 @@ const styles = StyleSheet.create({
   bubbleText: { fontSize: FontSize.sm, lineHeight: 20, color: Colors.textPrimary },
   encryptedRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4 },
   encryptedText: { fontSize: 10, fontWeight: FontWeight.semibold },
+  // iter-134: call log entry card (rendered when msg.type === 'call').
+  // Lives inside the existing bubble shell — only the body content changes.
+  callLogRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    minWidth: 180,
+    paddingVertical: 2,
+  },
+  callLogIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  callLogDirectionBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+  },
+  callLogTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  callLogTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textPrimary,
+  },
+  callLogSubtitle: {
+    fontSize: 11,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
   bubbleMeta: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', marginTop: 6 },
   bubbleTime: { fontSize: 11, color: Colors.textMuted },
   bubbleTimeOverlay: { color: Colors.white, fontSize: 11, fontWeight: FontWeight.medium },

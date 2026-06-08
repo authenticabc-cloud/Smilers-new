@@ -33,6 +33,7 @@ import MediaBubble from '../../src/components/MediaBubble';
 import PollComposer from '../../src/components/PollComposer';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
+import { useScreenCaptureProtection } from '../../src/hooks/useScreenCaptureProtection';
 import { recordDiagnostic } from '../../src/lib/diagnostics';
 import { errorToMessage } from '../../src/lib/safeString';
 import { scanMessage, explainScanResult, extractUrls, enrichScanWithRemoteAPI } from '../../src/lib/securityScanner';
@@ -115,6 +116,11 @@ export default function ChatScreen() {
   const insets = useSafeAreaInsets();
   const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
   const { isAuthenticated } = useAuth();
+  // iter-134 security hardening: chats contain end-to-end-encrypted
+  // messages, voice notes, and media. Block screenshots/screen recording
+  // while the user is reading a conversation. The hook is a no-op on
+  // web (preview only) so it remains safe to call here unconditionally.
+  useScreenCaptureProtection('chat-conversation');
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
