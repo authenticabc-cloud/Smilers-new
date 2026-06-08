@@ -87,14 +87,18 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
+  // iter-142: bring Settings rows visually in line with the web app.
+  //  • Bumped title to 17 (web uses ~17/18 px bold).
+  //  • Lowered divider opacity so the page reads as a continuous
+  //    cream surface like the web rather than a list of boxed rows.
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: Spacing.base,
-    paddingVertical: 14,
+    paddingVertical: 16,
     gap: Spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.borderLight,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(60, 40, 0, 0.08)',
   },
   iconWrap: {
     width: 44,
@@ -106,7 +110,7 @@ const styles = StyleSheet.create({
   },
   rowMid: { flex: 1 },
   rowTitle: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: FontWeight.bold,
     color: Colors.textPrimary,
   },

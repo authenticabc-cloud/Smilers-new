@@ -452,10 +452,15 @@ function Row({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   scroll: { paddingBottom: Spacing.xxl },
+  // iter-142: align Profile background with the web app — the entire
+  // page is a uniform cream (`Colors.background`). Native previously
+  // used `Colors.surface` (#FFFFFF) for the avatar block which created
+  // a visible white "bar" at the top and made the cream sections below
+  // appear comparatively grey.
   avatarSection: {
     alignItems: 'center',
     paddingVertical: Spacing.xl,
-    backgroundColor: Colors.surface,
+    backgroundColor: Colors.background,
   },
   avatarWrap: { position: 'relative' },
   cameraBadge: {
@@ -513,11 +518,16 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.base,
     gap: 10,
   },
+  // iter-142: button colors aligned with the web app's profile.
+  //   • Premium: solid gold (Colors.primary), no border (web has none).
+  //   • Starred + Settings: brighter `#FDE7A8` (slightly more saturated
+  //     than primaryLight #FEF3C7) so the buttons read clearly yellow
+  //     on Android — previously they appeared grey-cream on-device.
   linkBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.md,
-    backgroundColor: Colors.primaryLight,
+    backgroundColor: '#FDE7A8',
     paddingHorizontal: Spacing.base,
     paddingVertical: 16,
     borderRadius: Radius.lg,
@@ -536,8 +546,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.base,
     paddingVertical: 16,
     borderRadius: Radius.lg,
-    borderWidth: 1.5,
-    borderColor: Colors.primaryDark,
     ...Shadow.sm,
   },
   premiumBtnText: {
