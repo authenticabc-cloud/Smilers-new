@@ -34,6 +34,7 @@ import PollComposer from '../../src/components/PollComposer';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useScreenCaptureProtection } from '../../src/hooks/useScreenCaptureProtection';
+import { useEngagementTracker } from '../../src/hooks/useEngagementTracker';
 import { recordDiagnostic } from '../../src/lib/diagnostics';
 import { errorToMessage } from '../../src/lib/safeString';
 import { scanMessage, explainScanResult, extractUrls, enrichScanWithRemoteAPI } from '../../src/lib/securityScanner';
@@ -121,6 +122,11 @@ export default function ChatScreen() {
   // while the user is reading a conversation. The hook is a no-op on
   // web (preview only) so it remains safe to call here unconditionally.
   useScreenCaptureProtection('chat-conversation');
+  // iter-137 engagement tracking — fires `api.earnings.trackMessage`
+  // after each qualifying outgoing text message (matches the web app's
+  // earnings pipeline so the user's totalEngagements actually grows
+  // when chatting from the native client).
+  const engagement = useEngagementTracker();
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -555,6 +561,12 @@ export default function ChatScreen() {
           text: formattedValue,
           ...(replyToMessageId ? { replyToMessageId, replyToId: replyToMessageId } : {}),
         });
+      }
+      // iter-137 engagement tracking — fires only for the FRESH text
+      // path (skipping edits, which the web app also doesn't reward).
+      // No-ops if the message doesn't qualify (3+ words AND 8+ letters).
+      if (!editTargetId) {
+        void engagement.message(formattedValue, { isReceived: false });
       }
       await refetchMessages();
     } catch (e: any) {
@@ -1028,10 +1040,12 @@ export default function ChatScreen() {
       });
       setReplyTo(null);
       await refetchMessages();
+      // iter-137 engagement tracking — one event per location share.
+      void engagement.locationShare();
     } catch (errorValue: any) {
       Alert.alert('Location failed', errorValue?.message || 'Could not fetch your location.');
     }
-  }, [conversationId, isConversationAvailable, refetchMessages, replyTo, sendMessage]);
+  }, [conversationId, isConversationAvailable, refetchMessages, replyTo, sendMessage, engagement]);
 
   const onPickDocument = useCallback(async () => {
     if (!conversationId || !isConversationAvailable) return;
@@ -1216,6 +1230,10 @@ export default function ChatScreen() {
 
         setReplyTo(null);
         await refetchMessages();
+        // iter-137 engagement tracking — voice notes need >= 5 seconds
+        // to qualify (the hook enforces this). Fire-and-forget so a
+        // tracking failure never affects the chat UX.
+        void engagement.voiceNote(totalSec, { isReceived: false });
 
         // Kick off OpenAI Whisper transcription in the background — the
         // transcription pill on the voice bubble updates via Convex realtime

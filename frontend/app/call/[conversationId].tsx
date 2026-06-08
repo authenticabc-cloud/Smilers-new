@@ -42,6 +42,7 @@ import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInit
 import { useAuth } from '../../src/providers/AuthProvider';
 import { useConversationOtherUser } from '../../src/hooks/useConversationOtherUser';
 import { useReactiveSafeConvexQuery } from '../../src/hooks/useReactiveSafeConvexQuery';
+import { useEngagementTracker } from '../../src/hooks/useEngagementTracker';
 import { Colors, FontSize, FontWeight, Shadow, Spacing } from '../../src/theme';
 import { useRingtonePlayer } from '../../src/lib/ringtone/useRingtonePlayer';
 
@@ -236,6 +237,9 @@ function CallScreenInner() {
   const initiateCall = useMutation(api.calls.initiateCall);
   const answerCall = useMutation(api.calls.answerCall);
   const endCall = useMutation(api.calls.endCall);
+  // iter-137 engagement tracking — fires `api.earnings.trackCall` on
+  // hangup. See useEngagementTracker for thresholds (must connect).
+  const engagement = useEngagementTracker();
   const declineCall = useMutation(api.calls.declineCall);
   // Backend-confirmed contract (June 2025): `api.calls.heartbeat({ callId })`
   // is wired up to a 60s cron that auto-`ends` calls without a recent ping.
@@ -1140,6 +1144,16 @@ function CallScreenInner() {
           await endCall({ callId: id });
         }
       } catch {}
+      // iter-137 engagement tracking — count call minutes ONLY for
+      // calls that actually connected (otherwise duration is 0 and the
+      // tracker no-ops). Fire-and-forget so a failed tracking call
+      // never blocks the hangup → router.back() transition.
+      try {
+        const minutes = Math.max(0, callDurationSec / 60);
+        if (minutes > 0) {
+          void engagement.call(minutes, callType === 'video');
+        }
+      } catch {}
       // NOTE: signaling cleanup is intentionally skipped — the backend's
       // confirmed June 2025 contract exposes `signaling.send / poll /
       // markConsumed` only. The `signaling.cleanup` mutation was removed
@@ -1147,7 +1161,7 @@ function CallScreenInner() {
       // pruning expired signaling rows automatically.
     }
     router.back();
-  }, [activeCall?.status, callId, declineCall, endCall, router]);
+  }, [activeCall?.status, callId, declineCall, endCall, router, callDurationSec, callType, engagement]);
 
   const handleDecline = useCallback(async () => {
     const id = callId;

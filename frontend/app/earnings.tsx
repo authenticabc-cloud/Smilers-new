@@ -121,7 +121,9 @@ export default function EarningsScreen() {
   const { isAuthenticated } = useAuth();
   const [tab, setTab] = useState<Tab>('overview');
 
-  // --- Data ----------------------------------------------------------------
+  // iter-137: canonical Convex paths confirmed by the web team.
+  // `getMyProfile` IS the stats object — it returns every counter the
+  // overview tab needs. No more separate `getMyStats` probe.
   const { data: profile } = useSafeConvexQuery<any | null>(
     api.earnings.getMyProfile,
     {},
@@ -134,14 +136,8 @@ export default function EarningsScreen() {
     null,
     isAuthenticated,
   );
-  const { data: stats } = useSafeConvexQuery<any | null>(
-    (api as any).earnings?.getMyStats ?? api.earnings.getMyProfile,
-    {},
-    null,
-    isAuthenticated,
-  );
   const { data: top } = useSafeConvexQuery<any[]>(
-    (api as any).earnings?.getTopEarners ?? (api as any).earnings?.getTop,
+    api.earnings.getLeaderboard,
     { limit: 20 },
     [],
     isAuthenticated && tab === 'top',
@@ -160,47 +156,34 @@ export default function EarningsScreen() {
   );
 
   // --- Derived -------------------------------------------------------------
-  const totalEngagements = useMemo(() => {
-    return Number(
-      stats?.engagements ??
-        stats?.totalEngagements ??
-        profile?.engagements ??
-        profile?.points ??
-        0,
-    );
-  }, [stats, profile]);
+  // iter-137: read canonical fields exactly as the web app does.
+  // The total = `profile.totalEngagements` (the "73" the user expects).
+  // Per-activity raw counters are `messageEngagements`, `voiceNoteEngagements`,
+  // `callEngagements`. Level + progress come pre-computed from the backend.
+  const totalEngagements = Number(profile?.totalEngagements ?? 0);
+  const referralCount = Number(profile?.referralCount ?? 0);
+  const messageCount = Number(profile?.messageEngagements ?? 0);
+  const voiceCount = Number(profile?.voiceNoteEngagements ?? 0);
+  const callMinutes = Number(
+    profile?.callEngagements ?? profile?.videoCallMinutes ?? 0,
+  );
 
   const currentLevel = useMemo(() => {
-    if (profile?.level && LEVELS.find((l) => l.key === profile.level)) {
-      return LEVELS.find((l) => l.key === profile.level)!;
-    }
-    return computeLevelFromCount(totalEngagements);
+    // Web sends `earningsLevel` / `level` as 'A' | 'B' | 'C' | 'Gold'.
+    const raw = profile?.earningsLevel || profile?.level;
+    const found = raw ? LEVELS.find((l) => l.key === raw) : null;
+    return found || computeLevelFromCount(totalEngagements);
   }, [profile, totalEngagements]);
 
-  const referralCount = useMemo(() => {
-    return Number(
-      stats?.referrals ??
-        stats?.referralCount ??
-        profile?.referralCount ??
-        (Array.isArray(referrals) ? referrals.length : 0),
-    );
-  }, [stats, profile, referrals]);
-
-  const messageCount = Number(
-    stats?.messages ?? stats?.qualifyingMessages ?? profile?.messageCount ?? 0,
+  const engagementsToNext = Number(profile?.nextLevelEngagements ?? 0);
+  const engagementsProgressPct = Math.max(
+    0,
+    Math.min(100, Math.round(Number(profile?.engagementProgress ?? 0))),
   );
-  const voiceCount = Number(stats?.voiceNotes ?? profile?.voiceNoteCount ?? 0);
-  const callMinutes = Number(stats?.callMinutes ?? profile?.callMinutes ?? 0);
-
-  const engagementsToNext = currentLevel.next
-    ? Math.max(0, currentLevel.next - totalEngagements)
-    : 0;
-  const engagementsProgressPct = currentLevel.next
-    ? Math.min(100, Math.round((totalEngagements / currentLevel.next) * 100))
-    : 100;
-  const referralsProgressPct = currentLevel.referralsNext
-    ? Math.min(100, Math.round((referralCount / currentLevel.referralsNext) * 100))
-    : 100;
+  const referralsProgressPct = Math.max(
+    0,
+    Math.min(100, Math.round(Number(profile?.referralProgress ?? 0))),
+  );
 
   const handleCopyCode = async () => {
     const code = (referralCode as any)?.code || referralCode || '';

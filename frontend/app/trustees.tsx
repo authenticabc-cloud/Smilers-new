@@ -162,7 +162,12 @@ export default function TrusteesScreen() {
             onPress: async () => {
               setRemovingId(trustee._id);
               try {
-                await removeTrustee({ trusteeId: trustee._id });
+                // iter-137: canonical arg key is `trusteeEntryId`
+                // (the Convex row `_id`), NOT `trusteeId` (which is the
+                // user id). `trustee._id` here IS the entry row id
+                // (came from `getMyTrustees`), so the value is correct;
+                // only the key name was wrong.
+                await removeTrustee({ trusteeEntryId: trustee._id });
                 await refetch();
               } catch (errorValue: any) {
                 Alert.alert('Could not remove trustee', errorValue?.message || 'Please try again.');

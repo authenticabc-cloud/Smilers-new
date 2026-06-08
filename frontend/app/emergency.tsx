@@ -33,6 +33,7 @@ import { useRouter } from 'expo-router';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
 import { useMutation } from 'convex/react';
+import * as Location from 'expo-location';
 
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
@@ -181,7 +182,26 @@ function EmergencyScreenInner() {
           onPress: async () => {
             setBusy(true);
             try {
-              await triggerAlert({ source: 'manual', message: 'SOS triggered from mobile app' });
+              // iter-137: canonical contract → triggerAlert needs
+              // { latitude, longitude }. Capture coords here. We fall
+              // back to (0,0) only if the user explicitly refuses
+              // permission — server still broadcasts to trustees in
+              // that case, just without geo-aware nearby fan-out.
+              let latitude = 0;
+              let longitude = 0;
+              try {
+                const perm = await Location.requestForegroundPermissionsAsync();
+                if (perm.granted) {
+                  const position = await Location.getCurrentPositionAsync({
+                    accuracy: Location.Accuracy.Balanced,
+                  });
+                  latitude = position.coords.latitude;
+                  longitude = position.coords.longitude;
+                }
+              } catch {
+                /* swallow — geolocation is best-effort for SOS */
+              }
+              await triggerAlert({ latitude, longitude });
               await Promise.all([refetchActive(), refetchAlerts()]);
               Alert.alert('SOS sent', 'Your trustees have been notified.');
             } catch (e: any) {

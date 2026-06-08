@@ -34,119 +34,85 @@ interface VoiceTaskAssignment {
   name: string;
   avatar?: string | null;
   phone?: string | null;
+  /** Convex row id (Id<"voiceTaskContacts">) — required for remove
+   *  and reorder mutations. Canonical web shape: `_id`. */
+  entryId?: string | null;
 }
 
 type AssignmentMap = Record<number, VoiceTaskAssignment>;
 
 /**
- * Tries multiple Convex query paths for fetching the current user's voice
- * task assignments. The spec says the backend table is `voiceTaskContacts`
- * but the exact API function names weren't part of the spec we received,
- * so we try a few conventional names and fall back to local storage if
- * none work.
+ * iter-137: locked to the canonical Convex paths confirmed by the web
+ * team. The previous fallback probe arrays have been removed — only
+ * `api.voiceTaskContacts.getMyVoiceTaskContacts` is used.
  */
 async function loadFromConvex(convex: any): Promise<AssignmentMap | null> {
-  const candidates: Array<{ label: string; query: any }> = [];
-  const ns: any = (api as any).voiceTaskContacts;
-  const altNs: any = (api as any).voiceTasks;
-  if (ns?.list) candidates.push({ label: 'voiceTaskContacts.list', query: ns.list });
-  if (ns?.getMine) candidates.push({ label: 'voiceTaskContacts.getMine', query: ns.getMine });
-  if (ns?.get) candidates.push({ label: 'voiceTaskContacts.get', query: ns.get });
-  if (altNs?.listContacts) candidates.push({ label: 'voiceTasks.listContacts', query: altNs.listContacts });
-  if (altNs?.list) candidates.push({ label: 'voiceTasks.list', query: altNs.list });
-
-  for (const candidate of candidates) {
-    try {
-      const result = await convex.query(candidate.query, {});
-      if (Array.isArray(result)) {
-        const map: AssignmentMap = {};
-        for (const item of result) {
-          const position = Number(item?.position);
-          if (!position || position < 1 || position > 10) continue;
-          map[position] = {
-            position,
-            contactId: String(item?.contactId || item?.userId || item?._id || ''),
-            name: String(item?.name || item?.preferredName || item?.displayName || 'Contact'),
-            avatar: item?.avatar || null,
-            phone: item?.phone || null,
-          };
-        }
-        console.log('[voice-tasks] loaded via', candidate.label, Object.keys(map).length, 'rows');
-        return map;
-      }
-    } catch (errorValue: any) {
-      console.warn('[voice-tasks] load', candidate.label, 'failed:', errorValue?.message);
+  const fn = (api as any).voiceTaskContacts?.getMyVoiceTaskContacts;
+  if (!fn) return null;
+  try {
+    const result = await convex.query(fn, {});
+    if (!Array.isArray(result)) return null;
+    const map: AssignmentMap = {};
+    for (const item of result) {
+      const position = Number(item?.position);
+      if (!position || position < 1 || position > 10) continue;
+      map[position] = {
+        position,
+        contactId: String(item?.contactId || item?.userId || ''),
+        name: String(item?.name || 'Contact'),
+        avatar: item?.avatar || null,
+        phone: item?.phone || null,
+        entryId: String(item?._id || ''),
+      };
     }
+    return map;
+  } catch (errorValue: any) {
+    console.warn('[voice-tasks] getMyVoiceTaskContacts failed:', errorValue?.message);
+    return null;
   }
-  return null;
 }
 
+/**
+ * iter-137: canonical Convex mutations. `addVoiceTaskContact` takes
+ * `{ contactId, position }`; `removeVoiceTaskContact` takes
+ * `{ entryId }` (Id<"voiceTaskContacts">, NOT the user id).
+ */
 async function saveToConvex(
   convex: any,
   position: number,
-  contact: VoiceTaskAssignment | null
+  contact: VoiceTaskAssignment | null,
+  existingEntryId: string | null,
 ): Promise<boolean> {
   const ns: any = (api as any).voiceTaskContacts;
-  const altNs: any = (api as any).voiceTasks;
-  const candidates: Array<{ label: string; mutation: any; argsForSet: any; argsForRemove: any }> = [];
-  if (ns?.assign && ns?.unassign) {
-    candidates.push({
-      label: 'voiceTaskContacts.assign/unassign',
-      mutation: contact ? ns.assign : ns.unassign,
-      argsForSet: {
+  if (!ns) return false;
+  try {
+    if (contact) {
+      // Remove any existing row at this slot first (Convex enforces
+      // 1 entry per position).
+      if (existingEntryId && ns.removeVoiceTaskContact) {
+        try {
+          await convex.mutation(ns.removeVoiceTaskContact, { entryId: existingEntryId });
+        } catch (errorValue: any) {
+          // Non-fatal — server may already have GC'd a stale row.
+          console.warn('[voice-tasks] remove-before-add failed:', errorValue?.message);
+        }
+      }
+      if (!ns.addVoiceTaskContact) return false;
+      await convex.mutation(ns.addVoiceTaskContact, {
+        contactId: contact.contactId,
         position,
-        contactId: contact?.contactId,
-        name: contact?.name,
-        avatar: contact?.avatar || null,
-      },
-      argsForRemove: { position },
-    });
-  }
-  if (ns?.upsert) {
-    candidates.push({
-      label: 'voiceTaskContacts.upsert',
-      mutation: ns.upsert,
-      argsForSet: {
-        position,
-        contactId: contact?.contactId,
-        name: contact?.name,
-        avatar: contact?.avatar || null,
-      },
-      argsForRemove: { position, contactId: null },
-    });
-  }
-  if (ns?.set) {
-    candidates.push({
-      label: 'voiceTaskContacts.set',
-      mutation: ns.set,
-      argsForSet: {
-        position,
-        contactId: contact?.contactId,
-        name: contact?.name,
-      },
-      argsForRemove: { position, contactId: null },
-    });
-  }
-  if (altNs?.assignContact) {
-    candidates.push({
-      label: 'voiceTasks.assignContact',
-      mutation: altNs.assignContact,
-      argsForSet: { position, contactId: contact?.contactId, name: contact?.name },
-      argsForRemove: { position },
-    });
-  }
-
-  for (const candidate of candidates) {
-    try {
-      const args = contact ? candidate.argsForSet : candidate.argsForRemove;
-      await convex.mutation(candidate.mutation, args);
-      console.log('[voice-tasks] saved via', candidate.label);
+      });
       return true;
-    } catch (errorValue: any) {
-      console.warn('[voice-tasks] save', candidate.label, 'failed:', errorValue?.message);
     }
+    // Unassign — needs the row id.
+    if (!existingEntryId) return true; // nothing to remove
+    if (!ns.removeVoiceTaskContact) return false;
+    await convex.mutation(ns.removeVoiceTaskContact, { entryId: existingEntryId });
+    return true;
+  } catch (errorValue: any) {
+    console.warn('[voice-tasks] saveToConvex failed:', errorValue?.message);
+    return false;
   }
-  return false;
 }
 
 import PremiumGate from '../src/components/PremiumGate';
@@ -224,7 +190,11 @@ function VoiceTasksScreen() {
       setPendingPos(position);
       const merged: AssignmentMap = { ...assignments, [position]: next };
       await persistAll(merged);
-      await saveToConvex(convex, position, next);
+      // iter-137: pass the existing entryId at this slot (if any) so
+      // the canonical mutation can remove-before-add to honor the
+      // backend's 1-per-position constraint.
+      const existingEntryId = assignments[position]?.entryId || null;
+      await saveToConvex(convex, position, next, existingEntryId);
       setPendingPos(null);
       closePicker();
     },
@@ -237,7 +207,9 @@ function VoiceTasksScreen() {
       delete merged[position];
       setPendingPos(position);
       await persistAll(merged);
-      await saveToConvex(convex, position, null);
+      // iter-137: removal requires the Convex row id (entryId).
+      const existingEntryId = assignments[position]?.entryId || null;
+      await saveToConvex(convex, position, null, existingEntryId);
       setPendingPos(null);
     },
     [assignments, convex, persistAll]
