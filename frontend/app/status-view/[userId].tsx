@@ -22,6 +22,19 @@ import { setAudioModeAsync as setExpoAudioModeAsync } from 'expo-audio';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../src/convexApi';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
+import { recordDiagnostic } from '../../src/lib/diagnostics';
+
+// iter-135: module-evaluation marker so we can correlate a crash on
+// "Smilers has stopped" with whichever screen the user opened last.
+try {
+  recordDiagnostic({
+    tag: 'BOOT',
+    source: 'status-view/[userId]',
+    message: 'module evaluated',
+  });
+} catch {
+  /* swallow */
+}
 
 const DEFAULT_DURATION_MS = 5000;
 const MAX_VIDEO_DURATION_MS = 30000;
@@ -71,8 +84,37 @@ export default function StatusViewScreen() {
   useEffect(() => {
     // expo-audio's setAudioModeAsync — only needed to ensure video plays
     // through the speaker even when phone is on silent (iOS).
-    setExpoAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
-  }, []);
+    // iter-135: catch & log so a mismatched field name (Android) cannot
+    // bubble up as an unhandled native exception.
+    try {
+      setExpoAudioModeAsync({ playsInSilentMode: true } as any).catch((errorValue: any) => {
+        try {
+          recordDiagnostic({
+            tag: 'WARN',
+            source: 'status-view/[userId]',
+            message: `setAudioModeAsync failed: ${errorValue?.message?.slice(0, 160) || 'unknown'}`,
+          });
+        } catch {}
+      });
+    } catch (errorValue: any) {
+      try {
+        recordDiagnostic({
+          tag: 'WARN',
+          source: 'status-view/[userId]',
+          message: `setAudioModeAsync threw: ${errorValue?.message?.slice(0, 160) || 'unknown'}`,
+        });
+      } catch {}
+    }
+    // iter-135: MOUNT diagnostic so we can correlate a crash to the
+    // exact userId the user tapped.
+    try {
+      recordDiagnostic({
+        tag: 'MOUNT',
+        source: 'status-view/[userId]',
+        message: `userId=${String(userId).slice(0, 32)}`,
+      });
+    } catch {}
+  }, [userId]);
 
   const goNext = useCallback(() => {
     if (idx < total - 1) setIdx((currentIndex) => currentIndex + 1);
@@ -328,48 +370,21 @@ function StoryContent({
   videoPlayerRef: React.MutableRefObject<VideoPlayer | null>;
   onVideoEnd: () => void;
 }) {
-  const url = useQuery(api.files.getUrl, story.fileUrl ? 'skip' : story.storageId ? { storageId: story.storageId } : 'skip') as
-    | string
-    | null
-    | undefined;
-  const src = story.fileUrl || url;
-
-  // expo-video: useVideoPlayer creates the player and the setup callback runs
-  // when source changes. The player keeps running until the StoryContent is
-  // unmounted (i.e. moves to next story) — perfect for our single-clip flow.
-  const videoSource = src && story.type === 'video' ? { uri: src as string } : null;
-  const player = useVideoPlayer(videoSource, (p) => {
-    try {
-      p.loop = false;
-      p.play();
-    } catch {}
-  });
-
-  // Publish the latest player to the parent so the parent can pause/play
-  // on long-press (held-to-pause).
-  useEffect(() => {
-    videoPlayerRef.current = player;
-    return () => {
-      if (videoPlayerRef.current === player) {
-        videoPlayerRef.current = null;
-      }
-    };
-  }, [player, videoPlayerRef]);
-
-  // Listen for end-of-playback so the story advances to the next slide.
-  useEffect(() => {
-    if (!player || story.type !== 'video') return;
-    const sub = player.addListener('playToEnd', () => {
-      try {
-        onVideoEnd();
-      } catch {}
-    });
-    return () => {
-      try {
-        sub.remove();
-      } catch {}
-    };
-  }, [player, onVideoEnd, story.type]);
+  // iter-135: only run the Convex files.getUrl query when we actually
+  // need a URL (i.e. the story has a storageId and no inlined fileUrl).
+  // The previous implementation conditionally passed 'skip', which is
+  // correct, but on Android we additionally guard against malformed
+  // storageId values causing the Convex action to throw — that bubbled
+  // up as an unhandled native exception ("Smilers has stopped").
+  const safeStorageId =
+    typeof story?.storageId === 'string' && story.storageId.length > 0
+      ? story.storageId
+      : null;
+  const url = useQuery(
+    api.files.getUrl,
+    story?.fileUrl ? 'skip' : safeStorageId ? { storageId: safeStorageId } : 'skip',
+  ) as string | null | undefined;
+  const src = story?.fileUrl || url;
 
   if (story.type === 'text') {
     return (
@@ -388,12 +403,17 @@ function StoryContent({
   }
 
   if (story.type === 'video') {
+    // iter-135: render the video player in a dedicated sub-component so
+    // useVideoPlayer is ONLY created when this is actually a video story.
+    // Previously the hook ran unconditionally with a null source for
+    // text / image stories which caused an Android native crash inside
+    // expo-video when the screen rapidly transitioned between media
+    // types (the user's report: tapping any status crashes the app).
     return (
-      <VideoView
-        style={styles.mediaBody}
-        player={player}
-        contentFit="contain"
-        nativeControls={false}
+      <StoryVideo
+        src={src as string}
+        videoPlayerRef={videoPlayerRef}
+        onVideoEnd={onVideoEnd}
       />
     );
   }
@@ -402,6 +422,60 @@ function StoryContent({
     <View style={styles.mediaBody}>
       <Image source={{ uri: src }} style={styles.mediaImage} resizeMode="contain" />
     </View>
+  );
+}
+
+function StoryVideo({
+  src,
+  videoPlayerRef,
+  onVideoEnd,
+}: {
+  src: string;
+  videoPlayerRef: React.MutableRefObject<VideoPlayer | null>;
+  onVideoEnd: () => void;
+}) {
+  const player = useVideoPlayer({ uri: src }, (p) => {
+    try {
+      p.loop = false;
+      p.play();
+    } catch {
+      /* native player setup may fail with malformed source — caught above */
+    }
+  });
+
+  // Publish the latest player to the parent so it can pause/play on
+  // long-press (held-to-pause).
+  useEffect(() => {
+    videoPlayerRef.current = player;
+    return () => {
+      if (videoPlayerRef.current === player) {
+        videoPlayerRef.current = null;
+      }
+    };
+  }, [player, videoPlayerRef]);
+
+  // Listen for end-of-playback so the story advances to the next slide.
+  useEffect(() => {
+    if (!player) return;
+    const sub = player.addListener('playToEnd', () => {
+      try {
+        onVideoEnd();
+      } catch {}
+    });
+    return () => {
+      try {
+        sub.remove();
+      } catch {}
+    };
+  }, [player, onVideoEnd]);
+
+  return (
+    <VideoView
+      style={styles.mediaBody}
+      player={player}
+      contentFit="contain"
+      nativeControls={false}
+    />
   );
 }
 

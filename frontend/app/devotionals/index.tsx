@@ -20,6 +20,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -35,7 +36,7 @@ import { api } from '../../src/convexApi';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../src/theme';
 import { chooseDisplayText, readNoTranslateLangs } from '../../src/lib/devotionalsLocalPrefs';
 import { getLanguageByCode } from '../../src/lib/languages';
-import { getDisplayInitials } from '../../src/lib/displayName';
+import { getDisplayInitials, findSavedContactDisplayName, getDisplayNameFromUser } from '../../src/lib/displayName';
 import DevotionalMediaPlayer from '../../src/components/DevotionalMediaPlayer';
 import { recordDiagnostic } from '../../src/lib/diagnostics';
 import { useReactiveSafeConvexQuery } from '../../src/hooks/useReactiveSafeConvexQuery';
@@ -119,6 +120,13 @@ export default function DevotionalsFeedScreen() {
     null,
   );
   const me = useQuery(api.users.getCurrentUser);
+  // iter-135: pull the user's saved contacts so we can map an
+  // `authorId` to the human-readable name the user has saved
+  // (e.g., "ABC INVESTOR") instead of falling back to the raw
+  // `authorName` (which is often empty for users who never set a
+  // display name in their profile, yielding "User" everywhere).
+  // Mirrors the same lookup pattern used by chat/conversations.
+  const devotionalContacts = useQuery(api.contacts.getContacts, me ? {} : 'skip') as any[] | undefined;
   const removeDevotional = useMutation((api as any).devotionals?.remove);
 
   // Log feed errors so we can see them server-side without crashing the UI.
@@ -223,7 +231,34 @@ export default function DevotionalsFeedScreen() {
         translations: item.translations,
         noTranslateLangs,
       });
-      const authorInitials = getDisplayInitials(item.authorName || 'User', 1);
+      // iter-135: resolve the author the same way the web app does —
+      // saved-contact name takes precedence over the user's own
+      // unset profile name. Falls back gracefully when there is no
+      // saved contact for this author.
+      const savedContactName = findSavedContactDisplayName(
+        devotionalContacts,
+        { _id: item.authorId, userId: item.authorId, name: item.authorName },
+        me?._id || null,
+      );
+      const resolvedAuthorName =
+        (isMine && me ? getDisplayNameFromUser(me, '') : '') ||
+        savedContactName ||
+        item.authorName ||
+        'User';
+      // Prefer a saved-contact photo, then the raw author's photo, before
+      // falling back to the initials avatar (kept identical to the web).
+      const contactRecord = (devotionalContacts || []).find((c: any) => {
+        const ids = [c?.userId, c?.user?._id, c?._id, c?.contactUserId].filter(Boolean);
+        return ids.includes(item.authorId);
+      });
+      const authorPhoto: string | undefined =
+        (isMine ? (me as any)?.profilePicture || (me as any)?.avatarUrl : undefined) ||
+        contactRecord?.profilePicture ||
+        contactRecord?.user?.profilePicture ||
+        contactRecord?.avatarUrl ||
+        (item as any).authorPhoto ||
+        (item as any).authorProfilePicture;
+      const authorInitials = getDisplayInitials(resolvedAuthorName, 1);
       // Relative time ("3 hours ago") to match the web app's caption.
       const sentAt = item._creationTime ? formatRelativeTime(item._creationTime) : '';
       const typeIconName: any =
@@ -236,12 +271,16 @@ export default function DevotionalsFeedScreen() {
       return (
         <View style={styles.card} testID={`devotional-card-${item._id}`}>
           <View style={styles.cardHeader}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{authorInitials}</Text>
-            </View>
+            {authorPhoto ? (
+              <Image source={{ uri: authorPhoto }} style={styles.avatarImg} />
+            ) : (
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>{authorInitials}</Text>
+              </View>
+            )}
             <View style={styles.flexOne}>
               <Text style={styles.authorName} numberOfLines={1}>
-                {item.authorName || 'User'}
+                {resolvedAuthorName}
               </Text>
               <View style={styles.metaRow}>
                 <MaterialCommunityIcons
@@ -292,7 +331,7 @@ export default function DevotionalsFeedScreen() {
         </View>
       );
     },
-    [me?._id, noTranslateLangs, onDelete, preferredLanguage],
+    [me, noTranslateLangs, onDelete, preferredLanguage, devotionalContacts],
   );
 
   return (
@@ -444,6 +483,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   avatarText: { color: '#1F1208', fontWeight: FontWeight.bold, fontSize: FontSize.base },
+  avatarImg: { width: 40, height: 40, borderRadius: 20, backgroundColor: DEVOTION_ACCENT },
   authorName: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textPrimary },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
   metaIcon: { marginRight: 2 },
