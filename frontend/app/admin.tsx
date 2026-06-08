@@ -26,14 +26,22 @@ import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 type Tab = 'overview' | 'users' | 'reports' | 'ads' | 'premium' | 'activity';
 type AdsSubTab = 'review' | 'codes';
 
+// iter-136: canonical shape returned by `api.admin.queries.getStats`
+// (verified against web app source). All fields are numbers.
 interface Stats {
   totalUsers?: number;
-  activeUsersToday?: number;
-  newUsersThisWeek?: number;
-  pendingReports?: number;
-  pendingAds?: number;
+  onlineUsers?: number;          // → "Online Now"
+  recentSignups?: number;        // → "New This Week"
+  messagesLast24h?: number;      // → "Messages (24h)"
+  totalConversations?: number;   // → "Total Conversations"
+  groupChats?: number;           // → "Group Chats"
+  directChats?: number;          // (returned, not shown on a card)
+  totalMessages?: number;        // (returned, not shown on a card)
+  totalReports?: number;         // (returned, not shown on a card)
+  pendingReports?: number;       // → "Pending Reports"
+  totalCommunities?: number;     // → "Communities"
+  // Optional / legacy fields kept for forward compatibility:
   adRevenueEur?: number;
-  suspendedUsers?: number;
 }
 
 interface UserItem {
@@ -78,9 +86,11 @@ export default function AdminDashboard() {
   );
   const isAdmin = me?.role === 'admin';
 
-  // Queries (enabled only for admins to avoid Convex errors).
+  // iter-136: canonical web path is `api.admin.queries.getStats` (with
+  // a `.queries` namespace), NOT `api.admin.getStats`. Verified against
+  // the web app source by the user.
   const { data: stats, refetch: refetchStats } = useSafeConvexQuery<Stats>(
-    api.admin.getStats,
+    api.admin.queries.getStats,
     {},
     {},
     isAdmin,
@@ -267,7 +277,7 @@ export default function AdminDashboard() {
     { key: 'overview', label: 'Overview', icon: 'speedometer-outline' },
     { key: 'users', label: 'Users', icon: 'people-outline', badge: stats?.totalUsers },
     { key: 'reports', label: 'Reports', icon: 'flag-outline', badge: stats?.pendingReports || reports?.length },
-    { key: 'ads', label: 'Ads', icon: 'megaphone-outline', badge: stats?.pendingAds || pendingAds?.length },
+    { key: 'ads', label: 'Ads', icon: 'megaphone-outline', badge: pendingAds?.length },
     { key: 'premium', label: 'Premium', icon: 'star-outline' },
     { key: 'activity', label: 'Activity', icon: 'pulse-outline' },
   ];
@@ -400,63 +410,26 @@ export default function AdminDashboard() {
 
 /* ──────────────── OVERVIEW TAB ──────────────── */
 function OverviewTab({ stats }: { stats: Stats | undefined }) {
-  // iter-135: mirror the EXACT card grid the web app shows (8 cards),
-  // and use a chain of possible field names per card so the value lights
-  // up regardless of which name the Convex `admin.getStats` actually
-  // returns. This stops the "all dashes" state where the mobile asks
-  // for `activeUsersToday` but the backend returns `onlineNow`.
-  // Until the canonical names are confirmed by the backend agent, we
-  // accept any one of these.
+  // iter-136: mapped 1:1 to the web app's canonical card → field
+  // mapping (verified by the user against `src/pages/admin/page.tsx`):
+  //   Total Users         → totalUsers
+  //   Online Now          → onlineUsers
+  //   New This Week       → recentSignups
+  //   Messages (24h)      → messagesLast24h
+  //   Total Conversations → totalConversations
+  //   Group Chats         → groupChats
+  //   Pending Reports     → pendingReports
+  //   Communities         → totalCommunities
   const s: any = stats || {};
-  const firstNumber = (...candidates: any[]): number | undefined => {
-    for (const value of candidates) {
-      if (typeof value === 'number' && Number.isFinite(value)) return value;
-    }
-    return undefined;
-  };
   const cards = [
-    {
-      label: 'Total users',
-      value: firstNumber(s.totalUsers, s.users, s.userCount, s.totalUserCount),
-      icon: 'people-outline', tone: Colors.primary, accent: Colors.primaryLight,
-    },
-    {
-      label: 'Online now',
-      // Web shows "Online Now" — matches `onlineNow`, `activeNow`, or the
-      // older mobile name `activeUsersToday`.
-      value: firstNumber(s.onlineNow, s.activeNow, s.activeUsers, s.activeUsersToday, s.activeToday),
-      icon: 'globe-outline', tone: '#10B981', accent: '#D1FAE5',
-    },
-    {
-      label: 'New this week',
-      value: firstNumber(s.newThisWeek, s.newUsersThisWeek, s.newUsers, s.weeklyNewUsers),
-      icon: 'trending-up-outline', tone: '#8B5CF6', accent: '#EDE9FE',
-    },
-    {
-      label: 'Messages (24h)',
-      value: firstNumber(s.messages24h, s.messagesLast24h, s.messagesToday, s.dailyMessages),
-      icon: 'chatbubble-ellipses-outline', tone: '#F59E0B', accent: '#FEF3C7',
-    },
-    {
-      label: 'Total conversations',
-      value: firstNumber(s.totalConversations, s.conversations, s.conversationCount),
-      icon: 'chatbubbles-outline', tone: '#0EA5E9', accent: '#DBEAFE',
-    },
-    {
-      label: 'Group chats',
-      value: firstNumber(s.groupChats, s.groups, s.groupCount, s.totalGroups),
-      icon: 'people-circle-outline', tone: '#EC4899', accent: '#FCE7F3',
-    },
-    {
-      label: 'Pending reports',
-      value: firstNumber(s.pendingReports, s.openReports, s.reportsPending),
-      icon: 'flag-outline', tone: Colors.danger, accent: '#FEE2E2',
-    },
-    {
-      label: 'Communities',
-      value: firstNumber(s.communities, s.totalCommunities, s.communityCount),
-      icon: 'globe-outline', tone: '#14B8A6', accent: '#CCFBF1',
-    },
+    { label: 'Total users',          value: s.totalUsers,         icon: 'people-outline',         tone: Colors.primary, accent: Colors.primaryLight },
+    { label: 'Online now',           value: s.onlineUsers,        icon: 'globe-outline',          tone: '#10B981',      accent: '#D1FAE5' },
+    { label: 'New this week',        value: s.recentSignups,      icon: 'trending-up-outline',    tone: '#8B5CF6',      accent: '#EDE9FE' },
+    { label: 'Messages (24h)',       value: s.messagesLast24h,    icon: 'chatbubble-ellipses-outline', tone: '#F59E0B', accent: '#FEF3C7' },
+    { label: 'Total conversations',  value: s.totalConversations, icon: 'chatbubbles-outline',    tone: '#0EA5E9',      accent: '#DBEAFE' },
+    { label: 'Group chats',          value: s.groupChats,         icon: 'people-circle-outline',  tone: '#EC4899',      accent: '#FCE7F3' },
+    { label: 'Pending reports',      value: s.pendingReports,     icon: 'flag-outline',           tone: Colors.danger,  accent: '#FEE2E2' },
+    { label: 'Communities',          value: s.totalCommunities,   icon: 'globe-outline',          tone: '#14B8A6',      accent: '#CCFBF1' },
   ];
   return (
     <View style={{ paddingTop: Spacing.md }}>
@@ -486,8 +459,7 @@ function OverviewTab({ stats }: { stats: Stats | undefined }) {
 
       <Text style={styles.noteCard}>
         Stats are read from{' '}
-        <Text style={{ fontWeight: FontWeight.bold }}>api.admin.getStats</Text>. Missing values mean that field isn’t
-        returned by the backend yet — no action needed on the mobile side.
+        <Text style={{ fontWeight: FontWeight.bold }}>api.admin.queries.getStats</Text>. Requires admin role.
       </Text>
     </View>
   );

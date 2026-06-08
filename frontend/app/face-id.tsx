@@ -79,21 +79,28 @@ function pad(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }
 
-/** Coerces a Convex face record into the screen's shape. */
+/** Coerces a Convex face record into the screen's shape.
+ *  iter-136: canonical web shape is:
+ *    { _id, _creationTime, userId, storageId, label, registeredAt: ISO,
+ *      imageUrl: string | null } */
 function normalizeFaceRecord(record: any, idx: number): RegisteredFace | null {
   if (!record) return null;
   const id = String(record._id || record.id || record.faceId || idx);
   const thumbnail =
+    record.imageUrl ||
     record.thumbnailUri ||
     record.imageUri ||
     record.image ||
     record.thumbnailUrl ||
-    record.imageUrl ||
     '';
   if (!thumbnail) return null;
-  const registeredAt = Number(
-    record.registeredAt || record.createdAt || record._creationTime || Date.now(),
-  );
+  // registeredAt can be either ms-since-epoch or an ISO date string in the
+  // canonical web schema. Parse both safely.
+  const rawRegistered = record.registeredAt ?? record.createdAt ?? record._creationTime ?? Date.now();
+  const registeredAt =
+    typeof rawRegistered === 'number'
+      ? rawRegistered
+      : new Date(String(rawRegistered)).getTime() || Date.now();
   return {
     id,
     thumbnailUri: thumbnail,
@@ -105,16 +112,22 @@ function normalizeFaceRecord(record: any, idx: number): RegisteredFace | null {
 function normalizeDeviceRecord(record: any, idx: number): TrustedDevice | null {
   if (!record) return null;
   const id = String(record._id || record.id || record.deviceId || idx);
+  const rawVerified =
+    record.verifiedAt ??
+    record.lastVerifiedAt ??
+    record.updatedAt ??
+    record._creationTime ??
+    Date.now();
+  const verifiedAt =
+    typeof rawVerified === 'number'
+      ? rawVerified
+      : new Date(String(rawVerified)).getTime() || Date.now();
   return {
     id,
-    label: record.label || record.name || record.deviceName || 'Device',
-    verifiedAt: Number(
-      record.verifiedAt ||
-        record.lastVerifiedAt ||
-        record.updatedAt ||
-        record._creationTime ||
-        Date.now(),
-    ),
+    // Canonical field on web is `deviceName`. Fall back to legacy aliases
+    // so older records still render with a sensible label.
+    label: record.deviceName || record.name || record.label || 'Device',
+    verifiedAt,
     platform: record.platform || record.os || undefined,
   };
 }
@@ -132,53 +145,31 @@ export default function FaceIdScreen() {
   const [localDevices, setLocalDevices] = useState<TrustedDevice[]>([]);
   const [hydratedLocal, setHydratedLocal] = useState(false);
 
-  // Convex queries — iter-135: probe multiple candidate paths because the
-  // web app may use a different name than the mobile previously assumed.
-  // The first one that returns a non-empty array wins; the others are
-  // silently skipped. If NONE returns data we fall back to local
-  // AsyncStorage as before. Once the backend agent confirms the
-  // canonical name we can collapse this list down to one entry.
+  // iter-136: locked to canonical Convex paths confirmed by the web
+  // team (`api.faceId.getMyFaces` / `getTrustedDevices` / `registerFace`
+  // / `removeFace` / `removeTrustedDevice`). Probe arrays from iter-135
+  // are no longer needed because we know the exact names.
   const { data: remoteFaces } = useFirstSuccessfulConvexQuery<any[]>(
-    [
-      { label: 'faceId.listMyFaces', ref: (api as any).faceId?.listMyFaces },
-      { label: 'faceId.getMyFaces',  ref: (api as any).faceId?.getMyFaces },
-      { label: 'faceId.list',        ref: (api as any).faceId?.list },
-      { label: 'faceId.getFaces',    ref: (api as any).faceId?.getFaces },
-      { label: 'faceId.faces',       ref: (api as any).faceId?.faces },
-      { label: 'users.listFaces',    ref: (api as any).users?.listFaces },
-      { label: 'users.getMyFaces',   ref: (api as any).users?.getMyFaces },
-      { label: 'security.listFaces', ref: (api as any).security?.listFaces },
-    ],
+    [{ label: 'faceId.getMyFaces', ref: (api as any).faceId?.getMyFaces }],
     {},
     [],
     isAuthenticated,
   );
   const { data: remoteDevices } = useFirstSuccessfulConvexQuery<any[]>(
-    [
-      { label: 'faceId.listTrustedDevices',   ref: (api as any).faceId?.listTrustedDevices },
-      { label: 'faceId.getTrustedDevices',    ref: (api as any).faceId?.getTrustedDevices },
-      { label: 'devices.listTrustedDevices',  ref: (api as any).devices?.listTrustedDevices },
-      { label: 'devices.list',                ref: (api as any).devices?.list },
-      { label: 'devices.getMyDevices',        ref: (api as any).devices?.getMyDevices },
-      { label: 'trustedDevices.list',         ref: (api as any).trustedDevices?.list },
-      { label: 'trustedDevices.listMine',     ref: (api as any).trustedDevices?.listMine },
-      { label: 'security.listTrustedDevices', ref: (api as any).security?.listTrustedDevices },
-      { label: 'users.listTrustedDevices',    ref: (api as any).users?.listTrustedDevices },
-    ],
+    [{ label: 'faceId.getTrustedDevices', ref: (api as any).faceId?.getTrustedDevices }],
     {},
     [],
     isAuthenticated,
   );
 
-  const registerFaceM = useMutation(
-    (api as any).faceId?.registerFace ?? (api as any).faceId?.create,
-  );
-  const deleteFaceM = useMutation(
-    (api as any).faceId?.deleteFace ?? (api as any).faceId?.remove,
-  );
-  const deleteDeviceM = useMutation(
-    (api as any).faceId?.deleteTrustedDevice ?? (api as any).devices?.remove,
-  );
+  // Upload helper — web team uses a 3-step flow: generateUploadUrl ->
+  // POST blob -> registerFace({ storageId, label }). storageId is an
+  // Id<"_storage"> string returned by Convex's signed-upload endpoint.
+  const generateUploadUrlM = useMutation((api as any).faceId?.generateUploadUrl);
+
+  const registerFaceM = useMutation((api as any).faceId?.registerFace);
+  const deleteFaceM = useMutation((api as any).faceId?.removeFace);
+  const deleteDeviceM = useMutation((api as any).faceId?.removeTrustedDevice);
 
   useEffect(() => {
     let mounted = true;
@@ -283,25 +274,50 @@ export default function FaceIdScreen() {
         registeredAt: Date.now(),
       };
 
-      // Try to register with the backend first — if not yet shipped, we
-      // still keep the local entry so the user sees it on this device.
+      // iter-136: canonical 3-step upload flow (matches the web app):
+      //   1. mutation `generateUploadUrl()` → signed upload URL.
+      //   2. POST the binary blob to that URL → returns `{ storageId }`.
+      //   3. mutation `registerFace({ storageId, label })`.
+      // If any step fails (missing endpoint, network, permission) we
+      // keep the local entry so the device still shows the face.
       try {
-        if (typeof registerFaceM === 'function') {
-          const result: any = await (registerFaceM as any)({
-            imageBase64: asset.base64 || undefined,
-            mimeType: asset.mimeType || 'image/jpeg',
+        if (typeof generateUploadUrlM === 'function' && typeof registerFaceM === 'function') {
+          const uploadUrl: string | null | undefined = await (generateUploadUrlM as any)({});
+          if (!uploadUrl || typeof uploadUrl !== 'string') {
+            throw new Error('generateUploadUrl did not return a URL');
+          }
+          // Fetch the blob from the local file URI. expo-image-picker
+          // gives us a `file://` URI on iOS/Android — `fetch().blob()`
+          // works there. On web, `asset.uri` is already a data URL.
+          const blob = await (await fetch(asset.uri)).blob();
+          const uploadResp = await fetch(uploadUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': asset.mimeType || blob.type || 'image/jpeg' },
+            body: blob,
+          });
+          if (!uploadResp.ok) {
+            throw new Error(`upload failed (${uploadResp.status})`);
+          }
+          const uploadJson = await uploadResp.json().catch(() => null);
+          const storageId =
+            uploadJson?.storageId || uploadJson?.storage_id || uploadJson?.id;
+          if (!storageId) {
+            throw new Error('upload did not return storageId');
+          }
+          const registerResp: any = await (registerFaceM as any)({
+            storageId,
             label: newFace.label,
           });
           const remoteId =
-            result?._id || result?.id || result?.faceId || null;
+            registerResp?._id || registerResp?.id || registerResp?.faceId || null;
           if (remoteId) {
             newFace.id = String(remoteId);
           }
         }
       } catch (errorValue: any) {
         const message = String(errorValue?.message || errorValue || '');
-        // Silent failure for missing-endpoint case — we still keep the
-        // face locally. Only surface unexpected errors to the user.
+        // Silent for missing-endpoint / function-not-found, surface for
+        // anything else so we can debug.
         if (
           !message.includes('CouldNotFindFunction') &&
           !message.toLowerCase().includes('not found')
@@ -319,7 +335,7 @@ export default function FaceIdScreen() {
     } finally {
       setBusy(false);
     }
-  }, [faces.length, registerFaceM]);
+  }, [faces.length, registerFaceM, generateUploadUrlM]);
 
   const handleDeleteFace = useCallback(
     (face: RegisteredFace) => {
