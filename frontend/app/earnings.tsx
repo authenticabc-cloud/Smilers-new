@@ -26,6 +26,7 @@ import {
   Alert,
   Image,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -199,6 +200,29 @@ export default function EarningsScreen() {
     }
   };
 
+  // iter-138: native share sheet for the referral code. Uses
+  // React Native's built-in Share API which opens the platform-native
+  // share picker (WhatsApp, Telegram, SMS, etc.). The message body
+  // mirrors what the web app's "Share" button posts.
+  const handleShareCode = async () => {
+    const code = (referralCode as any)?.code || referralCode || '';
+    if (!code) {
+      Alert.alert('No code yet', 'A referral code will be created shortly.');
+      return;
+    }
+    try {
+      await Share.share({
+        message: `Join me on Smilers! Use my referral code ${code} when you sign up. https://smilers.online/?ref=${code}`,
+        title: 'Join me on Smilers',
+      });
+    } catch (errorValue: any) {
+      // User canceled the share sheet — not a failure.
+      if (!String(errorValue?.message || '').toLowerCase().includes('cancel')) {
+        Alert.alert('Could not share', errorValue?.message || 'Please try again.');
+      }
+    }
+  };
+
   // --- Render --------------------------------------------------------------
   return (
     <View style={styles.container} testID="earnings-screen">
@@ -368,9 +392,18 @@ export default function EarningsScreen() {
                   onPress={handleCopyCode}
                   activeOpacity={0.85}
                   testID="earnings-copy-code"
+                  accessibilityLabel="Copy referral code"
                 >
-                  <Feather name="copy" size={16} color="#3D2A00" />
-                  <Text style={styles.refCopyText}>Copy</Text>
+                  <Feather name="copy" size={18} color="#3D2A00" />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.refShareBtn}
+                  onPress={handleShareCode}
+                  activeOpacity={0.85}
+                  testID="earnings-share-code"
+                  accessibilityLabel="Share referral code"
+                >
+                  <Feather name="share-2" size={18} color={Colors.danger} />
                 </TouchableOpacity>
               </View>
               <Text style={styles.refHint}>
@@ -847,14 +880,25 @@ const styles = StyleSheet.create({
     color: '#3D2A00',
     letterSpacing: 2,
   },
+  // iter-138: icon-only copy/share buttons that match the web app's
+  // compact layout (square chips with just an icon, no label). The
+  // share button uses a danger-tone background to stand out, mirroring
+  // the web design.
   refCopyBtn: {
-    flexDirection: 'row',
+    width: 40,
+    height: 40,
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: Radius.pill,
-    backgroundColor: Colors.primary,
+    justifyContent: 'center',
+    borderRadius: Radius.md,
+    backgroundColor: '#E8E2D2',
+  },
+  refShareBtn: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: Radius.md,
+    backgroundColor: '#FFE2E0',
   },
   refCopyText: { color: '#3D2A00', fontWeight: FontWeight.bold, fontSize: FontSize.sm },
   refHint: { fontSize: FontSize.sm, color: Colors.textSecondary },

@@ -32,7 +32,12 @@ export function useSafeConvexQuery<T>(
 
   const refetch = useCallback(async () => {
     if (!enabled) {
-      setData((current) => (Object.is(current, fallbackRef.current) ? current : fallbackRef.current));
+      // iter-138: preserve the most recently fetched data when `enabled`
+      // momentarily flips to false (common cause: `me` query reloading
+      // → `isAdmin` briefly null → enabled goes false → enabled goes
+      // true again). Resetting to fallback here caused a "data appears
+      // / vanishes / re-appears" blink on Admin Users + similar tabs.
+      // Only stop the spinner; leave whatever data we have on screen.
       setLoading(false);
       return;
     }
@@ -54,7 +59,10 @@ export function useSafeConvexQuery<T>(
 
     const load = async () => {
       if (!enabled) {
-        setData((current) => (Object.is(current, fallbackRef.current) ? current : fallbackRef.current));
+        // iter-138: same as above — do NOT clear data on a transient
+        // `enabled=false` transition (e.g., admin role briefly null
+        // while `me` query is reloading). This kept causing list
+        // contents to flicker on/off, especially on Admin Users.
         setLoading(false);
         return;
       }
