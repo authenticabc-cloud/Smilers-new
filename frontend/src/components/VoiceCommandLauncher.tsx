@@ -13,7 +13,7 @@ import {
   View,
 } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, usePathname } from 'expo-router';
 import { useAuth } from '../providers/AuthProvider';
 import { readStoredJson } from '../lib/settingsStorage';
 import { parseVoiceCommand, ParsedVoiceCommand } from '../lib/voiceCommandParser';
@@ -290,7 +290,7 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
             <View style={styles.titleColumn}>
               <Text style={styles.title}>Voice Command</Text>
               <Text style={styles.subtitle}>
-                Say e.g. "Call 1" or "Video call 3"
+                Say e.g. &quot;Call 1&quot; or &quot;Video call 3&quot;
               </Text>
             </View>
             <TouchableOpacity onPress={onClose} hitSlop={12} testID="voice-command-close">
@@ -331,7 +331,7 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
             ) : null}
             {transcript ? (
               <Text style={styles.transcript} testID="voice-command-transcript">
-                "{transcript}"
+                &quot;{transcript}&quot;
               </Text>
             ) : null}
             {flow === 'recognized' && parsedCommand ? (
@@ -341,7 +341,7 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
             ) : null}
             {flow === 'no-match' ? (
               <Text style={styles.noMatch}>
-                Didn't catch a command. Try saying "Call 1", "Video call 3", or "Voice note to 2".
+                Didn&apos;t catch a command. Try saying &quot;Call 1&quot;, &quot;Video call 3&quot;, or &quot;Voice note to 2&quot;.
               </Text>
             ) : null}
             {flow === 'error' ? (
@@ -411,6 +411,31 @@ const FADE_DURATION_MS = 280;
 
 export default function VoiceCommandLauncher() {
   const { isAuthenticated } = useAuth();
+  // iter-139: hide the voice-command FAB on screens where it visually
+  // overlaps important content (admin pages, security pages, full-screen
+  // modals like Status / Call / Compose). The web app does the same —
+  // the floating mic only appears on chat/contact/home surfaces. Match
+  // is done by string prefix so any nested route under these prefixes
+  // is also hidden (e.g. `/admin/users/foo`).
+  const pathname = usePathname();
+  const isHiddenRoute = (() => {
+    const path = typeof pathname === 'string' ? pathname : '';
+    return (
+      path.startsWith('/admin') ||
+      path.startsWith('/face-id') ||
+      path.startsWith('/status-view') ||
+      path.startsWith('/status-compose') ||
+      path.startsWith('/call') ||
+      path.startsWith('/phone-verify') ||
+      path.startsWith('/change-phone-number') ||
+      path.startsWith('/screen-share') ||
+      path.startsWith('/sign-in') ||
+      path.startsWith('/encryption') ||
+      path.startsWith('/app-lock') ||
+      path.startsWith('/emergency') ||
+      path.startsWith('/voice-tasks')
+    );
+  })();
   const [sheetVisible, setSheetVisible] = useState(false);
   const [fabVisible, setFabVisible] = useState(true);
   const fabOpacity = useRef(new Animated.Value(1)).current;
@@ -490,6 +515,9 @@ export default function VoiceCommandLauncher() {
   }, [fadeIn, handleActivity, isAuthenticated, sheetVisible]);
 
   if (!isAuthenticated) return null;
+  // iter-139: skip rendering the FAB entirely on hidden routes so it
+  // can never overlap admin/security UI.
+  if (isHiddenRoute) return null;
 
   const handlePress = () => {
     fadeIn();

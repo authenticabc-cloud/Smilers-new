@@ -131,12 +131,17 @@ export default function EarningsScreen() {
     null,
     isAuthenticated,
   );
-  const { data: referralCode } = useSafeConvexQuery<string | null>(
-    api.earnings.getOrCreateReferralCode,
-    {},
-    null,
-    isAuthenticated,
-  );
+  // iter-139: read the referral code straight from the user's profile
+  // (canonical field `profile.referralCode`). Previously the mobile
+  // called `getOrCreateReferralCode` as a query, which the canonical
+  // contract identifies as a MUTATION — calling a mutation as a query
+  // either no-ops or creates a fresh code per session, which is why
+  // the native sometimes showed a different code than the web. Reading
+  // straight from the profile guarantees native and web show the same
+  // string (because both read from the same record). The
+  // `getOrCreateReferralCode` mutation is still useful as a fallback
+  // when `profile.referralCode` is null (newly-created user).
+  const referralCode = (profile as any)?.referralCode || null;
   const { data: top } = useSafeConvexQuery<any[]>(
     api.earnings.getLeaderboard,
     { limit: 20 },
