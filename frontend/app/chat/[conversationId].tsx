@@ -307,15 +307,11 @@ export default function ChatScreen() {
     setDisappearingMode(key);
   }, [conversation]);
 
-  // iter-147: also persist the user's "Disappearing messages" choice
-  // server-side, on the canonical `conversation.disappearAfter` field
-  // (mirrors the web app). Mutation name varies by deployment, so we
-  // try the most common contracts. The local AsyncStorage write
-  // remains as a fast-rendering optimistic fallback.
-  const setDisappearAfterMutation = useMutation(
-    (api as any).conversations?.setDisappearAfter
-      ?? (api as any).conversations?.updateDisappearAfter
-      ?? (api as any).conversations?.updateSettings,
+  // iter-151: canonical contract from backend = `setDisappearingMessages`
+  // (NOT `setDisappearAfter`) and the unit is SECONDS (NOT ms or option-key
+  // strings). 0 = off. Convert our local option keys → seconds at call time.
+  const setDisappearingMessagesM = useMutation(
+    (api as any).conversations?.setDisappearingMessages,
   );
 
   const sendMessage = useMutation(api.messages.send);
@@ -2697,18 +2693,18 @@ export default function ChatScreen() {
                     if (conversationId) {
                       await writeStoredJson(`disappearing_mode_${conversationId}`, option.key);
                     }
-                    // iter-147: also push the choice to the server so
-                    // every device in the conversation sees the same
-                    // canonical `disappearAfter` value. Tolerate
-                    // backends that don't expose this mutation yet.
+                    // iter-151: canonical contract = `setDisappearingMessages`
+                    // with `disappearAfter` in SECONDS. Our local option
+                    // `ms` is in milliseconds (or 0 for "off"), so convert.
                     try {
                       if (
                         conversationId &&
-                        typeof setDisappearAfterMutation === 'function'
+                        typeof setDisappearingMessagesM === 'function'
                       ) {
-                        await (setDisappearAfterMutation as any)({
+                        const seconds = option.key === 'off' ? 0 : Math.round(option.ms / 1000);
+                        await (setDisappearingMessagesM as any)({
                           conversationId,
-                          disappearAfter: option.key === 'off' ? null : option.ms,
+                          disappearAfter: seconds,
                         });
                       }
                     } catch (errorValue: any) {
