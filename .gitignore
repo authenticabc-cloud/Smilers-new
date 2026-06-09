@@ -18,6 +18,10 @@ node_modules/
 
 # Testing
 /coverage
+# Test reports (large screenshots/JSON from testing_agent — per Emergent Support
+# advice to keep this out of the source bundle going to CloudBuild).
+test_reports/
+!test_reports/.gitkeep
 
 # Next.js
 /.next/
