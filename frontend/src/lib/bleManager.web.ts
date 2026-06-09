@@ -63,6 +63,14 @@ export function setPanicPressListener(_fn: (() => void) | null) {
   /* noop */
 }
 
+export function setPanicThresholds(_opts: {
+  triggerBpm?: number;
+  sustainedSeconds?: number;
+  cooldownMinutes?: number;
+}) {
+  /* noop */
+}
+
 export function isConnected(): boolean {
   return false;
 }

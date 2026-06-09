@@ -43,6 +43,7 @@ import {
   getBleLoadError,
   scanForDevices,
   setPanicPressListener,
+  setPanicThresholds,
   stopScan,
   unpair,
 } from '../src/lib/bleManager';
@@ -341,6 +342,18 @@ function EmergencyScreenInner() {
   useEffect(() => {
     void autoReconnect();
   }, []);
+
+  // iter-147: push the user's current panic thresholds into the BLE
+  // listener so a slider change takes effect on the very next BPM
+  // notification without re-pairing. Mirrors the web app which
+  // re-reads `panicModeSettings` on every measurement.
+  useEffect(() => {
+    setPanicThresholds({
+      triggerBpm: panic.triggerBpm,
+      sustainedSeconds: panic.sustainedSeconds,
+      cooldownMinutes: panic.cooldownMinutes,
+    });
+  }, [panic.triggerBpm, panic.sustainedSeconds, panic.cooldownMinutes]);
 
   const onPairDevice = useCallback(() => {
     if (panic.pairedDeviceId) {

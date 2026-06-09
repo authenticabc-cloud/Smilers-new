@@ -58,9 +58,76 @@ try {
 const PAIRED_DEVICE_KEY = 'smilers.ble.pairedDeviceId';
 const PAIRED_DEVICE_NAME_KEY = 'smilers.ble.pairedDeviceName';
 
-/** Replace with the canonical UUIDs once the web team confirms. */
-export const PANIC_SERVICE_UUID: string | null = null;
-export const PANIC_CHARACTERISTIC_UUID: string | null = null;
+/** Canonical Heart Rate Monitor BLE service + characteristic (SIG 0x180D / 0x2A37).
+ *  Confirmed against the web app's `use-heart-rate-monitor.ts`. */
+export const HEART_RATE_SERVICE_UUID = '0000180d-0000-1000-8000-00805f9b34fb';
+export const HEART_RATE_CHARACTERISTIC_UUID = '00002a37-0000-1000-8000-00805f9b34fb';
+
+/** Default thresholds — match web `panicModeSettings` defaults. */
+export const DEFAULT_BPM_THRESHOLD = 130;
+export const DEFAULT_SUSTAINED_SECONDS = 10;
+
+/** Mutable runtime thresholds — Emergency screen pushes the user's current
+ *  panic-mode settings here so a slider change takes effect on the next
+ *  notification without re-subscribing to the characteristic. */
+let runtimeBpmThreshold = DEFAULT_BPM_THRESHOLD;
+let runtimeSustainedMs = DEFAULT_SUSTAINED_SECONDS * 1000;
+let runtimeCooldownMs = 20 * 60 * 1000;
+let lastPanicFiredAt = 0;
+
+/** Update the BPM threshold + sustained window used by the live BLE
+ *  subscription. Safe to call repeatedly (e.g. on every slider tick). */
+export function setPanicThresholds(opts: {
+  triggerBpm?: number;
+  sustainedSeconds?: number;
+  cooldownMinutes?: number;
+}) {
+  if (typeof opts.triggerBpm === 'number' && Number.isFinite(opts.triggerBpm) && opts.triggerBpm > 0) {
+    runtimeBpmThreshold = opts.triggerBpm;
+  }
+  if (
+    typeof opts.sustainedSeconds === 'number' &&
+    Number.isFinite(opts.sustainedSeconds) &&
+    opts.sustainedSeconds > 0
+  ) {
+    runtimeSustainedMs = opts.sustainedSeconds * 1000;
+  }
+  if (
+    typeof opts.cooldownMinutes === 'number' &&
+    Number.isFinite(opts.cooldownMinutes) &&
+    opts.cooldownMinutes >= 0
+  ) {
+    runtimeCooldownMs = opts.cooldownMinutes * 60 * 1000;
+  }
+}
+
+/** Parse a Heart Rate Measurement notification per the Bluetooth SIG
+ *  spec (byte 0 = flags; bit 0 indicates 16-bit BPM payload).
+ *  `b64` is the base64 string `react-native-ble-plx` hands us. */
+export function parseHeartRateMeasurement(b64: string | null): number | null {
+  if (!b64) return null;
+  try {
+    // Manual base64 → byte array (no Node Buffer on RN).
+    const binary =
+      typeof atob === 'function'
+        ? atob(b64)
+        : Buffer.from(b64, 'base64').toString('binary');
+    const bytes: number[] = [];
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes.push(binary.charCodeAt(index));
+    }
+    if (bytes.length < 2) return null;
+    const flags = bytes[0];
+    const is16Bit = (flags & 0x01) === 0x01;
+    if (is16Bit && bytes.length >= 3) {
+      // Little-endian uint16 at offset 1.
+      return bytes[1] | (bytes[2] << 8);
+    }
+    return bytes[1];
+  } catch {
+    return null;
+  }
+}
 
 export interface BleDeviceInfo {
   id: string;
@@ -179,33 +246,46 @@ export async function connectAndSubscribe(
   connectedDevice = device;
   await setPairedDevice(deviceId, deviceName || device.name || null);
 
-  // Subscribe to every notifying characteristic. When the web team
-  // sends canonical UUIDs we'll filter here to just that one.
+  // iter-147: lock to canonical Heart Rate Monitor service. Drop the
+  // generic "any notifying characteristic" subscription — that was a
+  // placeholder. We now mirror the web behavior exactly: subscribe to
+  // the BPM characteristic, parse the value, fire a panic press only
+  // after BPM stays >= threshold for `sustainedSeconds` continuously.
+  // Thresholds + cooldown read from module-scope so a slider change in
+  // the Emergency screen takes effect on the very next notification.
+  let aboveThresholdSince: number | null = null;
   const services = await device.services();
   for (const service of services) {
-    if (PANIC_SERVICE_UUID && service.uuid.toLowerCase() !== PANIC_SERVICE_UUID.toLowerCase()) {
+    if (service.uuid.toLowerCase() !== HEART_RATE_SERVICE_UUID.toLowerCase()) {
       continue;
     }
     const characteristics = await service.characteristics();
     for (const characteristic of characteristics) {
       if (!characteristic.isNotifiable) continue;
-      if (
-        PANIC_CHARACTERISTIC_UUID &&
-        characteristic.uuid.toLowerCase() !== PANIC_CHARACTERISTIC_UUID.toLowerCase()
-      ) {
+      if (characteristic.uuid.toLowerCase() !== HEART_RATE_CHARACTERISTIC_UUID.toLowerCase()) {
         continue;
       }
       const sub = characteristic.monitor((err: any, ch: any) => {
         if (err) return;
-        // Decode the value — a non-zero first byte counts as a press.
-        // (Once the web team supplies the canonical byte pattern we'll
-        //  filter here too.)
-        try {
-          const raw = ch?.value ? Buffer.from(ch.value, 'base64') : null;
-          if (raw && raw.length > 0 && raw[0] !== 0) {
-            onPanicPressListener?.();
+        const bpm = parseHeartRateMeasurement(ch?.value || null);
+        if (bpm == null) return;
+        if (bpm >= runtimeBpmThreshold) {
+          if (aboveThresholdSince == null) {
+            aboveThresholdSince = Date.now();
+          } else if (Date.now() - aboveThresholdSince >= runtimeSustainedMs) {
+            const now = Date.now();
+            if (now - lastPanicFiredAt >= runtimeCooldownMs) {
+              // Fire once, observe the user's cooldown window before
+              // another sustained high-BPM episode can trigger again
+              // (matches web `cooldownMinutes` semantics).
+              lastPanicFiredAt = now;
+              onPanicPressListener?.();
+            }
+            aboveThresholdSince = null;
           }
-        } catch {}
+        } else {
+          aboveThresholdSince = null;
+        }
       });
       notifySubscriptions.push(sub);
     }

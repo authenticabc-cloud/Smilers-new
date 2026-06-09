@@ -288,6 +288,36 @@ export default function ChatScreen() {
     };
   }, [conversationId]);
 
+  // iter-147: when the conversation document carries a canonical
+  // `disappearAfter` value (set from another device or the web app),
+  // align the local sheet selection so the UI reflects what the server
+  // has — overrides the AsyncStorage fallback above.
+  useEffect(() => {
+    const raw: any = (conversation as any)?.disappearAfter;
+    if (raw == null) return;
+    let key: (typeof DISAPPEARING_OPTIONS)[number]['key'] = 'off';
+    if (typeof raw === 'string') {
+      const match = DISAPPEARING_OPTIONS.find((item) => item.key === raw);
+      if (match) key = match.key;
+    } else if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
+      const ms = raw < 10_000 ? raw * 1000 : raw;
+      const match = DISAPPEARING_OPTIONS.find((item) => item.ms === ms);
+      if (match) key = match.key;
+    }
+    setDisappearingMode(key);
+  }, [conversation]);
+
+  // iter-147: also persist the user's "Disappearing messages" choice
+  // server-side, on the canonical `conversation.disappearAfter` field
+  // (mirrors the web app). Mutation name varies by deployment, so we
+  // try the most common contracts. The local AsyncStorage write
+  // remains as a fast-rendering optimistic fallback.
+  const setDisappearAfterMutation = useMutation(
+    (api as any).conversations?.setDisappearAfter
+      ?? (api as any).conversations?.updateDisappearAfter
+      ?? (api as any).conversations?.updateSettings,
+  );
+
   const sendMessage = useMutation(api.messages.send);
   const setTyping = useMutation(api.typing.setTyping);
   const markDelivered = useMutation((api as any).messages.markDelivered);
@@ -301,37 +331,21 @@ export default function ChatScreen() {
   const editMessage = useMutation((api as any).messages.editMessage);
   const updateMessage = useMutation((api as any).messages.updateMessage);
   const editTextMutation = useMutation((api as any).messages.editText);
-  // iter-143: star/unstar — try multiple Convex paths because the web
-  // app may name this differently. Order: `messages.toggleStar` (current
-  // mobile guess), then `starred.toggleStar`, then `starred.starMessage`
-  // / `starred.unstarMessage`, then `messages.star` / `messages.unstar`.
-  // First non-null mutation reference is used.
-  const toggleStarA = useMutation((api as any).messages?.toggleStar);
-  const toggleStarB = useMutation((api as any).starred?.toggleStar);
-  const toggleStarC = useMutation((api as any).starred?.starMessage);
-  const toggleStarD = useMutation((api as any).messages?.star);
+  // iter-147: canonical contract — toggleStar lives on `api.starred`,
+  // NOT `api.messages`. Args require BOTH `messageId` AND
+  // `conversationId` (server validates participant access).
+  const toggleStarMutation = useMutation((api as any).starred?.toggleStar);
   const toggleStar = useCallback(
     async (args: { messageId: string }) => {
-      const candidates = [toggleStarA, toggleStarB, toggleStarC, toggleStarD];
-      for (const candidate of candidates) {
-        if (typeof candidate !== 'function') continue;
-        try {
-          return await (candidate as any)(args);
-        } catch (errorValue: any) {
-          const message = String(errorValue?.message || '');
-          // Move on if the function simply doesn't exist on this Convex
-          // deployment, otherwise re-throw so the caller can surface it.
-          if (
-            !message.includes('CouldNotFindFunction') &&
-            !message.toLowerCase().includes('not found')
-          ) {
-            throw errorValue;
-          }
-        }
+      if (typeof toggleStarMutation !== 'function') {
+        throw new Error('Star/unstar is not available on this backend');
       }
-      throw new Error('No matching star/unstar mutation on backend');
+      return await (toggleStarMutation as any)({
+        messageId: args.messageId,
+        conversationId,
+      });
     },
-    [toggleStarA, toggleStarB, toggleStarC, toggleStarD],
+    [toggleStarMutation, conversationId],
   );
   const createScheduledMessage = useMutation((api as any).scheduling.scheduleMessageMobile);
   // iter-113: alternative scheduling mutations. Some Convex deployments
@@ -388,12 +402,32 @@ export default function ChatScreen() {
     });
   }, [e2eeStatus.enabled, e2eeStatus.passphrase, e2eeStatus.salt, messages]);
 
+  // iter-147: also honor the canonical conversation field
+  // `conversation.disappearAfter` if the server has set one. It may be
+  // delivered as milliseconds, seconds, OR one of our local option
+  // keys ('24h' | '7d' | '90d'). Coerce to ms here.
+  const serverDisappearMs = useMemo(() => {
+    const raw: any = (conversation as any)?.disappearAfter;
+    if (raw == null) return 0;
+    if (typeof raw === 'string') {
+      const match = DISAPPEARING_OPTIONS.find((item) => item.key === raw);
+      return match?.ms || 0;
+    }
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
+      // Anything below 10_000 we treat as seconds, above as ms — this
+      // covers both server conventions without a schema lookup.
+      return raw < 10_000 ? raw * 1000 : raw;
+    }
+    return 0;
+  }, [conversation]);
+
   const visibleMessages = useMemo(() => {
-    const ttlMs = DISAPPEARING_OPTIONS.find((item) => item.key === disappearingMode)?.ms || 0;
+    const localTtl = DISAPPEARING_OPTIONS.find((item) => item.key === disappearingMode)?.ms || 0;
+    const ttlMs = Math.max(localTtl, serverDisappearMs);
     if (!ttlMs) return decryptedMessages;
     const cutoff = Date.now() - ttlMs;
     return decryptedMessages.filter((message) => Number(message?._creationTime || 0) >= cutoff);
-  }, [disappearingMode, decryptedMessages]);
+  }, [disappearingMode, serverDisappearMs, decryptedMessages]);
 
   // iter-109: in-chat search filter — applied AFTER the disappearing-mode
   // filter so the user only sees results that are still visible per the
@@ -2027,19 +2061,20 @@ export default function ChatScreen() {
         </View>
       </View>
 
-      {/* iter-144: Chat Once countdown banner — matches the web app.
-          When the conversation is a chat-once (expiresAt set), show the
-          orange auto-delete countdown instead of the generic E2EE
-          banner. The native already encrypts every chat so the green
-          shield is implicit. */}
+      {/* iter-147: Chat Once countdown banner — locked to the
+          canonical field `chatOnceExpiresAt` (ISO 8601 string) from the
+          conversation record. */}
       {(() => {
+        const expiryRaw = (hydratedConversation as any)?.chatOnceExpiresAt;
         const expiresAt =
-          (hydratedConversation as any)?.expiresAt ||
-          (hydratedConversation as any)?.autoDeleteAt ||
-          (hydratedConversation as any)?.chatOnceExpiresAt;
+          typeof expiryRaw === 'string'
+            ? new Date(expiryRaw).getTime()
+            : typeof expiryRaw === 'number'
+              ? expiryRaw
+              : 0;
         if (
           expiresAt &&
-          typeof expiresAt === 'number' &&
+          Number.isFinite(expiresAt) &&
           expiresAt > Date.now()
         ) {
           const msLeft = expiresAt - Date.now();
@@ -2661,6 +2696,30 @@ export default function ChatScreen() {
                     setDisappearingMode(option.key);
                     if (conversationId) {
                       await writeStoredJson(`disappearing_mode_${conversationId}`, option.key);
+                    }
+                    // iter-147: also push the choice to the server so
+                    // every device in the conversation sees the same
+                    // canonical `disappearAfter` value. Tolerate
+                    // backends that don't expose this mutation yet.
+                    try {
+                      if (
+                        conversationId &&
+                        typeof setDisappearAfterMutation === 'function'
+                      ) {
+                        await (setDisappearAfterMutation as any)({
+                          conversationId,
+                          disappearAfter: option.key === 'off' ? null : option.ms,
+                        });
+                      }
+                    } catch (errorValue: any) {
+                      const message = String(errorValue?.message || '');
+                      if (
+                        !message.includes('CouldNotFindFunction') &&
+                        !message.includes('not found') &&
+                        !message.includes('ArgumentValidationError')
+                      ) {
+                        console.warn('[chat] disappearAfter save failed', message);
+                      }
                     }
                     setShowDisappearingSheet(false);
                   }}
