@@ -8,6 +8,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -129,6 +130,21 @@ export default function ContactsScreen() {
   const acceptRequest = useMutation(api.contacts.acceptRequest);
   const rejectRequest = useMutation(api.contacts.rejectRequest);
   const cancelRequest = useMutation(api.contacts.cancelRequest);
+
+  // iter-148: read the user's referral code (best-effort) so the
+  // invite Share message carries a deep link with the code (matches
+  // earnings page behavior). Falls back to a plain link.
+  const earningsProfile = useQuery((api as any).earnings?.getMyProfile, {}) as any | undefined;
+  const referralCode: string =
+    (earningsProfile?.referralCode && String(earningsProfile.referralCode)) ||
+    (earningsProfile?.code && String(earningsProfile.code)) ||
+    '';
+  const inviteUrl = referralCode
+    ? `https://smilers.online/?ref=${referralCode}`
+    : 'https://smilers.online/';
+  const inviteMessage = referralCode
+    ? `Join me on Smilers! Use my referral code ${referralCode} when you sign up. ${inviteUrl}`
+    : `Join me on Smilers — a smarter, safer messenger. ${inviteUrl}`;
 
   // iter-138: read the current user so we can derive a default country
   // hint for phone-number normalization in invite flows.
@@ -286,26 +302,47 @@ export default function ContactsScreen() {
         Alert.alert('No phone number', 'This device contact has no phone number to invite.');
         return;
       }
-      // iter-138: Convex `sendRequestByPhone` rejects anything that
-      // isn't strict E.164. Raw device-contact phones look like
-      // "328 074 0584" → must become "+39328…". Normalize before send.
-      const e164 = normalizePhoneE164(c.phone, myDefaultCountry);
-      if (!e164) {
-        Alert.alert(
-          'Invalid phone number',
-          `Could not understand the number "${c.phone}". Add the country code (e.g. +39 …) and try again.`,
-        );
-        return;
-      }
+      // iter-149: server-side `contacts.sendRequestByPhone` was returning
+      // generic "Server Error - Called by client" on every invite, so we
+      // now mirror what the web app actually does: open the native share
+      // sheet with a pre-baked invite message that carries the user's
+      // referral code (if any). User can pick SMS, WhatsApp, Telegram,
+      // etc. — works on iOS + Android with zero backend dependency.
       try {
-        await sendRequestByPhone({ phone: e164 });
-        Alert.alert('Invite sent', `${c.name} will receive an SMS invite to join Smilers.`);
+        const result = await Share.share({
+          message: `Hi ${c.name?.split(' ')[0] || 'there'} — ${inviteMessage}`,
+          title: 'Join me on Smilers',
+          url: inviteUrl,
+        } as any);
+        if (
+          (result as any)?.action === Share.dismissedAction &&
+          Platform.OS === 'android'
+        ) {
+          // Android falls through silently when the user cancels — no
+          // alert needed. Otherwise we'd nag the user on every dismiss.
+        }
       } catch (errorValue: any) {
-        Alert.alert('Could not invite', errorValue?.message || 'Try again later.');
+        Alert.alert('Could not open share sheet', errorValue?.message || 'Try again later.');
       }
     },
-    [sendRequestByPhone, myDefaultCountry],
+    [inviteMessage, inviteUrl],
   );
+
+  // iter-149: top-of-tab "Share invite link" CTA (parity with the
+  // dedicated section the web app shows above device contacts).
+  const onShareInviteLink = useCallback(async () => {
+    try {
+      await Share.share({
+        message: inviteMessage,
+        title: 'Join me on Smilers',
+        url: inviteUrl,
+      } as any);
+    } catch (errorValue: any) {
+      if (!String(errorValue?.message || '').toLowerCase().includes('cancel')) {
+        Alert.alert('Could not share', errorValue?.message || 'Please try again.');
+      }
+    }
+  }, [inviteMessage, inviteUrl]);
 
   const onAddByPhone = useCallback(async () => {
     const raw = phoneInput.trim();
@@ -542,11 +579,36 @@ export default function ContactsScreen() {
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           ListHeaderComponent={
-            devicePerm === 'granted' ? (
-              <Text style={styles.sectionLabel}>
-                INVITE TO SMILERS ({searchTerm ? deviceFiltered.length : deviceFiltered.length})
-              </Text>
-            ) : null
+            <>
+              {/* iter-149: top-of-list "Share Invite Link" CTA — parity
+                  with the web app's dedicated invite-link section above
+                  the device contacts list. Opens the native share sheet
+                  so users can post the invite to WhatsApp, SMS, etc. */}
+              <TouchableOpacity
+                style={styles.shareLinkCard}
+                onPress={onShareInviteLink}
+                activeOpacity={0.8}
+                testID="contacts-share-invite-link"
+              >
+                <View style={styles.shareLinkIcon}>
+                  <Feather name="share-2" size={20} color={Colors.primary} />
+                </View>
+                <View style={styles.shareLinkBody}>
+                  <Text style={styles.shareLinkTitle}>Share invite link</Text>
+                  <Text style={styles.shareLinkSub} numberOfLines={2}>
+                    {referralCode
+                      ? `Invite friends and earn rewards · Code ${referralCode}`
+                      : 'Invite friends to join you on Smilers'}
+                  </Text>
+                </View>
+                <Feather name="chevron-right" size={20} color={Colors.textMuted} />
+              </TouchableOpacity>
+              {devicePerm === 'granted' ? (
+                <Text style={styles.sectionLabel}>
+                  INVITE TO SMILERS ({searchTerm ? deviceFiltered.length : deviceFiltered.length})
+                </Text>
+              ) : null}
+            </>
           }
           renderItem={({ item }) => (
             <View style={styles.row} testID={`device-contact-${item.id}`}>
@@ -764,6 +826,30 @@ const styles = StyleSheet.create({
   },
 
   listContent: { paddingBottom: 120 },
+  shareLinkCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    marginHorizontal: Spacing.base,
+    marginTop: Spacing.base,
+    marginBottom: Spacing.sm,
+    padding: Spacing.md,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.borderLight,
+  },
+  shareLinkIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shareLinkBody: { flex: 1 },
+  shareLinkTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  shareLinkSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
   sectionLabel: {
     fontSize: FontSize.xs,
     fontWeight: FontWeight.bold,

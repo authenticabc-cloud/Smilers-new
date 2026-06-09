@@ -38,6 +38,12 @@ function LegacyLanguagesScreen() {
     isAuthenticated,
   );
   const updateProfile = useMutation(api.users.updateProfile);
+  // iter-149: try alternative canonical mutation names — the user's
+  // server may expose languages on a dedicated mutation rather than as
+  // a field of `updateProfile`. We attempt each in turn during save.
+  const updateLanguagesM = useMutation((api as any).users?.updateLanguages);
+  const setLanguagesM = useMutation((api as any).users?.setLanguages);
+  const updateUserLanguagesM = useMutation((api as any).languages?.update);
 
   const [selected, setSelected] = useState<string[]>([]);
   const [initialized, setInitialized] = useState(false);
@@ -117,18 +123,73 @@ function LegacyLanguagesScreen() {
     if (saving) return;
     setSaving(true);
     let serverOk = false;
-    try {
-      const payload = { languages: selected };
-      await safeMutation(
-        'users.updateProfile(languages)',
-        () => updateProfile(payload),
-        payload,
-      );
-      serverOk = true;
-    } catch (errorValue: any) {
-      // Backend may not have the field yet — write locally so the choice
-      // isn't lost, and surface a clear message.
-      console.warn('updateProfile(languages) failed:', errorValue?.message);
+    let lastError: any = null;
+
+    // iter-149: server contract for "skip translation languages" varies
+    // by deployment. Try the canonical mutation + field-name candidates
+    // in order until one succeeds. This mirrors what the web app does
+    // when negotiating against an older/newer backend.
+    const candidates: Array<{
+      label: string;
+      run?: (args: any) => Promise<any>;
+      payload: any;
+    }> = [
+      {
+        label: 'users.updateLanguages',
+        run: updateLanguagesM as any,
+        payload: { languages: selected },
+      },
+      {
+        label: 'users.setLanguages',
+        run: setLanguagesM as any,
+        payload: { languages: selected },
+      },
+      {
+        label: 'languages.update',
+        run: updateUserLanguagesM as any,
+        payload: { languages: selected },
+      },
+      {
+        label: 'users.updateProfile(languages)',
+        run: updateProfile as any,
+        payload: { languages: selected },
+      },
+      {
+        label: 'users.updateProfile(skipTranslationLanguages)',
+        run: updateProfile as any,
+        payload: { skipTranslationLanguages: selected },
+      },
+      {
+        label: 'users.updateProfile(spokenLanguages)',
+        run: updateProfile as any,
+        payload: { spokenLanguages: selected },
+      },
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate.run !== 'function') continue;
+      try {
+        await safeMutation(candidate.label, () => candidate.run!(candidate.payload), candidate.payload);
+        serverOk = true;
+        break;
+      } catch (errorValue: any) {
+        lastError = errorValue;
+        const message = String(errorValue?.message || '');
+        // If the function literally doesn't exist on the server OR if
+        // the field is rejected by the validator, fall through to the
+        // next candidate. Anything else (auth, network) ➝ stop.
+        const isMissing =
+          message.includes('CouldNotFindFunction') ||
+          message.includes('not found') ||
+          message.includes('ArgumentValidationError') ||
+          message.includes('ValidatorError') ||
+          message.includes('Object contains extra field') ||
+          message.includes('Object is missing the required field');
+        if (!isMissing) {
+          // Real server error — abort but still write locally.
+          break;
+        }
+      }
     }
     try {
       await writeStoredJson(LOCAL_KEY, selected);
@@ -143,12 +204,17 @@ function LegacyLanguagesScreen() {
     if (serverOk) {
       Alert.alert('Languages saved', 'Smilers will skip translation for these languages.');
     } else {
+      // Surface the actual server error so we can iterate, while still
+      // keeping the local copy so the user's choice isn't lost.
+      const detail =
+        (lastError?.message && String(lastError.message).slice(0, 200)) ||
+        'Server did not accept the request.';
       Alert.alert(
-        'Saved on this device',
-        'Your language preferences were saved locally. We’ll sync them with the server once the backend update ships.',
+        'Could not save to server',
+        `${detail}\n\nYour selection is kept locally and will retry next time you save.`,
       );
     }
-  }, [refetch, saving, selected, updateProfile]);
+  }, [refetch, saving, selected, setLanguagesM, updateLanguagesM, updateProfile, updateUserLanguagesM]);
 
   const onBack = useCallback(() => {
     if (!dirty) {

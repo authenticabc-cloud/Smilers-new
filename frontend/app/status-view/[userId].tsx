@@ -23,6 +23,7 @@ import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../src/convexApi';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 import { recordDiagnostic } from '../../src/lib/diagnostics';
+import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
 
 // iter-135: module-evaluation marker so we can correlate a crash on
 // "Smilers has stopped" with whichever screen the user opened last.
@@ -40,6 +41,20 @@ const DEFAULT_DURATION_MS = 5000;
 const MAX_VIDEO_DURATION_MS = 30000;
 
 export default function StatusViewScreen() {
+  // iter-149: wrap the inner screen in an ErrorBoundary so a render
+  // crash (e.g. an unexpected story shape from the server, a broken
+  // hook order under React 19, etc.) shows a friendly fallback INSTEAD
+  // of taking down the whole app with "Smilers has stopped".
+  // The inner component is below — same code path as before.
+  const router = useRouter();
+  return (
+    <ScreenErrorBoundary screenName="status-view" onClose={() => router.back()}>
+      <StatusViewScreenInner />
+    </ScreenErrorBoundary>
+  );
+}
+
+function StatusViewScreenInner() {
   const router = useRouter();
   const { userId } = useLocalSearchParams<{ userId: string }>();
   const targetUserId = userId === 'me' ? undefined : userId;
@@ -82,10 +97,10 @@ export default function StatusViewScreen() {
   const total = stories.length;
 
   useEffect(() => {
-    // expo-audio's setAudioModeAsync — only needed to ensure video plays
-    // through the speaker even when phone is on silent (iOS).
-    // iter-135: catch & log so a mismatched field name (Android) cannot
-    // bubble up as an unhandled native exception.
+    // iter-149: setAudioModeAsync is iOS-only — `playsInSilentMode`
+    // doesn't exist on Android and has been reported to fault under
+    // certain expo-audio versions. Skip the call entirely on Android.
+    if (Platform.OS !== 'ios') return;
     try {
       setExpoAudioModeAsync({ playsInSilentMode: true } as any).catch((errorValue: any) => {
         try {
@@ -434,14 +449,41 @@ function StoryVideo({
   videoPlayerRef: React.MutableRefObject<VideoPlayer | null>;
   onVideoEnd: () => void;
 }) {
-  // iter-138: extra hardening — only build the player once we have a
-  // well-formed source. Empty / non-http(s) sources have been observed
-  // to crash expo-video natively on Android.
+  // iter-138/149: only mount the actual expo-video hook subtree when we
+  // have a well-formed URL. Passing a null / data: / weird-scheme source
+  // to useVideoPlayer crashes natively on Android Hermes ("Smilers has
+  // stopped"). By splitting this into two components we guarantee
+  // useVideoPlayer is *never* called with an invalid value.
   const safeSrc =
     typeof src === 'string' && (src.startsWith('http') || src.startsWith('file://') || src.startsWith('content://'))
       ? src
       : null;
-  const player = useVideoPlayer(safeSrc ? { uri: safeSrc } : null, (p) => {
+  if (!safeSrc) {
+    return (
+      <View style={styles.mediaBody}>
+        <ActivityIndicator color="#FFFFFF" size="large" />
+      </View>
+    );
+  }
+  return (
+    <StoryVideoPlayer
+      safeSrc={safeSrc}
+      videoPlayerRef={videoPlayerRef}
+      onVideoEnd={onVideoEnd}
+    />
+  );
+}
+
+function StoryVideoPlayer({
+  safeSrc,
+  videoPlayerRef,
+  onVideoEnd,
+}: {
+  safeSrc: string;
+  videoPlayerRef: React.MutableRefObject<VideoPlayer | null>;
+  onVideoEnd: () => void;
+}) {
+  const player = useVideoPlayer({ uri: safeSrc }, (p) => {
     try {
       p.loop = false;
       p.play();
@@ -463,7 +505,7 @@ function StoryVideo({
 
   // Listen for end-of-playback so the story advances to the next slide.
   useEffect(() => {
-    if (!player || !safeSrc) return;
+    if (!player) return;
     let subscription: { remove?: () => void } | null = null;
     try {
       subscription = player.addListener('playToEnd', () => {
@@ -479,15 +521,7 @@ function StoryVideo({
         subscription?.remove?.();
       } catch {}
     };
-  }, [player, onVideoEnd, safeSrc]);
-
-  if (!safeSrc) {
-    return (
-      <View style={styles.mediaBody}>
-        <ActivityIndicator color="#FFFFFF" size="large" />
-      </View>
-    );
-  }
+  }, [player, onVideoEnd]);
 
   return (
     <VideoView

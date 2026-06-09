@@ -46,6 +46,7 @@ import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../src/providers/AuthProvider';
 import { getDisplayInitials, getDisplayNameFromUser } from '../src/lib/displayName';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
+import ScreenErrorBoundary from '../src/components/ScreenErrorBoundary';
 
 type Tab = 'overview' | 'top' | 'referrals' | 'history';
 
@@ -118,6 +119,20 @@ function formatNumber(n: number): string {
 }
 
 export default function EarningsScreen() {
+  // iter-149: wrap in a render-time ErrorBoundary so any unexpected
+  // ReferenceError / TypeError inside the screen body (e.g. a missing
+  // import like the iter-145 useMutation regression) shows a friendly
+  // fallback instead of taking the whole app down with "Smilers has
+  // stopped".
+  const router = useRouter();
+  return (
+    <ScreenErrorBoundary screenName="earnings" onClose={() => router.back()}>
+      <EarningsScreenInner />
+    </ScreenErrorBoundary>
+  );
+}
+
+function EarningsScreenInner() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { isAuthenticated } = useAuth();
