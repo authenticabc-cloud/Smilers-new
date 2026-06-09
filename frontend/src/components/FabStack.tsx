@@ -32,7 +32,9 @@ export default function FabStack({ onPencil, onBuilding, onBroadcast, onPeople }
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    bottom: Spacing.base,
+    // iter-144: raise the FAB stack above the tab bar so it doesn't
+    // cover bottom tab labels on smaller phones.
+    bottom: 84,
     right: Spacing.base,
     alignItems: 'center',
     gap: 12,

@@ -2027,10 +2027,52 @@ export default function ChatScreen() {
         </View>
       </View>
 
-      <View style={styles.encryptionBanner} testID="chat-encryption-banner">
-        <Ionicons name="shield-checkmark-outline" size={16} color="#2A7C48" />
-        <Text style={styles.encryptionBannerText}>End-to-end encrypted</Text>
-      </View>
+      {/* iter-144: Chat Once countdown banner — matches the web app.
+          When the conversation is a chat-once (expiresAt set), show the
+          orange auto-delete countdown instead of the generic E2EE
+          banner. The native already encrypts every chat so the green
+          shield is implicit. */}
+      {(() => {
+        const expiresAt =
+          (hydratedConversation as any)?.expiresAt ||
+          (hydratedConversation as any)?.autoDeleteAt ||
+          (hydratedConversation as any)?.chatOnceExpiresAt;
+        if (
+          expiresAt &&
+          typeof expiresAt === 'number' &&
+          expiresAt > Date.now()
+        ) {
+          const msLeft = expiresAt - Date.now();
+          const h = Math.floor(msLeft / 3_600_000);
+          const m = Math.floor((msLeft % 3_600_000) / 60_000);
+          const label =
+            h > 0
+              ? `${h}h ${m}m`
+              : m > 0
+                ? `${m}m`
+                : 'less than a minute';
+          return (
+            <View
+              style={[
+                styles.encryptionBanner,
+                { backgroundColor: '#FFF7E6' },
+              ]}
+              testID="chat-once-banner"
+            >
+              <Feather name="globe" size={16} color="#E97A00" />
+              <Text style={[styles.encryptionBannerText, { color: '#A35200' }]}>
+                Chat Once — this chat will auto-delete in {label}
+              </Text>
+            </View>
+          );
+        }
+        return (
+          <View style={styles.encryptionBanner} testID="chat-encryption-banner">
+            <Ionicons name="shield-checkmark-outline" size={16} color="#2A7C48" />
+            <Text style={styles.encryptionBannerText}>End-to-end encrypted</Text>
+          </View>
+        );
+      })()}
 
       {/* iter-109 → iter-111: in-chat search bar — slides in below the
           header when the search button is tapped. Live-filters the

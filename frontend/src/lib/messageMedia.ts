@@ -273,6 +273,15 @@ export async function saveMessageMediaToGallery(args: {
   }
 
   try {
+    // iter-144: Android 14+ scoped storage rejects createAssetAsync
+    // writing to DCIM via `content://media/external/file`. The newer
+    // `saveToLibraryAsync` API is designed for scoped storage and
+    // takes a file:// URI directly. Fall back to createAssetAsync only
+    // if the new API is unavailable (older expo-media-library bundles).
+    if (typeof (MediaLibrary as any).saveToLibraryAsync === 'function') {
+      await (MediaLibrary as any).saveToLibraryAsync(cacheUri);
+      return true;
+    }
     const asset = await MediaLibrary.createAssetAsync(cacheUri);
     // Best-effort: also drop into a Smilers album so users can find
     // saved photos easily. Failure here doesn't block success.

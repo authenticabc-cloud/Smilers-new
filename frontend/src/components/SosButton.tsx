@@ -24,7 +24,11 @@ export default function SosButton({ onPress }: SosButtonProps) {
 const styles = StyleSheet.create({
   sos: {
     position: 'absolute',
-    bottom: Spacing.base,
+    // iter-144: raise SOS above the tab bar — on smaller screens the
+    // previous `bottom: Spacing.base` (~16px) was overlapping the tab
+    // labels (Chats/Contacts/etc). 84px clears a 56px tab bar + 28px
+    // safe gap on Android phones with bottom navigation gestures.
+    bottom: 84,
     // Push the button further off-screen on the left so only the "SOS" label
     // peeks out — mirrors the web app's chat list peeking-pill look.
     left: -60,
