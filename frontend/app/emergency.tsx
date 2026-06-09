@@ -21,6 +21,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
+  Modal,
   ScrollView,
   StyleSheet,
   Switch,
@@ -34,6 +36,16 @@ import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
 import { useMutation } from 'convex/react';
 import * as Location from 'expo-location';
+import {
+  type BleDeviceInfo,
+  autoReconnect,
+  connectAndSubscribe,
+  getBleLoadError,
+  scanForDevices,
+  setPanicPressListener,
+  stopScan,
+  unpair,
+} from '../src/lib/bleManager';
 
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
@@ -261,26 +273,127 @@ function EmergencyScreenInner() {
     [broadcast, updateBroadcast],
   );
 
-  const onPairDevice = useCallback(() => {
-    Alert.alert(
-      'Pair heart rate monitor',
-      'Bluetooth pairing requires a native build. Once the production app is installed, this opens the OS Bluetooth picker. For now, we\'ll save a simulated paired device so you can preview the flow.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Use simulated device',
-          onPress: () => savePanic({ pairedDeviceName: 'Simulated HR Monitor', pairedDeviceId: 'sim-001' }),
+  // iter-146: real BLE pairing flow. Replaces the previous "Use
+  // Simulated Device" stub. Opens an in-app picker that scans for
+  // nearby BLE peripherals, connects + subscribes to notifying
+  // characteristics, persists the device id for auto-reconnect on
+  // every launch, and routes panic-press notifications to the same
+  // `triggerAlert` mutation the SOS button uses. Permissions are
+  // requested on-demand inside `scanForDevices`.
+  const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [scanResults, setScanResults] = useState<BleDeviceInfo[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  const startScan = useCallback(async () => {
+    setScanError(null);
+    setScanResults([]);
+    const loadErr = getBleLoadError();
+    if (loadErr) {
+      setScanError(loadErr);
+      return;
+    }
+    setScanning(true);
+    try {
+      await scanForDevices(
+        (device) => {
+          setScanResults((current) => {
+            // Merge by id, keep highest RSSI first.
+            const next = current.filter((existing) => existing.id !== device.id);
+            next.push(device);
+            next.sort((a, b) => (b.rssi || -200) - (a.rssi || -200));
+            return next;
+          });
         },
-        panic.pairedDeviceId
-          ? {
-              text: 'Unpair',
-              style: 'destructive',
-              onPress: () => savePanic({ pairedDeviceName: null, pairedDeviceId: null }),
+        10_000,
+      );
+    } catch (errorValue: any) {
+      setScanError(errorValue?.message || 'Scan failed.');
+    } finally {
+      setScanning(false);
+    }
+  }, []);
+
+  const pickDevice = useCallback(
+    async (device: BleDeviceInfo) => {
+      try {
+        stopScan();
+        setScanning(false);
+        await connectAndSubscribe(device.id, device.name);
+        await savePanic({
+          pairedDeviceName: device.name || 'Unknown device',
+          pairedDeviceId: device.id,
+        });
+        setPickerOpen(false);
+        Alert.alert(
+          'Paired',
+          `${device.name || 'Device'} is now linked to Smilers and will auto-reconnect on every launch.`,
+        );
+      } catch (errorValue: any) {
+        Alert.alert('Could not pair', errorValue?.message || 'Try again.');
+      }
+    },
+    [savePanic],
+  );
+
+  // iter-146: auto-reconnect to the previously paired BLE device on
+  // every screen mount. Best-effort — silent on failure.
+  useEffect(() => {
+    void autoReconnect();
+  }, []);
+
+  const onPairDevice = useCallback(() => {
+    if (panic.pairedDeviceId) {
+      Alert.alert(
+        'Paired device',
+        `${panic.pairedDeviceName || 'Device'} is currently linked. Unpair it?`,
+        [
+          { text: 'Keep paired', style: 'cancel' },
+          {
+            text: 'Unpair',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await unpair();
+              } catch {}
+              await savePanic({ pairedDeviceName: null, pairedDeviceId: null });
+            },
+          },
+        ],
+      );
+      return;
+    }
+    setPickerOpen(true);
+    void startScan();
+  }, [panic.pairedDeviceId, panic.pairedDeviceName, savePanic, startScan]);
+
+  // Route any panic press from the paired BLE device through the same
+  // `triggerAlert` flow as the on-screen SOS button.
+  useEffect(() => {
+    setPanicPressListener(() => {
+      void (async () => {
+        try {
+          let latitude = 0;
+          let longitude = 0;
+          try {
+            const perm = await Location.requestForegroundPermissionsAsync();
+            if (perm.granted) {
+              const position = await Location.getCurrentPositionAsync({
+                accuracy: Location.Accuracy.Balanced,
+              });
+              latitude = position.coords.latitude;
+              longitude = position.coords.longitude;
             }
-          : ({ text: '', style: 'cancel' } as any),
-      ].filter((a: any) => a && a.text),
-    );
-  }, [panic.pairedDeviceId, savePanic]);
+          } catch {}
+          await triggerAlert({ latitude, longitude });
+          await Promise.all([refetchActive(), refetchAlerts()]);
+        } catch (errorValue: any) {
+          console.warn('[ble] panic trigger failed:', errorValue?.message);
+        }
+      })();
+    });
+    return () => setPanicPressListener(null);
+  }, [triggerAlert, refetchActive, refetchAlerts]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="emergency-screen">
@@ -510,6 +623,88 @@ function EmergencyScreenInner() {
 
         <View style={{ height: 32 }} />
       </ScrollView>
+
+      {/* iter-146: BLE device picker modal — opens when the user taps
+          the Pair Device row. Scans for 10 seconds and lists discovered
+          peripherals; tapping one connects + persists + subscribes. */}
+      <Modal
+        animationType="slide"
+        transparent
+        visible={pickerOpen}
+        onRequestClose={() => {
+          stopScan();
+          setPickerOpen(false);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Pair Bluetooth device</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  stopScan();
+                  setPickerOpen(false);
+                }}
+                hitSlop={12}
+                testID="ble-picker-close"
+              >
+                <Ionicons name="close" size={24} color={Colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.modalHint}>
+              Scanning nearby panic buttons and wearables. Tap a device to pair —
+              it will auto-reconnect every launch.
+            </Text>
+            {scanError ? (
+              <Text style={styles.modalError}>{scanError}</Text>
+            ) : null}
+            {scanning ? (
+              <View style={styles.modalLoading}>
+                <ActivityIndicator color={Colors.primary} />
+                <Text style={styles.modalLoadingText}>Scanning…</Text>
+              </View>
+            ) : null}
+            <FlatList
+              data={scanResults}
+              keyExtractor={(item) => item.id}
+              ListEmptyComponent={
+                !scanning && !scanError ? (
+                  <Text style={styles.modalEmpty}>
+                    No devices found yet. Make sure the device is on and in pairing mode.
+                  </Text>
+                ) : null
+              }
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.modalRow}
+                  onPress={() => pickDevice(item)}
+                  testID={`ble-device-${item.id}`}
+                >
+                  <Feather name="bluetooth" size={20} color={Colors.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.modalRowTitle}>{item.name || 'Unknown device'}</Text>
+                    <Text style={styles.modalRowSub}>
+                      {item.id}
+                      {typeof item.rssi === 'number' ? `  ·  RSSI ${item.rssi}` : ''}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color={Colors.textMuted} />
+                </TouchableOpacity>
+              )}
+            />
+            <TouchableOpacity
+              style={styles.modalRescanBtn}
+              onPress={startScan}
+              disabled={scanning}
+              testID="ble-rescan"
+            >
+              <Text style={styles.modalRescanText}>
+                {scanning ? 'Scanning…' : 'Scan again'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -589,6 +784,27 @@ function HowStep({ n, text }: { n: number; text: string }) {
 /* ───────── Styles ───────── */
 
 const styles = StyleSheet.create({
+  // iter-146: BLE picker modal styles
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modalSheet: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    maxHeight: '75%',
+  },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  modalTitle: { fontSize: 18, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  modalHint: { fontSize: 13, color: Colors.textSecondary, marginBottom: 16 },
+  modalError: { fontSize: 13, color: Colors.danger, marginBottom: 12 },
+  modalLoading: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
+  modalLoadingText: { color: Colors.textSecondary, fontSize: 13 },
+  modalRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.borderLight },
+  modalRowTitle: { fontSize: 15, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
+  modalRowSub: { fontSize: 11, color: Colors.textMuted, marginTop: 2 },
+  modalEmpty: { textAlign: 'center', color: Colors.textMuted, paddingVertical: 24 },
+  modalRescanBtn: { marginTop: 16, paddingVertical: 12, borderRadius: 24, alignItems: 'center', backgroundColor: Colors.primaryLight },
+  modalRescanText: { fontSize: 14, fontWeight: FontWeight.bold, color: Colors.textPrimary },
   container: { flex: 1, backgroundColor: '#F8F4ED' },
   header: {
     flexDirection: 'row',

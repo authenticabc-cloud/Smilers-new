@@ -21,8 +21,11 @@
         "NSFaceIDUsageDescription": "Unlock Smilers securely with Face ID",
         "NSContactsUsageDescription": "Find friends who use Smilers",
         "NSPhotoLibraryAddUsageDescription": "Save photos and videos from chats to your gallery",
+        "NSBluetoothAlwaysUsageDescription": "Pair panic buttons and wearables for emergency alerts",
+        "NSBluetoothPeripheralUsageDescription": "Pair panic buttons and wearables for emergency alerts",
         "UIBackgroundModes": [
           "audio",
+          "bluetooth-central",
           "remote-notification"
         ]
       }
@@ -96,6 +99,10 @@
         "CHANGE_NETWORK_STATE",
         "BLUETOOTH",
         "BLUETOOTH_CONNECT",
+        "BLUETOOTH_SCAN",
+        "BLUETOOTH_ADVERTISE",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
         "USE_FULL_SCREEN_INTENT"
       ]
     },
@@ -179,7 +186,8 @@
       ],
       "@config-plugins/react-native-webrtc",
       "expo-font",
-      "expo-video"
+      "expo-video",
+      "react-native-ble-plx"
     ],
     "experiments": {
       "typedRoutes": false
