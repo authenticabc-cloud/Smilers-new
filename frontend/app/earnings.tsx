@@ -40,6 +40,7 @@ import {
   MaterialCommunityIcons,
 } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
+import { useMutation } from 'convex/react';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../src/providers/AuthProvider';

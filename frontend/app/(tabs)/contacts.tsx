@@ -171,16 +171,50 @@ export default function ContactsScreen() {
         fields: [Contacts.Fields.Name, Contacts.Fields.PhoneNumbers, Contacts.Fields.Emails],
         pageSize: 5000,
       });
-      const mapped: DeviceContact[] = data
-        .map((c: any) => ({
-          id: c.id,
-          name: c.name || c.firstName || c.lastName || 'Unnamed',
-          phone: c.phoneNumbers?.[0]?.number,
-          email: c.emails?.[0]?.email,
-        }))
-        .filter((c) => !!c.name)
-        .sort((a, b) => a.name.localeCompare(b.name));
-      setDeviceContacts(mapped);
+      // iter-148: align device-contacts surface with the web app.
+      // The web shows "INVITE TO SMILERS (N)" with canonical names — only
+      // contacts that actually have a usable name and a unique phone.
+      // The native list was showing 2,700+ rows including:
+      //   • "null" string names (Android quirk for SIM/no-name entries),
+      //   • duplicate phones in two formats (e.g. spaced + unspaced),
+      //   • placeholder entries with no phone at all.
+      // This collapses the surface to what's actually invitable.
+      const seenPhones = new Set<string>();
+      const cleaned: DeviceContact[] = [];
+      for (const raw of data as any[]) {
+        const rawName: string =
+          (typeof raw?.name === 'string' && raw.name.trim() && raw.name.trim().toLowerCase() !== 'null' && raw.name.trim()) ||
+          (typeof raw?.firstName === 'string' && raw.firstName.trim()) ||
+          (typeof raw?.lastName === 'string' && raw.lastName.trim()) ||
+          '';
+        const rawPhone: string | undefined = raw?.phoneNumbers?.[0]?.number;
+        const e164 = normalizePhoneE164(rawPhone, myDefaultCountry || null) || (rawPhone || '').trim();
+        // Skip rows with neither a real name nor any phone — those are
+        // pure noise (SIM "null" entries, placeholder rows).
+        if (!rawName && !e164) continue;
+        // Dedupe by E.164 — Android often lists the same contact twice
+        // because the OS keeps both raw + formatted variants.
+        const dedupeKey = e164 || `name:${rawName.toLowerCase()}`;
+        if (seenPhones.has(dedupeKey)) continue;
+        seenPhones.add(dedupeKey);
+        cleaned.push({
+          id: raw.id,
+          // Always prefer the actual saved name; only fall back to the
+          // phone when there really is no name at all.
+          name: rawName || e164 || 'Contact',
+          phone: e164 || rawPhone,
+          email: raw?.emails?.[0]?.email,
+        });
+      }
+      // Sort canonically — names first, then phone-only rows last.
+      cleaned.sort((a, b) => {
+        const aHasName = /[A-Za-z]/.test(a.name);
+        const bHasName = /[A-Za-z]/.test(b.name);
+        if (aHasName && !bHasName) return -1;
+        if (!aHasName && bHasName) return 1;
+        return a.name.localeCompare(b.name);
+      });
+      setDeviceContacts(cleaned);
     } catch (errorValue) {
       console.warn('device contacts failed:', errorValue);
       setDevicePerm('denied');
@@ -206,15 +240,29 @@ export default function ContactsScreen() {
   }, [list, searchTerm]);
 
   const deviceFiltered = useMemo(() => {
+    // iter-148: hide device contacts whose phone is already in
+    // "My Contacts" (= already a registered Smilers user). Mirrors the
+    // web app which shows "INVITE TO SMILERS" — only people NOT yet on
+    // Smilers should appear here.
+    const myContactPhones = new Set<string>();
+    for (const c of list as any[]) {
+      const e164 = normalizePhoneE164(c?.phone, myDefaultCountry || null);
+      if (e164) myContactPhones.add(e164);
+    }
     const q = searchTerm.toLowerCase();
-    if (!q) return deviceContacts;
-    return deviceContacts.filter(
-      (c) =>
+    return deviceContacts.filter((c) => {
+      // Drop any device contact whose normalized phone matches a saved
+      // Smilers contact — they don't need an invite.
+      const e164 = normalizePhoneE164(c.phone, myDefaultCountry || null);
+      if (e164 && myContactPhones.has(e164)) return false;
+      if (!q) return true;
+      return (
         (c.name || '').toLowerCase().includes(q) ||
         (c.phone || '').toLowerCase().includes(q) ||
-        (c.email || '').toLowerCase().includes(q),
-    );
-  }, [deviceContacts, searchTerm]);
+        (c.email || '').toLowerCase().includes(q)
+      );
+    });
+  }, [deviceContacts, list, myDefaultCountry, searchTerm]);
 
   // ── Actions ──────────────────────────────────────
   const openChat = async (userId: string) => {
@@ -286,7 +334,9 @@ export default function ContactsScreen() {
   }, [phoneInput, sendRequestByPhone, myDefaultCountry]);
 
   const myCount = list.length;
-  const deviceCount = deviceContacts.length;
+  // iter-148: count = the filtered-invitable count (matches web app's
+  // "INVITE TO SMILERS (N)" header — only contacts not yet on Smilers).
+  const deviceCount = deviceFiltered.length;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="contacts-screen">
@@ -494,7 +544,7 @@ export default function ContactsScreen() {
           ListHeaderComponent={
             devicePerm === 'granted' ? (
               <Text style={styles.sectionLabel}>
-                DEVICE CONTACTS ({searchTerm ? deviceFiltered.length : deviceCount})
+                INVITE TO SMILERS ({searchTerm ? deviceFiltered.length : deviceFiltered.length})
               </Text>
             ) : null
           }

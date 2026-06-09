@@ -94,6 +94,22 @@ export default function TrusteesScreen() {
     const query = search.trim().toLowerCase();
     return source
       .filter((contact) => {
+        // iter-148: only registered Smilers users can be trustees.
+        // The Convex `contacts.getContacts` query returns both
+        // registered-Smilers contacts AND locally-added pending-invite
+        // contacts (the latter have no `userId`). The picker MUST hide
+        // the pending ones — otherwise tapping them triggers the
+        // "Not a Smilers user" alert. Mirrors the web app behavior.
+        const trusteeUserId =
+          (contact as any)?.userId ||
+          (contact as any)?.user?._id ||
+          (contact as any)?.user?.userId ||
+          (contact as any)?.contactUserId ||
+          (contact as any)?.targetUserId ||
+          (contact as any)?.otherUserId ||
+          (contact as any)?.linkedUserId;
+        if (!trusteeUserId) return false;
+
         const phoneKey = normalizePhone(contact.phone);
         const emailKey = normalizeValue(contact.email);
         const idKey = normalizeValue(String(contact.userId || contact._id || contact.id || ''));
@@ -295,8 +311,10 @@ export default function TrusteesScreen() {
               ) : availableContacts.length === 0 ? (
                 <View style={styles.emptyModal} testID="trustees-contacts-empty">
                   <Ionicons name="people-outline" size={34} color={Colors.textMuted} />
-                  <Text style={styles.emptyModalTitle}>No Smilers contacts found</Text>
-                  <Text style={styles.emptyModalBody}>Only Smilers contacts in the user’s contact list can be added as trustees.</Text>
+                  <Text style={styles.emptyModalTitle}>No Smilers contacts available</Text>
+                  <Text style={styles.emptyModalBody}>
+                    Trustees must be registered Smilers users. Invite a contact from the Contacts tab — once they accept and install Smilers, they'll appear here.
+                  </Text>
                 </View>
               ) : (
                 availableContacts.map((contact, index) => {
