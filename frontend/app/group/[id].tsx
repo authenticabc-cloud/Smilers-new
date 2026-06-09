@@ -1,24 +1,34 @@
 /**
- * Group Details / Settings — Slice A of the Groups spec.
+ * /group/[id]  ▸  Group Info hub (iter-151)
  *
- * Surfaces the group header, role-aware member list, regulations board,
- * message-approval toggle, invite link, and admin actions (promote / demote /
- * suspend / remove / block / pass-chief). Tries the dedicated backend
- * endpoints first; falls back to data already returned by `listGroups` so the
- * screen still renders if the backend hasn't shipped a mutation yet.
+ * Aligned to the canonical Convex contract (`/app/GROUPS_CANONICAL_CONTRACT_iter151.md`).
+ * Uses ONLY documented endpoints — no path-guessing.
+ *
+ * Reads:
+ *   - api.conversations.getConversation
+ *   - api.conversations.getGroupMembers
+ *   - api.groupAdmin.getGroupAdminInfo
+ *   - api.groupSuspensions.getGroupSuspensions
+ *
+ * Writes:
+ *   - api.conversations.updateGroup / addGroupMember / removeGroupMember
+ *   - api.conversations.leaveGroup / deleteGroup
+ *   - api.groupAdmin.promoteToAdmin / demoteFromAdmin / transferChiefAdmin
+ *   - api.groupAdmin.generateInviteLink / disableInviteLink
+ *   - api.messageApproval.toggleApproval
+ *   - api.groupSuspensions.suspendMember / liftSuspension
  */
-
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
   Image,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Switch,
   Text,
@@ -27,978 +37,940 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Feather, Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
 import * as Clipboard from 'expo-clipboard';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
-import { useAuth } from '../../src/providers/AuthProvider';
-import { findSavedContactDisplayName } from '../../src/lib/displayName';
-import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../src/theme';
+import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
+import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 
-type RoleKey = 'chief' | 'admin' | 'member';
+type SuspendDuration = '1h' | '6h' | '24h' | '7d' | '30d' | 'permanent';
 
-interface NormalizedMember {
-  userId: string;
-  name: string;
-  avatar: string | null;
-  role: RoleKey;
-  suspendedUntil: number | null;
-  blocked: boolean;
-}
-
-const SUSPENSION_OPTIONS: { label: string; durationMs: number }[] = [
-  { label: '24 hours', durationMs: 24 * 60 * 60 * 1000 },
-  { label: '7 days', durationMs: 7 * 24 * 60 * 60 * 1000 },
-  // Spec says: 24h, 7d, 1 week. Treat "1 week" as the same 7d entry consolidated
-  // — adding the formal "1 week" wording so users see both labels familiar from
-  // the web app's dropdown.
-  { label: '1 week', durationMs: 7 * 24 * 60 * 60 * 1000 },
+const DURATION_OPTIONS: { key: SuspendDuration; label: string }[] = [
+  { key: '1h', label: '1 Hour' },
+  { key: '6h', label: '6 Hours' },
+  { key: '24h', label: '24 Hours' },
+  { key: '7d', label: '7 Days' },
+  { key: '30d', label: '30 Days' },
+  { key: 'permanent', label: 'Permanent' },
 ];
 
-function roleRank(role: RoleKey): number {
-  return role === 'chief' ? 0 : role === 'admin' ? 1 : 2;
+function getInitials(name?: string): string {
+  if (!name) return '?';
+  const parts = String(name).trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
+  return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
 }
 
-function normalizeRole(value: any): RoleKey {
-  const raw = typeof value === 'string' ? value.toLowerCase() : '';
-  if (raw === 'chief' || raw === 'chiefadmin' || raw === 'chief_admin' || raw === 'owner') return 'chief';
-  if (raw === 'admin' || raw === 'administrator') return 'admin';
-  return 'member';
+function extractConvexError(e: any): string {
+  const code = e?.data?.code || e?.code || '';
+  const message = e?.data?.message || e?.message || 'Unknown error';
+  return code ? `${code}: ${String(message).slice(0, 200)}` : String(message).slice(0, 240);
 }
 
-function asTimestamp(value: any): number | null {
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
-  if (typeof value === 'string') {
-    const parsed = Date.parse(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
-}
-
-function isStillSuspended(ts: number | null): boolean {
-  return !!ts && ts > Date.now();
-}
-
-function formatSuspensionLabel(ts: number | null): string {
-  if (!ts) return '';
-  const diffMs = ts - Date.now();
-  if (diffMs <= 0) return '';
-  const hours = Math.ceil(diffMs / 3_600_000);
-  if (hours < 24) return `Suspended · ${hours}h left`;
-  const days = Math.ceil(diffMs / 86_400_000);
-  return `Suspended · ${days}d left`;
-}
-
-function normalizeMember(raw: any, contactList: any[]): NormalizedMember {
-  const userId = String(raw?.userId || raw?._id || raw?.id || '');
-  const fallbackName = findSavedContactDisplayName(contactList, userId);
-  return {
-    userId,
-    name:
-      raw?.name ||
-      raw?.displayName ||
-      raw?.fullName ||
-      raw?.user?.name ||
-      fallbackName ||
-      'Member',
-    avatar:
-      raw?.avatar ||
-      raw?.avatarUrl ||
-      raw?.user?.avatar ||
-      raw?.user?.avatarUrl ||
-      null,
-    role: normalizeRole(raw?.role || raw?.groupRole),
-    suspendedUntil: asTimestamp(raw?.suspendedUntil || raw?.suspendedUntilAt),
-    blocked: !!(raw?.blocked || raw?.isBlocked),
-  };
-}
-
-function MemberAvatar({ member, size = 44 }: { member: NormalizedMember; size?: number }) {
-  if (member.avatar && /^https?:/i.test(member.avatar)) {
-    return <Image source={{ uri: member.avatar }} style={{ width: size, height: size, borderRadius: size / 2 }} />;
-  }
+export default function GroupInfoScreen() {
+  const router = useRouter();
   return (
-    <View style={[styles.avatarFallback, { width: size, height: size, borderRadius: size / 2 }]}>
-      <Text style={[styles.avatarFallbackText, { fontSize: size * 0.42 }]}>
-        {(member.name || 'M').charAt(0).toUpperCase()}
-      </Text>
-    </View>
+    <ScreenErrorBoundary screenName="group-info" onClose={() => router.back()}>
+      <GroupInfoInner />
+    </ScreenErrorBoundary>
   );
 }
 
-function RoleBadge({ role }: { role: RoleKey }) {
-  if (role === 'chief') {
-    return (
-      <View style={[styles.roleBadge, styles.roleBadgeChief]}>
-        <MaterialCommunityIcons name="crown" size={12} color="#92400e" />
-        <Text style={[styles.roleBadgeText, { color: '#92400e' }]}>Chief Admin</Text>
-      </View>
-    );
-  }
-  if (role === 'admin') {
-    return (
-      <View style={[styles.roleBadge, styles.roleBadgeAdmin]}>
-        <MaterialCommunityIcons name="star-four-points" size={11} color="#1e3a8a" />
-        <Text style={[styles.roleBadgeText, { color: '#1e3a8a' }]}>Admin</Text>
-      </View>
-    );
-  }
-  return null;
-}
-
-function SuspensionModal({
-  visible,
-  member,
-  onClose,
-  onConfirm,
-}: {
-  visible: boolean;
-  member: NormalizedMember | null;
-  onClose: () => void;
-  onConfirm: (durationMs: number) => void;
-}) {
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.modalBackdrop} onPress={onClose}>
-        <Pressable style={styles.modalCard} onPress={() => {}}>
-          <Text style={styles.modalTitle}>Suspend {member?.name || 'member'}?</Text>
-          <Text style={styles.modalSubtitle}>
-            They&apos;ll be a spectator in the group until the suspension lifts.
-          </Text>
-          {SUSPENSION_OPTIONS.map((option, index) => (
-            <TouchableOpacity
-              key={`${option.label}-${index}`}
-              style={styles.modalRow}
-              onPress={() => onConfirm(option.durationMs)}
-              testID={`suspend-option-${option.label.replace(/\s+/g, '-')}`}
-            >
-              <Text style={styles.modalRowText}>{option.label}</Text>
-              <Feather name="chevron-right" size={18} color={Colors.textMuted} />
-            </TouchableOpacity>
-          ))}
-          <TouchableOpacity style={[styles.modalRow, { justifyContent: 'center' }]} onPress={onClose}>
-            <Text style={[styles.modalRowText, { color: Colors.textSecondary }]}>Cancel</Text>
-          </TouchableOpacity>
-        </Pressable>
-      </Pressable>
-    </Modal>
-  );
-}
-
-function ActionSheet({
-  visible,
-  member,
-  isAdminMe,
-  isChiefMe,
-  onClose,
-  onPromote,
-  onDemote,
-  onSuspend,
-  onUnsuspend,
-  onRemove,
-  onBlock,
-  onPassChief,
-}: {
-  visible: boolean;
-  member: NormalizedMember | null;
-  isAdminMe: boolean;
-  isChiefMe: boolean;
-  onClose: () => void;
-  onPromote: () => void;
-  onDemote: () => void;
-  onSuspend: () => void;
-  onUnsuspend: () => void;
-  onRemove: () => void;
-  onBlock: () => void;
-  onPassChief: () => void;
-}) {
-  if (!member) return null;
-  const isSuspended = isStillSuspended(member.suspendedUntil);
-  const isMemberAdmin = member.role === 'admin';
-  const isMemberChief = member.role === 'chief';
-
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.modalBackdrop} onPress={onClose}>
-        <Pressable style={styles.modalCard} onPress={() => {}}>
-          <View style={styles.actionHeaderRow}>
-            <MemberAvatar member={member} size={48} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.actionHeaderName}>{member.name}</Text>
-              <View style={{ marginTop: 4 }}>
-                <RoleBadge role={member.role} />
-              </View>
-            </View>
-          </View>
-
-          {isAdminMe && !isMemberChief && (
-            <>
-              {isMemberAdmin ? (
-                <ActionRow icon="user-minus" label="Demote to member" onPress={onDemote} />
-              ) : (
-                <ActionRow icon="user-check" label="Promote to admin" onPress={onPromote} />
-              )}
-              {isSuspended ? (
-                <ActionRow icon="rotate-ccw" label="Lift suspension" onPress={onUnsuspend} />
-              ) : (
-                <ActionRow icon="clock" label="Suspend member…" onPress={onSuspend} />
-              )}
-              <ActionRow icon="user-x" label="Remove from group" onPress={onRemove} danger />
-              <ActionRow icon="slash" label="Block member" onPress={onBlock} danger />
-            </>
-          )}
-
-          {isChiefMe && isMemberAdmin && (
-            <ActionRow icon="award" label="Pass Chief Admin to this user" onPress={onPassChief} />
-          )}
-
-          <TouchableOpacity style={[styles.modalRow, { justifyContent: 'center' }]} onPress={onClose}>
-            <Text style={[styles.modalRowText, { color: Colors.textSecondary }]}>Cancel</Text>
-          </TouchableOpacity>
-        </Pressable>
-      </Pressable>
-    </Modal>
-  );
-}
-
-function ActionRow({ icon, label, onPress, danger }: { icon: any; label: string; onPress: () => void; danger?: boolean }) {
-  return (
-    <TouchableOpacity style={styles.modalRow} onPress={onPress} testID={`action-${label.replace(/\s+/g, '-')}`}>
-      <Feather name={icon} size={18} color={danger ? Colors.danger : Colors.textPrimary} />
-      <Text style={[styles.modalRowText, danger ? { color: Colors.danger } : null]}>{label}</Text>
-    </TouchableOpacity>
-  );
-}
-
-export default function GroupDetailsScreen() {
+function GroupInfoInner() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const conversationId = String(id || '');
-  const { isAuthenticated } = useAuth();
+  const conversationId = id;
 
-  // --- Backend: try the dedicated group-details endpoint, fall back to list.
-  const { data: details } = useSafeConvexQuery<any>(
-    api.conversations.getGroupDetails,
-    { conversationId },
+  // -------- Reads --------
+  const { data: conversation } = useSafeConvexQuery<any | null>(
+    api.conversations.getConversation,
+    conversationId ? { conversationId } : {},
     null,
-    isAuthenticated && !!conversationId,
+    !!conversationId,
   );
-  const { data: groups } = useSafeConvexQuery<any[]>(
-    api.conversations.listGroups,
-    {},
+  const { data: members } = useSafeConvexQuery<any[]>(
+    api.conversations.getGroupMembers,
+    conversationId ? { conversationId } : {},
     [],
-    isAuthenticated,
+    !!conversationId,
   );
-  const { data: regulations } = useSafeConvexQuery<any[]>(
-    api.conversations.listRegulations,
-    { conversationId },
+  const { data: adminInfo, refetch: refetchAdmin } = useSafeConvexQuery<any | null>(
+    (api as any).groupAdmin?.getGroupAdminInfo,
+    conversationId ? { conversationId } : {},
+    null,
+    !!conversationId,
+  );
+  const { data: suspensions } = useSafeConvexQuery<any[]>(
+    (api as any).groupSuspensions?.getGroupSuspensions,
+    conversationId ? { conversationId } : {},
     [],
-    isAuthenticated && !!conversationId,
+    !!conversationId,
   );
-  const { data: contacts } = useSafeConvexQuery<any[]>(api.contacts.getContacts, {}, [], isAuthenticated);
 
-  // Fallback to listGroups[i] when getGroupDetails isn't shipped.
-  const conversation = useMemo(() => {
-    if (details && typeof details === 'object') return details;
-    const list = Array.isArray(groups) ? groups : [];
-    return list.find((g: any) => String(g?._id || g?.id) === conversationId) || null;
-  }, [conversationId, details, groups]);
+  // -------- Mutations --------
+  const updateGroupM = useMutation((api as any).conversations?.updateGroup);
+  const addGroupMemberM = useMutation((api as any).conversations?.addGroupMember);
+  const removeGroupMemberM = useMutation((api as any).conversations?.removeGroupMember);
+  const leaveGroupM = useMutation((api as any).conversations?.leaveGroup);
+  const deleteGroupM = useMutation((api as any).conversations?.deleteGroup);
+  const promoteAdminM = useMutation((api as any).groupAdmin?.promoteToAdmin);
+  const demoteAdminM = useMutation((api as any).groupAdmin?.demoteFromAdmin);
+  const transferChiefM = useMutation((api as any).groupAdmin?.transferChiefAdmin);
+  const generateInviteM = useMutation((api as any).groupAdmin?.generateInviteLink);
+  const disableInviteM = useMutation((api as any).groupAdmin?.disableInviteLink);
+  const toggleApprovalM = useMutation((api as any).messageApproval?.toggleApproval);
+  const suspendMemberM = useMutation((api as any).groupSuspensions?.suspendMember);
+  const liftSuspensionM = useMutation((api as any).groupSuspensions?.liftSuspension);
 
-  const myUserId: string | undefined = (conversation as any)?.viewerUserId
-    || (conversation as any)?.currentUserId
-    || (conversation as any)?.me?._id;
-
-  const members: NormalizedMember[] = useMemo(() => {
-    const raw =
-      (conversation as any)?.memberRecords ||
-      (conversation as any)?.members ||
-      (conversation as any)?.participants ||
-      [];
-    const list = Array.isArray(raw) ? raw : [];
-    const normalized = list.map((entry: any) => {
-      if (typeof entry === 'string') {
-        return normalizeMember({ userId: entry }, contacts || []);
-      }
-      return normalizeMember(entry, contacts || []);
-    });
-    return normalized.sort((a, b) => {
-      const rankDiff = roleRank(a.role) - roleRank(b.role);
-      if (rankDiff !== 0) return rankDiff;
-      return a.name.localeCompare(b.name);
-    });
-  }, [conversation, contacts]);
-
-  const me = useMemo(() => {
-    if (!myUserId) return null;
-    return members.find((m) => m.userId === myUserId) || null;
-  }, [members, myUserId]);
-
-  // If we can't detect the viewer from the conversation, fall back to "viewer
-  // is the chief admin if exactly one chief exists and no others match" so the
-  // screen is still usable before the backend provides a viewerUserId field.
-  const meDerived = me;
-  const isAdminMe = meDerived?.role === 'admin' || meDerived?.role === 'chief' || !meDerived; // unknown viewer assumes admin so they can experiment; backend authoritative
-  const isChiefMe = meDerived?.role === 'chief' || !meDerived;
-
-  // --- Local UI state ---
-  const [actionMember, setActionMember] = useState<NormalizedMember | null>(null);
-  const [suspendingMember, setSuspendingMember] = useState<NormalizedMember | null>(null);
-  const [showInviteModal, setShowInviteModal] = useState(false);
-  const [showAddRegulationModal, setShowAddRegulationModal] = useState(false);
-  const [regulationDraft, setRegulationDraft] = useState('');
-  const [messageApprovalLocal, setMessageApprovalLocal] = useState<boolean>(
-    !!(conversation as any)?.messageApprovalRequired,
+  // -------- Derived --------
+  const isAdmin = !!adminInfo?.isAdmin;
+  const isChief = !!adminInfo?.isChiefAdmin;
+  const myId = adminInfo?.myId ? String(adminInfo.myId) : null;
+  const adminIds = useMemo(
+    () => new Set<string>((adminInfo?.admins || []).map((a: any) => String(a))),
+    [adminInfo],
   );
-  // Keep the toggle visually in sync if the backend value arrives after first render.
-  React.useEffect(() => {
-    if (conversation) {
-      setMessageApprovalLocal(!!(conversation as any).messageApprovalRequired);
+  const chiefAdminId = adminInfo?.chiefAdmin ? String(adminInfo.chiefAdmin) : null;
+  const memberCount = adminInfo?.memberCount ?? (Array.isArray(members) ? members.length : 0);
+  const currentAdminCount = adminInfo?.currentAdminCount ?? 1;
+  const maxAdmins = adminInfo?.maxAdmins ?? Math.max(1, Math.floor(memberCount * 0.2));
+  const messageApprovalEnabled = !!adminInfo?.messageApprovalEnabled;
+  const inviteLinkEnabled = !!adminInfo?.inviteLinkEnabled;
+  const inviteCode: string | null = adminInfo?.inviteCode || null;
+
+  const groupName = conversation?.name || 'Group';
+
+  // Build sorted members list: Me first, then chief, then admins, then rest by name
+  const sortedMembers = useMemo(() => {
+    const list = Array.isArray(members) ? [...members] : [];
+    return list.sort((a, b) => {
+      const aId = String(a._id || a.userId);
+      const bId = String(b._id || b.userId);
+      if (myId && aId === myId) return -1;
+      if (myId && bId === myId) return 1;
+      if (chiefAdminId && aId === chiefAdminId) return -1;
+      if (chiefAdminId && bId === chiefAdminId) return 1;
+      const aA = adminIds.has(aId), bA = adminIds.has(bId);
+      if (aA && !bA) return -1;
+      if (!aA && bA) return 1;
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    });
+  }, [members, myId, chiefAdminId, adminIds]);
+
+  const suspendedMap = useMemo(() => {
+    const map = new Map<string, any>();
+    (Array.isArray(suspensions) ? suspensions : []).forEach((s: any) => {
+      if (s?.userId) map.set(String(s.userId), s);
+    });
+    return map;
+  }, [suspensions]);
+
+  // -------- Modal state --------
+  const [editNameOpen, setEditNameOpen] = useState(false);
+  const [draftName, setDraftName] = useState(groupName);
+  const [draftDesc, setDraftDesc] = useState(conversation?.description || '');
+  const [inviteModalOpen, setInviteModalOpen] = useState(false);
+  const [transferModalOpen, setTransferModalOpen] = useState(false);
+  const [suspendTarget, setSuspendTarget] = useState<any | null>(null);
+  const [suspendDuration, setSuspendDuration] = useState<SuspendDuration>('24h');
+  const [suspendReason, setSuspendReason] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+
+  // -------- Handlers --------
+  const callMutation = useCallback(async (label: string, fn: any, args: any) => {
+    if (typeof fn !== 'function') {
+      Alert.alert(`Server missing ${label}`, 'Please try after the next deployment.');
+      return false;
     }
-  }, [conversation]);
-
-  // --- Mutations (each wrapped to degrade gracefully) ---
-  const updateGroupM = useMutation((api as any).conversations.updateGroup);
-  const addMembersM = useMutation((api as any).conversations.addMembers);
-  const removeMemberM = useMutation((api as any).conversations.removeMember);
-  const promoteAdminM = useMutation((api as any).conversations.promoteToAdmin);
-  const demoteAdminM = useMutation((api as any).conversations.demoteAdmin);
-  const suspendMemberM = useMutation((api as any).conversations.suspendMember);
-  const unsuspendMemberM = useMutation((api as any).conversations.unsuspendMember);
-  const blockMemberM = useMutation((api as any).conversations.blockMember);
-  const passChiefM = useMutation((api as any).conversations.passChiefAdmin);
-  const toggleApprovalM = useMutation((api as any).conversations.toggleMessageApproval);
-  const generateInviteM = useMutation((api as any).conversations.generateInviteLink);
-  const postRegulationM = useMutation((api as any).conversations.postRegulation);
-  const leaveGroupM = useMutation((api as any).conversations.leaveGroup);
-
-  const safeCall = useCallback(async (label: string, fn: () => Promise<any>) => {
+    setBusy(label);
     try {
-      const result = await fn();
-      return result;
-    } catch (errorValue: any) {
-      const message = errorValue?.message || String(errorValue || '');
-      // eslint-disable-next-line no-console
-      console.warn(`[group] ${label} failed:`, message);
-      Alert.alert(label, message.includes('not found') ? 'This action needs the latest backend update. Please rebuild on the server side, then retry.' : message);
-      return null;
+      await fn(args);
+      return true;
+    } catch (e: any) {
+      Alert.alert(`${label} failed`, extractConvexError(e));
+      return false;
+    } finally {
+      setBusy(null);
     }
   }, []);
 
-  const handlePromote = useCallback(async (member: NormalizedMember) => {
-    setActionMember(null);
-    await safeCall('Promote to admin', async () => promoteAdminM({ conversationId, userId: member.userId }));
-  }, [conversationId, promoteAdminM, safeCall]);
-
-  const handleDemote = useCallback(async (member: NormalizedMember) => {
-    setActionMember(null);
-    await safeCall('Demote admin', async () => demoteAdminM({ conversationId, userId: member.userId }));
-  }, [conversationId, demoteAdminM, safeCall]);
-
-  const handleSuspendConfirm = useCallback(async (durationMs: number) => {
-    if (!suspendingMember) return;
-    const member = suspendingMember;
-    setSuspendingMember(null);
-    await safeCall('Suspend member', async () =>
-      suspendMemberM({ conversationId, userId: member.userId, durationMs }),
-    );
-  }, [conversationId, safeCall, suspendMemberM, suspendingMember]);
-
-  const handleUnsuspend = useCallback(async (member: NormalizedMember) => {
-    setActionMember(null);
-    await safeCall('Lift suspension', async () => unsuspendMemberM({ conversationId, userId: member.userId }));
-  }, [conversationId, safeCall, unsuspendMemberM]);
-
-  const handleRemove = useCallback((member: NormalizedMember) => {
-    Alert.alert(
-      `Remove ${member.name}?`,
-      'They will be removed from this group. They can be added again later.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: async () => {
-            setActionMember(null);
-            await safeCall('Remove member', async () => removeMemberM({ conversationId, userId: member.userId }));
-          },
-        },
-      ],
-    );
-  }, [conversationId, removeMemberM, safeCall]);
-
-  const handleBlock = useCallback((member: NormalizedMember) => {
-    Alert.alert(
-      `Block ${member.name}?`,
-      'Blocked members can\u2019t see or send messages in this group.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Block',
-          style: 'destructive',
-          onPress: async () => {
-            setActionMember(null);
-            await safeCall('Block member', async () => blockMemberM({ conversationId, userId: member.userId }));
-          },
-        },
-      ],
-    );
-  }, [blockMemberM, conversationId, safeCall]);
-
-  const handlePassChief = useCallback((member: NormalizedMember) => {
-    Alert.alert(
-      `Pass Chief Admin to ${member.name}?`,
-      'You will lose Chief Admin rights. Only the current and original creator can reclaim it.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Pass',
-          onPress: async () => {
-            setActionMember(null);
-            await safeCall('Pass Chief Admin', async () => passChiefM({ conversationId, toUserId: member.userId }));
-          },
-        },
-      ],
-    );
-  }, [conversationId, passChiefM, safeCall]);
-
-  const handleApprovalToggle = useCallback(async (value: boolean) => {
-    setMessageApprovalLocal(value);
-    const result = await safeCall('Message approval', async () =>
-      toggleApprovalM({ conversationId, enabled: value }),
-    );
-    if (result === null) {
-      // Revert if mutation failed (e.g. endpoint not deployed yet).
-      setMessageApprovalLocal(!value);
+  const onSaveName = async () => {
+    if (!conversationId) return;
+    const name = draftName.trim();
+    if (!name) return Alert.alert('Name required', 'Group name cannot be empty.');
+    const ok = await callMutation('updateGroup', updateGroupM, {
+      conversationId,
+      name,
+      description: draftDesc.trim() || undefined,
+    });
+    if (ok) {
+      setEditNameOpen(false);
+      void refetchAdmin();
     }
-  }, [conversationId, safeCall, toggleApprovalM]);
+  };
 
-  const handleGenerateInvite = useCallback(async () => {
-    const result: any = await safeCall('Generate invite link', async () =>
-      generateInviteM({ conversationId }),
-    );
-    if (result?.url || result?.link || result?.inviteUrl) {
-      const url = String(result.url || result.link || result.inviteUrl);
-      await Clipboard.setStringAsync(url);
-      Alert.alert('Invite link copied', url);
-    } else if (typeof result === 'string' && result.length > 0) {
-      await Clipboard.setStringAsync(result);
-      Alert.alert('Invite link copied', result);
+  const onToggleApproval = async (next: boolean) => {
+    if (!conversationId) return;
+    const ok = await callMutation('toggleApproval', toggleApprovalM, { conversationId, enabled: next });
+    if (ok) void refetchAdmin();
+  };
+
+  const onGenerateInvite = async () => {
+    if (!conversationId) return;
+    const ok = await callMutation('generateInviteLink', generateInviteM, { conversationId });
+    if (ok) void refetchAdmin();
+  };
+
+  const onDisableInvite = async () => {
+    if (!conversationId) return;
+    const ok = await callMutation('disableInviteLink', disableInviteM, { conversationId });
+    if (ok) {
+      setInviteModalOpen(false);
+      void refetchAdmin();
     }
-    setShowInviteModal(false);
-  }, [conversationId, generateInviteM, safeCall]);
+  };
 
-  const handleAddRegulation = useCallback(async () => {
-    const text = regulationDraft.trim();
-    if (!text) return;
-    const result = await safeCall('Post regulation', async () =>
-      postRegulationM({ conversationId, text }),
-    );
-    if (result !== null) {
-      setRegulationDraft('');
-      setShowAddRegulationModal(false);
+  const onShareInvite = async () => {
+    if (!inviteCode) return;
+    const url = `https://smilers.online/join/${inviteCode}`;
+    try {
+      await Share.share({
+        message: `Join my group "${groupName}" on Smilers: ${url}`,
+        url,
+        title: groupName,
+      } as any);
+    } catch {}
+  };
+
+  const onCopyInvite = async () => {
+    if (!inviteCode) return;
+    try {
+      await Clipboard.setStringAsync(`https://smilers.online/join/${inviteCode}`);
+      Alert.alert('Copied', 'Invite link copied to clipboard.');
+    } catch {}
+  };
+
+  const onPromote = async (userId: string) => {
+    if (!conversationId) return;
+    if (currentAdminCount >= maxAdmins) {
+      return Alert.alert('Admin cap reached', `This group allows at most ${maxAdmins} admin(s) (20% of ${memberCount} members).`);
     }
-  }, [conversationId, postRegulationM, regulationDraft, safeCall]);
+    const ok = await callMutation('promoteToAdmin', promoteAdminM, { conversationId, userId });
+    if (ok) void refetchAdmin();
+  };
 
-  const handleLeaveGroup = useCallback(() => {
-    Alert.alert('Leave group?', 'You will no longer receive messages from this group.', [
+  const onDemote = async (userId: string) => {
+    if (!conversationId) return;
+    const ok = await callMutation('demoteFromAdmin', demoteAdminM, { conversationId, userId });
+    if (ok) void refetchAdmin();
+  };
+
+  const onTransferChief = async (newChiefAdminId: string) => {
+    if (!conversationId) return;
+    const ok = await callMutation('transferChiefAdmin', transferChiefM, { conversationId, newChiefAdminId });
+    if (ok) {
+      setTransferModalOpen(false);
+      void refetchAdmin();
+    }
+  };
+
+  const onSuspendConfirm = async () => {
+    if (!conversationId || !suspendTarget) return;
+    const ok = await callMutation('suspendMember', suspendMemberM, {
+      conversationId,
+      userId: suspendTarget.userId || suspendTarget._id,
+      duration: suspendDuration,
+      reason: suspendReason.trim() || undefined,
+    });
+    if (ok) {
+      setSuspendTarget(null);
+      setSuspendReason('');
+      setSuspendDuration('24h');
+    }
+  };
+
+  const onLiftSuspension = async (userId: string) => {
+    if (!conversationId) return;
+    await callMutation('liftSuspension', liftSuspensionM, { conversationId, userId });
+  };
+
+  const onRemoveMember = (userId: string, name: string) => {
+    if (!conversationId) return;
+    Alert.alert('Remove from group?', `${name} will be removed from this group.`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Remove',
+        style: 'destructive',
+        onPress: () => callMutation('removeGroupMember', removeGroupMemberM, { conversationId, userId }),
+      },
+    ]);
+  };
+
+  const onLeave = () => {
+    if (!conversationId) return;
+    Alert.alert('Leave group?', `You will no longer receive messages from "${groupName}".`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Leave',
         style: 'destructive',
         onPress: async () => {
-          await safeCall('Leave group', async () => leaveGroupM({ conversationId }));
-          router.back();
+          const ok = await callMutation('leaveGroup', leaveGroupM, { conversationId });
+          if (ok) router.back();
         },
       },
     ]);
-  }, [conversationId, leaveGroupM, router, safeCall]);
+  };
 
-  const groupName: string = (conversation as any)?.name || 'Group';
-  const description: string = (conversation as any)?.description || (conversation as any)?.about || '';
-  const avatar: string | null = (conversation as any)?.avatar || (conversation as any)?.avatarUrl || null;
-
-  const renderMember = ({ item }: { item: NormalizedMember }) => {
-    const isMe = item.userId === myUserId;
-    const suspended = isStillSuspended(item.suspendedUntil);
-    return (
-      <TouchableOpacity
-        style={styles.memberRow}
-        onPress={() => {
-          if (isMe) return;
-          if (isAdminMe || isChiefMe) setActionMember(item);
-        }}
-        activeOpacity={isAdminMe ? 0.7 : 1}
-        testID={`group-member-${item.userId}`}
-        disabled={isMe || (!isAdminMe && !isChiefMe)}
-      >
-        <MemberAvatar member={item} />
-        <View style={{ flex: 1 }}>
-          <View style={styles.memberNameRow}>
-            <Text style={styles.memberName} numberOfLines={1}>
-              {item.name}{isMe ? ' (You)' : ''}
-            </Text>
-            <RoleBadge role={item.role} />
-          </View>
-          {suspended ? (
-            <Text style={styles.suspensionText}>{formatSuspensionLabel(item.suspendedUntil)}</Text>
-          ) : item.blocked ? (
-            <Text style={styles.suspensionText}>Blocked</Text>
-          ) : null}
-        </View>
-        {(isAdminMe || isChiefMe) && !isMe ? (
-          <Feather name="more-vertical" size={18} color={Colors.textMuted} />
-        ) : null}
-      </TouchableOpacity>
+  const onDelete = () => {
+    if (!conversationId) return;
+    Alert.alert(
+      'Delete group permanently?',
+      'All messages, regulations, and members will be removed. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const ok = await callMutation('deleteGroup', deleteGroupM, { conversationId });
+            if (ok) router.replace('/(tabs)/groups' as any);
+          },
+        },
+      ],
     );
   };
 
+  // -------- Render --------
+  if (!conversationId) {
+    return (
+      <SafeAreaView style={styles.screen} edges={['top']}>
+        <Text style={styles.errText}>Missing group id.</Text>
+      </SafeAreaView>
+    );
+  }
+
+  const eligibleTransferAdmins = sortedMembers.filter((m: any) => {
+    const mid = String(m._id || m.userId);
+    return adminIds.has(mid) && mid !== myId;
+  });
+
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="group-details-screen">
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={10} style={styles.headerBtn} testID="group-back">
-          <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
+    <SafeAreaView style={styles.screen} edges={['top', 'bottom']} testID="group-info-screen">
+      <View style={styles.header} testID="group-info-header">
+        <TouchableOpacity onPress={() => router.back()} hitSlop={10} testID="group-info-back">
+          <Ionicons name="arrow-back" size={26} color={Colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>Group info</Text>
-        <View style={{ width: 44 }} />
+        <Text style={styles.headerTitle}>Group Info</Text>
+        <View style={{ width: 26 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        {/* Top group identity card */}
-        <View style={styles.identityCard}>
-          {avatar && /^https?:/i.test(avatar) ? (
-            <Image source={{ uri: avatar }} style={styles.bigAvatar} />
-          ) : (
-            <View style={[styles.bigAvatar, styles.bigAvatarFallback]}>
-              <Text style={styles.bigAvatarText}>{groupName.charAt(0).toUpperCase()}</Text>
-            </View>
-          )}
-          <Text style={styles.groupTitle}>{groupName}</Text>
-          <Text style={styles.groupSubtitle}>
-            {members.length || (conversation as any)?.memberCount || 0} member
-            {(members.length || (conversation as any)?.memberCount || 0) === 1 ? '' : 's'}
-          </Text>
-          {description ? <Text style={styles.groupDescription}>{description}</Text> : null}
+      <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
+        {/* Identity */}
+        <View style={styles.identityWrap}>
+          <View style={styles.bigAvatar}>
+            <Feather name="users" size={42} color={Colors.primary} />
+          </View>
           <TouchableOpacity
-            style={styles.openChatBtn}
-            onPress={() => router.push(`/chat/${conversationId}` as any)}
-            testID="group-open-chat"
+            style={styles.nameRow}
+            disabled={!isAdmin}
+            onPress={() => {
+              setDraftName(groupName);
+              setDraftDesc(conversation?.description || '');
+              setEditNameOpen(true);
+            }}
+            testID="group-info-edit-name"
           >
-            <Feather name="message-circle" size={18} color={Colors.textPrimary} />
-            <Text style={styles.openChatText}>Open chat</Text>
+            <Text style={styles.groupName}>{groupName}</Text>
+            {isAdmin ? <Feather name="edit-2" size={16} color={Colors.textSecondary} /> : null}
           </TouchableOpacity>
+          <Text style={styles.memberCountLine}>{memberCount} members</Text>
+          <Text style={styles.adminCapLine}>
+            Admins: {currentAdminCount}/{maxAdmins} (20% cap)
+          </Text>
         </View>
 
-        {/* Admin-only settings block */}
-        {(isAdminMe || isChiefMe) ? (
+        {/* ADMIN ACTIONS (only if admin) */}
+        {isAdmin ? (
           <View style={styles.section}>
-            <Text style={styles.sectionLabel}>Admin tools</Text>
+            <Text style={styles.sectionLabel}>ADMIN ACTIONS</Text>
 
-            <View style={styles.settingRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingTitle}>Message approval</Text>
-                <Text style={styles.settingHint}>
-                  Hold every new message until an admin approves it.
-                </Text>
-              </View>
-              <Switch
-                value={messageApprovalLocal}
-                onValueChange={handleApprovalToggle}
-                trackColor={{ true: Colors.primary, false: '#d6cfbf' }}
-                thumbColor="#fff"
-                testID="group-approval-toggle"
+            <ActionRow
+              icon="link"
+              label="Invite Link"
+              trailing={inviteLinkEnabled && inviteCode ? 'Enabled' : 'Disabled'}
+              onPress={() => setInviteModalOpen(true)}
+              testID="group-info-invite"
+            />
+            <ActionRow
+              icon="user-plus"
+              label="Add Members"
+              onPress={() => Alert.alert('Add Members', 'Picker coming next — use Contacts for now.')}
+              testID="group-info-add-members"
+            />
+            <ToggleRow
+              icon="check-circle"
+              label="Message Approval"
+              value={messageApprovalEnabled}
+              onValueChange={onToggleApproval}
+              disabled={busy === 'toggleApproval'}
+              testID="group-info-approval"
+            />
+            {messageApprovalEnabled ? (
+              <ActionRow
+                icon="inbox"
+                label="Pending Messages"
+                onPress={() => router.push(`/group/${conversationId}/pending` as any)}
+                testID="group-info-pending"
               />
-            </View>
-
-            <TouchableOpacity
-              style={styles.actionTile}
-              onPress={() => setShowInviteModal(true)}
-              testID="group-invite-link"
-            >
-              <Feather name="link" size={18} color={Colors.primary} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingTitle}>Invite link</Text>
-                <Text style={styles.settingHint}>Generate a shareable link for new members.</Text>
-              </View>
-              <Feather name="chevron-right" size={18} color={Colors.textMuted} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.actionTile}
-              onPress={() => router.push(`/groups-create?addToConversation=${conversationId}` as any)}
-              testID="group-add-members"
-            >
-              <Feather name="user-plus" size={18} color={Colors.primary} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingTitle}>Add members</Text>
-                <Text style={styles.settingHint}>Only admins can add members to the group.</Text>
-              </View>
-              <Feather name="chevron-right" size={18} color={Colors.textMuted} />
-            </TouchableOpacity>
+            ) : null}
+            <ActionRow
+              icon="file-text"
+              label="Regulations Board"
+              onPress={() => router.push(`/group/${conversationId}/regulations` as any)}
+              testID="group-info-regulations"
+            />
+            {isChief ? (
+              <ActionRow
+                icon="award"
+                label="Transfer Chief Admin"
+                onPress={() => setTransferModalOpen(true)}
+                testID="group-info-transfer"
+              />
+            ) : null}
           </View>
         ) : null}
 
-        {/* Regulations board */}
+        {/* MEMBERS */}
         <View style={styles.section}>
-          <View style={styles.sectionHeaderRow}>
-            <Text style={styles.sectionLabel}>Regulations board</Text>
-            {(isAdminMe || isChiefMe) ? (
-              <TouchableOpacity
-                onPress={() => setShowAddRegulationModal(true)}
-                hitSlop={10}
-                testID="group-add-regulation"
-              >
-                <Feather name="plus" size={20} color={Colors.primary} />
-              </TouchableOpacity>
-            ) : null}
-          </View>
-          {Array.isArray(regulations) && regulations.length > 0 ? (
-            regulations.map((reg: any, idx: number) => (
-              <View key={String(reg?._id || idx)} style={styles.regulationItem}>
-                <Text style={styles.regulationIndex}>{idx + 1}.</Text>
-                <Text style={styles.regulationText}>{reg?.text || reg?.content || ''}</Text>
+          <Text style={styles.sectionLabel}>MEMBERS ({memberCount})</Text>
+          {sortedMembers.map((m: any) => {
+            const mid = String(m._id || m.userId);
+            const isMe = mid === myId;
+            const isChiefMember = mid === chiefAdminId;
+            const isAdminMember = adminIds.has(mid);
+            const suspension = suspendedMap.get(mid);
+            return (
+              <View key={mid} style={styles.memberRow} testID={`group-member-${mid}`}>
+                <View style={styles.memberAvatar}>
+                  {m?.avatarUrl ? (
+                    <Image source={{ uri: m.avatarUrl }} style={styles.memberAvatarImg} />
+                  ) : (
+                    <Text style={styles.memberAvatarText}>{getInitials(m?.name)}</Text>
+                  )}
+                </View>
+                <View style={styles.memberBody}>
+                  <View style={styles.memberNameLine}>
+                    {isChiefMember ? <Text style={styles.crown}>👑 </Text> : null}
+                    <Text style={styles.memberName} numberOfLines={1}>
+                      {isMe ? 'You' : m?.name || 'Unnamed'}
+                    </Text>
+                    {isChiefMember ? (
+                      <View style={styles.chiefBadge}>
+                        <Text style={styles.chiefBadgeText}>Chief Admin</Text>
+                      </View>
+                    ) : isAdminMember ? (
+                      <View style={styles.adminBadge}>
+                        <Text style={styles.adminBadgeText}>Admin</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                  <Text style={styles.memberBio} numberOfLines={1}>
+                    {suspension
+                      ? `🚫 Suspended${suspension.duration ? ` · ${suspension.duration}` : ''}`
+                      : m?.bio || m?.statusMessage || 'Hey there! I am using Smilers.'}
+                  </Text>
+                </View>
+                {isAdmin && !isMe && !isChiefMember ? (
+                  <View style={styles.memberActions}>
+                    {/* Promote / Demote (chief only for demote) */}
+                    {isAdminMember ? (
+                      isChief ? (
+                        <TouchableOpacity
+                          style={styles.iconBtn}
+                          onPress={() => onDemote(mid)}
+                          testID={`group-member-demote-${mid}`}
+                        >
+                          <Feather name="arrow-down-circle" size={20} color={Colors.textSecondary} />
+                        </TouchableOpacity>
+                      ) : null
+                    ) : (
+                      <TouchableOpacity
+                        style={styles.iconBtn}
+                        onPress={() => onPromote(mid)}
+                        testID={`group-member-promote-${mid}`}
+                      >
+                        <Feather name="arrow-up-circle" size={20} color={Colors.primary} />
+                      </TouchableOpacity>
+                    )}
+                    {suspension ? (
+                      <TouchableOpacity
+                        style={styles.iconBtn}
+                        onPress={() => onLiftSuspension(mid)}
+                        testID={`group-member-lift-${mid}`}
+                      >
+                        <Feather name="refresh-cw" size={20} color="#22A06B" />
+                      </TouchableOpacity>
+                    ) : (
+                      <TouchableOpacity
+                        style={styles.iconBtn}
+                        onPress={() => setSuspendTarget(m)}
+                        testID={`group-member-suspend-${mid}`}
+                      >
+                        <Feather name="slash" size={20} color="#D67200" />
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity
+                      style={styles.iconBtn}
+                      onPress={() => onRemoveMember(mid, m?.name || 'this member')}
+                      testID={`group-member-remove-${mid}`}
+                    >
+                      <Feather name="user-minus" size={20} color="#D63030" />
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
               </View>
-            ))
-          ) : (
-            <Text style={styles.sectionEmpty}>
-              {(isAdminMe || isChiefMe)
-                ? 'No regulations yet. Tap + to post the first one.'
-                : 'No regulations have been posted by the admins yet.'}
-            </Text>
-          )}
+            );
+          })}
         </View>
 
-        {/* Members list */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>
-            Members ({members.length || (conversation as any)?.memberCount || 0})
-          </Text>
-          {members.length === 0 ? (
-            <Text style={styles.sectionEmpty}>
-              Member list will appear here when the backend exposes it.
-            </Text>
-          ) : (
-            <FlatList
-              data={members}
-              keyExtractor={(item) => item.userId || Math.random().toString(36).slice(2)}
-              renderItem={renderMember}
-              scrollEnabled={false}
-              ItemSeparatorComponent={() => <View style={styles.memberDivider} />}
-            />
-          )}
-        </View>
-
-        {/* Danger zone */}
-        <View style={styles.section}>
-          <TouchableOpacity
-            style={[styles.actionTile, styles.dangerTile]}
-            onPress={handleLeaveGroup}
-            testID="group-leave"
-          >
-            <Feather name="log-out" size={18} color={Colors.danger} />
-            <Text style={[styles.settingTitle, { color: Colors.danger, flex: 1 }]}>Leave group</Text>
+        {/* Footer actions */}
+        <View style={styles.footerActions}>
+          <TouchableOpacity style={styles.leaveBtn} onPress={onLeave} testID="group-info-leave">
+            <Feather name="log-out" size={18} color="#D63030" />
+            <Text style={styles.leaveBtnText}>Leave Group</Text>
           </TouchableOpacity>
+          {isChief ? (
+            <TouchableOpacity style={styles.deleteBtn} onPress={onDelete} testID="group-info-delete">
+              <Feather name="trash-2" size={18} color={Colors.white} />
+              <Text style={styles.deleteBtnText}>Delete Group Permanently</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       </ScrollView>
 
-      <ActionSheet
-        visible={!!actionMember}
-        member={actionMember}
-        isAdminMe={isAdminMe}
-        isChiefMe={isChiefMe}
-        onClose={() => setActionMember(null)}
-        onPromote={() => actionMember && handlePromote(actionMember)}
-        onDemote={() => actionMember && handleDemote(actionMember)}
-        onSuspend={() => {
-          if (actionMember) {
-            setSuspendingMember(actionMember);
-            setActionMember(null);
-          }
-        }}
-        onUnsuspend={() => actionMember && handleUnsuspend(actionMember)}
-        onRemove={() => actionMember && handleRemove(actionMember)}
-        onBlock={() => actionMember && handleBlock(actionMember)}
-        onPassChief={() => actionMember && handlePassChief(actionMember)}
-      />
-
-      <SuspensionModal
-        visible={!!suspendingMember}
-        member={suspendingMember}
-        onClose={() => setSuspendingMember(null)}
-        onConfirm={handleSuspendConfirm}
-      />
-
-      {/* Invite link confirm modal */}
-      <Modal
-        visible={showInviteModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowInviteModal(false)}
-      >
-        <Pressable style={styles.modalBackdrop} onPress={() => setShowInviteModal(false)}>
+      {/* ----- Edit Name Modal ----- */}
+      <Modal visible={editNameOpen} transparent animationType="slide" onRequestClose={() => setEditNameOpen(false)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setEditNameOpen(false)}>
           <Pressable style={styles.modalCard} onPress={() => {}}>
-            <Text style={styles.modalTitle}>Generate an invite link?</Text>
-            <Text style={styles.modalSubtitle}>
-              Anyone with this link can request to join. You can revoke it later from the admin tools.
-            </Text>
-            <TouchableOpacity style={styles.primaryBtn} onPress={handleGenerateInvite} testID="group-invite-confirm">
-              <Text style={styles.primaryBtnText}>Generate &amp; copy</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.modalRow, { justifyContent: 'center' }]} onPress={() => setShowInviteModal(false)}>
-              <Text style={[styles.modalRowText, { color: Colors.textSecondary }]}>Cancel</Text>
-            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Edit Group</Text>
+            <Text style={styles.modalLabel}>Name</Text>
+            <TextInput
+              value={draftName}
+              onChangeText={setDraftName}
+              style={styles.modalInput}
+              maxLength={64}
+              testID="group-info-edit-name-input"
+            />
+            <Text style={styles.modalLabel}>Description</Text>
+            <TextInput
+              value={draftDesc}
+              onChangeText={setDraftDesc}
+              style={[styles.modalInput, { minHeight: 70, textAlignVertical: 'top' }]}
+              multiline
+              maxLength={280}
+              testID="group-info-edit-desc-input"
+            />
+            <View style={styles.modalActions}>
+              <TouchableOpacity onPress={() => setEditNameOpen(false)} style={styles.modalCancel}>
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={onSaveName} style={styles.modalSave} testID="group-info-edit-save">
+                <Text style={styles.modalSaveText}>Save</Text>
+              </TouchableOpacity>
+            </View>
           </Pressable>
         </Pressable>
       </Modal>
 
-      {/* Add regulation modal */}
-      <Modal
-        visible={showAddRegulationModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowAddRegulationModal(false)}
-      >
-        <KeyboardAvoidingView
-          style={styles.modalBackdrop}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowAddRegulationModal(false)} />
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Post a regulation</Text>
-            <Text style={styles.modalSubtitle}>
-              All members &mdash; current and future &mdash; will see this on the regulations board.
-            </Text>
-            <TextInput
-              value={regulationDraft}
-              onChangeText={setRegulationDraft}
-              placeholder="e.g. Respect each other and stay on topic."
-              placeholderTextColor={Colors.textMuted}
-              style={styles.regulationInput}
-              multiline
-              maxLength={400}
-              testID="group-regulation-input"
-            />
-            <TouchableOpacity
-              style={[styles.primaryBtn, !regulationDraft.trim() && { opacity: 0.5 }]}
-              onPress={handleAddRegulation}
-              disabled={!regulationDraft.trim()}
-              testID="group-regulation-submit"
-            >
-              <Text style={styles.primaryBtnText}>Post regulation</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modalRow, { justifyContent: 'center' }]}
-              onPress={() => setShowAddRegulationModal(false)}
-            >
-              <Text style={[styles.modalRowText, { color: Colors.textSecondary }]}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </KeyboardAvoidingView>
+      {/* ----- Invite Link Modal ----- */}
+      <Modal visible={inviteModalOpen} transparent animationType="slide" onRequestClose={() => setInviteModalOpen(false)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setInviteModalOpen(false)}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <Text style={styles.modalTitle}>🔗 Invite Link</Text>
+            {inviteLinkEnabled && inviteCode ? (
+              <>
+                <Text style={styles.modalBody}>Share this link with anyone you want to add.</Text>
+                <View style={styles.linkBox}>
+                  <Text style={styles.linkBoxText} numberOfLines={1}>
+                    https://smilers.online/join/{inviteCode}
+                  </Text>
+                </View>
+                <View style={{ flexDirection: 'row', gap: Spacing.sm }}>
+                  <TouchableOpacity style={styles.modalActionBtn} onPress={onCopyInvite} testID="group-info-invite-copy">
+                    <Feather name="copy" size={16} color={Colors.textPrimary} />
+                    <Text style={styles.modalActionText}>Copy</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.modalActionBtn} onPress={onShareInvite} testID="group-info-invite-share">
+                    <Feather name="share-2" size={16} color={Colors.textPrimary} />
+                    <Text style={styles.modalActionText}>Share</Text>
+                  </TouchableOpacity>
+                </View>
+                <TouchableOpacity
+                  style={[styles.modalSave, { backgroundColor: '#D63030' }]}
+                  onPress={onDisableInvite}
+                  testID="group-info-invite-disable"
+                >
+                  <Text style={styles.modalSaveText}>Disable Invite Link</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <Text style={styles.modalBody}>Only admins can generate and share invite links.</Text>
+                <TouchableOpacity style={styles.modalSave} onPress={onGenerateInvite} testID="group-info-invite-generate">
+                  <Text style={styles.modalSaveText}>Generate Invite Link</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </Pressable>
+        </Pressable>
       </Modal>
+
+      {/* ----- Transfer Chief Modal ----- */}
+      <Modal visible={transferModalOpen} transparent animationType="slide" onRequestClose={() => setTransferModalOpen(false)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setTransferModalOpen(false)}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <Text style={styles.modalTitle}>👑 Transfer Chief Admin</Text>
+            <Text style={styles.modalBody}>You can transfer Chief Admin to any admin in the group.</Text>
+            {eligibleTransferAdmins.length === 0 ? (
+              <View style={styles.emptyModal}>
+                <Text style={styles.emptyModalTitle}>No eligible admins</Text>
+                <Text style={styles.emptyModalBody}>Promote someone to admin first.</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={eligibleTransferAdmins}
+                keyExtractor={(m: any) => String(m._id || m.userId)}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={styles.transferRow}
+                    onPress={() =>
+                      Alert.alert('Transfer Chief Admin?', `${item?.name || 'this admin'} will become the new Chief Admin.`, [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Transfer',
+                          style: 'destructive',
+                          onPress: () => onTransferChief(String(item._id || item.userId)),
+                        },
+                      ])
+                    }
+                    testID={`group-info-transfer-${String(item._id || item.userId)}`}
+                  >
+                    <View style={styles.memberAvatar}>
+                      <Text style={styles.memberAvatarText}>{getInitials(item?.name)}</Text>
+                    </View>
+                    <Text style={styles.transferName}>{item?.name || 'Admin'}</Text>
+                    <Feather name="chevron-right" size={18} color={Colors.textMuted} />
+                  </TouchableOpacity>
+                )}
+              />
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ----- Suspend Member Modal ----- */}
+      <Modal visible={!!suspendTarget} transparent animationType="slide" onRequestClose={() => setSuspendTarget(null)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setSuspendTarget(null)}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <Text style={styles.modalTitle}>🚫 Suspend Member</Text>
+            <Text style={styles.modalBody}>
+              Suspended members enter spectator mode — they can read messages but cannot send.
+            </Text>
+            <Text style={styles.modalLabel}>Duration</Text>
+            <View style={styles.durationGrid}>
+              {DURATION_OPTIONS.map((opt) => {
+                const active = suspendDuration === opt.key;
+                return (
+                  <TouchableOpacity
+                    key={opt.key}
+                    style={[styles.durationCell, active && styles.durationCellActive]}
+                    onPress={() => setSuspendDuration(opt.key)}
+                    testID={`group-info-suspend-${opt.key}`}
+                  >
+                    <Text style={[styles.durationText, active && styles.durationTextActive]}>
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <Text style={styles.modalLabel}>Reason (optional)</Text>
+            <TextInput
+              value={suspendReason}
+              onChangeText={setSuspendReason}
+              placeholder="Why is this member being suspended?"
+              placeholderTextColor={Colors.textMuted}
+              style={[styles.modalInput, { minHeight: 60, textAlignVertical: 'top' }]}
+              multiline
+              maxLength={200}
+            />
+            <View style={styles.modalActions}>
+              <TouchableOpacity onPress={() => setSuspendTarget(null)} style={styles.modalCancel}>
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={onSuspendConfirm}
+                style={[styles.modalSave, { backgroundColor: '#D63030' }]}
+                testID="group-info-suspend-confirm"
+              >
+                <Text style={styles.modalSaveText}>Suspend</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {busy ? (
+        <View pointerEvents="none" style={styles.busyOverlay}>
+          <ActivityIndicator size="large" color={Colors.primary} />
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
 
+function ActionRow({
+  icon,
+  label,
+  trailing,
+  onPress,
+  testID,
+}: {
+  icon: any;
+  label: string;
+  trailing?: string;
+  onPress: () => void;
+  testID?: string;
+}) {
+  return (
+    <TouchableOpacity style={styles.actionRow} onPress={onPress} testID={testID} activeOpacity={0.7}>
+      <Feather name={icon} size={20} color={Colors.primary} />
+      <Text style={styles.actionLabel}>{label}</Text>
+      {trailing ? <Text style={styles.actionTrailing}>{trailing}</Text> : null}
+      <Feather name="chevron-right" size={18} color={Colors.textMuted} />
+    </TouchableOpacity>
+  );
+}
+
+function ToggleRow({
+  icon,
+  label,
+  value,
+  onValueChange,
+  disabled,
+  testID,
+}: {
+  icon: any;
+  label: string;
+  value: boolean;
+  onValueChange: (v: boolean) => void;
+  disabled?: boolean;
+  testID?: string;
+}) {
+  return (
+    <View style={styles.actionRow} testID={testID}>
+      <Feather name={icon} size={20} color={Colors.primary} />
+      <Text style={[styles.actionLabel, { flex: 1 }]}>{label}</Text>
+      <Switch value={value} onValueChange={onValueChange} disabled={disabled} />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
+  screen: { flex: 1, backgroundColor: Colors.background },
+  errText: { padding: 24, color: Colors.textPrimary },
   header: {
+    height: Platform.select({ ios: 100, default: 88 }),
+    backgroundColor: Colors.primary,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-end',
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.base,
-    paddingVertical: Spacing.sm,
-    backgroundColor: Colors.background,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.borderLight,
+    paddingBottom: Spacing.md,
   },
-  headerTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: FontWeight.bold,
-    color: Colors.textPrimary,
-  },
-  headerBtn: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  scrollContent: { paddingBottom: Spacing.xxl * 2 },
-
-  identityCard: {
-    alignItems: 'center',
-    paddingVertical: Spacing.lg,
-    paddingHorizontal: Spacing.base,
-    gap: 8,
-  },
-  bigAvatar: { width: 96, height: 96, borderRadius: 48 },
-  bigAvatarFallback: {
+  headerTitle: { fontSize: 22, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  body: { paddingBottom: 80 },
+  identityWrap: { alignItems: 'center', paddingVertical: Spacing.lg, gap: 6 },
+  bigAvatar: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
     backgroundColor: Colors.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  bigAvatarText: { fontSize: 36, fontWeight: FontWeight.bold, color: Colors.primary },
-  groupTitle: { fontSize: 24, fontWeight: FontWeight.bold, color: Colors.textPrimary, marginTop: 8 },
-  groupSubtitle: { fontSize: FontSize.base, color: Colors.textSecondary },
-  groupDescription: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-    marginTop: 6,
-  },
-  openChatBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: Spacing.md,
-    paddingVertical: 10,
-    paddingHorizontal: 18,
-    borderRadius: Radius.pill,
-    backgroundColor: '#f5e9d3',
-  },
-  openChatText: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
-
-  section: {
-    paddingHorizontal: Spacing.base,
-    paddingTop: Spacing.lg,
-  },
-  sectionHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: Spacing.md },
+  groupName: { fontSize: 22, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  memberCountLine: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
+  adminCapLine: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2 },
+  section: { marginTop: Spacing.lg, backgroundColor: Colors.surface, paddingVertical: Spacing.sm },
   sectionLabel: {
-    fontSize: FontSize.sm,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.bold,
+    letterSpacing: 1.2,
     color: Colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    fontWeight: FontWeight.semibold,
-    marginBottom: 8,
+    paddingHorizontal: Spacing.base,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.sm,
   },
-  sectionEmpty: { fontSize: FontSize.sm, color: Colors.textMuted, paddingVertical: 6 },
-
-  settingRow: {
+  actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.md,
-    paddingVertical: 14,
-    paddingHorizontal: Spacing.md,
-    borderRadius: Radius.lg,
-    backgroundColor: Colors.surface,
-    marginBottom: 8,
+    paddingHorizontal: Spacing.base,
+    paddingVertical: Spacing.md,
   },
-  settingTitle: { fontSize: FontSize.base, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
-  settingHint: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2, lineHeight: 18 },
-
-  actionTile: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-    paddingVertical: 14,
-    paddingHorizontal: Spacing.md,
-    borderRadius: Radius.lg,
-    backgroundColor: Colors.surface,
-    marginBottom: 8,
-  },
-  dangerTile: { backgroundColor: '#fee2e2' },
-
-  regulationItem: {
-    flexDirection: 'row',
-    gap: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 4,
-  },
-  regulationIndex: { fontSize: FontSize.base, color: Colors.primary, fontWeight: FontWeight.bold },
-  regulationText: { flex: 1, fontSize: FontSize.base, color: Colors.textPrimary, lineHeight: 22 },
-
+  actionLabel: { flex: 1, fontSize: FontSize.base, color: Colors.textPrimary },
+  actionTrailing: { fontSize: FontSize.sm, color: Colors.textSecondary, marginRight: 4 },
   memberRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    paddingHorizontal: Spacing.base,
+    paddingVertical: Spacing.md,
     gap: Spacing.md,
-    paddingVertical: 10,
   },
-  memberDivider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.borderLight, marginVertical: 2 },
-  memberNameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  memberName: { fontSize: FontSize.base, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
-  suspensionText: { fontSize: FontSize.sm, color: Colors.danger, marginTop: 2 },
-
-  avatarFallback: {
+  memberAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: Colors.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarFallbackText: { color: Colors.primary, fontWeight: FontWeight.bold },
+  memberAvatarImg: { width: 44, height: 44, borderRadius: 22 },
+  memberAvatarText: { color: Colors.primary, fontWeight: FontWeight.bold, fontSize: 16 },
+  memberBody: { flex: 1 },
+  memberNameLine: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  crown: { fontSize: 14 },
+  memberName: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  chiefBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    backgroundColor: 'rgba(229,156,26,0.18)',
+  },
+  chiefBadgeText: { fontSize: FontSize.xs, color: Colors.primary, fontWeight: FontWeight.bold },
+  adminBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    backgroundColor: 'rgba(50,120,200,0.15)',
+  },
+  adminBadgeText: { fontSize: FontSize.xs, color: '#3278C8', fontWeight: FontWeight.bold },
+  memberBio: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
+  memberActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  iconBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
 
-  roleBadge: {
+  footerActions: { padding: Spacing.base, gap: Spacing.md, marginTop: Spacing.lg },
+  leaveBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: Radius.pill,
-  },
-  roleBadgeChief: { backgroundColor: '#fef3c7' },
-  roleBadgeAdmin: { backgroundColor: '#dbeafe' },
-  roleBadgeText: { fontSize: 11, fontWeight: FontWeight.semibold },
-
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.lg,
+    gap: 8,
+    height: 50,
+    borderRadius: Radius.md,
+    borderWidth: 1.5,
+    borderColor: '#D63030',
+    backgroundColor: 'rgba(214,48,48,0.08)',
   },
+  leaveBtnText: { fontSize: FontSize.base, color: '#D63030', fontWeight: FontWeight.semibold },
+  deleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    height: 54,
+    borderRadius: Radius.md,
+    backgroundColor: '#D63030',
+  },
+  deleteBtnText: { fontSize: FontSize.base, color: Colors.white, fontWeight: FontWeight.bold },
+
+  // Modals
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalCard: {
-    width: '100%',
-    maxWidth: 460,
-    backgroundColor: Colors.background,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    gap: 10,
-    ...Shadow.lg,
-  },
-  modalTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-  modalSubtitle: { fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
-  modalRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 14,
-    paddingHorizontal: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.borderLight,
-  },
-  modalRowText: { flex: 1, fontSize: FontSize.base, color: Colors.textPrimary, fontWeight: FontWeight.medium },
-
-  primaryBtn: {
-    minHeight: 48,
-    backgroundColor: Colors.primary,
-    borderRadius: Radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  primaryBtnText: { fontSize: FontSize.base, color: Colors.headerBg, fontWeight: FontWeight.bold },
-
-  actionHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, marginBottom: 4 },
-  actionHeaderName: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
-
-  regulationInput: {
-    minHeight: 100,
-    maxHeight: 220,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
     backgroundColor: Colors.surface,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 12,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: Spacing.lg,
+    maxHeight: '90%',
+    gap: Spacing.md,
+  },
+  modalTitle: { fontSize: 20, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  modalBody: { fontSize: FontSize.base, color: Colors.textSecondary, lineHeight: 20 },
+  modalLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textPrimary, marginTop: 4 },
+  modalInput: {
+    minHeight: 46,
+    paddingHorizontal: Spacing.base,
+    paddingVertical: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.borderLight,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.surfaceMuted || Colors.surface,
     fontSize: FontSize.base,
     color: Colors.textPrimary,
-    textAlignVertical: 'top',
+  },
+  modalActions: { flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.sm },
+  modalCancel: { flex: 1, height: 48, borderRadius: Radius.md, alignItems: 'center', justifyContent: 'center' },
+  modalCancelText: { fontSize: FontSize.base, color: Colors.textSecondary, fontWeight: FontWeight.semibold },
+  modalSave: {
+    flex: 1,
+    height: 48,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalSaveText: { fontSize: FontSize.base, color: Colors.textPrimary, fontWeight: FontWeight.bold },
+  modalActionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    gap: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 44,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.primaryLight,
+  },
+  modalActionText: { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
+  linkBox: {
+    padding: Spacing.md,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.background,
+    borderWidth: 1,
+    borderColor: Colors.borderLight,
+  },
+  linkBoxText: { fontSize: FontSize.sm, color: Colors.textPrimary, fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }) as any },
+  emptyModal: { alignItems: 'center', gap: 6, paddingVertical: Spacing.lg },
+  emptyModalTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  emptyModalBody: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center' },
+  transferRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    paddingVertical: Spacing.md,
+  },
+  transferName: { flex: 1, fontSize: FontSize.base, color: Colors.textPrimary },
+  durationGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  durationCell: {
+    flexBasis: '31%',
+    flexGrow: 1,
+    paddingVertical: Spacing.md,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.borderLight,
+    alignItems: 'center',
+  },
+  durationCellActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  durationText: { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
+  durationTextActive: { color: Colors.textPrimary, fontWeight: FontWeight.bold },
+  busyOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
