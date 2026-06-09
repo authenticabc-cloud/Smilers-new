@@ -139,7 +139,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const directRedirectUri =
     Platform.OS === 'web'
-      ? AuthSession.makeRedirectUri({ scheme: 'smilers', path: 'auth-callback' })
+      ? // iter-152 deployment fix: AuthSession.makeRedirectUri on web can return
+        // the preview/sandbox host even after deploy. Anchor to the live
+        // window.location.origin so OAuth callbacks land on whatever
+        // domain the build is actually served from (preview, production,
+        // custom domains).
+        (typeof window !== 'undefined' && window.location?.origin
+          ? `${window.location.origin}/auth-callback`
+          : AuthSession.makeRedirectUri({ scheme: 'smilers', path: 'auth-callback' }))
       : AuthSession.makeRedirectUri({
           scheme: 'smilers',
           path: 'auth-callback',
