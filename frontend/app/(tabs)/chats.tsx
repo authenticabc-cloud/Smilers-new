@@ -93,6 +93,12 @@ export default function ChatsScreen() {
         <Pressable style={menuStyles.backdrop} onPress={() => setShowMenu(false)}>
           <View style={menuStyles.popover}>
             <MenuItem
+              icon={<Feather name="phone" size={20} color={Colors.textPrimary} />}
+              label="Calls"
+              onPress={() => handleMenuPress('/calls')}
+              testID="menu-calls"
+            />
+            <MenuItem
               icon={<Feather name="bookmark" size={20} color={Colors.textPrimary} />}
               label="Starred Messages"
               onPress={() => handleMenuPress('/starred')}
