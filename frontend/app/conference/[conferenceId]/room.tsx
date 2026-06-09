@@ -49,10 +49,10 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
 import { StatusBar } from 'expo-status-bar';
 
-import { api } from '../../src/convexApi';
-import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
-import { getDisplayInitials } from '../../src/lib/displayName';
-import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../src/theme';
+import { api } from '../../../src/convexApi';
+import { useSafeConvexQuery } from '../../../src/hooks/useSafeConvexQuery';
+import { getDisplayInitials } from '../../../src/lib/displayName';
+import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../../src/theme';
 
 type Role = 'chair' | 'clerk' | 'protocol' | 'participant';
 type Audience = 'everyone' | 'chair' | 'clerk';

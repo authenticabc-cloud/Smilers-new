@@ -268,7 +268,7 @@ function MinutesSheet({
         <Pressable style={styles.modalCard} onPress={() => {}}>
           <Text style={styles.modalTitle}>Minutes</Text>
           <Text style={styles.modalSubtitle}>
-            Private to the Clerk. Exportable as PDF (sent to the Clerk's email).
+            Private to the Clerk. Exportable as PDF (sent to the Clerk\u2019s email).
           </Text>
           <View style={styles.minutesScroll} testID="conf-minutes-scroll">
             <Text style={styles.minutesText}>{transcript || 'No entries yet — start the live transcription or type below.'}</Text>
@@ -321,14 +321,17 @@ export default function ConferenceHUD({ conferenceId, onLeave, onToggleScreenSha
   const [collapsed, setCollapsed] = useState(false);
 
   // --- Backend state (graceful fallback) ---
+  // Live in-call state lives in `conferenceRoom.getRoomState`. The HUD layers
+  // extra fields (notice, allMuted, pendingUnmuteRequests, timerEndsAt,
+  // minutes…) on top — those gracefully default when absent.
   const { data: state } = useSafeConvexQuery<any>(
-    (api as any).conferences.getConferenceState,
+    (api as any).conferenceRoom.getRoomState,
     { conferenceId },
     null,
     !!conferenceId,
   );
 
-  const role = normalizeRole(state?.viewerRole);
+  const role = normalizeRole(state?.viewerRole || state?.myRole);
   const isChair = role === 'chair';
   const isClerk = role === 'clerk';
   const isProtocol = role === 'protocol';
@@ -530,7 +533,7 @@ export default function ConferenceHUD({ conferenceId, onLeave, onToggleScreenSha
           <ToolBtn
             icon="view-grid-outline"
             label="Meeting room"
-            onPress={() => router.push(`/conference/${conferenceId}` as any)}
+            onPress={() => router.push(`/conference/${conferenceId}/room` as any)}
             testID="conf-tool-open-room"
           />
 

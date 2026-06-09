@@ -330,19 +330,18 @@ export default function ConferenceCreateScreen() {
         frequency: recurring ? frequency : null,
       });
 
-      // If a future schedule was set, take user back to the conference list
-      // so the just-created conference appears there. If "now", route into
-      // the call screen with the conference HUD overlay.
+      // After successful create, always navigate to the conference INFO screen
+      // so the user can see/share the invite code and enter the room when ready.
       if (scheduledAt && scheduledAt > Date.now() + 60_000) {
         Alert.alert(
           'Conference scheduled',
           usedFallback
             ? 'Conference created — schedule and recurrence are saved on this device. Once the web team ships the latest backend update, they will sync to all your devices.'
             : 'Your conference has been scheduled.',
+          [{ text: 'OK', onPress: () => router.replace(`/conference/${conferenceId}` as any) }],
         );
-        router.back();
       } else {
-        router.replace(`/call/${conferenceId}?type=${type === 'audio' ? 'voice' : 'video'}&conferenceMode=1` as any);
+        router.replace(`/conference/${conferenceId}` as any);
       }
     } catch (errorValue: any) {
       const message = String(errorValue?.message || errorValue || '');

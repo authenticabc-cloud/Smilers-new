@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useMutation } from 'convex/react';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
@@ -105,11 +106,52 @@ export default function GroupsScreen() {
       return;
     }
     if (tab === 'conferences') {
-      router.push(`/call/${itemId}?type=video` as any);
+      router.push(`/conference/${itemId}` as any);
       return;
     }
     router.push(`/chat/${itemId}` as any);
   };
+
+  // --- Join by invite code (api.conferences.joinByCode) ---
+  const joinByCodeM = useMutation((api as any).conferences.joinByCode);
+  const [joining, setJoining] = useState(false);
+
+  const handleJoinByCode = useCallback(async () => {
+    const code = inviteCode.trim().toUpperCase();
+    if (!code) {
+      Alert.alert('Enter a code', 'Please enter a conference invite code to join.');
+      return;
+    }
+    if (joining) return;
+    setJoining(true);
+    try {
+      const result: any = await joinByCodeM({ inviteCode: code });
+      const conferenceId = String(result?._id || result?.id || result || '');
+      if (!conferenceId) {
+        Alert.alert('Could not join', 'The server did not return a conference reference. Please try again.');
+        return;
+      }
+      setInviteCode('');
+      router.push(`/conference/${conferenceId}` as any);
+    } catch (e: any) {
+      const message = String(e?.message || e || '');
+      const lower = message.toLowerCase();
+      if (lower.includes('not_found') || lower.includes('invalid') || lower.includes('no such')) {
+        Alert.alert('Invalid code', 'That invite code didn\u2019t match any conference. Double-check and try again.');
+      } else if (lower.includes('couldnotfindfunction') || lower.includes('no function')) {
+        Alert.alert(
+          'Join unavailable',
+          'The join-by-code endpoint isn\u2019t available on this backend yet. Please try again after the latest backend update ships.',
+        );
+      } else if (lower.includes('ended') || lower.includes('adjourned')) {
+        Alert.alert('Conference closed', 'This conference has already ended and cannot be joined.');
+      } else {
+        Alert.alert('Could not join', message || 'Something went wrong. Please try again.');
+      }
+    } finally {
+      setJoining(false);
+    }
+  }, [inviteCode, joining, joinByCodeM, router]);
 
   if (tab === 'conferences') {
     return (
@@ -156,11 +198,16 @@ export default function GroupsScreen() {
             testID="conference-invite-input"
           />
           <TouchableOpacity
-            style={styles.joinButton}
-            onPress={() => Alert.alert('Conference invite codes', 'I’ll wire the join flow when you share the detailed conference instructions.')}
+            style={[styles.joinButton, joining ? styles.joinButtonDisabled : null]}
+            onPress={handleJoinByCode}
+            disabled={joining}
             testID="conference-join-button"
           >
-            <Text style={styles.joinButtonText}>Join</Text>
+            {joining ? (
+              <ActivityIndicator size="small" color={Colors.headerBg} />
+            ) : (
+              <Text style={styles.joinButtonText}>Join</Text>
+            )}
           </TouchableOpacity>
         </View>
 
@@ -427,6 +474,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#A9D2F3',
+  },
+  joinButtonDisabled: {
+    opacity: 0.55,
   },
   joinButtonText: {
     fontSize: FontSize.base,
