@@ -36,6 +36,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -192,6 +193,29 @@ export default function ConferenceRoomScreen() {
   const removeClerkM = useMutation((api as any).conferenceMinutes.removeClerkRole);
   const assignProtocolM = useMutation((api as any).conferenceSpeakerTimer.assignProtocolRole);
   const removeProtocolM = useMutation((api as any).conferenceSpeakerTimer.removeProtocolRole);
+  // Toolbar pill actions (graceful fallback when functions don't exist):
+  const startTimerM = useMutation((api as any).conferences.startTimer);
+  const endTimerM = useMutation((api as any).conferences.endTimer);
+  const appendMinutesM = useMutation((api as any).conferences.appendMinutes);
+  const sendReactionM = useMutation((api as any).conferences.sendReaction);
+  const muteAllM = useMutation((api as any).conferences.muteAll); // eslint-disable-line @typescript-eslint/no-unused-vars
+  // Best-effort namespaces — wrapped in safeMutate so they degrade gracefully
+  // if the backend hasn't shipped these endpoints yet.
+  const createBreakoutRoomM = useMutation((api as any).chairControls.createBreakoutRoom);
+  const closeBreakoutRoomM = useMutation((api as any).chairControls.closeBreakoutRoom);
+  const proposeMotionM = useMutation((api as any).conferenceMotions?.propose ?? (api as any).conferences.proposeMotion);
+  const createPollM = useMutation((api as any).conferencePolls?.create ?? (api as any).conferences.createPoll);
+
+  // --- Toolbar panel state ---
+  const [activePanel, setActivePanel] = useState<
+    null | 'minutes' | 'timer' | 'motions' | 'polls' | 'breakout' | 'chat' | 'e2ee' | 'participants'
+  >(null);
+  const closePanel = useCallback(() => setActivePanel(null), []);
+
+  // --- Floating reactions overlay (incoming reactions) ---
+  const incomingReactions: any[] = Array.isArray((state as any)?.recentReactions)
+    ? (state as any).recentReactions
+    : [];
 
   // --- Auto-join once on mount ---
   const joinedRef = useRef(false);
@@ -215,7 +239,6 @@ export default function ConferenceRoomScreen() {
   }, [isValid, refetchState]);
 
   // --- Local UI state ---
-  const [chatOpen, setChatOpen] = useState(false);
   const [actionTarget, setActionTarget] = useState<Participant | null>(null);
 
   // --- Handlers ---
@@ -350,10 +373,10 @@ export default function ConferenceRoomScreen() {
             <Text style={styles.headerSubtitle}>
               <Text style={styles.headerLiveDot}>●</Text>  {active.length} participant{active.length === 1 ? '' : 's'}
               {state?.conference?.status ? `  ·  ${state.conference.status}` : ''}
-            </Text>
+          </Text>
           </View>
           <TouchableOpacity
-            onPress={() => setChatOpen(true)}
+            onPress={() => setActivePanel('chat')}
             hitSlop={10}
             style={styles.headerActionBtn}
             testID="conf-open-chat"
@@ -362,6 +385,96 @@ export default function ConferenceRoomScreen() {
           </TouchableOpacity>
         </View>
       </SafeAreaView>
+
+      {/* Horizontal pill toolbar — per Smilers web parity */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.pillBarContent}
+        style={styles.pillBar}
+        testID="conf-pillbar"
+      >
+        <ToolbarPill
+          icon="file-document-outline"
+          tint="#FFFFFF"
+          bg="rgba(255,255,255,0.08)"
+          onPress={() => setActivePanel('minutes')}
+          testID="conf-pill-minutes"
+        />
+        <ToolbarPill
+          icon="timer-outline"
+          tint="#F59E0B"
+          bg="rgba(245,158,11,0.18)"
+          onPress={() => setActivePanel('timer')}
+          testID="conf-pill-timer"
+        />
+        <ToolbarPill
+          icon="gavel"
+          tint="#A855F7"
+          bg="rgba(168,85,247,0.18)"
+          onPress={() => setActivePanel('motions')}
+          testID="conf-pill-motions"
+        />
+        <ToolbarPill
+          icon="poll"
+          tint="#14B8A6"
+          bg="rgba(20,184,166,0.18)"
+          onPress={() => setActivePanel('polls')}
+          testID="conf-pill-polls"
+        />
+        <ToolbarPill
+          icon="view-grid-outline"
+          tint="#818CF8"
+          bg="rgba(129,140,248,0.18)"
+          onPress={() => setActivePanel('breakout')}
+          testID="conf-pill-breakout"
+        />
+        <ToolbarPill
+          icon="chat-outline"
+          tint="#38BDF8"
+          bg="rgba(56,189,248,0.18)"
+          onPress={() => setActivePanel('chat')}
+          testID="conf-pill-chat"
+        />
+        <ToolbarPill
+          icon="shield-check-outline"
+          tint="#10B981"
+          bg="rgba(16,185,129,0.18)"
+          onPress={() => setActivePanel('e2ee')}
+          testID="conf-pill-e2ee"
+        />
+        <ToolbarPill
+          icon={myMuted ? 'microphone-off' : 'microphone'}
+          tint={myMuted ? '#EF4444' : '#FFFFFF'}
+          bg={myMuted ? 'rgba(239,68,68,0.18)' : 'rgba(255,255,255,0.08)'}
+          onPress={handleToggleSelfMute}
+          testID="conf-pill-mute"
+        />
+        <ToolbarPill
+          icon={myVideoEnabled ? 'video' : 'video-off'}
+          tint={myVideoEnabled ? '#FFFFFF' : '#EF4444'}
+          bg={myVideoEnabled ? 'rgba(255,255,255,0.08)' : 'rgba(239,68,68,0.18)'}
+          onPress={handleToggleSelfVideo}
+          testID="conf-pill-camera"
+        />
+        <ToolbarPill
+          icon="account-multiple-outline"
+          tint="#FFFFFF"
+          bg="rgba(255,255,255,0.08)"
+          onPress={() => setActivePanel('participants')}
+          badgeCount={active.length}
+          testID="conf-pill-participants"
+        />
+        <ToolbarPill
+          icon="emoticon-happy-outline"
+          tint="#3D2A00"
+          bg="#FACC15"
+          onPress={() => {
+            void safeMutate('Send reaction', async () => sendReactionM({ conferenceId, emoji: '\uD83C\uDF89' }));
+          }}
+          testID="conf-pill-reactions"
+        />
+      </ScrollView>
 
       {/* Waiting room (lobby) */}
       {waiting.length > 0 && isPrivileged ? (
@@ -451,7 +564,7 @@ export default function ConferenceRoomScreen() {
           <SelfControl
             icon="message-circle"
             label="Chat"
-            onPress={() => setChatOpen(true)}
+            onPress={() => setActivePanel('chat')}
             testID="conf-self-chat"
           />
           <SelfControl
@@ -475,12 +588,230 @@ export default function ConferenceRoomScreen() {
 
       {/* Chat modal */}
       <ConferenceChatModal
-        visible={chatOpen}
-        onClose={() => setChatOpen(false)}
+        visible={activePanel === 'chat'}
+        onClose={closePanel}
         conferenceId={conferenceId!}
         myUserId={myUserId}
         myRole={myRole}
       />
+
+      {/* Side drawer panels (Participants / E2EE info / Breakout / Motions / Polls / Timer / Minutes) */}
+      <SideDrawerPanel
+        visible={activePanel === 'participants'}
+        title={`Participants (${active.length})`}
+        icon="account-multiple-outline"
+        accent="#FFFFFF"
+        onClose={closePanel}
+      >
+        {active.length === 0 ? (
+          <Text style={styles.panelEmpty}>No one in the room yet.</Text>
+        ) : (
+          active.map((p) => {
+            const cfg = getRoleConfig(normalizeRole(p.role));
+            return (
+              <View key={p.userId} style={styles.panelRow}>
+                <View style={styles.panelAvatar}>
+                  <Text style={styles.panelAvatarText}>{getDisplayInitials(p.name || 'U', 1)}</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.panelRowTitle} numberOfLines={1}>
+                    {(p.name || 'Unknown').toUpperCase()}
+                  </Text>
+                  <Text style={styles.panelRowSubtitle}>{cfg.label}</Text>
+                </View>
+                <Feather
+                  name={p.isMuted ? 'mic-off' : 'mic'}
+                  size={16}
+                  color={p.isMuted ? '#EF4444' : '#10B981'}
+                  style={{ marginRight: 8 }}
+                />
+                <MaterialCommunityIcons
+                  name={p.videoEnabled === false ? 'video-off' : 'video'}
+                  size={16}
+                  color={p.videoEnabled === false ? '#EF4444' : '#10B981'}
+                />
+              </View>
+            );
+          })
+        )}
+      </SideDrawerPanel>
+
+      <SideDrawerPanel
+        visible={activePanel === 'e2ee'}
+        title="End-to-End Encryption"
+        icon="shield-check-outline"
+        accent="#10B981"
+        onClose={closePanel}
+      >
+        <View style={styles.panelInfoBlock}>
+          {[
+            'Chair enables E2EE and sets a passphrase',
+            'Chair shares the passphrase securely (voice/DM)',
+            'Participants enter the passphrase in chat',
+            'Messages encrypted locally before sending',
+            'Server never sees plaintext messages',
+          ].map((line, i) => (
+            <View key={i} style={styles.panelInfoRow}>
+              <Text style={styles.panelInfoNumber}>{i + 1}.</Text>
+              <Text style={styles.panelInfoText}>{line}</Text>
+            </View>
+          ))}
+        </View>
+        <Text style={styles.panelHelper}>
+          E2EE is configured from chat. Tap the encryption setting inside chat to set a passphrase.
+        </Text>
+      </SideDrawerPanel>
+
+      <SideDrawerPanel
+        visible={activePanel === 'breakout'}
+        title="Breakout Rooms"
+        icon="view-grid-outline"
+        accent="#818CF8"
+        onClose={closePanel}
+      >
+        <TouchableOpacity
+          style={[styles.panelPrimaryBtn, { borderColor: '#818CF8' }]}
+          activeOpacity={0.85}
+          onPress={async () => {
+            if (!isChair) {
+              Alert.alert('Chair only', 'Only the Chair can create breakout rooms.');
+              return;
+            }
+            await safeMutate('Create breakout room', async () =>
+              createBreakoutRoomM({ conferenceId, name: `Room ${Date.now() % 1000}` }),
+            );
+            void refetchState();
+          }}
+          testID="conf-breakout-new"
+        >
+          <Feather name="plus" size={18} color="#818CF8" />
+          <Text style={[styles.panelPrimaryBtnText, { color: '#818CF8' }]}>New Room</Text>
+        </TouchableOpacity>
+        <Text style={styles.panelEmpty}>No breakout rooms</Text>
+      </SideDrawerPanel>
+
+      <SideDrawerPanel
+        visible={activePanel === 'motions'}
+        title="Motions"
+        icon="gavel"
+        accent="#A855F7"
+        onClose={closePanel}
+      >
+        <TouchableOpacity
+          style={[styles.panelPrimaryBtn, { borderColor: '#A855F7' }]}
+          activeOpacity={0.85}
+          onPress={async () => {
+            await safeMutate('Propose a motion', async () =>
+              proposeMotionM({ conferenceId, text: 'New motion' }),
+            );
+            void refetchState();
+          }}
+          testID="conf-motion-new"
+        >
+          <Feather name="plus" size={18} color="#A855F7" />
+          <Text style={[styles.panelPrimaryBtnText, { color: '#A855F7' }]}>Propose a Motion</Text>
+        </TouchableOpacity>
+        <Text style={styles.panelEmpty}>No motions yet</Text>
+      </SideDrawerPanel>
+
+      <SideDrawerPanel
+        visible={activePanel === 'polls'}
+        title="Polls"
+        icon="poll"
+        accent="#14B8A6"
+        onClose={closePanel}
+      >
+        <TouchableOpacity
+          style={[styles.panelPrimaryBtn, { borderColor: '#14B8A6' }]}
+          activeOpacity={0.85}
+          onPress={async () => {
+            await safeMutate('Create poll', async () =>
+              createPollM({ conferenceId, question: 'New poll', options: ['Yes', 'No'] }),
+            );
+            void refetchState();
+          }}
+          testID="conf-poll-new"
+        >
+          <Feather name="plus" size={18} color="#14B8A6" />
+          <Text style={[styles.panelPrimaryBtnText, { color: '#14B8A6' }]}>Create Poll</Text>
+        </TouchableOpacity>
+        <Text style={styles.panelEmpty}>No polls yet</Text>
+      </SideDrawerPanel>
+
+      <SideDrawerPanel
+        visible={activePanel === 'timer'}
+        title="Protocol Timer"
+        icon="timer-outline"
+        accent="#F59E0B"
+        onClose={closePanel}
+      >
+        <Text style={styles.panelSection}>DURATION</Text>
+        <View style={styles.panelGrid}>
+          {[1, 2, 3, 5, 10, 15].map((mins) => (
+            <TouchableOpacity
+              key={mins}
+              style={styles.panelGridBtn}
+              activeOpacity={0.85}
+              onPress={async () => {
+                await safeMutate('Start timer', async () =>
+                  startTimerM({ conferenceId, durationSec: mins * 60 }),
+                );
+                void refetchState();
+              }}
+              testID={`conf-timer-${mins}min`}
+            >
+              <Text style={styles.panelGridBtnText}>{mins} min</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <TouchableOpacity
+          style={[styles.panelGhostBtn, { marginTop: 12 }]}
+          onPress={async () => {
+            await safeMutate('End timer', async () => endTimerM({ conferenceId }));
+            void refetchState();
+          }}
+          testID="conf-timer-end"
+        >
+          <Text style={styles.panelGhostBtnText}>End timer</Text>
+        </TouchableOpacity>
+      </SideDrawerPanel>
+
+      <SideDrawerPanel
+        visible={activePanel === 'minutes'}
+        title="Minutes"
+        icon="file-document-outline"
+        accent="#FFFFFF"
+        onClose={closePanel}
+      >
+        <Text style={styles.panelHelper}>
+          Private to the Clerk. Tap below to append a quick note.
+        </Text>
+        <TouchableOpacity
+          style={[styles.panelPrimaryBtn, { borderColor: '#FFFFFF' }]}
+          activeOpacity={0.85}
+          onPress={async () => {
+            await safeMutate('Append minute entry', async () =>
+              appendMinutesM({ conferenceId, text: `Note logged at ${new Date().toLocaleTimeString()}` }),
+            );
+            void refetchState();
+          }}
+          testID="conf-minutes-append"
+        >
+          <Feather name="edit-3" size={18} color="#FFFFFF" />
+          <Text style={[styles.panelPrimaryBtnText, { color: '#FFFFFF' }]}>Append entry</Text>
+        </TouchableOpacity>
+      </SideDrawerPanel>
+
+      {/* Floating reactions overlay (incoming) */}
+      {incomingReactions.length > 0 ? (
+        <View style={styles.reactionsOverlay} pointerEvents="none">
+          {incomingReactions.slice(-3).map((r: any, i: number) => (
+            <View key={`${r?._id || i}`} style={styles.reactionBubble}>
+              <Text style={styles.reactionEmoji}>{String(r?.emoji || '\uD83C\uDF89')}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -702,6 +1033,77 @@ function AdminActionSheet({
                 <Feather name="chevron-right" size={18} color={Colors.textMuted} />
               </TouchableOpacity>
             ))}
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+/* --------------------------- ToolbarPill --------------------------- */
+
+function ToolbarPill({
+  icon,
+  tint,
+  bg,
+  badgeCount,
+  onPress,
+  testID,
+}: {
+  icon: string;
+  tint: string;
+  bg: string;
+  badgeCount?: number;
+  onPress: () => void;
+  testID?: string;
+}) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.7}
+      style={[styles.toolbarPill, { backgroundColor: bg }]}
+      testID={testID}
+    >
+      <MaterialCommunityIcons name={icon as any} size={22} color={tint} />
+      {typeof badgeCount === 'number' && badgeCount > 0 ? (
+        <View style={styles.toolbarPillBadge}>
+          <Text style={styles.toolbarPillBadgeText}>{badgeCount > 99 ? '99+' : String(badgeCount)}</Text>
+        </View>
+      ) : null}
+    </TouchableOpacity>
+  );
+}
+
+/* --------------------------- SideDrawerPanel --------------------------- */
+
+function SideDrawerPanel({
+  visible,
+  title,
+  icon,
+  accent,
+  onClose,
+  children,
+}: {
+  visible: boolean;
+  title: string;
+  icon: string;
+  accent: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.drawerBackdrop} onPress={onClose}>
+        <Pressable style={styles.drawerCard} onPress={() => {}}>
+          <View style={styles.drawerHeader}>
+            <MaterialCommunityIcons name={icon as any} size={20} color={accent} />
+            <Text style={styles.drawerTitle}>{title}</Text>
+            <TouchableOpacity onPress={onClose} hitSlop={10} testID="conf-drawer-close">
+              <Text style={styles.drawerCloseText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView contentContainerStyle={styles.drawerBody} keyboardShouldPersistTaps="handled">
+            {children}
+          </ScrollView>
         </Pressable>
       </Pressable>
     </Modal>
@@ -1364,4 +1766,219 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   sendBtnDisabled: { backgroundColor: Colors.border },
+
+  /* Toolbar pill bar */
+  pillBar: {
+    flexGrow: 0,
+    flexShrink: 0,
+    height: 56,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(228,181,59,0.18)',
+  },
+  pillBarContent: {
+    paddingHorizontal: Spacing.base,
+    paddingVertical: Spacing.sm,
+    gap: 10,
+    alignItems: 'center',
+  },
+  toolbarPill: {
+    width: 56,
+    height: 36,
+    borderRadius: Radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+    position: 'relative',
+  },
+  toolbarPillBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: '#FACC15',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  toolbarPillBadgeText: {
+    color: '#3D2A00',
+    fontSize: 10,
+    fontWeight: FontWeight.bold,
+  },
+
+  /* Side drawer panel */
+  drawerBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    flexDirection: 'row',
+  },
+  drawerCard: {
+    flex: 1,
+    marginLeft: 48,
+    backgroundColor: '#0F0A04',
+    borderTopLeftRadius: 16,
+    borderBottomLeftRadius: 16,
+    overflow: 'hidden',
+  },
+  drawerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: Spacing.base,
+    paddingVertical: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+  },
+  drawerTitle: {
+    flex: 1,
+    color: Colors.white,
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+  },
+  drawerCloseText: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.semibold,
+  },
+  drawerBody: {
+    padding: Spacing.base,
+    gap: Spacing.sm,
+  },
+
+  /* Panel rows */
+  panelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.sm,
+    borderRadius: Radius.md,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    minHeight: 56,
+  },
+  panelAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(228,181,59,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  panelAvatarText: { color: '#FFD34E', fontWeight: FontWeight.bold, fontSize: 14 },
+  panelRowTitle: {
+    color: Colors.white,
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.bold,
+  },
+  panelRowSubtitle: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: FontSize.sm,
+    marginTop: 2,
+  },
+  panelEmpty: {
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: FontSize.sm,
+    textAlign: 'center',
+    paddingVertical: Spacing.lg,
+  },
+  panelHelper: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: FontSize.sm,
+    lineHeight: 20,
+  },
+  panelSection: {
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.bold,
+    letterSpacing: 1.2,
+    marginTop: Spacing.sm,
+  },
+  panelGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
+  panelGridBtn: {
+    flexBasis: '30%',
+    flexGrow: 1,
+    paddingVertical: 14,
+    borderRadius: Radius.md,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  panelGridBtnText: {
+    color: Colors.white,
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.semibold,
+  },
+  panelPrimaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    minHeight: 48,
+    borderRadius: Radius.md,
+    borderWidth: 1.5,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  panelPrimaryBtnText: {
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.bold,
+  },
+  panelGhostBtn: {
+    minHeight: 44,
+    borderRadius: Radius.md,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  panelGhostBtnText: {
+    color: Colors.white,
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.semibold,
+  },
+  panelInfoBlock: {
+    gap: Spacing.sm,
+  },
+  panelInfoRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  panelInfoNumber: {
+    color: '#10B981',
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.bold,
+    width: 24,
+  },
+  panelInfoText: {
+    flex: 1,
+    color: Colors.white,
+    fontSize: FontSize.base,
+    lineHeight: 22,
+  },
+
+  /* Floating reactions overlay */
+  reactionsOverlay: {
+    position: 'absolute',
+    right: 8,
+    top: '30%',
+    gap: 6,
+  },
+  reactionBubble: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reactionEmoji: {
+    fontSize: 20,
+  },
 });
