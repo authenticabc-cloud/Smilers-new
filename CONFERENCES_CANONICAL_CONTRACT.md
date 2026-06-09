@@ -13,8 +13,65 @@
 | `api.conferenceChat` | In-meeting chat (`getMessages`, `sendMessage`) |
 | `api.conferenceMinutes` | Clerk role assignment + minute-related (`assignClerkRole`, `removeClerkRole`) |
 | `api.conferenceSpeakerTimer` | Protocol role + speaker timer (`assignProtocolRole`, `removeProtocolRole`, `startTimer`, `endTimer`) |
-| `api.chairControls` | Chair-only lifecycle (start / adjourn / breakout rooms / remove participant) |
-| (others) | Breakout rooms, polls/motions if present |
+| `api.chairControls` | Chair-only lifecycle (start / adjourn / participant management — does NOT host breakout rooms) |
+| `api.conferenceMotions` | **Motions** — `proposeMotion`, `secondMotion`, `openVoting`, `castVote`, `closeVoting`, `withdrawMotion`, `getMotions`, `hasVoted` |
+| `api.conferencePolls` | **Polls** — `createPoll`, `vote`, `closePoll`, `getPolls` |
+| `api.breakoutRooms` | **Breakout rooms** — `createRoom`, `joinRoom`, `leaveRoom`, `closeRoom`, `closeAllRooms`, `moveParticipant`, `getRooms` |
+
+---
+
+## Confirmed function signatures — Motions / Polls / Breakout (iter 154)
+
+### `api.conferenceMotions.*`
+```ts
+proposeMotion({ conferenceId: Id<"conferences">, title: string })   // mutation
+secondMotion({ motionId: Id<"conferenceMotions"> })                 // mutation
+openVoting({ motionId: Id<"conferenceMotions"> })                   // mutation (chair)
+castVote({ motionId: Id<"conferenceMotions">, vote: "for" | "against" | "abstain" })  // mutation
+closeVoting({ motionId: Id<"conferenceMotions"> })                  // mutation (chair)
+withdrawMotion({ motionId: Id<"conferenceMotions"> })               // mutation (proposer)
+getMotions({ conferenceId: Id<"conferences"> })                     // query → motions[] (desc)
+hasVoted({ motionId: Id<"conferenceMotions"> })                     // query → boolean
+```
+> ⚠️ `proposeMotion` takes `title` (not `text`). No `description` arg.
+> ⚠️ Don't call `propose` or `.create` — those don't exist.
+
+### `api.conferencePolls.*`
+```ts
+createPoll({
+  conferenceId: Id<"conferences">,
+  question: string,
+  options: string[],
+  allowMultiple?: boolean,
+  isAnonymous?: boolean,
+})                                                                  // mutation (chair)
+vote({ pollId: Id<"conferencePolls">, optionId: string })           // mutation
+closePoll({ pollId: Id<"conferencePolls"> })                        // mutation (chair)
+getPolls({ conferenceId: Id<"conferences"> })                       // query → polls[]
+```
+> ⚠️ `vote` takes `optionId: string` (the option's id/value), NOT an index.
+
+### `api.breakoutRooms.*`
+```ts
+createRoom({
+  conferenceId: Id<"conferences">,
+  name: string,
+  durationMinutes?: number,
+  assignedUserIds?: Id<"users">[],
+})                                                                  // mutation (chair)
+joinRoom({ conferenceId: Id<"conferences">, roomId: Id<"breakoutRooms"> })   // mutation
+leaveRoom({ conferenceId: Id<"conferences"> })                      // mutation
+closeRoom({ roomId: Id<"breakoutRooms"> })                          // mutation (chair)
+closeAllRooms({ conferenceId: Id<"conferences"> })                  // mutation (chair)
+moveParticipant({
+  conferenceId: Id<"conferences">,
+  targetUserId: Id<"users">,
+  roomId: Id<"breakoutRooms"> | null,   // null = back to main room
+})                                                                  // mutation (chair)
+getRooms({ conferenceId: Id<"conferences"> })                       // query → rooms[]
+```
+> ⚠️ Breakout rooms live in **`api.breakoutRooms`**, NOT `api.chairControls`.
+> ⚠️ All mutations throw `ConvexError` with `UNAUTHENTICATED` / `NOT_FOUND` / `FORBIDDEN` codes — `safeMutate` handles these gracefully.
 
 ---
 
@@ -95,6 +152,9 @@ In-meeting chat. The mobile client encodes audience targeting as a text prefix (
 - Use `api.conferences.joinByCode({ inviteCode })` — arg key is `inviteCode`.
 - Use `api.conferences.deleteConference` for permanent delete; show "Only creator can delete" on `FORBIDDEN`.
 - Use `api.conferenceRoom.getRoomState` for live in-call state.
+- Use `api.conferenceMotions.proposeMotion({ conferenceId, title })` for motions — `title`, not `text`.
+- Use `api.conferencePolls.createPoll({ conferenceId, question, options })`; vote takes `optionId: string`, not an index.
+- Use `api.breakoutRooms.createRoom({ conferenceId, name, ... })` for breakout rooms — NOT `api.chairControls.*`.
 
 ❌ DON'T
 - Don't call `api.conferences.getConferenceState` — it does not exist.
@@ -102,3 +162,6 @@ In-meeting chat. The mobile client encodes audience targeting as a text prefix (
 - Don't call `api.conferences.joinByInviteCode` — it's `joinByCode`.
 - Don't conflate `adjourn` (soft-end) with `deleteConference` (permanent).
 - Don't put group conference creation under `api.groups.*` — there's no shared namespace.
+- Don't call `api.conferenceMotions.propose` or `.create` — the function is `proposeMotion`.
+- Don't call `api.conferencePolls.create` — the function is `createPoll`.
+- Don't call `api.chairControls.createBreakoutRoom` — breakout rooms live in `api.breakoutRooms.createRoom`.

@@ -199,12 +199,34 @@ export default function ConferenceRoomScreen() {
   const appendMinutesM = useMutation((api as any).conferences.appendMinutes);
   const sendReactionM = useMutation((api as any).conferences.sendReaction);
   const muteAllM = useMutation((api as any).conferences.muteAll); // eslint-disable-line @typescript-eslint/no-unused-vars
-  // Best-effort namespaces — wrapped in safeMutate so they degrade gracefully
-  // if the backend hasn't shipped these endpoints yet.
-  const createBreakoutRoomM = useMutation((api as any).chairControls.createBreakoutRoom);
-  const closeBreakoutRoomM = useMutation((api as any).chairControls.closeBreakoutRoom);
-  const proposeMotionM = useMutation((api as any).conferenceMotions?.propose ?? (api as any).conferences.proposeMotion);
-  const createPollM = useMutation((api as any).conferencePolls?.create ?? (api as any).conferences.createPoll);
+  // Confirmed canonical contracts (iter 154):
+  //   Motions   → api.conferenceMotions.proposeMotion / getMotions
+  //   Polls     → api.conferencePolls.createPoll / getPolls
+  //   Breakout  → api.breakoutRooms.createRoom / closeRoom / getRooms
+  const createBreakoutRoomM = useMutation((api as any).breakoutRooms.createRoom);
+  const closeBreakoutRoomM = useMutation((api as any).breakoutRooms.closeRoom); // eslint-disable-line @typescript-eslint/no-unused-vars
+  const proposeMotionM = useMutation((api as any).conferenceMotions.proposeMotion);
+  const createPollM = useMutation((api as any).conferencePolls.createPoll);
+
+  // List queries for drawer panels (graceful fallback to []).
+  const { data: motions } = useSafeConvexQuery<any[]>(
+    (api as any).conferenceMotions.getMotions,
+    { conferenceId },
+    [],
+    !!conferenceId,
+  );
+  const { data: polls } = useSafeConvexQuery<any[]>(
+    (api as any).conferencePolls.getPolls,
+    { conferenceId },
+    [],
+    !!conferenceId,
+  );
+  const { data: breakoutRooms } = useSafeConvexQuery<any[]>(
+    (api as any).breakoutRooms.getRooms,
+    { conferenceId },
+    [],
+    !!conferenceId,
+  );
 
   // --- Toolbar panel state ---
   const [activePanel, setActivePanel] = useState<
@@ -678,7 +700,7 @@ export default function ConferenceRoomScreen() {
               return;
             }
             await safeMutate('Create breakout room', async () =>
-              createBreakoutRoomM({ conferenceId, name: `Room ${Date.now() % 1000}` }),
+              createBreakoutRoomM({ conferenceId, name: `Room ${(breakoutRooms?.length || 0) + 1}` }),
             );
             void refetchState();
           }}
@@ -687,7 +709,23 @@ export default function ConferenceRoomScreen() {
           <Feather name="plus" size={18} color="#818CF8" />
           <Text style={[styles.panelPrimaryBtnText, { color: '#818CF8' }]}>New Room</Text>
         </TouchableOpacity>
-        <Text style={styles.panelEmpty}>No breakout rooms</Text>
+        {Array.isArray(breakoutRooms) && breakoutRooms.length > 0 ? (
+          breakoutRooms.map((r: any) => (
+            <View key={String(r._id || r.id)} style={styles.panelRow} testID={`conf-breakout-${r._id || r.id}`}>
+              <View style={[styles.panelAvatar, { backgroundColor: 'rgba(129,140,248,0.18)' }]}>
+                <MaterialCommunityIcons name="view-grid-outline" size={18} color="#818CF8" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.panelRowTitle} numberOfLines={1}>{r.name || 'Room'}</Text>
+                <Text style={styles.panelRowSubtitle}>
+                  {Array.isArray(r.participants) ? `${r.participants.length} participant${r.participants.length === 1 ? '' : 's'}` : 'Open'}
+                </Text>
+              </View>
+            </View>
+          ))
+        ) : (
+          <Text style={styles.panelEmpty}>No breakout rooms</Text>
+        )}
       </SideDrawerPanel>
 
       <SideDrawerPanel
@@ -702,7 +740,7 @@ export default function ConferenceRoomScreen() {
           activeOpacity={0.85}
           onPress={async () => {
             await safeMutate('Propose a motion', async () =>
-              proposeMotionM({ conferenceId, text: 'New motion' }),
+              proposeMotionM({ conferenceId, title: `Motion #${(motions?.length || 0) + 1}` }),
             );
             void refetchState();
           }}
@@ -711,7 +749,24 @@ export default function ConferenceRoomScreen() {
           <Feather name="plus" size={18} color="#A855F7" />
           <Text style={[styles.panelPrimaryBtnText, { color: '#A855F7' }]}>Propose a Motion</Text>
         </TouchableOpacity>
-        <Text style={styles.panelEmpty}>No motions yet</Text>
+        {Array.isArray(motions) && motions.length > 0 ? (
+          motions.map((m: any) => {
+            const stateLabel = String(m.status || m.state || 'proposed');
+            return (
+              <View key={String(m._id || m.id)} style={styles.panelRow} testID={`conf-motion-${m._id || m.id}`}>
+                <View style={[styles.panelAvatar, { backgroundColor: 'rgba(168,85,247,0.18)' }]}>
+                  <MaterialCommunityIcons name="gavel" size={18} color="#A855F7" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.panelRowTitle} numberOfLines={2}>{m.title || m.text || 'Motion'}</Text>
+                  <Text style={styles.panelRowSubtitle}>{stateLabel}</Text>
+                </View>
+              </View>
+            );
+          })
+        ) : (
+          <Text style={styles.panelEmpty}>No motions yet</Text>
+        )}
       </SideDrawerPanel>
 
       <SideDrawerPanel
@@ -725,8 +780,16 @@ export default function ConferenceRoomScreen() {
           style={[styles.panelPrimaryBtn, { borderColor: '#14B8A6' }]}
           activeOpacity={0.85}
           onPress={async () => {
+            if (!isChair) {
+              Alert.alert('Chair only', 'Only the Chair can create polls.');
+              return;
+            }
             await safeMutate('Create poll', async () =>
-              createPollM({ conferenceId, question: 'New poll', options: ['Yes', 'No'] }),
+              createPollM({
+                conferenceId,
+                question: `Poll #${(polls?.length || 0) + 1}`,
+                options: ['Yes', 'No', 'Abstain'],
+              }),
             );
             void refetchState();
           }}
@@ -735,7 +798,26 @@ export default function ConferenceRoomScreen() {
           <Feather name="plus" size={18} color="#14B8A6" />
           <Text style={[styles.panelPrimaryBtnText, { color: '#14B8A6' }]}>Create Poll</Text>
         </TouchableOpacity>
-        <Text style={styles.panelEmpty}>No polls yet</Text>
+        {Array.isArray(polls) && polls.length > 0 ? (
+          polls.map((p: any) => {
+            const closed = p.status === 'closed' || p.closed === true;
+            return (
+              <View key={String(p._id || p.id)} style={styles.panelRow} testID={`conf-poll-${p._id || p.id}`}>
+                <View style={[styles.panelAvatar, { backgroundColor: 'rgba(20,184,166,0.18)' }]}>
+                  <MaterialCommunityIcons name="poll" size={18} color="#14B8A6" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.panelRowTitle} numberOfLines={2}>{p.question || 'Poll'}</Text>
+                  <Text style={styles.panelRowSubtitle}>
+                    {closed ? 'Closed' : `${Array.isArray(p.options) ? p.options.length : 0} options`}
+                  </Text>
+                </View>
+              </View>
+            );
+          })
+        ) : (
+          <Text style={styles.panelEmpty}>No polls yet</Text>
+        )}
       </SideDrawerPanel>
 
       <SideDrawerPanel
