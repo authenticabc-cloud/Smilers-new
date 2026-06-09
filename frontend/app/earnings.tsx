@@ -20,7 +20,7 @@
  *     fallback empty states.
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -131,17 +131,49 @@ export default function EarningsScreen() {
     null,
     isAuthenticated,
   );
-  // iter-139: read the referral code straight from the user's profile
-  // (canonical field `profile.referralCode`). Previously the mobile
-  // called `getOrCreateReferralCode` as a query, which the canonical
-  // contract identifies as a MUTATION — calling a mutation as a query
-  // either no-ops or creates a fresh code per session, which is why
-  // the native sometimes showed a different code than the web. Reading
-  // straight from the profile guarantees native and web show the same
-  // string (because both read from the same record). The
-  // `getOrCreateReferralCode` mutation is still useful as a fallback
-  // when `profile.referralCode` is null (newly-created user).
-  const referralCode = (profile as any)?.referralCode || null;
+  // iter-145: real fix for "DLLW42AL on one device, dashes on another".
+  // The canonical contract says `getMyProfile` returns `referralCode:
+  // string | null` — meaning some user records simply don't have one
+  // yet (they were created before the web app rolled out auto-creation,
+  // or `getMyProfile` was called before `getOrCreateReferralCode` ever
+  // fired). The robust pattern, mirroring the web app:
+  //   1. Read `profile.referralCode` (zero-cost, comes with the profile)
+  //   2. If null → fire `getOrCreateReferralCode` ONCE on mount; the
+  //      mutation creates a code server-side and stores it on the user
+  //      record. Convex's reactive query will then refresh `profile`
+  //      and the new code surfaces automatically.
+  //   3. Local `localCode` ref holds the mutation result in the
+  //      meantime so the UI doesn't show dashes while waiting for the
+  //      profile to re-fetch.
+  const generateCodeM = useMutation((api as any).earnings?.getOrCreateReferralCode);
+  const [localCode, setLocalCode] = useState<string | null>(null);
+  const profileCode = (profile as any)?.referralCode || null;
+  // Trigger creation once we know the profile has loaded AND it doesn't
+  // already contain a code AND we haven't fired the mutation yet.
+  const triedCreateRef = useRef(false);
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    if (!profile) return; // profile still loading
+    if (profileCode) return; // already have one
+    if (triedCreateRef.current) return;
+    if (typeof generateCodeM !== 'function') return;
+    triedCreateRef.current = true;
+    (async () => {
+      try {
+        const result: any = await (generateCodeM as any)({});
+        // Convex may return either a plain string or an object like
+        // { code: 'ABCD1234' }. Normalize to a string.
+        const value =
+          typeof result === 'string'
+            ? result
+            : (result?.code || result?.referralCode || '');
+        if (value) setLocalCode(String(value));
+      } catch (errorValue: any) {
+        console.warn('[earnings] getOrCreateReferralCode failed:', errorValue?.message);
+      }
+    })();
+  }, [isAuthenticated, profile, profileCode, generateCodeM]);
+  const referralCode = profileCode || localCode;
   const { data: top } = useSafeConvexQuery<any[]>(
     api.earnings.getLeaderboard,
     { limit: 20 },
