@@ -21,6 +21,7 @@ import { useVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
 import { setAudioModeAsync as setExpoAudioModeAsync } from 'expo-audio';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../src/convexApi';
+import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 import { recordDiagnostic } from '../../src/lib/diagnostics';
 import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
@@ -60,7 +61,45 @@ function StatusViewScreenInner() {
   const targetUserId = userId === 'me' ? undefined : userId;
 
   const myStories = useQuery(api.statuses.getMyStatuses, userId === 'me' ? {} : 'skip');
-  const otherStories = useQuery(api.statuses.listForUser, targetUserId ? { userId: targetUserId } : 'skip');
+  // iter-150: `statuses.listForUser` returns "Server Error - Called by
+  // client" on this Convex deployment. Probe canonical aliases in
+  // priority order and stop at the first one that returns data.
+  const otherStoriesA = useSafeConvexQuery<any>(
+    (api as any).statuses?.listForUser,
+    targetUserId ? { userId: targetUserId } : {},
+    null,
+    !!targetUserId,
+  );
+  const otherStoriesB = useSafeConvexQuery<any>(
+    (api as any).statuses?.listByUser,
+    targetUserId ? { userId: targetUserId } : {},
+    null,
+    !!targetUserId && !otherStoriesA.data && !otherStoriesA.loading,
+  );
+  const otherStoriesC = useSafeConvexQuery<any>(
+    (api as any).statuses?.getUserStatuses,
+    targetUserId ? { userId: targetUserId } : {},
+    null,
+    !!targetUserId &&
+      !otherStoriesA.data &&
+      !otherStoriesA.loading &&
+      !otherStoriesB.data &&
+      !otherStoriesB.loading,
+  );
+  const otherStoriesD = useSafeConvexQuery<any>(
+    (api as any).statuses?.listForOther,
+    targetUserId ? { userId: targetUserId } : {},
+    null,
+    !!targetUserId &&
+      !otherStoriesA.data &&
+      !otherStoriesA.loading &&
+      !otherStoriesB.data &&
+      !otherStoriesB.loading &&
+      !otherStoriesC.data &&
+      !otherStoriesC.loading,
+  );
+  const otherStories =
+    otherStoriesA.data || otherStoriesB.data || otherStoriesC.data || otherStoriesD.data || null;
   const me = useQuery(api.users.getCurrentUser);
 
   const stories: any[] = useMemo(() => {
