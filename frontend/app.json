@@ -228,7 +228,6 @@
           "disableExperimental": true
         }
       ],
-      "./plugins/withIosBroadcastExtension",
       [
         "react-native-callkeep",
         {
