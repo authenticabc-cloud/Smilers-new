@@ -124,12 +124,12 @@ export default function ChatScreen() {
   // web (preview only) so it remains safe to call here unconditionally.
   // iter-140: screen-capture protection on chat conversations was
   // blocking the user from taking screenshots of errors for debugging.
-  // iter 158 (security hardening): re-enable FLAG_SECURE / iOS screen-capture
-  // protection on chat conversations. Per Smilers PRD this guards private
-  // messages, attachments, and voice notes from screenshots and from
-  // showing up in the task-switcher recents preview.
-  // Safe no-op on web. Reverts on unmount.
-  useScreenCaptureProtection('chat-conversation');
+  // iter 158 (reverted iter 159): screen-capture restriction is deliberately
+  // NOT enabled here. Per product direction, users must retain full freedom
+  // to screenshot their own chats. Anti-tampering measures live in the
+  // messageSecurityScanner + (upcoming) auto-delete enforcement, NOT in
+  // FLAG_SECURE which is a UX restriction, not a hacker defense.
+  // useScreenCaptureProtection('chat-conversation');
   // iter-137 engagement tracking — fires `api.earnings.trackMessage`
   // after each qualifying outgoing text message (matches the web app's
   // earnings pipeline so the user's totalEngagements actually grows
