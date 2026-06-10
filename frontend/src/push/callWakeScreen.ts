@@ -39,6 +39,28 @@ import type { Router } from 'expo-router';
 
 type ConvexAction = (args: any) => Promise<any>;
 
+/**
+ * iter-176 native-crash hotfix.
+ *
+ * The wake-screen ringing layer (CallKeep + Notifee + iOS VoIP push) was added
+ * in iter-175 as an additive prep layer. The Expo config plugin that injects
+ * the required AndroidManifest <service> entries for `io.wazo.callkeep.
+ * VoiceConnectionService` had to be removed to unblock the EAS deployment
+ * (`react-native-callkeep` does not ship `app.plugin.js`). As a result,
+ * calling `RNCallKeep.setup()` on Android crashes the app at launch with
+ * "Smilers has stopped".
+ *
+ * Until the Android manifest entries and iOS VoIP cert are wired in, this
+ * entire layer is force-disabled. Native modules remain autolinked into the
+ * APK (harmless) — we just never touch them from JS, so the runtime path
+ * that crashes never runs.
+ *
+ * To re-enable later, flip this flag back to `true` AND add the required
+ * AndroidManifest entries (either via a working config plugin or via the
+ * EAS prebuild hooks).
+ */
+const WAKE_SCREEN_ENABLED = false;
+
 let initialised = false;
 let registeredRouter: Router | null = null;
 let registeredDeclineCall: ConvexAction | null = null;
@@ -96,6 +118,11 @@ export async function initCallWakeScreen(
   decline: ConvexAction,
   registerVoipToken?: ConvexAction,
 ): Promise<void> {
+  if (!WAKE_SCREEN_ENABLED) {
+    // Hard-disabled until Android manifest entries / iOS VoIP cert are wired in.
+    // Existing FCM push pipeline keeps working unchanged.
+    return;
+  }
   if (initialised) {
     registeredRouter = router;
     registeredDeclineCall = decline;
@@ -230,6 +257,7 @@ export async function initCallWakeScreen(
  * sticky notification. We just additionally wake the screen.
  */
 export async function presentIncomingCallWake(payload: IncomingCallPayload): Promise<void> {
+  if (!WAKE_SCREEN_ENABLED) return;
   if (Platform.OS === 'web') return;
   if (!payload?.callId) return;
   const native = loadNative();

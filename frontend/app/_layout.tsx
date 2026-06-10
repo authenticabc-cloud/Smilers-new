@@ -169,21 +169,33 @@ function PresenceHeartbeat() {
  * (native module missing on web), the rest of the app continues working.
  */
 function CallWakeBootstrap() {
+  // iter-176 native-crash hotfix: the wake-screen ringing layer
+  // (CallKeep + Notifee + iOS VoIP push) is force-disabled until the
+  // Android Manifest entries for io.wazo.callkeep.VoiceConnectionService
+  // are properly wired in. Without those entries `RNCallKeep.setup()`
+  // crashes the Android app at launch ("Smilers has stopped"). The
+  // existing FCM push pipeline continues working unchanged.
+  //
+  // To re-enable: restore the hook-driven body below (move out of the
+  // commented block) AND flip `WAKE_SCREEN_ENABLED` in
+  // `src/push/callWakeScreen.ts` AND add the required manifest entries.
+  return null;
+}
+
+/* eslint-disable */
+// @ts-nocheck — preserved original implementation for future re-enable.
+// Intentionally guarded behind `false &&` so the bundler keeps it cold-
+// referenced but Metro/JS engine never evaluates the require()s on a
+// release device. Do NOT remove without restoring the manifest entries.
+function _CallWakeBootstrapImpl_DO_NOT_USE() {
   if (Platform.OS === 'web') return null;
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { useEffect } = require('react');
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { useRouter } = require('expo-router');
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { useMutation } = require('convex/react');
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { api } = require('../src/convexApi');
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { initCallWakeScreen } = require('../src/push/callWakeScreen');
 
   const router = useRouter();
-  // Use `as any` so a missing function ref on older deployments doesn't
-  // crash the layout — useMutation is forgiving when args are an `any`.
   const decline = useMutation((api as any).calls?.declineCall) as any;
   const registerVoipToken = useMutation((api as any).calls?.registerVoipToken) as any;
 
@@ -193,6 +205,7 @@ function CallWakeBootstrap() {
 
   return null;
 }
+/* eslint-enable */
 
 /**
  * iter-170 OS Share Sheet receiver.
