@@ -29,7 +29,8 @@ import { useQuery } from 'convex/react';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../src/providers/AuthProvider';
-import { readCache, writeCache } from '../src/lib/offlineCache';
+import { readCacheMeta, writeCache } from '../src/lib/offlineCache';
+import OfflineBanner from '../src/components/OfflineBanner';
 import { getDisplayInitials } from '../src/lib/displayName';
 import Header from '../src/components/Header';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
@@ -126,25 +127,29 @@ export default function CallsScreen() {
   // it arrives. Lets call history show up instantly without network.
   const userKey = me?._id ? String(me._id) : 'anon';
   const [cachedHistory, setCachedHistory] = useState<CallHistoryEntry[] | null>(null);
+  const [cachedTs, setCachedTs] = useState<number | undefined>(undefined);
   useEffect(() => {
     let alive = true;
     (async () => {
-      const data = await readCache<CallHistoryEntry[]>('call-history', userKey);
-      if (alive && Array.isArray(data)) setCachedHistory(data);
+      const meta = await readCacheMeta<CallHistoryEntry[]>('call-history', userKey);
+      if (alive && meta) {
+        if (Array.isArray(meta.data)) setCachedHistory(meta.data);
+        setCachedTs(meta.ts);
+      }
     })();
     return () => { alive = false; };
   }, [userKey]);
   useEffect(() => {
-    if (Array.isArray(history) && history.length >= 0) {
+    if (Array.isArray(history)) {
       void writeCache('call-history', userKey, history);
+      setCachedTs(Date.now());
     }
   }, [history, userKey]);
 
-  const effectiveHistory: CallHistoryEntry[] | null =
-    Array.isArray(history) && history.length > 0
-      ? history
-      : (Array.isArray(history) ? history : cachedHistory);
+  const liveHistory: CallHistoryEntry[] | null = Array.isArray(history) ? history : null;
+  const effectiveHistory = liveHistory ?? cachedHistory;
   const loading = liveLoading && !cachedHistory;
+  const showOfflineBanner = !liveHistory && Array.isArray(cachedHistory) && cachedHistory.length > 0;
 
   const items = useMemo(() => {
     const src = Array.isArray(effectiveHistory) ? effectiveHistory : [];
@@ -183,6 +188,7 @@ export default function CallsScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="calls-screen">
       <Header title="Calls" showBack onBack={() => router.back()} variant="dark" />
+      <OfflineBanner visible={showOfflineBanner} ts={cachedTs} />
       {loading && items.length === 0 ? (
         <View style={styles.loadingWrap}>
           <ActivityIndicator size="large" color={Colors.primary} />
