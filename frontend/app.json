@@ -187,7 +187,23 @@
       "@config-plugins/react-native-webrtc",
       "expo-font",
       "expo-video",
-      "react-native-ble-plx"
+      "react-native-ble-plx",
+      [
+        "expo-share-intent",
+        {
+          "iosActivationRules": {
+            "NSExtensionActivationSupportsText": true,
+            "NSExtensionActivationSupportsWebURLWithMaxCount": 1,
+            "NSExtensionActivationSupportsWebPageWithMaxCount": 1,
+            "NSExtensionActivationSupportsImageWithMaxCount": 10,
+            "NSExtensionActivationSupportsMovieWithMaxCount": 5,
+            "NSExtensionActivationSupportsFileWithMaxCount": 10
+          },
+          "androidIntentFilters": ["text/*", "image/*", "video/*", "application/*", "audio/*"],
+          "androidMultiIntentFilters": ["image/*", "video/*", "application/*"],
+          "disableExperimental": true
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": false

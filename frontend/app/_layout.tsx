@@ -160,6 +160,45 @@ function PresenceHeartbeat() {
   return null;
 }
 
+/**
+ * iter-170 OS Share Sheet receiver.
+ *
+ * Listens globally for an incoming share intent (text/URL/image/video/file
+ * delivered by the iOS share extension or Android ACTION_SEND intent
+ * filter). When a payload arrives we route the user to /share-receiver
+ * which renders the recipient picker.
+ *
+ * Web preview / Expo Go: `useShareIntent` is a no-op there, so the hook
+ * safely renders nothing.
+ */
+function ShareIntentRouter() {
+  // iter-170: skip the native hook entirely on web — `useShareIntent`
+  // crashes when the native module isn't present. We still mount this
+  // component globally; it just becomes a no-op on web preview.
+  if (Platform.OS === 'web') {
+    return null;
+  }
+  // Lazy-require to avoid breaking Web bundling when the native module
+  // isn't present in some environments.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { useShareIntent } = require('expo-share-intent');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { useRouter, usePathname } = require('expo-router');
+
+  const router = useRouter();
+  const pathname = usePathname();
+  const { hasShareIntent } = useShareIntent({ debug: false });
+
+  React.useEffect(() => {
+    if (!hasShareIntent) return;
+    // Don't re-route if we're already on the receiver screen.
+    if (pathname === '/share-receiver') return;
+    router.push('/share-receiver' as any);
+  }, [hasShareIntent, pathname, router]);
+
+  return null;
+}
+
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     Inter_300Light,
@@ -212,6 +251,7 @@ export default function RootLayout() {
             <GlobalNotificationSound />
             <GlobalNotificationServices />
             <PresenceHeartbeat />
+            <ShareIntentRouter />
             <StatusBar style="light" backgroundColor={Colors.headerBg} />
             <AppLockGate>
               <View
@@ -266,6 +306,7 @@ export default function RootLayout() {
               <Stack.Screen name="contact-qr" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
               <Stack.Screen name="screen-share" />
               <Stack.Screen name="find-by-phone" />
+              <Stack.Screen name="share-receiver" />
             </Stack>
             <VoiceCommandLauncher />
             <IncomingScreenShareModal />

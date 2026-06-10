@@ -479,6 +479,7 @@ export default function VoiceCommandLauncher() {
       path.startsWith('/phone-verify') ||
       path.startsWith('/change-phone-number') ||
       path.startsWith('/find-by-phone') ||
+      path.startsWith('/share-receiver') ||
       path.startsWith('/screen-share') ||
       path.startsWith('/sign-in') ||
       path.startsWith('/encryption') ||
