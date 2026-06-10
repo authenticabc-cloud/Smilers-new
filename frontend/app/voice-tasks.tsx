@@ -135,6 +135,11 @@ function VoiceTasksScreen() {
   const [pendingPos, setPendingPos] = useState<number | null>(null);
 
   // Initial load — try Convex first, fall back to local persisted copy.
+  // iter-165: when Convex returns data, ALSO mirror it into AsyncStorage so
+  // the global VoiceCommandLauncher (which only reads local for speed and
+  // offline robustness) sees the cross-device assignments. Without this,
+  // a user assigning slots on the web app would not see them reflected in
+  // the mobile floating mic until they manually opened this screen + saved.
   useEffect(() => {
     if (!isAuthenticated) return;
     let cancelled = false;
@@ -144,6 +149,12 @@ function VoiceTasksScreen() {
       if (fromConvex && Object.keys(fromConvex).length > 0) {
         setAssignments(fromConvex);
         setLoaded(true);
+        // Mirror to local for VoiceCommandLauncher.
+        try {
+          await writeStoredJson(VOICE_TASKS_STORAGE_KEY, fromConvex);
+        } catch {
+          // ignore — non-fatal
+        }
         return;
       }
       const local = (await readStoredJson(VOICE_TASKS_STORAGE_KEY, null)) as AssignmentMap | null;

@@ -14,8 +14,10 @@ import {
 } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter, usePathname } from 'expo-router';
+import { useConvex } from 'convex/react';
+import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
-import { readStoredJson } from '../lib/settingsStorage';
+import { readStoredJson, writeStoredJson } from '../lib/settingsStorage';
 import { parseVoiceCommand, ParsedVoiceCommand } from '../lib/voiceCommandParser';
 import { subscribeTouchActivity } from '../lib/touchActivity';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../theme';
@@ -55,6 +57,7 @@ interface VoiceCommandSheetProps {
 
 function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
   const router = useRouter();
+  const convex = useConvex();
   const [transcript, setTranscript] = useState('');
   const [flow, setFlow] = useState<FlowState>('idle');
   const [assignments, setAssignments] = useState<AssignmentMap>({});
@@ -103,14 +106,61 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
     return undefined;
   }, [flow, pulseAnim]);
 
-  // Load assignments when opened (fresh each session in case user changed them)
+  // Load assignments when opened (fresh each session in case user changed them).
+  // iter-165: local-first read for speed and offline robustness, then if the
+  // local map is empty AND we have a Convex client, attempt to hydrate from
+  // the canonical `api.voiceTaskContacts.getMyVoiceTaskContacts` query
+  // (same shape used by /voice-tasks settings screen). This lets the FAB
+  // work cross-device — e.g. user set their positions on the web app and
+  // hasn't yet opened mobile Settings → Voice Tasks. NEVER overwrites a
+  // non-empty local map (regulations: respect the user's local-first wishes
+  // and the per-position mutation history). NEVER stores audio or transcript.
   useEffect(() => {
     if (!visible) return;
+    let cancelled = false;
     (async () => {
       const saved = (await readStoredJson(VOICE_TASKS_STORAGE_KEY, null)) as AssignmentMap | null;
-      setAssignments(saved || {});
+      if (cancelled) return;
+      if (saved && Object.keys(saved).length > 0) {
+        setAssignments(saved);
+        return;
+      }
+      // Convex fallback — only when local is empty so we never override
+      // user-curated mobile assignments with stale server state.
+      try {
+        const fn = (api as any).voiceTaskContacts?.getMyVoiceTaskContacts;
+        if (!fn || !convex) return;
+        const result = await convex.query(fn, {});
+        if (cancelled) return;
+        if (!Array.isArray(result)) return;
+        const map: AssignmentMap = {};
+        for (const item of result) {
+          const position = Number(item?.position);
+          if (!position || position < 1 || position > 10) continue;
+          map[position] = {
+            position,
+            contactId: String(item?.contactId || item?.userId || ''),
+            name: String(item?.name || 'Contact'),
+            avatar: item?.avatar || null,
+            phone: item?.phone || null,
+          };
+        }
+        if (Object.keys(map).length === 0) return;
+        setAssignments(map);
+        // Mirror to local so subsequent sheet opens are instant + offline.
+        try {
+          await writeStoredJson(VOICE_TASKS_STORAGE_KEY, map);
+        } catch {
+          /* swallow */
+        }
+      } catch {
+        /* swallow — Convex unreachable, local-first is good enough */
+      }
     })();
-  }, [visible]);
+    return () => {
+      cancelled = true;
+    };
+  }, [convex, visible]);
 
   // Reset state and stop recognition when closed
   useEffect(() => {
