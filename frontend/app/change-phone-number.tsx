@@ -1,19 +1,23 @@
 /**
- * Change Phone Number screen (iter-134, Phase B item 2)
+ * Change Phone Number screen — Identity Rework (iter-166).
  *
  * Lets a signed-in user update the phone number associated with
- * their Smilers account. Mirrors the OTP flow used during initial
- * onboarding (`/phone-verify`) but is intentionally scoped to the
- * "I already have a verified number and want to swap it" use-case.
+ * their Smilers account using the canonical Convex actions:
+ *   - api.users.startChangeNumber({ newPhoneE164 })   action
+ *       → { otpRequestId, expiresAt }
+ *   - api.users.confirmChangeNumber({ otpRequestId, code }) action
+ *       → { success, oldPhoneE164, newPhoneE164 }
  *
- * Backend integration:
- *   - api.phoneAuthAction.sendOtp({ phone: <E.164> })
- *   - api.phoneAuthAction.verifyOtp({ phone: <E.164>, code: <string> })
+ * Backend enforces:
+ *   - phoneE164 must be E.164 (we parse client-side via libphonenumber-js)
+ *   - REJECT if newPhoneE164 already belongs to another user (CONFLICT)
+ *   - REJECT if it's already yours (BAD_REQUEST)
+ *   - On confirm: updates users.phoneE164, bumps users.numberChangedAt,
+ *     and inserts a `numberChanged` system message into every conversation
+ *     the user is in (canonical contract).
  *
- * On successful verification the Convex action `verifyOtp` is
- * expected to persist the new number on the user record (server-side
- * `savePhoneVerified` flow). We refresh the local user record so the
- * UI shows the new number immediately.
+ * Both endpoints are Convex Actions (they hit Twilio Verify), so we use
+ * `useAction`, NOT `useMutation`.
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -58,8 +62,8 @@ export default function ChangePhoneNumberScreen() {
   const me: any = meQuery ?? null;
   const updateCurrentUser = useMutation(api.users.updateCurrentUser);
 
-  const sendOtp = useAction(api.phoneAuthAction.sendOtp);
-  const verifyOtp = useAction(api.phoneAuthAction.verifyOtp);
+  const sendOtp = useAction((api as any).users?.startChangeNumber);
+  const verifyOtp = useAction((api as any).users?.confirmChangeNumber);
 
   const [step, setStep] = useState<'enter' | 'otp' | 'done'>('enter');
   const [pickerVisible, setPickerVisible] = useState(false);
@@ -70,12 +74,21 @@ export default function ChangePhoneNumberScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [resendIn, setResendIn] = useState(0);
   const pendingPhoneRef = useRef<string>('');
+  // iter-166: the backend issues an `otpRequestId` from startChangeNumber
+  // that confirmChangeNumber needs. Track it across the two steps.
+  const otpRequestIdRef = useRef<string>('');
+  // Track the final OLD number returned by the backend on confirm so the
+  // success screen can show "switched from X to Y".
+  const completedOldNumberRef = useRef<string>('');
 
-  // Existing number on the account (read-only display).
-  const currentPhone: string = useMemo(
-    () => (typeof me?.phone === 'string' && me.phone.trim().length > 0 ? me.phone : '—'),
-    [me?.phone],
-  );
+  // Existing number on the account (read-only display) — prefer the canonical
+  // `phoneE164` if the backend ships it (iter-166 schema), else fall back
+  // to the legacy `phone` field for users not yet migrated.
+  const currentPhone: string = useMemo(() => {
+    const e164 = typeof me?.phoneE164 === 'string' ? me.phoneE164.trim() : '';
+    const legacy = typeof me?.phone === 'string' ? me.phone.trim() : '';
+    return e164.length > 0 ? e164 : legacy.length > 0 ? legacy : '—';
+  }, [me?.phone, me?.phoneE164]);
 
   // Resend cooldown
   useEffect(() => {
@@ -89,6 +102,13 @@ export default function ChangePhoneNumberScreen() {
       Alert.alert('Not signed in', 'Please sign in before changing your number.');
       return;
     }
+    if (!sendOtp) {
+      Alert.alert(
+        'Update needed',
+        'This version of Smilers can\u2019t change your number yet. Please install the latest app update.',
+      );
+      return;
+    }
     const raw = `${countryCode}${phoneLocal.replace(/\D/g, '')}`;
     const parsed = parsePhoneNumberFromString(raw);
     if (!parsed || !parsed.isValid()) {
@@ -96,7 +116,9 @@ export default function ChangePhoneNumberScreen() {
       return;
     }
     const e164 = parsed.number;
-    if (e164 === me?.phone) {
+    // Canonical compare uses phoneE164; legacy `phone` accepted as fallback.
+    const myCanonical = typeof me?.phoneE164 === 'string' ? me.phoneE164 : (typeof me?.phone === 'string' ? me.phone : '');
+    if (e164 === myCanonical) {
       Alert.alert(
         'Same number',
         'That number is already linked to your account. Enter a different number to change it.',
@@ -106,12 +128,27 @@ export default function ChangePhoneNumberScreen() {
     pendingPhoneRef.current = e164;
     setSubmitting(true);
     try {
-      await sendOtp({ phone: e164 });
+      // Canonical contract: `startChangeNumber({ newPhoneE164 })` → `{ otpRequestId, expiresAt }`.
+      const res: any = await sendOtp({ newPhoneE164: e164 });
+      const requestId = typeof res?.otpRequestId === 'string' ? res.otpRequestId : '';
+      if (!requestId) {
+        throw new Error('Server did not return an OTP request id.');
+      }
+      otpRequestIdRef.current = requestId;
       setStep('otp');
       setResendIn(RESEND_SECONDS);
     } catch (errorValue: any) {
       const msg = errorValue?.data?.message || errorValue?.message || 'Could not send code. Try again.';
-      Alert.alert('Could not send code', msg);
+      // Backend throws CONFLICT if newPhoneE164 already belongs to another account.
+      const isConflict =
+        /already in use|conflict|409|in_use|already linked/i.test(String(msg)) ||
+        /CONFLICT/i.test(String(errorValue?.data?.code || ''));
+      Alert.alert(
+        isConflict ? 'Number already in use' : 'Could not send code',
+        isConflict
+          ? 'Another Smilers account already uses that number. Please use a different one.'
+          : msg,
+      );
     } finally {
       setSubmitting(false);
     }
@@ -123,9 +160,26 @@ export default function ChangePhoneNumberScreen() {
       Alert.alert('Enter the code', 'Please enter the 6-digit code we sent.');
       return;
     }
+    if (!verifyOtp) {
+      Alert.alert(
+        'Update needed',
+        'This version of Smilers can\u2019t change your number yet. Please install the latest app update.',
+      );
+      return;
+    }
+    if (!otpRequestIdRef.current) {
+      Alert.alert('Session expired', 'Please go back and request a new code.');
+      return;
+    }
     setSubmitting(true);
     try {
-      await verifyOtp({ phone: pendingPhoneRef.current, code });
+      // Canonical: `confirmChangeNumber({ otpRequestId, code })`
+      //   → `{ success: true, oldPhoneE164, newPhoneE164 }`
+      const res: any = await verifyOtp({
+        otpRequestId: otpRequestIdRef.current,
+        code,
+      });
+      completedOldNumberRef.current = typeof res?.oldPhoneE164 === 'string' ? res.oldPhoneE164 : '';
       // Refresh the user record so the new phone propagates to the rest
       // of the UI (Account screen pulls from the same reactive query).
       try {
@@ -144,9 +198,14 @@ export default function ChangePhoneNumberScreen() {
 
   const handleResend = async () => {
     if (resendIn > 0) return;
+    if (!sendOtp) return;
     setSubmitting(true);
     try {
-      await sendOtp({ phone: pendingPhoneRef.current });
+      // Resend = restart the OTP session (re-issue a fresh otpRequestId)
+      // so the backend's pending-change record stays consistent.
+      const res: any = await sendOtp({ newPhoneE164: pendingPhoneRef.current });
+      const requestId = typeof res?.otpRequestId === 'string' ? res.otpRequestId : '';
+      if (requestId) otpRequestIdRef.current = requestId;
       setResendIn(RESEND_SECONDS);
     } catch (errorValue: any) {
       const msg = errorValue?.data?.message || errorValue?.message || 'Could not resend. Try again.';
@@ -175,8 +234,9 @@ export default function ChangePhoneNumberScreen() {
               </View>
               <Text style={styles.title}>Number updated</Text>
               <Text style={styles.subtitle}>
-                Your Smilers account is now linked to {pendingPhoneRef.current}. You can keep using
-                the app — your messages, contacts, and groups stay exactly where they are.
+                {completedOldNumberRef.current
+                  ? `Your Smilers account is now linked to ${pendingPhoneRef.current} (previously ${completedOldNumberRef.current}). A system note has been posted in your conversations so contacts know the change.`
+                  : `Your Smilers account is now linked to ${pendingPhoneRef.current}. A system note has been posted in your conversations so contacts know the change.`}
               </Text>
               <TouchableOpacity
                 style={styles.primaryBtn}

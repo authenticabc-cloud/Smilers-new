@@ -66,6 +66,62 @@ function extractFirstUrl(text?: string) {
   return match?.[0];
 }
 
+/**
+ * SystemMessagePill — renders a centered, neutral pill for messages with
+ * `type:'system'`. Currently handles `systemKind:'numberChanged'` per the
+ * Identity Rework contract; falls back to a generic label for any other
+ * future systemKind so unknown system events still render gracefully.
+ *
+ * Backend shape (canonical contract, iter-166):
+ *   {
+ *     type: 'system',
+ *     systemKind: 'numberChanged',
+ *     senderId,                  // user who triggered it
+ *     systemMeta: { userId, oldPhoneE164?, newPhoneE164 },
+ *     _creationTime,
+ *   }
+ *
+ * We intentionally do NOT show the changing user's name lookup here — the
+ * chat header already shows the conversation peer, and the web app shows
+ * a self-contained sentence with just the numbers. Mirrors that.
+ */
+function SystemMessagePill({ msg, timeStr, myUserId }: { msg: any; timeStr: string; myUserId?: string }) {
+  const kind = String(msg?.systemKind || '');
+  const meta = (msg?.systemMeta && typeof msg.systemMeta === 'object') ? msg.systemMeta : {};
+  const isSelf =
+    !!myUserId && (String(meta?.userId || '') === String(myUserId) || String(msg?.senderId || '') === String(myUserId));
+
+  let body = '';
+  if (kind === 'numberChanged') {
+    const oldNum = typeof meta.oldPhoneE164 === 'string' ? meta.oldPhoneE164 : '';
+    const newNum = typeof meta.newPhoneE164 === 'string' ? meta.newPhoneE164 : '';
+    if (isSelf) {
+      body = oldNum
+        ? `You changed your number from ${oldNum} to ${newNum}`
+        : `You changed your number to ${newNum}`;
+    } else {
+      body = oldNum
+        ? `Changed number from ${oldNum} to ${newNum}`
+        : `Changed number to ${newNum}`;
+    }
+  } else if (typeof msg?.text === 'string' && msg.text.length > 0) {
+    body = msg.text;
+  } else {
+    body = 'System update';
+  }
+
+  return (
+    <View style={styles.systemRow} testID={`system-message-${msg._id}`}>
+      <View style={styles.systemPill}>
+        <Text style={styles.systemText} numberOfLines={3}>
+          {body}
+        </Text>
+        <Text style={styles.systemTime}>{timeStr}</Text>
+      </View>
+    </View>
+  );
+}
+
 interface BubbleProps {
   msg: any;
   isMine: boolean;
@@ -96,6 +152,23 @@ export default function MediaBubble({
 }: BubbleProps) {
   const time = msg._creationTime ? new Date(msg._creationTime) : new Date();
   const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+  // iter-166 system-message renderer (Identity Rework).
+  // Backend per canonical contract emits:
+  //   { type:'system', systemKind:'numberChanged',
+  //     senderId, systemMeta:{ userId, oldPhoneE164?, newPhoneE164 } }
+  // Renders as a centered pill — NOT a chat bubble — to match the web
+  // app's "X changed their number" treatment. We deliberately omit the
+  // old number when missing (E.164 only).
+  if (msg?.type === 'system') {
+    return (
+      <SystemMessagePill
+        msg={msg}
+        timeStr={timeStr}
+        myUserId={myUserId}
+      />
+    );
+  }
 
   // Delivery status indicator (sender's own messages only) — per web spec:
   //   green  → sent (server received, not delivered yet)
@@ -1397,6 +1470,34 @@ const styles = StyleSheet.create({
   bubbleRow: { marginVertical: 5, flexDirection: 'row', position: 'relative' },
   bubbleRowMine: { justifyContent: 'flex-end' },
   bubbleRowOther: { justifyContent: 'flex-start' },
+  // iter-166 system message pill (Identity Rework numberChanged + future kinds)
+  systemRow: {
+    marginVertical: 6,
+    flexDirection: 'row',
+    justifyContent: 'center',
+  },
+  systemPill: {
+    maxWidth: '85%',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 14,
+    backgroundColor: 'rgba(61,42,0,0.06)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(61,42,0,0.1)',
+    alignItems: 'center',
+    gap: 2,
+  },
+  systemText: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 17,
+  },
+  systemTime: {
+    fontSize: 10,
+    color: Colors.textMuted,
+    marginTop: 1,
+  },
   bubble: {
     maxWidth: '80%',
     paddingHorizontal: 14,
