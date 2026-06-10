@@ -12,7 +12,7 @@
  * Tapping the trailing phone/video icon → call back (api.calls.initiateCall via /call/[id]).
  */
 
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -24,10 +24,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useQuery } from 'convex/react';
 
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../src/providers/AuthProvider';
+import { readCache, writeCache } from '../src/lib/offlineCache';
 import { getDisplayInitials } from '../src/lib/displayName';
 import Header from '../src/components/Header';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
@@ -110,18 +112,44 @@ function getOutcomeIcon(entry: CallHistoryEntry): { name: any; color: string } {
 export default function CallsScreen() {
   const router = useRouter();
   const { isAuthenticated } = useAuth();
+  const me = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip') as any;
 
-  const { data: history, loading, error } = useSafeConvexQuery<CallHistoryEntry[]>(
+  const { data: history, loading: liveLoading, error } = useSafeConvexQuery<CallHistoryEntry[]>(
     (api as any).calls.listMyCallHistory,
     {},
     [],
     !!isAuthenticated,
   );
 
+  // iter 161 (offline persistence — calls list): same pattern as chats.tsx.
+  // Hydrate from AsyncStorage on cold launch, write fresh data back when
+  // it arrives. Lets call history show up instantly without network.
+  const userKey = me?._id ? String(me._id) : 'anon';
+  const [cachedHistory, setCachedHistory] = useState<CallHistoryEntry[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const data = await readCache<CallHistoryEntry[]>('call-history', userKey);
+      if (alive && Array.isArray(data)) setCachedHistory(data);
+    })();
+    return () => { alive = false; };
+  }, [userKey]);
+  useEffect(() => {
+    if (Array.isArray(history) && history.length >= 0) {
+      void writeCache('call-history', userKey, history);
+    }
+  }, [history, userKey]);
+
+  const effectiveHistory: CallHistoryEntry[] | null =
+    Array.isArray(history) && history.length > 0
+      ? history
+      : (Array.isArray(history) ? history : cachedHistory);
+  const loading = liveLoading && !cachedHistory;
+
   const items = useMemo(() => {
-    if (!Array.isArray(history)) return [];
-    return history.slice().sort((a, b) => (b.startedAt || b._creationTime || 0) - (a.startedAt || a._creationTime || 0));
-  }, [history]);
+    const src = Array.isArray(effectiveHistory) ? effectiveHistory : [];
+    return src.slice().sort((a, b) => (b.startedAt || b._creationTime || 0) - (a.startedAt || a._creationTime || 0));
+  }, [effectiveHistory]);
 
   const openConversation = useCallback(
     (entry: CallHistoryEntry) => {
