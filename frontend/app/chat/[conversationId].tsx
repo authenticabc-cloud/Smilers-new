@@ -38,6 +38,13 @@ import { useEngagementTracker } from '../../src/hooks/useEngagementTracker';
 import { recordDiagnostic } from '../../src/lib/diagnostics';
 import { errorToMessage } from '../../src/lib/safeString';
 import { scanMessage, explainScanResult, extractUrls, enrichScanWithRemoteAPI } from '../../src/lib/securityScanner';
+import { scanMessage as scanMessageDeep } from '../../src/lib/messageSecurityScanner';
+import {
+  IMAGE_PICKER_OPTIONS_CHAT,
+  VIDEO_PICKER_OPTIONS_CHAT,
+  assertUploadSize,
+} from '../../src/lib/dataFriendlyDefaults';
+import { readCache, writeCache } from '../../src/lib/offlineCache';
 import { shareMessage } from '../../src/lib/messageMedia';
 import { appendDiaryEntry, chatMessageToDiaryEntry } from '../../src/lib/diaryStore';
 import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
@@ -395,19 +402,62 @@ export default function ChatScreen() {
     return Array.isArray(arr) ? [...arr].reverse() : [];
   }, [messagesPage]);
 
+  // iter-164 per-conversation offline message cache.
+  //
+  // We persist the most recent ~100 messages of this conversation to
+  // AsyncStorage on every server refresh so that:
+  //   - Cold opens render instantly (no Convex round-trip)
+  //   - The user can scroll their last conversation while offline
+  //
+  // Caching uses the shared `offlineCache` namespace under the scope
+  // `chat-messages` keyed by conversationId. Writes are silent on
+  // failure (quota / locked) — they must never block UI.
+  const [cachedMessages, setCachedMessages] = useState<any[] | null>(null);
+
+  useEffect(() => {
+    if (!conversationId) return;
+    let mounted = true;
+    void readCache<any[]>('chat-messages', String(conversationId)).then((cached) => {
+      if (mounted && Array.isArray(cached) && cached.length) {
+        setCachedMessages(cached);
+      }
+    });
+    return () => { mounted = false; };
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (!conversationId) return;
+    const page = messagesPage as any;
+    const arr = page?.page || page;
+    if (Array.isArray(arr) && arr.length) {
+      // Server returns newest-first; keep the freshest 100 to bound storage.
+      void writeCache('chat-messages', String(conversationId), arr.slice(0, 100));
+    }
+  }, [conversationId, messagesPage]);
+
+  // When the server hasn't returned yet (cold start / offline) prefer
+  // the cached array so the user sees something useful immediately.
+  const messagesForRender: any[] = useMemo(() => {
+    if (messages.length > 0) return messages;
+    if (cachedMessages && cachedMessages.length) {
+      return [...cachedMessages].reverse();
+    }
+    return messages;
+  }, [messages, cachedMessages]);
+
   // E2EE decryption — text messages with `encrypted: true` carry base64
   // ciphertext in `text` and a base64 `iv` field. Derive the conversation's
   // key (PBKDF2-SHA256 ▶ AES-GCM-256) once, then decrypt each message text.
   const e2eeStatus = useConversationE2EE(conversationId || null);
   const decryptedMessages = useMemo(() => {
-    if (!messages.length) return messages;
+    if (!messagesForRender.length) return messagesForRender;
     if (!e2eeStatus.enabled || !e2eeStatus.passphrase || !e2eeStatus.salt) {
       // E2EE not active for this conversation OR key not yet fetched.
       // Returning the raw messages means encrypted ones will still show as
       // base64 until the key arrives (next render).
-      return messages;
+      return messagesForRender;
     }
-    return messages.map((msg: any) => {
+    return messagesForRender.map((msg: any) => {
       if (!msg?.encrypted) return msg;
       try {
         // Only decrypt plain text fields. Media URLs are streamed as bytes
@@ -428,7 +478,7 @@ export default function ChatScreen() {
       }
       return msg;
     });
-  }, [e2eeStatus.enabled, e2eeStatus.passphrase, e2eeStatus.salt, messages]);
+  }, [e2eeStatus.enabled, e2eeStatus.passphrase, e2eeStatus.salt, messagesForRender]);
 
   // iter-147: also honor the canonical conversation field
   // `conversation.disappearAfter` if the server has set one. It may be
@@ -601,6 +651,47 @@ export default function ChatScreen() {
     displayMessages.forEach((message) => map.set(message._id, message));
     return map;
   }, [displayMessages]);
+
+  // iter-164 auto-delete for malicious links/files.
+  //
+  // The render layer already HIDES messages whose heuristic scanner reports
+  // `block` severity (see MessageBubble below). That keeps the UI safe.
+  // Here we go a step further per the PRD ("Auto-delete for malicious
+  // links/files"): if the deeper attachment scanner flags a file/link as
+  // `shouldAutoDelete: true`, we actually remove the message from THIS user's
+  // view server-side via `deleteMessage(mode: 'me')`. Other participants
+  // remain unaffected — they will run their own scan and decide independently.
+  //
+  // We track attempted IDs in a ref so we never loop, and use the deletion
+  // mutation we already have wired up. Errors are silent (offline, not
+  // permitted, etc.) — the render hide is the user-visible safety net.
+  const autoDeletedIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!displayMessages.length) return;
+    for (const m of displayMessages) {
+      if (!m || !m._id) continue;
+      if (m.deletedAt) continue;
+      const id = String(m._id);
+      if (autoDeletedIdsRef.current.has(id)) continue;
+      let scan;
+      try {
+        scan = scanMessageDeep({
+          text: typeof m.text === 'string' ? m.text : undefined,
+          fileName: typeof m.fileName === 'string' ? m.fileName : undefined,
+          mimeType: typeof m.mimeType === 'string' ? m.mimeType : undefined,
+        });
+      } catch {
+        continue;
+      }
+      if (!scan?.shouldAutoDelete) continue;
+      autoDeletedIdsRef.current.add(id);
+      // mode 'me' = delete just for this viewer (private retraction).
+      (deleteMessage as any)({ messageId: m._id, mode: 'me' }).catch(() => {
+        // Fall back to the schema-less call if `mode` isn't supported.
+        (deleteMessage as any)({ messageId: m._id }).catch(() => {});
+      });
+    }
+  }, [displayMessages, deleteMessage]);
 
   useEffect(() => {
     if (conversationId && visibleMessages.length > 0) {
@@ -1034,11 +1125,10 @@ export default function ChatScreen() {
       return;
     }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.85,
-      allowsEditing: false,
-    });
+    // iter-164 data-friendly tuning: route through centralized chat defaults
+    // (quality 0.7, exif stripped, no base64) — cuts typical photo from
+    // 5–10 MB to ~250–600 KB on cellular.
+    const result = await ImagePicker.launchImageLibraryAsync(IMAGE_PICKER_OPTIONS_CHAT);
 
     if (result.canceled || !result.assets?.[0]?.uri) return;
     const asset = result.assets[0];
@@ -1067,11 +1157,8 @@ export default function ChatScreen() {
       return;
     }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-      quality: 0.85,
-      allowsEditing: false,
-    });
+    // iter-164 data-friendly: 60s cap + lower quality → smaller payloads.
+    const result = await ImagePicker.launchImageLibraryAsync(VIDEO_PICKER_OPTIONS_CHAT);
 
     if (result.canceled || !result.assets?.[0]?.uri || !conversationId) return;
     const asset = result.assets[0];
@@ -1112,11 +1199,8 @@ export default function ChatScreen() {
       return;
     }
 
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-      quality: 0.85,
-      allowsEditing: false,
-    });
+    // iter-164 data-friendly: 60s cap + reduced quality.
+    const result = await ImagePicker.launchCameraAsync(VIDEO_PICKER_OPTIONS_CHAT);
 
     if (result.canceled || !result.assets?.[0]?.uri || !conversationId) return;
     const asset = result.assets[0];
@@ -1191,6 +1275,26 @@ export default function ChatScreen() {
 
       const file = result.assets?.[0];
       if (!file) return;
+
+      // iter-164 security: block obviously dangerous attachments (e.g., .exe,
+      // .apk, .bat) at the SEND boundary so a malicious upload never reaches
+      // the recipient. Mirrors the auto-delete-on-receive behaviour below.
+      const preSendScan = scanMessageDeep({ fileName: file.name, mimeType: file.mimeType || undefined });
+      if (preSendScan.shouldAutoDelete) {
+        const reason = preSendScan.findings[0]?.reason || 'This file type may run code on the recipient\u2019s device.';
+        Alert.alert('Blocked: risky file', reason);
+        return;
+      }
+
+      // iter-164 data-friendly: refuse oversized uploads before burning
+      // bandwidth + cellular data. assertUploadSize throws a user-friendly
+      // message we surface via Alert.
+      try {
+        assertUploadSize(file.size || 0, 'document');
+      } catch (sizeErr: any) {
+        Alert.alert('File too large', sizeErr?.message || 'Please choose a smaller file.');
+        return;
+      }
 
       setUploading(true);
       const mime = file.mimeType || 'application/octet-stream';
