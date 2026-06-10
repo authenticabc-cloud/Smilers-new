@@ -2131,7 +2131,16 @@ export default function ChatScreen() {
       testID="chat-screen"
     >
       <View style={styles.chatHeader} testID="chat-header">
-        <View style={styles.chatHeaderLeft}>
+        {/* iter-174: chat header restructured into TWO ROWS for legibility.
+            Row 1 = back arrow + avatar + name + presence subtitle (each get
+            generous horizontal space so the contact's name reads clearly
+            instead of getting truncated to "...").
+            Row 2 = the 7 utility action buttons (search, call, video, time,
+            shield, more).
+            The user explicitly OK'd this layout in iter-174 feedback:
+              "If you should shift that up on top of the call buttons, it
+               should be fine. Just make them clearly readable." */}
+        <View style={styles.chatHeaderTopRow}>
           <TouchableOpacity testID="chat-back-btn" onPress={() => router.back()} style={styles.headerIconButton}>
             <Ionicons name="arrow-back" size={24} color={Colors.white} />
           </TouchableOpacity>
@@ -2196,7 +2205,7 @@ export default function ChatScreen() {
           >
             <Feather
               name={chatSearchQuery === null ? 'search' : 'x'}
-              size={18}
+              size={20}
               color={Colors.white}
             />
           </TouchableOpacity>
@@ -2205,23 +2214,23 @@ export default function ChatScreen() {
             onPress={() => router.push(`/call/${conversationId}?type=voice&displayName=${encodeURIComponent(title)}` as any)}
             style={styles.headerIconButton}
           >
-            <Ionicons name="call-outline" size={18} color={Colors.white} />
+            <Ionicons name="call-outline" size={20} color={Colors.white} />
           </TouchableOpacity>
           <TouchableOpacity
             testID="video-btn"
             onPress={() => router.push(`/call/${conversationId}?type=video&displayName=${encodeURIComponent(title)}` as any)}
             style={styles.headerIconButton}
           >
-            <Ionicons name="videocam-outline" size={19} color={Colors.white} />
+            <Ionicons name="videocam-outline" size={21} color={Colors.white} />
           </TouchableOpacity>
           <TouchableOpacity testID="chat-disappearing-btn" onPress={() => setShowDisappearingSheet(true)} style={styles.headerIconButton}>
-            <Ionicons name="time-outline" size={18} color={Colors.white} />
+            <Ionicons name="time-outline" size={20} color={Colors.white} />
           </TouchableOpacity>
           <TouchableOpacity testID="chat-encryption-btn" onPress={() => router.push('/encryption' as any)} style={styles.headerIconButton}>
-            <Ionicons name="shield-checkmark-outline" size={18} color={Colors.white} />
+            <Ionicons name="shield-checkmark-outline" size={20} color={Colors.white} />
           </TouchableOpacity>
           <TouchableOpacity testID="chat-menu-btn" onPress={() => setShowOptionsMenu(true)} style={styles.headerIconButton}>
-            <Feather name="more-vertical" size={18} color={Colors.white} />
+            <Feather name="more-vertical" size={20} color={Colors.white} />
           </TouchableOpacity>
         </View>
       </View>
@@ -3452,15 +3461,21 @@ const styles = StyleSheet.create({
   // `chatWallpaper` token (#F5F1E7) instead of the app body color.
   container: { flex: 1, backgroundColor: Colors.chatWallpaper },
   chatHeader: {
+    // iter-174: two-row header layout for legibility (Row 1 = identity,
+    // Row 2 = action buttons). Header is now a column.
     minHeight: 130,
-    // iter-169 web parity: conversation header now reads from the theme
-    // (Colors.headerBg = #4A3917), unifying it with all other dark headers.
     backgroundColor: Colors.headerBg,
-    paddingHorizontal: 12,
-    paddingVertical: 24,
+    paddingHorizontal: 8,
+    paddingTop: 14,
+    paddingBottom: 8,
+    flexDirection: 'column',
+    gap: 6,
+  },
+  chatHeaderTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    flex: 0,
+    minWidth: 0,
   },
   chatHeaderLeft: {
     flexDirection: 'row',
@@ -3477,19 +3492,20 @@ const styles = StyleSheet.create({
   chatHeaderActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginLeft: 4,
+    justifyContent: 'space-around',
+    paddingHorizontal: 4,
     flexShrink: 0,
   },
   headerIconButton: {
-    width: 36,
-    height: 36,
+    width: 40,
+    height: 40,
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: '#E4B53B',
     alignItems: 'center',
     justifyContent: 'center',
@@ -3501,9 +3517,9 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.diary,
   },
   headerAvatarImage: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
   },
   headerAvatarText: {
     fontSize: 18,
@@ -3514,16 +3530,21 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     flexShrink: 1,
+    paddingRight: 8,
   },
   chatHeaderTitle: {
-    fontSize: 19,
+    // iter-174: bigger, bolder, more legible. Title now has full row width.
+    fontSize: 20,
     fontWeight: FontWeight.bold,
     color: Colors.white,
   },
   chatHeaderSubtitle: {
+    // iter-174: brighter presence subtitle. Was 0.78 alpha → tougher to
+    // read on a brown background; bumped to 0.92 + slightly larger font.
     marginTop: 3,
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.78)',
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.92)',
+    fontWeight: FontWeight.medium,
   },
   encryptionBanner: {
     minHeight: 34,
