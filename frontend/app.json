@@ -203,7 +203,8 @@
           "androidMultiIntentFilters": ["image/*", "video/*", "application/*"],
           "disableExperimental": true
         }
-      ]
+      ],
+      "./plugins/withIosBroadcastExtension"
     ],
     "experiments": {
       "typedRoutes": false

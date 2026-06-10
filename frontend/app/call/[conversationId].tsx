@@ -1301,10 +1301,14 @@ function CallScreenInner() {
       Alert.alert('Screen sharing', 'Screen sharing will be available as soon as the call media is ready.');
       return;
     }
-    if (Platform.OS === 'ios') {
-      alertScreenShareIOSError();
-      return;
-    }
+    // iter-171: removed the unconditional iOS alert. The Broadcast Upload
+    // Extension added by `plugins/withIosBroadcastExtension.js` registers
+    // a Smilers broadcast target with iOS at install time. Calling
+    // `startScreenShare()` triggers `RPSystemBroadcastPickerView`, which
+    // lets the user pick that target. If the extension isn't bundled
+    // (e.g. the user is running an old EAS build), `getDisplayMedia`
+    // throws synchronously — we catch it below and show the iOS-specific
+    // explainer alert as a graceful fallback.
     try {
       if (screenSharing) {
         await session.stopScreenShare(callType === 'video');
@@ -1316,6 +1320,12 @@ function CallScreenInner() {
         setCameraOff(false);
       }
     } catch (e: any) {
+      if (Platform.OS === 'ios') {
+        // The Broadcast Upload Extension isn't present in this build —
+        // surface the same explainer that used to gate the entry point.
+        alertScreenShareIOSError();
+        return;
+      }
       Alert.alert('Screen sharing failed', e?.message || 'Could not start screen sharing.');
     }
   }, [screenSharing, callType]);

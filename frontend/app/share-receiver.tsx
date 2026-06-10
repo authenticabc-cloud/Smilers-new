@@ -78,6 +78,10 @@ interface Recipient {
   conversationId?: string;
   /** Contact userId — used to lazy-create a DM if no conversation exists. */
   userId?: string;
+  /** True when this row represents a group chat (DM otherwise). */
+  isGroup?: boolean;
+  /** Optional member count to surface as a subtitle for groups. */
+  memberCount?: number;
   name: string;
   avatarUrl?: string | null;
   /** Last conversation timestamp for sorting (ms). */
@@ -199,27 +203,31 @@ function ShareReceiverNative() {
   const recipients: Recipient[] = useMemo(() => {
     const map = new Map<string, Recipient>();
 
-    // 1) Recent DM conversations
+    // 1) Recent DMs + group conversations
     if (Array.isArray(conversations)) {
       for (const conv of conversations) {
         if (!conv || !conv._id) continue;
-        // Only show DMs in the share picker; group sharing is a future iter.
         const isGroup = !!conv.isGroup;
-        if (isGroup) continue;
+        // Group: render with group icon + member-count subtitle, no peer.
+        // Direct: render with peer name + avatar.
         const peer = conv.otherUser || conv.peer || {};
-        const name =
-          resolveContactName(peer) ||
-          conv.title ||
-          conv.name ||
-          'Direct chat';
-        const userId = peer?._id ? String(peer._id) : undefined;
+        const name = isGroup
+          ? (conv.title || conv.name || conv.groupName || 'Group chat')
+          : (resolveContactName(peer) || conv.title || conv.name || 'Direct chat');
+        const userId = !isGroup && peer?._id ? String(peer._id) : undefined;
         const key = `conv:${conv._id}`;
         map.set(key, {
           key,
           conversationId: String(conv._id),
           userId,
+          isGroup,
+          memberCount: typeof conv.memberCount === 'number'
+            ? conv.memberCount
+            : (Array.isArray(conv.members) ? conv.members.length : undefined),
           name,
-          avatarUrl: peer?.avatarUrl || peer?.profilePictureUrl || null,
+          avatarUrl: isGroup
+            ? (conv.groupAvatarUrl || conv.avatarUrl || null)
+            : (peer?.avatarUrl || peer?.profilePictureUrl || null),
           lastActivity:
             typeof conv.lastMessageAt === 'number'
               ? conv.lastMessageAt
@@ -392,6 +400,9 @@ function ShareReceiverNative() {
     ({ item }: { item: Recipient }) => {
       const isSelected = !!selected[item.key];
       const init = initialsOf(item.name);
+      const subtitle = item.isGroup
+        ? `${typeof item.memberCount === 'number' ? item.memberCount : 0} members`
+        : null;
       return (
         <TouchableOpacity
           style={styles.row}
@@ -401,13 +412,24 @@ function ShareReceiverNative() {
           {item.avatarUrl ? (
             <Image source={{ uri: item.avatarUrl }} style={styles.avatar} />
           ) : (
-            <View style={styles.avatarFallback}>
-              <Text style={styles.avatarInit}>{init}</Text>
+            <View style={[styles.avatarFallback, item.isGroup && styles.avatarFallbackGroup]}>
+              {item.isGroup ? (
+                <Ionicons name="people" size={20} color={Colors.headerBg} />
+              ) : (
+                <Text style={styles.avatarInit}>{init}</Text>
+              )}
             </View>
           )}
-          <Text style={styles.rowName} numberOfLines={1}>
-            {item.name}
-          </Text>
+          <View style={styles.rowMid}>
+            <Text style={styles.rowName} numberOfLines={1}>
+              {item.name}
+            </Text>
+            {subtitle ? (
+              <Text style={styles.rowSub} numberOfLines={1}>
+                {subtitle}
+              </Text>
+            ) : null}
+          </View>
           <View style={[styles.checkbox, isSelected && styles.checkboxOn]}>
             {isSelected ? <Feather name="check" size={14} color={Colors.white} /> : null}
           </View>
@@ -606,8 +628,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // Distinct background for group avatars so they read differently
+  // from initial-only DM avatars in the list.
+  avatarFallbackGroup: {
+    backgroundColor: Colors.primary,
+  },
   avatarInit: { fontSize: 16, fontWeight: FontWeight.bold, color: Colors.headerBg },
-  rowName: { flex: 1, fontSize: FontSize.base, color: Colors.textPrimary },
+  rowMid: { flex: 1, gap: 2 },
+  rowName: { fontSize: FontSize.base, color: Colors.textPrimary },
+  rowSub: { fontSize: FontSize.xs, color: Colors.textSecondary },
   checkbox: {
     width: 22,
     height: 22,
