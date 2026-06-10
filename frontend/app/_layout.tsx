@@ -32,6 +32,10 @@ import {
   recordDiagnostic,
 } from '../src/lib/diagnostics';
 import { Colors } from '../src/theme';
+import { DeviceContactProvider } from '../src/lib/deviceContactIndex';
+import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+import { api } from '../src/convexApi';
+import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js';
 
 // ⚡ Per the Emergent push playbook, the Android 'default' channel MUST
 // be created at MODULE SCOPE (before any component mounts) so it exists
@@ -158,6 +162,41 @@ function PresenceHeartbeat() {
   const { usePresenceHeartbeat } = require('../src/hooks/usePresenceHeartbeat');
   usePresenceHeartbeat();
   return null;
+}
+
+/**
+ * iter-176: Device-contact bridge.
+ *
+ * Resolves the signed-in user's default country code (from their own
+ * E.164 phone) and feeds it to `DeviceContactProvider`. The provider
+ * uses the country hint to parse device-address-book phone numbers that
+ * were saved in local format (very common on Android).
+ *
+ * Why a bridge: the country code only becomes known after Convex's
+ * `users.getCurrentUser` resolves, which requires being inside
+ * `ConvexClientProvider`. Splitting this responsibility keeps the
+ * provider itself convex-free and easy to test.
+ */
+function DeviceContactBridge({ children }: { children: React.ReactNode }) {
+  const meQuery = useSafeConvexQuery<any>(
+    (api as any)?.users?.getCurrentUser,
+    {},
+    null,
+    true,
+  );
+  const me: any = (meQuery as any)?.data;
+  const country: CountryCode | null = React.useMemo(() => {
+    const phone = me?.phoneE164 || me?.phone || '';
+    if (!phone) return null;
+    try {
+      const parsed = parsePhoneNumberFromString(String(phone));
+      return (parsed?.country as CountryCode) || null;
+    } catch {
+      return null;
+    }
+  }, [me?.phoneE164, me?.phone]);
+
+  return <DeviceContactProvider myDefaultCountry={country}>{children}</DeviceContactProvider>;
 }
 
 /**
@@ -306,6 +345,7 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <AuthProvider>
           <ConvexClientProvider>
+            <DeviceContactBridge>
             <GlobalNotificationSound />
             <GlobalNotificationServices />
             <PresenceHeartbeat />
@@ -371,6 +411,7 @@ export default function RootLayout() {
             <IncomingScreenShareModal />
               </View>
             </AppLockGate>
+            </DeviceContactBridge>
           </ConvexClientProvider>
         </AuthProvider>
       </SafeAreaProvider>

@@ -175,6 +175,47 @@ export function getDisplayNameFromUser(user: any, fallback = 'Smilers user'): st
   return direct || fallback;
 }
 
+/**
+ * iter-176: Resolve a user's display name with the device address book
+ * taking priority over their Smilers profile name.
+ *
+ * Order of preference:
+ *   1. Name as saved in this device's contacts (e.g. "ABC Albania"),
+ *   2. The Smilers displayName / name / phone (via getDisplayNameFromUser),
+ *   3. The provided fallback.
+ *
+ * `deviceIndex` is the value from `useDeviceContactIndex()`. Pass null
+ * (or omit) to skip the device-contact lookup — used for places where
+ * we explicitly want the Smilers name (e.g. own Profile page).
+ *
+ * `lookup` is the bound `lookupDeviceContactName` from the index module.
+ * It's passed in to keep this helper free of circular imports.
+ */
+export function getResolvedDisplayName(
+  user: any,
+  deviceIndex: any,
+  lookup: ((index: any, phone: string | null | undefined) => string | null) | null,
+  fallback = 'Smilers user',
+): string {
+  if (user && deviceIndex && deviceIndex.isReady && lookup) {
+    const candidates: any[] = [
+      user?.phoneE164,
+      user?.phone,
+      user?.otherUserPhone,
+      user?.otherUser?.phoneE164,
+      user?.otherUser?.phone,
+      user?.user?.phoneE164,
+      user?.user?.phone,
+    ];
+    for (const cand of candidates) {
+      if (!cand) continue;
+      const matched = lookup(deviceIndex, String(cand));
+      if (matched && matched.trim()) return matched.trim();
+    }
+  }
+  return getDisplayNameFromUser(user, fallback);
+}
+
 export function getConversationDisplayName(
   conversation: any,
   currentUserId?: string | null,
@@ -217,6 +258,68 @@ export function getConversationDisplayName(
   }
 
   return directName || (!isBrandFallback(conversationName) ? conversationName : '') || fallback;
+}
+
+/**
+ * iter-176: Resolve a 1:1 conversation's display name with the device
+ * address book taking priority over the other user's Smilers name.
+ *
+ * For groups: keeps the existing group-name behaviour (device contacts
+ * don't have group entries, so device lookup is skipped).
+ *
+ * For 1:1: tries to find the other user's phoneE164 in the device index
+ * and returns the device-saved name. Falls back to the existing
+ * `getConversationDisplayName` resolution.
+ */
+export function getResolvedConversationDisplayName(
+  conversation: any,
+  currentUserId: string | null | undefined,
+  deviceIndex: any,
+  lookup: ((index: any, phone: string | null | undefined) => string | null) | null,
+  fallback = 'Smilers',
+): string {
+  // Group conversations: never override.
+  if (conversation?.type === 'group') {
+    return getConversationDisplayName(conversation, currentUserId, fallback);
+  }
+
+  if (conversation && deviceIndex && deviceIndex.isReady && lookup) {
+    // Collect phone-number candidates: the conversation-level shortcuts
+    // first, then the actual non-self member.
+    const directCandidates: any[] = [
+      conversation?.otherUserPhone,
+      conversation?.otherUser?.phoneE164,
+      conversation?.otherUser?.phone,
+    ];
+    for (const cand of directCandidates) {
+      if (!cand) continue;
+      const matched = lookup(deviceIndex, String(cand));
+      if (matched && matched.trim()) return matched.trim();
+    }
+
+    // Walk participants/members and resolve the first non-self phone.
+    const memberLists = [conversation?.participants, conversation?.members]
+      .filter(Array.isArray) as any[][];
+    for (const list of memberLists) {
+      for (const member of list) {
+        const memberId = String(member?.userId || member?._id || member?.id || '');
+        if (currentUserId && memberId && memberId === currentUserId) continue;
+        const phoneCands = [
+          member?.phoneE164,
+          member?.phone,
+          member?.user?.phoneE164,
+          member?.user?.phone,
+        ];
+        for (const cand of phoneCands) {
+          if (!cand) continue;
+          const matched = lookup(deviceIndex, String(cand));
+          if (matched && matched.trim()) return matched.trim();
+        }
+      }
+    }
+  }
+
+  return getConversationDisplayName(conversation, currentUserId, fallback);
 }
 
 export function getDisplayInitials(name: unknown, maxLetters = 1): string {

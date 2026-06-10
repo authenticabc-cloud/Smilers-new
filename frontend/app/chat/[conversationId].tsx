@@ -48,7 +48,8 @@ import { readCache, writeCache } from '../../src/lib/offlineCache';
 import { shareMessage } from '../../src/lib/messageMedia';
 import { appendDiaryEntry, chatMessageToDiaryEntry } from '../../src/lib/diaryStore';
 import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
-import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
+import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { getLanguageByCode } from '../../src/lib/languages';
 import {
   applyDraftFormatting,
@@ -247,6 +248,9 @@ export default function ChatScreen() {
   const [activeRecording, setActiveRecording] = useState<any>(null);
   const me = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip') as any | null | undefined;
   const contacts = useQuery(api.contacts.getContacts, me ? {} : 'skip') as any[] | undefined;
+  // iter-176: device address-book name takes priority for the chat
+  // header title (1:1 chats only — group titles are untouched).
+  const deviceContactIndex = useDeviceContactIndex();
   const refetchMessages = useCallback(async () => {}, []);
   const { data: conversationsForForward } = useSafeConvexQuery<any[]>(
     api.conversations.listConversations,
@@ -2014,7 +2018,18 @@ export default function ChatScreen() {
   // where a heuristic ("any conversation whose otherUserId equals me")
   // could falsely tag a regular chat as Diary and apply diary chrome.
 
+  // iter-176: device address book overrides Smilers display name for
+  // 1:1 chats. Saved-contact-from-Smilers name is still checked first
+  // (for users without phone numbers / when device permission denied).
+  const deviceTitle = getResolvedConversationDisplayName(
+    hydratedConversation,
+    me?._id ? String(me._id) : null,
+    deviceContactIndex,
+    lookupDeviceContactName,
+    '',
+  );
   const title =
+    deviceTitle ||
     savedContactTitle ||
     getConversationDisplayName(hydratedConversation, me?._id ? String(me._id) : undefined, 'Chat');
   const isMineSelected = selectedMsg && me && selectedMsg.senderId === me._id;

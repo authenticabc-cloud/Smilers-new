@@ -24,7 +24,8 @@ import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js'
 import Header from '../../src/components/Header';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
-import { getDisplayInitials, getDisplayNameFromUser } from '../../src/lib/displayName';
+import { getDisplayInitials, getDisplayNameFromUser, getResolvedDisplayName } from '../../src/lib/displayName';
+import { useDeviceContactIndex, useDeviceContactRefresh, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../src/theme';
 
 type TabKey = 'my' | 'device';
@@ -108,6 +109,8 @@ function normalizePhoneE164(
 
 export default function ContactsScreen() {
   const router = useRouter();
+  const deviceIndex = useDeviceContactIndex();
+  const refreshDeviceIndex = useDeviceContactRefresh();
   const [tab, setTab] = useState<TabKey>('my');
   const [search, setSearch] = useState('');
   const [showAddSheet, setShowAddSheet] = useState(false);
@@ -234,13 +237,17 @@ export default function ContactsScreen() {
         return a.name.localeCompare(b.name);
       });
       setDeviceContacts(cleaned);
+      // iter-176: also refresh the GLOBAL device-contact name index so
+      // the chats list / chat header / contacts-list pick up the names
+      // immediately after the user grants the contacts permission.
+      try { void refreshDeviceIndex({ requestPermission: false }); } catch {}
     } catch (errorValue) {
       console.warn('device contacts failed:', errorValue);
       setDevicePerm('denied');
     } finally {
       setDeviceLoading(false);
     }
-  }, []);
+  }, [refreshDeviceIndex]);
 
   useEffect(() => {
     if (tab === 'device' && devicePerm === 'unknown') {
@@ -471,12 +478,14 @@ export default function ContactsScreen() {
               {pendingList.length > 0 && !searchTerm ? (
                 <>
                   <Text style={styles.sectionLabel}>PENDING REQUESTS ({pendingList.length})</Text>
-                  {pendingList.map((p: any) => (
+                  {pendingList.map((p: any) => {
+                    const pName = getResolvedDisplayName(p, deviceIndex, lookupDeviceContactName, getDisplayNameFromUser(p));
+                    return (
                     <View key={p._id} style={styles.row} testID={`pending-${p._id}`}>
-                      <ContactAvatar name={getDisplayNameFromUser(p)} online={false} />
+                      <ContactAvatar name={pName} online={false} />
                       <View style={styles.rowMid}>
                         <Text style={styles.rowName} numberOfLines={1}>
-                          {getDisplayNameFromUser(p)}
+                          {pName}
                         </Text>
                         <Text style={styles.rowSub} numberOfLines={1}>
                           wants to connect
@@ -505,19 +514,22 @@ export default function ContactsScreen() {
                         <Text style={styles.acceptText}>Accept</Text>
                       </TouchableOpacity>
                     </View>
-                  ))}
+                    );
+                  })}
                 </>
               ) : null}
 
               {outgoingList.length > 0 && !searchTerm ? (
                 <>
                   <Text style={styles.sectionLabel}>SENT REQUESTS ({outgoingList.length})</Text>
-                  {outgoingList.map((o: any) => (
+                  {outgoingList.map((o: any) => {
+                    const oName = getResolvedDisplayName(o, deviceIndex, lookupDeviceContactName, getDisplayNameFromUser(o));
+                    return (
                     <View key={o._id} style={styles.row} testID={`outgoing-${o._id}`}>
-                      <ContactAvatar name={getDisplayNameFromUser(o)} online={false} />
+                      <ContactAvatar name={oName} online={false} />
                       <View style={styles.rowMid}>
                         <Text style={styles.rowName} numberOfLines={1}>
-                          {getDisplayNameFromUser(o)}
+                          {oName}
                         </Text>
                         <Text style={styles.rowSub}>Awaiting response</Text>
                       </View>
@@ -533,7 +545,8 @@ export default function ContactsScreen() {
                         <Text style={styles.cancelText}>Cancel</Text>
                       </TouchableOpacity>
                     </View>
-                  ))}
+                    );
+                  })}
                 </>
               ) : null}
 
@@ -545,7 +558,10 @@ export default function ContactsScreen() {
           renderItem={({ item }) => {
             const uid = getContactUserId(item);
             const online = !!item.online || !!item.isOnline;
-            const displayName = getDisplayNameFromUser(item);
+            // iter-176: device address-book name takes priority over the
+            // Smilers display name. If you have this user's number saved
+            // as "ABC Albania", you see "ABC Albania" here.
+            const displayName = getResolvedDisplayName(item, deviceIndex, lookupDeviceContactName, getDisplayNameFromUser(item));
             const contactKey = uid || displayName.toLowerCase().replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '') || 'unknown-contact';
             return (
               <TouchableOpacity

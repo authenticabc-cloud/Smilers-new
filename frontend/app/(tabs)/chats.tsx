@@ -9,7 +9,8 @@ import Avatar from '../../src/components/Avatar';
 import FabStack from '../../src/components/FabStack';
 import SosButton from '../../src/components/SosButton';
 import { api } from '../../src/convexApi';
-import { findSavedContactDisplayName, getConversationDisplayName } from '../../src/lib/displayName';
+import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName } from '../../src/lib/displayName';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { readCacheMeta, writeCache } from '../../src/lib/offlineCache';
 import OfflineBanner from '../../src/components/OfflineBanner';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
@@ -288,7 +289,13 @@ function PinnedRow({
 }
 
 function ConversationRow({ item, currentUserId, contacts, onPress }: { item: any; currentUserId?: string; contacts?: any[]; onPress: () => void }) {
-  const savedContactName = findSavedContactDisplayName(contacts, item, currentUserId);
+  // iter-176: Device address-book name beats both the saved-contact name
+  // AND the Smilers display name. e.g. if your phone has the other user
+  // saved as "ABC Albania", you'll see "ABC Albania" here instead of the
+  // user's Google account name "Smilers".
+  const deviceIndex = useDeviceContactIndex();
+  const deviceName = getResolvedConversationDisplayName(item, currentUserId, deviceIndex, lookupDeviceContactName, '');
+  const savedContactName = deviceName || findSavedContactDisplayName(contacts, item, currentUserId);
   const name = savedContactName || getConversationDisplayName(item, currentUserId, 'Smilers user');
   // iter-140b: resolve the photo URL from the same sources the web app
   // uses. Order of precedence:
