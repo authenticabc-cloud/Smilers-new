@@ -40,6 +40,7 @@ import { api } from '../src/convexApi';
 import { useFirstSuccessfulConvexQuery } from '../src/hooks/useFirstSuccessfulConvexQuery';
 import { useAuth } from '../src/providers/AuthProvider';
 import { readStoredJson, writeStoredJson } from '../src/lib/settingsStorage';
+import PremiumGate from '../src/components/PremiumGate';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
 const MAX_FACES = 3;
@@ -132,7 +133,23 @@ function normalizeDeviceRecord(record: any, idx: number): TrustedDevice | null {
   };
 }
 
-export default function FaceIdScreen() {
+export default function GatedFaceIdScreen() {
+  // iter-168: Face ID is now Premium-only per FACE_VERIFICATION_PREMIUM_CONTRACT.
+  // PremiumGate internally uses `usePremiumAccess`, which:
+  //   1) Calls `api.premium.getPremiumStatus` (query)
+  //   2) If reason === 'expired', also calls
+  //      `api.premiumAction.checkPremiumSubscription` (action)
+  //   3) Grants access if EITHER returns hasAccess: true
+  // This mirrors the web app behaviour (a paying subscriber's local trial
+  // appears "expired" but the Commerce check confirms they're current).
+  return (
+    <PremiumGate featureName="Face ID">
+      <FaceIdScreen />
+    </PremiumGate>
+  );
+}
+
+function FaceIdScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { isAuthenticated } = useAuth();
