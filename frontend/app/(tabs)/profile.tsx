@@ -183,7 +183,8 @@ export default function ProfileScreen() {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.8,
+      quality: 0.6,
+      exif: false,
     });
     if (result.canceled || !result.assets || !result.assets[0]) return;
     const asset = result.assets[0];
@@ -203,7 +204,8 @@ export default function ProfileScreen() {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.8,
+      quality: 0.6,
+      exif: false,
     });
     if (result.canceled || !result.assets || !result.assets[0]) return;
     const asset = result.assets[0];

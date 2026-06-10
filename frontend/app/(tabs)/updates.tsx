@@ -40,9 +40,10 @@ export default function StatusScreen() {
 
         const result = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: kind === 'image' ? ImagePicker.MediaTypeOptions.Images : ImagePicker.MediaTypeOptions.Videos,
-          quality: 0.85,
+          quality: kind === 'image' ? 0.7 : 0.5,
           allowsEditing: false,
           videoMaxDuration: 60,
+          exif: false,
         });
 
         if (result.canceled || !result.assets?.[0]) return;

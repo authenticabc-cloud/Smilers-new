@@ -124,7 +124,7 @@ export default function DevotionalsComposeScreen() {
         source === 'library' ? ImagePicker.launchImageLibraryAsync : ImagePicker.launchCameraAsync;
       const result = await launch({
         mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-        quality: 0.85,
+        quality: 0.5,
         allowsEditing: false,
         videoMaxDuration: 120,
       });

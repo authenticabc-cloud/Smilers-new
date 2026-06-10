@@ -52,8 +52,9 @@ export default function CreateAdScreen() {
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.9,
+      quality: 0.7,
       allowsEditing: false,
+      exif: false,
     });
     if (result.canceled || !result.assets?.[0]?.uri) return;
     const asset = result.assets[0];
