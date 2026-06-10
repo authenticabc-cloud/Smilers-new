@@ -150,7 +150,10 @@ export default function ContactsScreen() {
   // hint for phone-number normalization in invite flows.
   const me = useQuery(api.users.getCurrentUser, {}) as any | undefined;
   const myDefaultCountry = useMemo<string | null>(() => {
-    const myPhone = typeof me?.phone === 'string' ? me.phone : '';
+    // iter-166: prefer canonical E.164, fall back to legacy `phone`.
+    const myPhone = (typeof me?.phoneE164 === 'string' && me.phoneE164)
+      || (typeof me?.phone === 'string' && me.phone)
+      || '';
     if (!myPhone) return null;
     try {
       const parsed = parsePhoneNumberFromString(myPhone);
@@ -158,7 +161,7 @@ export default function ContactsScreen() {
     } catch {
       return null;
     }
-  }, [me?.phone]);
+  }, [me?.phone, me?.phoneE164]);
 
   const list: any[] = Array.isArray(contactsQuery.data) ? contactsQuery.data : [];
   const pendingList: any[] = Array.isArray(pendingQuery.data) ? pendingQuery.data : [];
@@ -382,6 +385,15 @@ export default function ContactsScreen() {
         variant="dark"
         right={
           <View style={styles.headerRight}>
+            <TouchableOpacity
+              hitSlop={10}
+              style={styles.headerBtn}
+              onPress={() => router.push('/find-by-phone' as any)}
+              testID="contacts-find-by-phone-btn"
+              accessibilityLabel="Find a Smilers user by phone number"
+            >
+              <Feather name="user-plus" size={22} color={Colors.white} />
+            </TouchableOpacity>
             <TouchableOpacity
               hitSlop={10}
               style={styles.headerBtn}

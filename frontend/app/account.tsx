@@ -110,7 +110,11 @@ export default function AccountScreen() {
   };
 
   const displayName = me?.name || me?.displayName || 'Smilers user';
-  const phone = me?.phone || '—';
+  // iter-166 Identity Rework: prefer canonical phoneE164, fall back to
+  // legacy `phone` for not-yet-migrated users.
+  const phone = (typeof me?.phoneE164 === 'string' && me.phoneE164)
+    || (typeof me?.phone === 'string' && me.phone)
+    || '—';
   const email = me?.email || '—';
   const avatarLetter = (displayName || 'S').trim().charAt(0).toUpperCase();
 

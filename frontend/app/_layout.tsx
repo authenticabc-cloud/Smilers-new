@@ -246,6 +246,7 @@ export default function RootLayout() {
               <Stack.Screen name="status-view/[userId]" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
               <Stack.Screen name="contact-qr" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
               <Stack.Screen name="screen-share" />
+              <Stack.Screen name="find-by-phone" />
             </Stack>
             <VoiceCommandLauncher />
             <IncomingScreenShareModal />

@@ -165,6 +165,7 @@ export function getDisplayNameFromUser(user: any, fallback = 'Smilers user'): st
       user?.username,
       user?.title,
       [user?.firstName, user?.lastName],
+      user?.phoneE164,
       user?.phone,
       user?.email,
     ],
