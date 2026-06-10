@@ -10,7 +10,8 @@ import FabStack from '../../src/components/FabStack';
 import SosButton from '../../src/components/SosButton';
 import { api } from '../../src/convexApi';
 import { findSavedContactDisplayName, getConversationDisplayName } from '../../src/lib/displayName';
-import { readCache, writeCache } from '../../src/lib/offlineCache';
+import { readCacheMeta, writeCache } from '../../src/lib/offlineCache';
+import OfflineBanner from '../../src/components/OfflineBanner';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 
 function relTime(iso?: string) {
@@ -41,23 +42,29 @@ export default function ChatsScreen() {
   // the moment it arrives.
   const userKey = me?._id ? String(me._id) : 'anon';
   const [cachedList, setCachedList] = useState<any[] | null>(null);
+  const [cachedTs, setCachedTs] = useState<number | undefined>(undefined);
   useEffect(() => {
     let alive = true;
     (async () => {
-      const data = await readCache<any[]>('conversations', userKey);
-      if (alive && Array.isArray(data)) setCachedList(data);
+      const meta = await readCacheMeta<any[]>('conversations', userKey);
+      if (alive && meta) {
+        if (Array.isArray(meta.data)) setCachedList(meta.data);
+        setCachedTs(meta.ts);
+      }
     })();
     return () => { alive = false; };
   }, [userKey]);
   useEffect(() => {
     if (Array.isArray(conversations)) {
       void writeCache('conversations', userKey, conversations);
+      setCachedTs(Date.now());
     }
   }, [conversations, userKey]);
 
   // Prefer live data; fall back to cache while loading.
   const liveList: any[] | null = Array.isArray(conversations) ? conversations : null;
   const list: any[] = liveList ?? cachedList ?? [];
+  const showOfflineBanner = !liveList && Array.isArray(cachedList) && cachedList.length > 0;
 
   const handleMenuPress = (route: string) => {
     setShowMenu(false);
@@ -107,6 +114,8 @@ export default function ChatsScreen() {
           </>
         }
       />
+
+      <OfflineBanner visible={showOfflineBanner} ts={cachedTs} />
 
       <Modal
         visible={showMenu}

@@ -40,17 +40,28 @@ function makeKey(scope: string, key: string): string {
  *   - AsyncStorage threw (e.g. quota / locked)
  */
 export async function readCache<T>(scope: string, key: string): Promise<T | null> {
+  const meta = await readCacheMeta<T>(scope, key);
+  return meta ? meta.data : null;
+}
+
+/**
+ * Read cached value WITH metadata (write-timestamp). Useful for showing
+ * "Last synced 2 min ago" UI affordances.
+ */
+export async function readCacheMeta<T>(
+  scope: string,
+  key: string,
+): Promise<{ data: T; ts: number } | null> {
   try {
     const raw = await AsyncStorage.getItem(makeKey(scope, key));
     if (!raw) return null;
     const env = JSON.parse(raw) as Envelope<T>;
     if (!env || typeof env !== 'object' || env.v !== 1) return null;
     if (env.ttl > 0 && Date.now() - env.ts > env.ttl) {
-      // Stale — fire-and-forget cleanup.
       AsyncStorage.removeItem(makeKey(scope, key)).catch(() => {});
       return null;
     }
-    return env.data;
+    return { data: env.data, ts: env.ts };
   } catch {
     return null;
   }
