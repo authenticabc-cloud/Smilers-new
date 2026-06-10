@@ -22,7 +22,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useConvex, useMutation, useQuery } from 'convex/react';
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
-import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
+import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
@@ -73,6 +73,7 @@ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 const EMPTY_MESSAGES_PAGE = { page: [] as any[] };
 const EMPTY_FORWARD_CONVERSATIONS: any[] = [];
+const EMPTY_CALL_LOGS: any[] = [];
 const DISAPPEARING_OPTIONS = [
   { key: 'off', label: 'Off', ms: 0 },
   { key: '24h', label: '24 hours', ms: 24 * 60 * 60 * 1000 },
@@ -206,6 +207,35 @@ export default function ChatScreen() {
     canQueryConversation ? { conversationId, paginationOpts: { numItems: 50, cursor: null } } : 'skip'
   ) as any;
   const messagesLoading = canQueryConversation && messagesPage === undefined;
+  // iter 156: call-log pills in chat timeline (per Smilers web parity).
+  // Backed by canonical contract api.calls.listCallLogsForConversation.
+  // Graceful fallback → [] when offline / function unavailable.
+  const { data: callLogsForConvo } = useSafeConvexQuery<any[]>(
+    (api as any).calls.listCallLogsForConversation,
+    { conversationId },
+    EMPTY_CALL_LOGS,
+    !!canQueryConversation,
+  );
+  // iter 157: recordings playback for "Recorded" pills.
+  // listMyRecordings returns ALL of viewer's recordings — we build a Map
+  // keyed by callId so each call-pill can look up its recording URL O(1).
+  const { data: myRecordings } = useSafeConvexQuery<any[]>(
+    (api as any).callRecording.listMyRecordings,
+    {},
+    EMPTY_CALL_LOGS,
+    !!isAuthenticated,
+  );
+  const recordingByCallId = useMemo(() => {
+    const map = new Map<string, any>();
+    if (Array.isArray(myRecordings)) {
+      myRecordings.forEach((r: any) => {
+        if (r && r.callId) map.set(String(r.callId), r);
+      });
+    }
+    return map;
+  }, [myRecordings]);
+  // null | { url, durationSeconds, callType, outcome }
+  const [activeRecording, setActiveRecording] = useState<any>(null);
   const me = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip') as any | null | undefined;
   const contacts = useQuery(api.contacts.getContacts, me ? {} : 'skip') as any[] | undefined;
   const refetchMessages = useCallback(async () => {}, []);
@@ -530,6 +560,39 @@ export default function ChatScreen() {
     )),
     [translatedMessageMap, searchFilteredMessages],
   );
+
+  // iter 156: merge call-log pills into the timeline (per Smilers web parity).
+  // Each call-log row is rendered as a centered system pill with outcome label,
+  // duration, and a "Recorded" badge if applicable. Tagged with __kind:'call'
+  // so the renderItem branch knows to render a CallPill, not a MediaBubble.
+  const timeline = useMemo(() => {
+    if (!Array.isArray(callLogsForConvo) || callLogsForConvo.length === 0) {
+      return displayMessages;
+    }
+    const myId = me?._id ? String(me._id) : '';
+    const pills = callLogsForConvo.map((c: any) => {
+      const outcome = String(c?.outcome || '');
+      // Derive direction defensively — backend may set it; otherwise infer
+      // from callerId so missed/declined calls still tag as incoming.
+      const direction = typeof c?.direction === 'string'
+        ? c.direction
+        : (myId && String(c?.callerId) === myId ? 'outgoing' : 'incoming');
+      return {
+        __kind: 'call' as const,
+        _id: `call::${String(c._id)}`,
+        _callId: String(c._id),
+        _creationTime: Number(c.startedAt || c._creationTime || 0),
+        callType: c?.callType === 'video' ? 'video' : 'voice',
+        outcome,
+        direction,
+        durationSeconds: Number(c?.durationSeconds || 0),
+        wasRecorded: !!c?.wasRecorded,
+      };
+    });
+    return [...displayMessages, ...pills].sort(
+      (a: any, b: any) => Number(a?._creationTime || 0) - Number(b?._creationTime || 0),
+    );
+  }, [displayMessages, callLogsForConvo, me?._id]);
 
   const msgById = useMemo(() => {
     const map = new Map<string, any>();
@@ -2188,12 +2251,40 @@ export default function ChatScreen() {
         ) : (
           <FlatList
             ref={listRef}
-            data={displayMessages}
+            data={timeline}
             keyExtractor={(item: any) => item._id}
             contentContainerStyle={styles.listContent}
             renderItem={({ item, index }) => {
-              const previous = index > 0 ? visibleMessages[index - 1] : null;
+              const previous = index > 0 ? timeline[index - 1] : null;
               const showDayChip = !previous || !isSameCalendarDay(item?._creationTime, previous?._creationTime);
+              // Call-log pill branch (iter 156, web parity).
+              if (item?.__kind === 'call') {
+                return (
+                  <>
+                    {showDayChip ? (
+                      <View style={styles.dayChipWrap} testID={`chat-day-chip-${item._id}`}>
+                        <Text style={styles.dayChipText}>{formatChatDayChip(item?._creationTime)}</Text>
+                      </View>
+                    ) : null}
+                    <CallPill
+                      item={item}
+                      hasRecording={item.wasRecorded && recordingByCallId.has(item._callId)}
+                      onPress={() => {
+                        const rec = recordingByCallId.get(item._callId);
+                        if (rec && rec.url) {
+                          setActiveRecording({
+                            url: String(rec.url),
+                            durationSeconds: Number(rec.durationSeconds || item.durationSeconds || 0),
+                            callType: item.callType,
+                            outcome: item.outcome,
+                          });
+                        }
+                      }}
+                      testID={`chat-call-pill-${item._id}`}
+                    />
+                  </>
+                );
+              }
               return (
                 <>
                   {showDayChip ? (
@@ -2960,6 +3051,11 @@ export default function ChatScreen() {
           setShowOptionsMenu(false);
           handleMenuAction(key);
         }}
+      />
+      {/* iter 157: recording playback for "Recorded" call-log pills */}
+      <RecordingPlaybackModal
+        recording={activeRecording}
+        onClose={() => setActiveRecording(null)}
       />
     </SafeAreaView>
   );
@@ -4115,6 +4211,244 @@ const menuStyles = StyleSheet.create({
     fontSize: 17,
     color: Colors.textSecondary,
     fontWeight: '500',
+  },
+});
+
+
+/* ---------------------------- CallPill (iter 156) ---------------------------
+ * Renders a single call-log row as a centered "system pill" inside the chat
+ * timeline. Matches Smilers web parity (per user screenshots):
+ *   "Call declined"
+ *   "No answer"
+ *   "Outgoing call · 26s"
+ *   "Incoming call · 1m 32s · Recorded"
+ */
+
+function formatCallDuration(sec?: number): string {
+  if (!sec || sec <= 0) return '';
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return s ? `${m}m ${s}s` : `${m}m`;
+}
+
+function CallPill({ item, onPress, hasRecording, testID }: { item: any; onPress?: () => void; hasRecording?: boolean; testID?: string }) {
+  const outcome = String(item?.outcome || '');
+  const direction = item?.direction === 'outgoing' ? 'outgoing' : 'incoming';
+  const isVideo = item?.callType === 'video';
+  const duration = formatCallDuration(Number(item?.durationSeconds || 0));
+  const isMissed = outcome === 'missed';
+  const isDeclined = outcome === 'declined';
+  const isNegative = isMissed || isDeclined;
+
+  let label = '';
+  if (isMissed) {
+    label = isVideo ? 'Missed video call' : 'Missed call';
+  } else if (isDeclined) {
+    label = isVideo ? 'Video call declined' : 'Call declined';
+  } else if (outcome === 'completed') {
+    const dirLabel = direction === 'outgoing' ? 'Outgoing' : 'Incoming';
+    const typeLabel = isVideo ? 'video call' : 'call';
+    label = duration ? `${dirLabel} ${typeLabel} \u00B7 ${duration}` : `${dirLabel} ${typeLabel}`;
+  } else {
+    label = isVideo ? 'No answer (video)' : 'No answer';
+  }
+
+  const iconName = isNegative
+    ? 'phone-missed'
+    : direction === 'outgoing'
+      ? 'phone-outgoing'
+      : 'phone-incoming';
+  const iconColor = isNegative ? '#EF4444' : '#10B981';
+
+  const Wrapper: any = onPress && hasRecording ? TouchableOpacity : View;
+  const wrapperProps: any = onPress && hasRecording
+    ? { onPress, activeOpacity: 0.7, accessibilityRole: 'button' as const }
+    : {};
+  return (
+    <View style={callPillStyles.row} testID={testID}>
+      <Wrapper
+        {...wrapperProps}
+        style={[
+          callPillStyles.pill,
+          isNegative ? callPillStyles.pillDanger : null,
+        ]}
+      >
+        <MaterialCommunityIcons name={iconName as any} size={14} color={iconColor} />
+        <Text
+          style={[
+            callPillStyles.text,
+            isNegative ? callPillStyles.textDanger : null,
+          ]}
+          numberOfLines={1}
+        >
+          {label}
+        </Text>
+        {item?.wasRecorded ? (
+          <View style={callPillStyles.recordedBadge}>
+            <View style={callPillStyles.recordedDot} />
+            <Text style={callPillStyles.recordedText}>Recorded</Text>
+          </View>
+        ) : null}
+      </Wrapper>
+    </View>
+  );
+}
+
+/* ---------------------- RecordingPlaybackModal (iter 157) ----------------------
+ * Minimal audio player for a saved call recording. Mounted/unmounted on demand
+ * so useAudioPlayer is recreated for each new recording.
+ */
+function RecordingPlaybackModal({
+  recording,
+  onClose,
+}: {
+  recording: { url: string; durationSeconds?: number; callType?: string; outcome?: string } | null;
+  onClose: () => void;
+}) {
+  if (!recording) return null;
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={recPlayStyles.backdrop} onPress={onClose}>
+        <Pressable style={recPlayStyles.card} onPress={() => {}}>
+          <RecordingPlayer recording={recording} onClose={onClose} />
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+function RecordingPlayer({
+  recording,
+  onClose,
+}: {
+  recording: { url: string; durationSeconds?: number; callType?: string; outcome?: string };
+  onClose: () => void;
+}) {
+  const player = useAudioPlayer({ uri: recording.url });
+  const status = useAudioPlayerStatus(player);
+  const isPlaying = !!status?.playing;
+
+  return (
+    <View style={recPlayStyles.body}>
+      <View style={recPlayStyles.headerRow}>
+        <MaterialCommunityIcons name="record-rec" size={20} color="#EF4444" />
+        <Text style={recPlayStyles.title}>Call Recording</Text>
+        <TouchableOpacity onPress={onClose} hitSlop={10} testID="rec-close">
+          <Feather name="x" size={22} color={Colors.textPrimary} />
+        </TouchableOpacity>
+      </View>
+      <Text style={recPlayStyles.subtitle}>
+        {recording.callType === 'video' ? 'Video' : 'Voice'} call{' '}
+        {recording.durationSeconds ? `\u00B7 ${formatCallDuration(recording.durationSeconds)}` : ''}
+      </Text>
+      <View style={recPlayStyles.controls}>
+        <TouchableOpacity
+          onPress={() => {
+            if (isPlaying) {
+              player.pause();
+            } else {
+              player.play();
+            }
+          }}
+          style={recPlayStyles.playBtn}
+          activeOpacity={0.8}
+          testID="rec-play-pause"
+        >
+          <Ionicons
+            name={isPlaying ? 'pause' : 'play'}
+            size={28}
+            color={Colors.headerBg}
+            style={!isPlaying ? { marginLeft: 3 } : null}
+          />
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+const recPlayStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  card: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: Colors.surface,
+    borderRadius: 16,
+    padding: 16,
+  },
+  body: { gap: 12 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  title: { flex: 1, fontSize: 17, fontWeight: '700', color: Colors.textPrimary },
+  subtitle: { fontSize: 13, color: Colors.textSecondary },
+  controls: { alignItems: 'center', justifyContent: 'center', paddingTop: 8 },
+  playBtn: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});
+
+const callPillStyles = StyleSheet.create({
+  row: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 16,
+  },
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: 'rgba(60, 40, 0, 0.06)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(60, 40, 0, 0.10)',
+    maxWidth: '90%',
+  },
+  pillDanger: {
+    backgroundColor: 'rgba(239, 68, 68, 0.10)',
+    borderColor: 'rgba(239, 68, 68, 0.22)',
+  },
+  text: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    fontWeight: '600',
+  },
+  textDanger: {
+    color: '#B91C1C',
+  },
+  recordedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginLeft: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+  },
+  recordedDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#EF4444',
+  },
+  recordedText: {
+    fontSize: 11,
+    color: '#B91C1C',
+    fontWeight: '700',
   },
 });
 
