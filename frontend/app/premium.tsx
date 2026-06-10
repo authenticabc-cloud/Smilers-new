@@ -391,6 +391,14 @@ export default function PremiumPage() {
             subtitle="Temporary anonymous conversations"
             iconLib="ion"
           />
+          <IncludeRow
+            iconBg="#D1FAE5"
+            iconColor="#0F766E"
+            icon="face-recognition"
+            title="Face Verification"
+            subtitle="Secure your account with a face check on new devices"
+            iconLib="mc"
+          />
         </View>
 
         {/* Redeem code block */}

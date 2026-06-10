@@ -10,13 +10,28 @@ import { useAuth } from '../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Spacing } from '../src/theme';
 
 type IconLib = 'ion' | 'mc';
-type Row = { key: string; route: string; title: string; sub: string; icon: string; lib: IconLib; danger?: boolean; adminOnly?: boolean };
+type Row = {
+  key: string;
+  route: string;
+  title: string;
+  sub: string;
+  icon: string;
+  lib: IconLib;
+  danger?: boolean;
+  adminOnly?: boolean;
+  /**
+   * iter-173 — mirrors the web app's "👑 Premium" badge next to gated
+   * features. The screen these point to is wrapped in <PremiumGate>,
+   * so the badge is purely visual cue, not a hard gate.
+   */
+  premium?: boolean;
+};
 
 const ITEMS: Row[] = [
   { key: 'diagnostic-logs', route: '/diagnostic-logs', title: 'Diagnostic Logs', sub: 'Crash + WebRTC event log (for support)', icon: 'bug-outline', lib: 'ion' },
   { key: 'privacy', route: '/privacy', title: 'Privacy', sub: 'Last seen, profile photo, about', icon: 'shield-outline', lib: 'ion' },
   { key: 'app-lock', route: '/app-lock', title: 'App Lock', sub: 'PIN code and biometric unlock', icon: 'fingerprint', lib: 'mc' },
-  { key: 'face-id', route: '/face-id', title: 'Face ID', sub: 'Verify identity on new devices', icon: 'face-recognition', lib: 'mc' },
+  { key: 'face-id', route: '/face-id', title: 'Face ID', sub: 'Verify identity on new devices', icon: 'face-recognition', lib: 'mc', premium: true },
   { key: 'notifications', route: '/notifications', title: 'Notifications', sub: 'Message, group, and call alerts', icon: 'notifications-outline', lib: 'ion' },
   { key: 'call-recording', route: '/call-recording', title: 'Call Recording', sub: 'Auto-record voice & video calls with exceptions', icon: 'record-rec', lib: 'mc' },
   { key: 'admin', route: '/admin', title: 'Admin Dashboard', sub: 'Manage users, reports, and app data', icon: 'crown-outline', lib: 'mc', adminOnly: true },
@@ -29,9 +44,10 @@ const ITEMS: Row[] = [
   { key: 'languages', route: '/languages', title: 'Languages', sub: 'Select languages to skip translation', icon: 'globe-outline', lib: 'ion' },
   { key: 'ringtones', route: '/ringtones', title: 'Ringtones', sub: 'Choose your incoming call ringtone', icon: 'musical-notes-outline', lib: 'ion' },
   { key: 'backup', route: '/backup', title: 'Backup & Storage', sub: 'Auto backup and frequency settings', icon: 'server-outline', lib: 'ion' },
-  { key: 'voice-tasks', route: '/voice-tasks', title: 'Voice Tasks', sub: 'Hands-free voice commands for contacts', icon: 'mic-outline', lib: 'ion' },
+  { key: 'voice-tasks', route: '/voice-tasks', title: 'Voice Tasks', sub: 'Hands-free voice commands for contacts', icon: 'mic-outline', lib: 'ion', premium: true },
   { key: 'trustees', route: '/trustees', title: 'Trustees', sub: 'Manage your emergency contacts (max 5)', icon: 'shield-checkmark-outline', lib: 'ion' },
-  { key: 'emergency', route: '/emergency', title: 'Emergency', sub: 'Alert your trustees in an emergency', icon: 'alert-circle-outline', lib: 'ion', danger: true },
+  { key: 'emergency', route: '/emergency', title: 'Emergency', sub: 'Alert your trustees in an emergency', icon: 'alert-circle-outline', lib: 'ion', danger: true, premium: true },
+  { key: 'chat-once', route: '/chat-once', title: 'Chat Once', sub: 'Temporary anonymous conversations', icon: 'message-circle', lib: 'mc', premium: true },
   { key: 'help', route: '/help', title: 'Help & Support', sub: 'FAQs, contact support team', icon: 'help-circle-outline', lib: 'ion' },
   { key: 'account', route: '/account', title: 'Account', sub: 'Sign out, delete account', icon: 'lock-closed-outline', lib: 'ion', danger: true },
 ];
@@ -71,7 +87,15 @@ export default function SettingsScreen() {
               )}
             </View>
             <View style={styles.rowMid}>
-              <Text style={[styles.rowTitle, item.danger ? { color: Colors.danger } : null]}>{item.title}</Text>
+              <View style={styles.titleRow}>
+                <Text style={[styles.rowTitle, item.danger ? { color: Colors.danger } : null]}>{item.title}</Text>
+                {item.premium ? (
+                  <View style={styles.premiumBadge} testID={`settings-premium-${item.key}`}>
+                    <MaterialCommunityIcons name="crown-outline" size={11} color={Colors.primaryDark} />
+                    <Text style={styles.premiumBadgeText}>Premium</Text>
+                  </View>
+                ) : null}
+              </View>
               <Text style={styles.rowSub}>{item.sub}</Text>
             </View>
             <Feather name="chevron-right" size={22} color={Colors.textMuted} />
@@ -110,10 +134,37 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   rowMid: { flex: 1 },
+  // iter-173: row title now sits in a flex row alongside the optional
+  // Premium badge — matches the web app treatment.
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
   rowTitle: {
     fontSize: 17,
     fontWeight: FontWeight.bold,
     color: Colors.textPrimary,
+  },
+  // Small gold-on-cream pill with a crown glyph. Mirrors the web app's
+  // "👑 Premium" badge sitting next to gated feature names.
+  premiumBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: Colors.primaryLight,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.primary,
+  },
+  premiumBadgeText: {
+    fontSize: 11,
+    fontWeight: FontWeight.bold,
+    color: Colors.primaryDark,
+    letterSpacing: 0.2,
   },
   rowSub: {
     fontSize: 13,
