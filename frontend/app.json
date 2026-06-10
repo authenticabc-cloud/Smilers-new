@@ -227,16 +227,6 @@
           "androidMultiIntentFilters": ["image/*", "video/*", "application/*"],
           "disableExperimental": true
         }
-      ],
-      [
-        "react-native-callkeep",
-        {
-          "appName": "Smilers",
-          "imageName": "ic_launcher_round",
-          "supportsVideo": true,
-          "displayName": "Smilers",
-          "includesCallsInRecents": true
-        }
       ]
     ],
     "experiments": {
