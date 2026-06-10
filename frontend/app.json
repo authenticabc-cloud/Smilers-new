@@ -79,26 +79,6 @@
             "BROWSABLE",
             "DEFAULT"
           ]
-        },
-        {
-          "action": "SEND",
-          "data": [
-            { "mimeType": "text/*" },
-            { "mimeType": "image/*" },
-            { "mimeType": "video/*" },
-            { "mimeType": "audio/*" },
-            { "mimeType": "application/*" }
-          ],
-          "category": ["DEFAULT"]
-        },
-        {
-          "action": "SEND_MULTIPLE",
-          "data": [
-            { "mimeType": "image/*" },
-            { "mimeType": "video/*" },
-            { "mimeType": "application/*" }
-          ],
-          "category": ["DEFAULT"]
         }
       ],
       "permissions": [

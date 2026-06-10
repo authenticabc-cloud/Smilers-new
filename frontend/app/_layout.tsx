@@ -234,14 +234,25 @@ function ShareIntentRouter() {
 
   const router = useRouter();
   const pathname = usePathname();
-  const { hasShareIntent } = useShareIntent({ debug: false });
+  const { hasShareIntent, shareIntent } = useShareIntent({ debug: false });
 
   React.useEffect(() => {
     if (!hasShareIntent) return;
+    // iter-176: only navigate when there's an ACTUAL payload. The
+    // expo-share-intent native module can briefly report
+    // `hasShareIntent=true` on cold-start even for a normal launcher
+    // intent (especially when duplicate SEND filters live on the MAIN
+    // activity). Without this guard the user gets stranded on the
+    // "Nothing shared yet" screen after a normal tap on the app icon.
+    const hasText = !!(shareIntent && (shareIntent as any).text);
+    const hasUrl = !!(shareIntent && (shareIntent as any).webUrl);
+    const hasFiles = Array.isArray((shareIntent as any)?.files)
+      && (shareIntent as any).files.length > 0;
+    if (!hasText && !hasUrl && !hasFiles) return;
     // Don't re-route if we're already on the receiver screen.
     if (pathname === '/share-receiver') return;
     router.push('/share-receiver' as any);
-  }, [hasShareIntent, pathname, router]);
+  }, [hasShareIntent, pathname, router, shareIntent]);
 
   return null;
 }
