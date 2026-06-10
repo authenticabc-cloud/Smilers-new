@@ -1,17 +1,35 @@
-// Smilers theme constants — matches web app exactly
+// Smilers theme constants — matches web app exactly.
+//
+// iter-169 WEB_PARITY_POLISH_CONTRACT — exact-value updates:
+//   • App body  : oklch(0.96 0.012 90) ≈ #F4F1E8   (was #F5EFE0)
+//   • Card/list : #FCFBF7                          (was #FFFFFF)
+//   • Wallpaper : #F5F1E7                          (conversation message area)
+//   • Header dark: oklch(0.35 0.08 85) ≈ #4A3917   (was #3A2608)
+//   • Online dot: #22C55E (14px in chat list, smaller in chat header)
 export const Colors = {
   primary: '#E4B53B',
   primaryLight: '#FEF3C7',
   primaryDark: '#C99A1F',
-  headerBg: '#3A2608',
-  background: '#F5EFE0',
-  surface: '#FFFFFF',
+  // iter-169: brown header darkened from #3A2608 to web-canonical #4A3917
+  // (oklch(0.35 0.08 85) on the web app). Keep `headerBgDeep` for the rare
+  // accent that wants the original ink-dark tone (e.g. devotion screen).
+  headerBg: '#4A3917',
+  headerBgDeep: '#3A2608',
+  // iter-169: app body switched to the canonical #F4F1E8.
+  background: '#F4F1E8',
+  // iter-169: list/settings "card" surface is the slightly-lighter #FCFBF7.
+  // Most screens previously used `surface: '#FFFFFF'` which was too white;
+  // this matches the web app's `--card` token.
+  surface: '#FCFBF7',
+  // iter-169: chat message-area wallpaper (the canvas behind bubbles).
+  chatWallpaper: '#F5F1E7',
   textPrimary: '#1F2937',
   textSecondary: '#6B7280',
   textMuted: '#9CA3AF',
   danger: '#EF4444',
   dangerDark: '#DC2626',
-  success: '#10B981',
+  // iter-169: presence dot — canonical green per web parity contract.
+  success: '#22C55E',
   // Warning (amber) — used by sync banners, "Saved on this device" badges, etc.
   warning: '#F59E0B',
   warningLight: '#FEF3C7',
@@ -80,6 +98,33 @@ export const FontWeight = {
   medium: '500' as const,
   semibold: '600' as const,
   bold: '700' as const,
+};
+
+/**
+ * iter-169 WEB_PARITY_POLISH_CONTRACT — Inter font family.
+ *
+ * The web app uses Inter exclusively (no Roboto/SF fallback). We load
+ * Inter_300_Light, Inter_400_Regular, Inter_500_Medium, Inter_600_SemiBold,
+ * and Inter_700_Bold via `@expo-google-fonts/inter` in the root layout's
+ * `useFonts()` call.
+ *
+ * Usage:
+ *   <Text style={{ fontFamily: FontFamily.regular }} />
+ *   <Text style={{ fontFamily: FontFamily.semibold }} />  // titles
+ *   <Text style={{ fontFamily: FontFamily.bold }} />      // strong emphasis
+ *
+ * Why per-weight family names instead of `fontWeight`?
+ *   On Android, `fontWeight: '600'` on a custom-loaded font silently falls
+ *   back to the system regular face — the only reliable way to render
+ *   weight 600 is to load and reference the matching family ("Inter_600SemiBold").
+ *   This pattern matches the official Expo Google Fonts guide.
+ */
+export const FontFamily = {
+  light: 'Inter_300Light',
+  regular: 'Inter_400Regular',
+  medium: 'Inter_500Medium',
+  semibold: 'Inter_600SemiBold',
+  bold: 'Inter_700Bold',
 };
 
 export const Shadow = {

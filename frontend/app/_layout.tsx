@@ -9,6 +9,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { sentry } from '../src/lib/sentry';
 import {
   useFonts,
+  Inter_300Light,
   Inter_400Regular,
   Inter_500Medium,
   Inter_600SemiBold,
@@ -143,8 +144,25 @@ function GlobalNotificationServices() {
   return null;
 }
 
+/**
+ * iter-169 WEB_PARITY_POLISH_CONTRACT — Presence heartbeat.
+ *
+ * Mounted ONCE inside ConvexClientProvider + AuthProvider so the
+ * heartbeat fires `setOnlineStatus(true)` every 60s while the user
+ * is authenticated and the app is foregrounded. The backend marks a
+ * user offline if `lastSeen > 2 min`, so 60s gives us a safety
+ * margin. See `src/hooks/usePresenceHeartbeat.ts` for details.
+ */
+function PresenceHeartbeat() {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { usePresenceHeartbeat } = require('../src/hooks/usePresenceHeartbeat');
+  usePresenceHeartbeat();
+  return null;
+}
+
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
+    Inter_300Light,
     Inter_400Regular,
     Inter_500Medium,
     Inter_600SemiBold,
@@ -193,6 +211,7 @@ export default function RootLayout() {
           <ConvexClientProvider>
             <GlobalNotificationSound />
             <GlobalNotificationServices />
+            <PresenceHeartbeat />
             <StatusBar style="light" backgroundColor={Colors.headerBg} />
             <AppLockGate>
               <View

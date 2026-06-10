@@ -3448,10 +3448,14 @@ function MessageBubble({
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
+  // iter-169 web parity: conversation message area uses the dedicated
+  // `chatWallpaper` token (#F5F1E7) instead of the app body color.
+  container: { flex: 1, backgroundColor: Colors.chatWallpaper },
   chatHeader: {
     minHeight: 130,
-    backgroundColor: '#3D2A00',
+    // iter-169 web parity: conversation header now reads from the theme
+    // (Colors.headerBg = #4A3917), unifying it with all other dark headers.
+    backgroundColor: Colors.headerBg,
     paddingHorizontal: 12,
     paddingVertical: 24,
     flexDirection: 'row',
@@ -4271,7 +4275,9 @@ const menuStyles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   sheet: {
-    backgroundColor: '#F5EFE0',
+    // iter-169 web parity: attachment sheet uses the app background token
+    // so it tracks any future theme tweaks automatically.
+    backgroundColor: Colors.background,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingTop: 8,

@@ -484,7 +484,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
 
   // Header
-  headerSafe: { backgroundColor: '#3D2A00' },
+  headerSafe: { backgroundColor: Colors.headerBg },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',

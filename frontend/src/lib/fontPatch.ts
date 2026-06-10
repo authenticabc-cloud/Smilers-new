@@ -18,9 +18,9 @@
 import { StyleSheet, Text } from 'react-native';
 
 const WEIGHT_TO_INTER: Record<string, string> = {
-  '100': 'Inter_400Regular',
-  '200': 'Inter_400Regular',
-  '300': 'Inter_400Regular',
+  '100': 'Inter_300Light',
+  '200': 'Inter_300Light',
+  '300': 'Inter_300Light',
   '400': 'Inter_400Regular',
   '500': 'Inter_500Medium',
   '600': 'Inter_600SemiBold',

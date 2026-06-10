@@ -364,7 +364,7 @@ const styles = StyleSheet.create({
   },
   header: {
     minHeight: 116,
-    backgroundColor: '#3D2A00',
+    backgroundColor: Colors.headerBg,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 18,
