@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Modal, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -10,6 +10,7 @@ import FabStack from '../../src/components/FabStack';
 import SosButton from '../../src/components/SosButton';
 import { api } from '../../src/convexApi';
 import { findSavedContactDisplayName, getConversationDisplayName } from '../../src/lib/displayName';
+import { readCache, writeCache } from '../../src/lib/offlineCache';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 
 function relTime(iso?: string) {
@@ -32,8 +33,31 @@ export default function ChatsScreen() {
   const me = useQuery(api.users.getCurrentUser, {});
   const contacts = useQuery(api.contacts.getContacts, {});
   const conversations = useQuery(api.conversations.listConversations);
-  const loading = conversations === undefined;
-  const list: any[] = Array.isArray(conversations) ? conversations : [];
+  const loading = conversations === undefined && cachedList === null;
+
+  // iter 160 (offline persistence): hydrate the conversation list from
+  // AsyncStorage on cold launch so users see their last-known chats
+  // even with no internet. Fresh data from Convex overrides the cache
+  // the moment it arrives.
+  const userKey = me?._id ? String(me._id) : 'anon';
+  const [cachedList, setCachedList] = useState<any[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const data = await readCache<any[]>('conversations', userKey);
+      if (alive && Array.isArray(data)) setCachedList(data);
+    })();
+    return () => { alive = false; };
+  }, [userKey]);
+  useEffect(() => {
+    if (Array.isArray(conversations)) {
+      void writeCache('conversations', userKey, conversations);
+    }
+  }, [conversations, userKey]);
+
+  // Prefer live data; fall back to cache while loading.
+  const liveList: any[] | null = Array.isArray(conversations) ? conversations : null;
+  const list: any[] = liveList ?? cachedList ?? [];
 
   const handleMenuPress = (route: string) => {
     setShowMenu(false);
