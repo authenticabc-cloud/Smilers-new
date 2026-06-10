@@ -56,6 +56,9 @@ import { useConvex, useMutation } from 'convex/react';
 import { api } from '../src/convexApi';
 import { useAuth } from '../src/providers/AuthProvider';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+import { appendDiaryEntry, type DiaryEntryKind } from '../src/lib/diaryStore';
+import { uploadFile } from '../src/lib/uploadFile';
+import { scanMessage as scanMessageDeep } from '../src/lib/messageSecurityScanner';
 import Header from '../src/components/Header';
 import {
   classifyFile,
@@ -80,6 +83,8 @@ interface Recipient {
   userId?: string;
   /** True when this row represents a group chat (DM otherwise). */
   isGroup?: boolean;
+  /** True when this row is the user's own Diary (self-conversation). */
+  isDiary?: boolean;
   /** Optional member count to surface as a subtitle for groups. */
   memberCount?: number;
   name: string;
@@ -134,6 +139,21 @@ function ShareReceiverNative() {
 
   const sendMessage = useMutation(api.messages.send);
   const getOrCreateDirect = useMutation(api.conversations.getOrCreateDirect);
+  // iter-172: Diary cloud-write mutation. Diary is a local-first feature
+  // (AsyncStorage primary), but we ALSO push to the optional `api.diary.
+  // appendEntry` so the entry shows up cross-device. Probed lazily —
+  // safe when the backend hasn't shipped diary endpoints yet (mutation
+  // resolves to undefined and we skip the cloud write).
+  const appendDiaryCloud = useMutation((api as any).diary?.appendEntry);
+
+  // iter-172: current user — needed for the Diary row's userId scope.
+  const { data: meData } = useSafeConvexQuery<any>(
+    api.users.getCurrentUser,
+    {},
+    null,
+    !!isAuthenticated,
+  );
+  const myUserId: string | null = meData?._id ? String(meData._id) : null;
 
   // Recent chats — same query as the chats tab. Used to surface frequent
   // recipients at the top so the user can fan-out with one tap.
@@ -281,8 +301,23 @@ function ShareReceiverNative() {
       return a.name.localeCompare(b.name);
     });
 
+    // iter-172: synthetic "My Diary" row pinned at the very top so the
+    // user can quickly save anything to their own self-conversation.
+    // We only surface it when the user is authenticated AND the row
+    // wouldn't be filtered out by their search query.
+    const diaryName = 'My Diary';
+    const showDiary = !!myUserId && (q.length === 0 || diaryName.toLowerCase().includes(q));
+    if (showDiary) {
+      list.unshift({
+        key: 'diary:self',
+        isDiary: true,
+        name: diaryName,
+        avatarUrl: null,
+      });
+    }
+
     return list;
-  }, [contacts, conversations, search]);
+  }, [contacts, conversations, myUserId, search]);
 
   const toggleSelected = useCallback((r: Recipient) => {
     setSelected((prev) => {
@@ -321,8 +356,83 @@ function ShareReceiverNative() {
     // end (e.g. "Sent to 3 chats, 1 file blocked").
     const allOutcomes: { recipient: Recipient; outcomes: SendOutcome[] }[] = [];
     let firstConversationId: string | null = null;
+    let diaryHit = false;
 
     for (const r of selectedList) {
+      // iter-172: Diary branch — bypass conversation send entirely.
+      // Diary writes go to local AsyncStorage (always) + optional cloud
+      // `api.diary.appendEntry` (when wired). We upload attachments
+      // through the same `uploadFile` helper so a single storageId
+      // works across devices.
+      if (r.isDiary) {
+        try {
+          const outcomes: SendOutcome[] = [];
+          // Attachments first.
+          for (const file of (payload.files || [])) {
+            const scan = scanMessageDeep({ fileName: file.fileName, mimeType: file.mimeType });
+            if (scan.shouldAutoDelete) {
+              outcomes.push({ ok: false, reason: scan.findings[0]?.reason || 'Blocked: risky file type' });
+              continue;
+            }
+            try {
+              const storageId = await uploadFile(convex, file.uri, file.mimeType);
+              const kind: DiaryEntryKind = file.kind === 'image'
+                ? 'image'
+                : file.kind === 'video'
+                ? 'video'
+                : 'file';
+              const attachment = {
+                storageId,
+                fileName: file.fileName,
+                mimeType: file.mimeType,
+                fileSize: typeof file.fileSize === 'number' ? file.fileSize : null,
+              };
+              const entry = await appendDiaryEntry(myUserId, { kind, attachment });
+              if (appendDiaryCloud) {
+                // Cloud write is best-effort — diary is local-first.
+                try {
+                  await (appendDiaryCloud as any)({
+                    kind,
+                    attachment,
+                    _creationTime: entry._creationTime,
+                  });
+                } catch { /* swallow */ }
+              }
+              outcomes.push({ ok: true });
+            } catch (errorValue: any) {
+              outcomes.push({ ok: false, reason: errorValue?.message || 'Upload failed' });
+            }
+          }
+          // Text last (mirrors chat behaviour).
+          const cleanText = (payload.text || '').trim();
+          if (cleanText.length > 0) {
+            try {
+              const entry = await appendDiaryEntry(myUserId, { kind: 'text', text: cleanText });
+              if (appendDiaryCloud) {
+                try {
+                  await (appendDiaryCloud as any)({
+                    kind: 'text',
+                    text: cleanText,
+                    _creationTime: entry._creationTime,
+                  });
+                } catch { /* swallow */ }
+              }
+              outcomes.push({ ok: true });
+            } catch (errorValue: any) {
+              outcomes.push({ ok: false, reason: errorValue?.message || 'Save failed' });
+            }
+          }
+          allOutcomes.push({ recipient: r, outcomes });
+          if (outcomes.some((o) => o.ok)) diaryHit = true;
+        } catch (errorValue: any) {
+          allOutcomes.push({
+            recipient: r,
+            outcomes: [{ ok: false, reason: errorValue?.message || 'Diary save failed' }],
+          });
+        }
+        continue;
+      }
+
       // Resolve conversationId — lazy-create if we only have a userId.
       let convId = r.conversationId;
       try {
@@ -382,25 +492,29 @@ function ShareReceiverNative() {
     if (blockedCount > 0) lines.push(`${blockedCount} item(s) blocked (risky file)`);
     if (failedCount > 0) lines.push(`${failedCount} send(s) failed`);
 
-    // Stay in-app: route into the first conversation we sent to so the user
-    // sees the message land. Falls back to /chats if for some reason we
-    // didn't capture an id (all recipients failed).
+    // Stay in-app: if any conversation was sent to, route into the first
+    // one. If ONLY the Diary was selected, route to the Diary screen so
+    // the user sees their saved entries. Otherwise fall back to /chats.
     if (firstConversationId) {
       router.replace(`/chat/${firstConversationId}` as any);
+    } else if (diaryHit) {
+      router.replace('/diary' as any);
     } else {
       router.replace('/(tabs)/chats' as any);
     }
 
     // Show the summary AFTER navigation so it's visible on top of the chat.
     setTimeout(() => Alert.alert('Share complete', lines.join('\n')), 300);
-  }, [convex, getOrCreateDirect, payload, resetShareIntent, router, selectedList, sendMessage]);
+  }, [appendDiaryCloud, convex, getOrCreateDirect, myUserId, payload, resetShareIntent, router, selectedList, sendMessage]);
 
   // Render row
   const renderItem = useCallback(
     ({ item }: { item: Recipient }) => {
       const isSelected = !!selected[item.key];
       const init = initialsOf(item.name);
-      const subtitle = item.isGroup
+      const subtitle = item.isDiary
+        ? 'Save to your private notes'
+        : item.isGroup
         ? `${typeof item.memberCount === 'number' ? item.memberCount : 0} members`
         : null;
       return (
@@ -412,8 +526,16 @@ function ShareReceiverNative() {
           {item.avatarUrl ? (
             <Image source={{ uri: item.avatarUrl }} style={styles.avatar} />
           ) : (
-            <View style={[styles.avatarFallback, item.isGroup && styles.avatarFallbackGroup]}>
-              {item.isGroup ? (
+            <View
+              style={[
+                styles.avatarFallback,
+                item.isGroup && styles.avatarFallbackGroup,
+                item.isDiary && styles.avatarFallbackDiary,
+              ]}
+            >
+              {item.isDiary ? (
+                <Feather name="bookmark" size={20} color={Colors.headerBg} />
+              ) : item.isGroup ? (
                 <Ionicons name="people" size={20} color={Colors.headerBg} />
               ) : (
                 <Text style={styles.avatarInit}>{init}</Text>
@@ -632,6 +754,13 @@ const styles = StyleSheet.create({
   // from initial-only DM avatars in the list.
   avatarFallbackGroup: {
     backgroundColor: Colors.primary,
+  },
+  // Diary uses the same gold tone but adds a subtle gold ring so it
+  // visibly stands out as a private/system row.
+  avatarFallbackDiary: {
+    backgroundColor: Colors.primary,
+    borderWidth: 2,
+    borderColor: Colors.primaryDark,
   },
   avatarInit: { fontSize: 16, fontWeight: FontWeight.bold, color: Colors.headerBg },
   rowMid: { flex: 1, gap: 2 },
