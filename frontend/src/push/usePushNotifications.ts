@@ -286,6 +286,34 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
     },
     trigger: Platform.OS === 'android' ? { channelId: type === 'call' ? CALLS_CHANNEL : MESSAGES_CHANNEL } : null,
   });
+
+  // iter-175 Path B Phase 2 — ADDITIVE wake-screen bridge.
+  //
+  // After the existing notification has been scheduled (unchanged from
+  // iter-127), we ALSO fire the full-screen-intent / CallKeep UI for
+  // `type === 'call'` payloads. This wakes the screen on Android even
+  // when locked, and shows the native CallKit UI on iOS (when VoIP
+  // push cert is provisioned). If the native modules aren't loaded
+  // (e.g. older build), this is a silent no-op — the existing banner
+  // path is what the user has always had.
+  //
+  // Note: we lazy-require the module so a missing native binding can
+  // NEVER throw inside the background task and break the message path.
+  if (type === 'call') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { presentIncomingCallWake } = require('./callWakeScreen');
+      const callId = toNonEmptyString(payload.callId) || notificationKey;
+      const callerName = getDisplayNameFromPayload(payload) || 'Smilers user';
+      const callerId = toNonEmptyString(payload.callerId) || callId;
+      const callType = toNonEmptyString(payload.callType) === 'video' ? 'video' : 'audio';
+      if (callId) {
+        await presentIncomingCallWake({ callId, callerId, callerName, callType });
+      }
+    } catch (errorValue: any) {
+      console.warn('[push] presentIncomingCallWake bridge failed:', errorValue?.message);
+    }
+  }
 }
 
 if (Platform.OS !== 'web' && !runtimeScope.__smilersNotificationTaskDefined) {

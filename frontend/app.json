@@ -26,8 +26,12 @@
         "UIBackgroundModes": [
           "audio",
           "bluetooth-central",
-          "remote-notification"
+          "remote-notification",
+          "voip"
         ]
+      },
+      "entitlements": {
+        "com.apple.developer.pushkit.unrestricted-voip": true
       }
     },
     "android": {
@@ -204,7 +208,17 @@
           "disableExperimental": true
         }
       ],
-      "./plugins/withIosBroadcastExtension"
+      "./plugins/withIosBroadcastExtension",
+      [
+        "react-native-callkeep",
+        {
+          "appName": "Smilers",
+          "imageName": "ic_launcher_round",
+          "supportsVideo": true,
+          "displayName": "Smilers",
+          "includesCallsInRecents": true
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": false

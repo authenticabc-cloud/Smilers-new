@@ -161,6 +161,40 @@ function PresenceHeartbeat() {
 }
 
 /**
+ * iter-175 Path B Phase 2 — CallKeep + Notifee + iOS VoIP push bootstrap.
+ *
+ * IMPORTANT: this is PURELY ADDITIVE. It runs alongside the existing
+ * `usePushNotifications` and `useEmergentPush` hooks; it never touches
+ * their state, channels, or registration logic. If this fails to load
+ * (native module missing on web), the rest of the app continues working.
+ */
+function CallWakeBootstrap() {
+  if (Platform.OS === 'web') return null;
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { useEffect } = require('react');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { useRouter } = require('expo-router');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { useMutation } = require('convex/react');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { api } = require('../src/convexApi');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { initCallWakeScreen } = require('../src/push/callWakeScreen');
+
+  const router = useRouter();
+  // Use `as any` so a missing function ref on older deployments doesn't
+  // crash the layout — useMutation is forgiving when args are an `any`.
+  const decline = useMutation((api as any).calls?.declineCall) as any;
+  const registerVoipToken = useMutation((api as any).calls?.registerVoipToken) as any;
+
+  useEffect(() => {
+    initCallWakeScreen(router, decline, registerVoipToken).catch(() => {});
+  }, [decline, registerVoipToken, router]);
+
+  return null;
+}
+
+/**
  * iter-170 OS Share Sheet receiver.
  *
  * Listens globally for an incoming share intent (text/URL/image/video/file
@@ -252,6 +286,7 @@ export default function RootLayout() {
             <GlobalNotificationServices />
             <PresenceHeartbeat />
             <ShareIntentRouter />
+            <CallWakeBootstrap />
             <StatusBar style="light" backgroundColor={Colors.headerBg} />
             <AppLockGate>
               <View
