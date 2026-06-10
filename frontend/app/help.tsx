@@ -25,7 +25,11 @@ import { useAuth } from '../src/providers/AuthProvider';
 import { FAQS, FAQ_CATEGORIES, FaqCategory, FaqItem } from '../src/lib/faqs';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
-const SUPPORT_EMAIL = 'support@smilers.online';
+// iter-174: support inbox was switched from support@smilers.online
+// (broken MX records — mail bounced) to a Gmail-hosted alias that the
+// team monitors directly. All mailto: links + the on-screen footer
+// reference this constant so any future change is a one-line edit.
+const SUPPORT_EMAIL = 'support.smilers@gmail.com';
 const HELP_CENTER_URL = 'https://smilers.online/help';
 
 type TopicKey = 'question' | 'bug' | 'feature' | 'billing' | 'other';
