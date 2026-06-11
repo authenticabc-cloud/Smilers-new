@@ -44,6 +44,9 @@ Root cause was mobile-side: `useSafeConvexQuery` awaited a ONE-SHOT `convex.quer
 31 bubble/action style keys moved out of the main StyleSheet (verified exclusive via usage scan; only flexOne shared → copied). All code moved VERBATIM; tsc/eslint clean; boot smoke pass.
 **Phase 2 candidates (next):** extract the three in-JSX modals (action sheet ~line 2700, disappearing sheet, template picker), then split composer + header into components, then hook-extraction for the ~90 hooks at top of ChatScreen.
 
+### iter-185: Reply-to-message send failure FIXED
+Replying on mobile always failed (message stayed unsent; web worked). Root cause: mobile sent BOTH `replyToId` AND `replyToMessageId` on every reply payload (iter-101 dual-compat) — the deployed `messages.send` strict validator rejects the unknown extra field → mutation throws → composer restored silently. Web sends only `replyToId` → works. Fix: ALL 8 send sites in chat screen now send ONLY `replyToId` (text, edit-fallback, image, file, GIF, voice, video, poll/location paths). Renderer still reads both names on rows. Also: send failure now restores the reply banner AND shows a "Message not sent" alert instead of failing silently. Contract doc section 5 updated.
+
 ## Overview
 Native iOS + Android port of **smilers.online** (a Convex-backed real-time messaging app). Connects directly to the existing Convex backend (`https://aware-newt-456.convex.cloud`) using the official Convex React Native SDK. Authenticates via Hercules Auth OIDC (same provider as web app). Web and mobile share the same database in real time.
 

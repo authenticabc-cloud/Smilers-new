@@ -198,14 +198,13 @@ If none exists, the user gets a friendly "Edit failed" alert (no crash).
 
 ### 5. `messages.send` — Reply field name MUST be `replyToId`
 
-**Background**: iter-101 normalized the mobile client to send BOTH
-`replyToId` AND `replyToMessageId` on every message-send payload, to be
-compatible with both schema variants. To match the web app spec, the
-backend should:
+**UPDATE (iter-185)**: Mobile now sends ONLY `replyToId` — exactly what
+the web app sends. (The previous dual-field payload `replyToId` +
+`replyToMessageId` was being REJECTED by the deployed strict validator,
+which silently broke every reply send from mobile while web worked.)
 
 - **Accept arg name**: `replyToId?: Id<"messages">`
 - **Store field name**: `replyToId` on the message row
-- (Tolerate `replyToMessageId` as a synonym for one release cycle.)
 
 Mobile reads BOTH `item.replyToId` and `item.replyToMessageId` so either
 name on the row works.

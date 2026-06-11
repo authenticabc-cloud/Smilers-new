@@ -776,7 +776,7 @@ export default function ChatScreen() {
             conversationId,
             type: 'text',
             text: formattedValue,
-            ...(replyToMessageId ? { replyToMessageId, replyToId: replyToMessageId } : {}),
+            ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
           });
         }
       } else {
@@ -784,7 +784,7 @@ export default function ChatScreen() {
           conversationId,
           type: 'text',
           text: formattedValue,
-          ...(replyToMessageId ? { replyToMessageId, replyToId: replyToMessageId } : {}),
+          ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
         });
       }
       // iter-137 engagement tracking — fires only for the FRESH text
@@ -802,6 +802,14 @@ export default function ChatScreen() {
       if (editTargetId) {
         setEditingMessageId(editTargetId);
       }
+      // iter-185: also restore the reply banner (it was silently dropped
+      // before, leaving the user staring at an unsent message with no
+      // explanation) and SAY that the send failed. `replyTo` here is the
+      // closure-captured ORIGINAL object from before setReplyTo(null).
+      if (replyToMessageId && replyTo) {
+        setReplyTo(replyTo);
+      }
+      Alert.alert('Message not sent', 'Something went wrong while sending. Please tap Send to try again.');
     } finally {
       setSending(false);
     }
@@ -1116,7 +1124,7 @@ export default function ChatScreen() {
           type: 'image',
           text: formattedCaption,
           storageId,
-          ...(replyToMessageId ? { replyToMessageId, replyToId: replyToMessageId } : {}),
+          ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
         });
         setText('');
         setReplyTo(null);
@@ -1263,7 +1271,7 @@ export default function ChatScreen() {
         type: 'text',
         text,
         ...(replyTo?._id
-          ? { replyToMessageId: replyTo._id, replyToId: replyTo._id }
+          ? { replyToId: replyTo._id }
           : {}),
       });
       setReplyTo(null);
@@ -1320,7 +1328,7 @@ export default function ChatScreen() {
         mimeType: mime,
         fileName: file.name,
         fileSize: file.size,
-        ...(replyToMessageId ? { replyToMessageId } : {}),
+        ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
       });
       setReplyTo(null);
       await refetchMessages();
@@ -1356,7 +1364,7 @@ export default function ChatScreen() {
           storageId,
           mimeType: 'image/gif',
           fileName: `giphy-${asset.id}.gif`,
-          ...(replyToMessageId ? { replyToMessageId, replyToId: replyToMessageId } : {}),
+          ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
         });
         setText('');
         setReplyTo(null);
@@ -1394,7 +1402,7 @@ export default function ChatScreen() {
           conversationId,
           type: 'poll',
           poll: { question: poll.question, options: poll.options },
-          ...(replyToMessageId ? { replyToMessageId, replyToId: replyToMessageId } : {}),
+          ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
         });
         setReplyTo(null);
         await refetchMessages();
@@ -1473,7 +1481,7 @@ export default function ChatScreen() {
           storageId,
           mimeType: mime,
           duration: totalSec,
-          ...(replyToMessageId ? { replyToMessageId, replyToId: replyToMessageId } : {}),
+          ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
         });
 
         setReplyTo(null);
