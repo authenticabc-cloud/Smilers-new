@@ -9,8 +9,8 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "postinstall": "node ./scripts/patch-rn-webrtc.js",
-    "prepare": "node ./scripts/patch-rn-webrtc.js"
+    "postinstall": "node ./scripts/patch-rn-webrtc.js && node ./scripts/patch-expo-share-intent.js",
+    "prepare": "node ./scripts/patch-rn-webrtc.js && node ./scripts/patch-expo-share-intent.js"
   },
   "dependencies": {
     "@babel/core": "^7.29.0",
