@@ -32,6 +32,10 @@ Call pills (CallPill, `__kind:'call'` merge, `api.calls.listCallLogsForConversat
 6. **Chat slow initial load / call buttons (issue 2)**: investigated — buttons are wired directly; sluggishness = JS-thread saturation from the 4600-line screen's initial render. FlatList initialNumToRender tuning was tried and REVERTED (blank-bottom regression risk with scrollToEnd). Proper fix = chat screen refactor (backlog).
 HONEST LIMIT: full screen-wake on locked phones still requires the CallKeep/full-screen-intent native layer which is BLOCKED by the build pipeline (expo config crash). The MAX-importance call channel gives heads-up + screen light-up on most devices.
 
+### iter-183: Trustees infinite spinner — ROOT CAUSE + global fix
+Backend verified FINE via direct Convex probes: `trustees:getMyTrustees` ✓, `trustees:addTrustee` ✓, `trustees:removeTrustee` ✓, `contacts:getContacts` ✓, `conversations:listConversations` ✓ all exist on deployment (no Convex/web changes needed — communicated to user).
+Root cause was mobile-side: `useSafeConvexQuery` awaited a ONE-SHOT `convex.query()` that the client can queue FOREVER when racing the auth handshake → `loading:true` for eternity (same failure class as the languages-save hang and call-pills emptiness). REWROTE the hook internals to a `watchQuery` SUBSCRIPTION (same public API `{data, loading, refetch}`): auto-recovers when auth completes, live-updates on server writes, 12s safety timer guarantees no infinite spinner, still degrades to fallback on errors. Benefits ALL consumer screens (trustees, contacts pickers, admin tabs, recordings, share picker...). Preserved iter-138 (no flicker on enabled toggles) and iter-141 (spinner only on first load) behaviors.
+
 ## Overview
 Native iOS + Android port of **smilers.online** (a Convex-backed real-time messaging app). Connects directly to the existing Convex backend (`https://aware-newt-456.convex.cloud`) using the official Convex React Native SDK. Authenticates via Hercules Auth OIDC (same provider as web app). Web and mobile share the same database in real time.
 

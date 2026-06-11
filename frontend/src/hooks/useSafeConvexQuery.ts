@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useConvex } from 'convex/react';
 
 export function useSafeConvexQuery<T>(
@@ -8,102 +8,97 @@ export function useSafeConvexQuery<T>(
   enabled = true
 ) {
   const convex = useConvex();
-  const convexRef = useRef(convex);
   const fallbackRef = useRef(fallback);
   const queryRefRef = useRef(queryRef);
   const argsKey = JSON.stringify(args ?? {});
-  const stableArgs = useMemo(() => args ?? {}, [argsKey]);
-  const argsRef = useRef(stableArgs);
   const queryPath = queryRef?.udfPath || 'unknown';
   const [data, setData] = useState<T>(fallback);
   const [loading, setLoading] = useState(enabled);
-  // iter-141: only enter the "loading" state on the FIRST fetch.
-  // Subsequent re-fetches (e.g. triggered by transient `enabled=false`
-  // → `true` cycles when `me` reloads) just refresh data silently in
-  // the background. This stops the spinner from blinking on/off on
-  // Admin Reports / Ads tabs where the empty state would otherwise
-  // flash a spinner every few seconds.
+  // iter-141: only enter the "loading" state on the FIRST fetch so empty
+  // states don't blink between "loading" and "empty" on re-fetches.
   const hasLoadedOnce = useRef(false);
-
-  useEffect(() => {
-    convexRef.current = convex;
-  }, [convex]);
+  // Bumping this re-subscribes (refetch support).
+  const [subscriptionNonce, setSubscriptionNonce] = useState(0);
 
   useEffect(() => {
     queryRefRef.current = queryRef;
   }, [queryRef]);
 
+  // iter-183 REWRITE: this hook previously awaited a ONE-SHOT
+  // `convex.query()`. When that call raced the Convex auth handshake the
+  // client could queue it FOREVER — never resolving, never rejecting —
+  // leaving `loading: true` for eternity (the "Trustees keeps on
+  // turning" bug; same failure froze the Languages save). It also meant
+  // results were stale until the screen remounted.
+  //
+  // Now we use a `watchQuery` SUBSCRIPTION (the same primitive Convex's
+  // own `useQuery` uses): it re-evaluates automatically once auth
+  // completes, live-updates on every server write, and a 12s safety
+  // timer guarantees the spinner can never spin forever. Errors (e.g.
+  // function not deployed) still degrade gracefully to `fallback`.
   useEffect(() => {
-    argsRef.current = stableArgs;
-  }, [stableArgs]);
-
-  const refetch = useCallback(async () => {
     if (!enabled) {
-      // iter-138: preserve the most recently fetched data when `enabled`
-      // momentarily flips to false (common cause: `me` query reloading
-      // → `isAdmin` briefly null → enabled goes false → enabled goes
-      // true again). Resetting to fallback here caused a "data appears
-      // / vanishes / re-appears" blink on Admin Users + similar tabs.
-      // Only stop the spinner; leave whatever data we have on screen.
+      // iter-138: do NOT clear data on transient `enabled=false`
+      // transitions (e.g. admin role briefly null while `me` reloads) —
+      // that caused list contents to flicker on/off. Only stop the spinner.
       setLoading(false);
       return;
     }
+    if (!hasLoadedOnce.current) {
+      setLoading(true);
+    }
 
-    setLoading(true);
+    const safetyTimer = setTimeout(() => {
+      hasLoadedOnce.current = true;
+      setLoading(false);
+    }, 12_000);
+
+    let unsubscribe: (() => void) | undefined;
+    const settle = () => {
+      hasLoadedOnce.current = true;
+      setLoading(false);
+    };
     try {
-      const result = await convexRef.current.query(queryRefRef.current, argsRef.current);
-      setData((result ?? fallbackRef.current) as T);
+      const watch = (convex as any).watchQuery(queryRefRef.current, JSON.parse(argsKey));
+      const read = () => {
+        try {
+          const result = watch.localQueryResult();
+          if (result === undefined) return; // no server result yet — keep waiting
+          setData((result ?? fallbackRef.current) as T);
+          settle();
+        } catch (errorValue) {
+          console.warn('Convex query failed:', queryPath, errorValue);
+          setData(fallbackRef.current);
+          settle();
+        }
+      };
+      unsubscribe = watch.onUpdate(read);
+      read();
     } catch (errorValue) {
       console.warn('Convex query failed:', queryPath, errorValue);
       setData(fallbackRef.current);
-    } finally {
-      setLoading(false);
+      settle();
     }
-  }, [enabled, queryPath]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const load = async () => {
-      if (!enabled) {
-        // iter-138: same as above — do NOT clear data on a transient
-        // `enabled=false` transition (e.g., admin role briefly null
-        // while `me` query is reloading). This kept causing list
-        // contents to flicker on/off, especially on Admin Users.
-        setLoading(false);
-        return;
-      }
-
-      // iter-141: only show the spinner on the FIRST fetch. Subsequent
-      // re-fetches happen silently in the background so the empty
-      // state doesn't blink between "loading" and "empty" forever.
-      if (!hasLoadedOnce.current) {
-        setLoading(true);
-      }
-      try {
-        const result = await convexRef.current.query(queryRefRef.current, argsRef.current);
-        if (!cancelled) {
-          setData((result ?? fallbackRef.current) as T);
-          hasLoadedOnce.current = true;
-        }
-      } catch (errorValue) {
-        console.warn('Convex query failed:', queryPath, errorValue);
-        if (!cancelled) {
-          setData(fallbackRef.current);
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    };
-
-    void load();
 
     return () => {
-      cancelled = true;
+      clearTimeout(safetyTimer);
+      try {
+        unsubscribe?.();
+      } catch {
+        /* ignore */
+      }
     };
-  }, [enabled, argsKey, queryPath]);
+  }, [convex, argsKey, enabled, queryPath, subscriptionNonce]);
+
+  const refetch = useCallback(async () => {
+    if (!enabled) {
+      setLoading(false);
+      return;
+    }
+    // Subscriptions already deliver fresh data automatically; a manual
+    // refetch simply re-subscribes (covers function-redeploy edge cases).
+    setSubscriptionNonce((n) => n + 1);
+  }, [enabled]);
 
   return { data, loading, refetch };
 }
