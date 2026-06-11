@@ -61,6 +61,12 @@ User insight confirmed: outgoing-call ringback (Smilers theme on the CALLER's ph
 ALSO acknowledged to user: wake-screen + CallKeep still requires EAS CLI build (Emergent pipeline rejects the config plugin) — per earlier diagnosis; backend redeploy still needed for the push channel routing (iter-182).
 NOTE: during editing, two search_replace ops mis-applied leaving duplicate trailing lines in call/[conversationId].tsx — repaired by truncation; file verified clean (tsc/eslint pass).
 
+### iter-188: Mobile alignment with the NEW scheduled-messages backend
+Web-side agent rewrote the Convex delivery worker (real timers, repeat recurrence, unified store, expectedSendKey stale-timer guard). Mobile alignment applied:
+1. `recipient` label now prefers the SERVER-KNOWN Smilers profile name (device-contact name only as fallback) — the new worker resolves recipient→conversation BY NAME and can't match device-saved names.
+2. Chat-composer schedule create now self-negotiates `conversationId`: tries `{...args, conversationId}` first (zero-ambiguity targeting), falls back to the confirmed iter-126 contract if the validator rejects the extra field. Works with both old and new deployed validators.
+OPTIONAL backend follow-up (relay to web agent): accept optional `conversationId` in `scheduling.scheduleMessageMobile` + `scheduledMessages.create` validators and use it directly when present — mobile already sends it.
+
 ## Overview
 Native iOS + Android port of **smilers.online** (a Convex-backed real-time messaging app). Connects directly to the existing Convex backend (`https://aware-newt-456.convex.cloud`) using the official Convex React Native SDK. Authenticates via Hercules Auth OIDC (same provider as web app). Web and mobile share the same database in real time.
 

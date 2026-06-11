@@ -872,20 +872,23 @@ export default function ChatScreen() {
         // string — never an Id, never the conversationId.
         const myIdForRecipient = me?._id ? String(me._id) : undefined;
         const recipientLabel =
-          // iter-181: device-saved contact name first (same override as
-          // Chats/share-picker) — fixes "Unknown" recipients on rows
-          // created before the profile name was hydrated.
+          // iter-188: SERVER-KNOWN Smilers profile name FIRST. The new
+          // backend delivery worker resolves "recipient name → conversation"
+          // server-side, and it can only match names that exist in the
+          // Smilers users table. The device-contact name (iter-181) is now
+          // the FALLBACK — it's still better than "Unknown" but the server
+          // can't resolve it.
+          getConversationDisplayName(
+            hydratedConversation || conversation,
+            myIdForRecipient,
+            '',
+          ) ||
           getResolvedConversationDisplayName(
             hydratedConversation || conversation,
             myIdForRecipient,
             deviceContactIndex,
             lookupDeviceContactName,
             '',
-          ) ||
-          getConversationDisplayName(
-            hydratedConversation || conversation,
-            myIdForRecipient,
-            'Chat',
           ) ||
           (typeof (conversation as any)?.title === 'string' && (conversation as any).title.trim()) ||
           (typeof (conversation as any)?.name === 'string' && (conversation as any).name.trim()) ||
@@ -951,8 +954,25 @@ export default function ChatScreen() {
         // The dual-endpoint probe is kept as belt-and-suspenders in case
         // one endpoint is briefly redeployed without the other.
         let primaryError: any = null;
+        // iter-188: the rewritten backend worker resolves the recipient by
+        // NAME unless the row is pinned to a conversation. We KNOW the
+        // exact conversation here, so we attempt the payload WITH
+        // `conversationId` first (zero ambiguity), and self-negotiate down
+        // to the confirmed iter-126 contract if the deployed validator
+        // doesn't accept the extra field yet.
+        const sendWithConversationNegotiation = async (mutate: (args: any) => Promise<any>) => {
+          if (conversationId) {
+            try {
+              await mutate({ ...scheduleArgs, conversationId: String(conversationId) });
+              return;
+            } catch {
+              // Validator likely rejected the extra field — retry bare.
+            }
+          }
+          await mutate(scheduleArgs);
+        };
         try {
-          await createScheduledMessage(scheduleArgs);
+          await sendWithConversationNegotiation(createScheduledMessage as any);
         } catch (primaryFailure: any) {
           primaryError = primaryFailure;
           // Capture the FULL error data field from Convex —
@@ -988,7 +1008,7 @@ export default function ChatScreen() {
           // Try the alternate endpoint with the SAME confirmed payload.
           if (typeof createScheduledLegacy === 'function') {
             try {
-              await (createScheduledLegacy as any)(scheduleArgs);
+              await sendWithConversationNegotiation(createScheduledLegacy as any);
               primaryError = null; // fallback succeeded
               try {
                 recordDiagnostic({
