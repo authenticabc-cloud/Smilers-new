@@ -14,7 +14,7 @@
  *     `api.messages.generateUploadUrl` per the canonical contract.
  *
  * Pre-send safety: every payload is run through `messageSecurityScanner`
- * (per iter-164 contract). Dangerous attachments (.exe, .apk, .bat, etc.)
+ * (per iter-164 contract). Dangerous attachments (.exe, .bat, etc.)
  * are blocked at the SEND boundary. Suspicious URLs flag a warning
  * the share-receiver screen surfaces in its confirmation prompt.
  *

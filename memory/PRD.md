@@ -11,6 +11,9 @@ Share screen recipient list was showing Smilers/Google account names instead of 
 ### iter-178: "Frequently shared" pins in share picker
 New `src/lib/recentShareTargets.ts` (AsyncStorage, per-user, stable ids `u:<userId>` / `c:<convId>`, capped 8). After each successful share, targets are recorded; on next share up to 3 most-used recipients are pinned below My Diary with a "Frequently shared" subtitle. Local-only, best-effort, never blocks send.
 
+### iter-179: APK sharing allowed + clear "blocked" reporting
+The "Sent to 0 chats / 1 send(s) failed" report was the iter-164 security scanner silently blocking an .apk share — not a real failure. Fixes: (1) `SendOutcome.blocked` flag replaces fragile regex tally; share-complete alert now states the block reason explicitly. (2) Per user decision (option b, WhatsApp-style), `.apk` removed from DANGEROUS_EXTENSIONS in BOTH `messageSecurityScanner.ts` (send boundary) and `securityScanner.ts` (incoming render/auto-delete). `.exe/.bat/.ipa/etc.` remain blocked. Verified via tsx unit run: apk allowed, exe/bat/ipa blocked, jpg safe — ALL PASS.
+
 ## Overview
 Native iOS + Android port of **smilers.online** (a Convex-backed real-time messaging app). Connects directly to the existing Convex backend (`https://aware-newt-456.convex.cloud`) using the official Convex React Native SDK. Authenticates via Hercules Auth OIDC (same provider as web app). Web and mobile share the same database in real time.
 

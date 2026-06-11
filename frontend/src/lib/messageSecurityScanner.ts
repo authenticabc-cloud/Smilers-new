@@ -8,7 +8,8 @@
  * (per user PRD) can be enforced at the chat layer in a follow-up.
  *
  * Heuristics are deliberately conservative to avoid false positives:
- *   - High-risk file extensions (.exe, .bat, .scr, .vbs, .cmd, .js, .jar, .apk)
+ *   - High-risk file extensions (.exe, .bat, .scr, .vbs, .cmd, .js, .jar)
+ *     — .apk is deliberately ALLOWED (user decision, WhatsApp-style policy)
  *   - URLs to bare IPs (e.g. http://192.0.2.1/file.exe)
  *   - URLs using URL-shortener domains (bit.ly, tinyurl, t.co, ow.ly, is.gd)
  *     — flagged as MEDIUM only, never auto-deleted by default
@@ -40,7 +41,9 @@ export interface SecurityScanResult {
 const DANGEROUS_EXTENSIONS = new Set([
   'exe', 'bat', 'cmd', 'com', 'scr', 'pif', 'msi', 'msp',
   'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'ps1', 'psm1',
-  'jar', 'apk', 'ipa',
+  // NOTE: 'apk' intentionally NOT listed — user opted to allow Android
+  // package sharing (WhatsApp-style). 'ipa' and desktop installers stay blocked.
+  'jar', 'ipa',
   'reg', 'cab', 'lnk', 'inf', 'cpl',
   'hta', 'iso', 'img', 'vhd',
 ]);

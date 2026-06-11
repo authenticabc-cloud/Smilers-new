@@ -104,7 +104,8 @@ const DANGEROUS_EXTENSIONS = new Set([
   'cpl', 'msc', 'reg', 'lnk', 'inf', 'dll',
   'iso', 'img', 'vhd',          // commonly used to bypass MOTW on Windows
   'hta', 'sct',
-  'apk',                         // Android sideload package
+  // NOTE: 'apk' intentionally NOT listed — user opted to allow Android
+  // package sharing (WhatsApp-style policy, iter-179).
   'ipa',                         // iOS sideload package
   'dmg', 'pkg',                  // macOS installers
   'app',                         // macOS app bundle

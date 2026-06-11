@@ -24,7 +24,7 @@
  *   - Stay-in-app on completion (returns to first selected chat, falls
  *     back to chats list)
  *   - MessageSecurityScanner runs at the SEND boundary; dangerous files
- *     (.exe/.apk/...) are skipped silently per recipient and surfaced in
+ *     (.exe/.bat/...) are skipped silently per recipient and surfaced in
  *     the result toast.
  *
  * IMPORTANT — this screen is a NO-OP on web preview / Expo Go because
@@ -615,7 +615,7 @@ function ShareReceiverNative() {
         `${blockedCount} item(s) blocked for your safety` +
           (blockedReasons.size > 0 ? `\n(${Array.from(blockedReasons).join('; ')})` : ''),
       );
-      lines.push('Smilers blocks risky file types like .apk and .exe.');
+      lines.push('Smilers blocks risky file types like .exe and .bat.');
     }
     if (failedCount > 0) {
       lines.push(
