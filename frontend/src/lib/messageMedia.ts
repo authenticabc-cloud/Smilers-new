@@ -68,28 +68,63 @@ async function fetchMediaInfo(
 }
 
 /** Pick a safe filename based on the media info + a fallback extension. */
+const EXT_BY_MIME: Record<string, string> = {
+  'image/jpeg': '.jpg',
+  'image/jpg': '.jpg',
+  'image/png': '.png',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+  'image/heic': '.heic',
+  'image/heif': '.heif',
+  'image/bmp': '.bmp',
+  'video/mp4': '.mp4',
+  'video/quicktime': '.mov',
+  'video/webm': '.webm',
+  'video/3gpp': '.3gp',
+  'audio/mpeg': '.mp3',
+  'audio/m4a': '.m4a',
+  'audio/mp4': '.m4a',
+  'audio/aac': '.aac',
+  'audio/ogg': '.ogg',
+  'audio/wav': '.wav',
+  'audio/x-wav': '.wav',
+};
+
+const MEDIA_EXT_RE = /\.(jpe?g|png|gif|webp|heic|heif|bmp|mp4|mov|webm|3gp|m4v|mp3|m4a|aac|ogg|wav)$/i;
+
+/** Best extension we can infer for this media (mime → url → type default). */
+function inferMediaExt(info: MediaInfo): string | null {
+  if (info.mimeType && EXT_BY_MIME[info.mimeType.toLowerCase()]) {
+    return EXT_BY_MIME[info.mimeType.toLowerCase()];
+  }
+  // Try the URL path (before any query string).
+  if (info.url) {
+    const m = info.url.split('?')[0].match(MEDIA_EXT_RE);
+    if (m) return m[0].toLowerCase();
+  }
+  // Type-based defaults — Android's MediaStore REQUIRES a recognizable
+  // media extension to allow DCIM placement (iter-182: "Primary
+  // directory DCIM not allowed" save errors came from extension-less /
+  // .bin files).
+  if (info.type === 'image') return '.jpg';
+  if (info.type === 'video') return '.mp4';
+  if (info.type === 'audio' || info.type === 'voice') return '.m4a';
+  return null;
+}
+
 function safeFileName(info: MediaInfo, fallbackExt = '.bin'): string {
+  const inferredExt = inferMediaExt(info);
   if (info.fileName && info.fileName.trim().length > 0) {
-    return info.fileName.replace(/[^\w.\-]+/g, '_').slice(0, 120);
+    let name = info.fileName.replace(/[^\w.\-]+/g, '_').slice(0, 120);
+    // iter-182: a fileName WITHOUT a media extension (e.g. "IMG_2031" or
+    // "photo.bin") makes saveToLibraryAsync classify the file as
+    // non-media → DCIM rejected. Append the inferred extension.
+    if (inferredExt && !MEDIA_EXT_RE.test(name)) {
+      name = `${name}${inferredExt}`;
+    }
+    return name;
   }
-  let ext = fallbackExt;
-  if (info.mimeType) {
-    const map: Record<string, string> = {
-      'image/jpeg': '.jpg',
-      'image/png': '.png',
-      'image/gif': '.gif',
-      'image/webp': '.webp',
-      'video/mp4': '.mp4',
-      'video/quicktime': '.mov',
-      'audio/mpeg': '.mp3',
-      'audio/m4a': '.m4a',
-      'audio/mp4': '.m4a',
-      'audio/wav': '.wav',
-      'audio/x-wav': '.wav',
-    };
-    ext = map[info.mimeType] || ext;
-  }
-  return `smilers_${Date.now()}${ext}`;
+  return `smilers_${Date.now()}${inferredExt || fallbackExt}`;
 }
 
 /**

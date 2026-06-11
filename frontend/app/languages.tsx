@@ -169,12 +169,26 @@ function LegacyLanguagesScreen() {
     for (const candidate of candidates) {
       if (typeof candidate.run !== 'function') continue;
       try {
-        await safeMutation(candidate.label, () => candidate.run!(candidate.payload), candidate.payload);
+        // iter-182: hard 10s timeout per candidate. If the Convex client's
+        // auth handshake glitches, a mutation can be queued FOREVER without
+        // resolving or rejecting — which left the Save spinner turning "till
+        // eternity". On timeout we stop trying, keep the local copy, and
+        // release the UI.
+        await Promise.race([
+          safeMutation(candidate.label, () => candidate.run!(candidate.payload), candidate.payload),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Request timed out — please check your connection.')), 10_000),
+          ),
+        ]);
         serverOk = true;
         break;
       } catch (errorValue: any) {
         lastError = errorValue;
         const message = String(errorValue?.message || '');
+        if (message.includes('timed out')) {
+          // Network/auth stall — no point trying more candidates.
+          break;
+        }
         // If the function literally doesn't exist on the server OR if
         // the field is rejected by the validator, fall through to the
         // next candidate. Anything else (auth, network) ➝ stop.
@@ -609,11 +623,18 @@ export function MessageLanguageScreen() {
       let savedToServer = false;
       try {
         const payload = { preferredLanguage: item.code };
-        await safeMutation(
-          'users.updateProfile(preferredLanguage)',
-          () => updateProfile(payload),
-          payload,
-        );
+        // iter-182: same 10s timeout guard as onSave — a queued Convex
+        // mutation can hang forever and freeze the saving state.
+        await Promise.race([
+          safeMutation(
+            'users.updateProfile(preferredLanguage)',
+            () => updateProfile(payload),
+            payload,
+          ),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Request timed out')), 10_000),
+          ),
+        ]);
         savedToServer = true;
       } catch (errorValue: any) {
         console.warn('updateProfile(preferredLanguage) failed:', errorValue?.message);

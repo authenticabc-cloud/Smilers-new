@@ -26,6 +26,11 @@ import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import { useAuth } from '../providers/AuthProvider';
 import { recordDiagnostic } from '../lib/diagnostics';
+import {
+  applyNotificationChannelPrefs,
+  getChannelIdsForPrefs,
+  readRingtonePrefs,
+} from './notificationChannels';
 
 const BACKEND_URL =
   process.env.EXPO_PUBLIC_BACKEND_URL?.replace(/\/$/, '') || '';
@@ -44,6 +49,37 @@ let lastDeviceToken: string | null = null;
 let lastRegisteredUserId: string | null = null;
 let lastRegisteredAt = 0;
 
+/**
+ * iter-182: re-POST the registration for the last known device/user —
+ * used by the Ringtones screen right after the user changes a tone so
+ * the backend immediately learns the NEW tone-versioned channel ids
+ * (instead of waiting for the next app foreground). Best-effort.
+ */
+export async function reregisterPushDevice(): Promise<void> {
+  if (Platform.OS === 'web') return;
+  const token = lastDeviceToken;
+  const userId = lastRegisteredUserId;
+  if (!token || !userId) return;
+  // Bust the 5-minute throttle so future register() calls also re-POST.
+  lastRegisteredAt = 0;
+  try {
+    await postRegisterPush({
+      userId,
+      platform: Platform.OS as 'ios' | 'android',
+      deviceToken: token,
+    });
+    lastRegisteredAt = Date.now();
+  } catch (errorValue: any) {
+    try {
+      recordDiagnostic({
+        tag: 'NOTIFY',
+        source: 'emergentPush/reregister',
+        message: `re-register after tone change failed: ${errorValue?.message || errorValue}`,
+      });
+    } catch {}
+  }
+}
+
 async function postRegisterPush(opts: {
   userId: string;
   platform: 'ios' | 'android';
@@ -51,6 +87,19 @@ async function postRegisterPush(opts: {
 }): Promise<void> {
   if (!BACKEND_URL) {
     throw new Error('EXPO_PUBLIC_BACKEND_URL is not configured.');
+  }
+  // iter-182: ensure the tone-versioned channels EXIST before telling the
+  // backend to target them, then include their ids in the registration so
+  // FCM pushes route into the channel carrying the user's selected sound.
+  let channelIds: { callChannelId: string; messageChannelId: string } | null = null;
+  if (opts.platform === 'android') {
+    try {
+      const prefs = await readRingtonePrefs();
+      await applyNotificationChannelPrefs(prefs);
+      channelIds = getChannelIdsForPrefs(prefs);
+    } catch {
+      channelIds = null;
+    }
   }
   const url = `${BACKEND_URL}/api/register-push`;
   const controller = new AbortController();
@@ -63,6 +112,12 @@ async function postRegisterPush(opts: {
         user_id: opts.userId,
         platform: opts.platform,
         device_token: opts.deviceToken,
+        ...(channelIds
+          ? {
+              call_channel_id: channelIds.callChannelId,
+              message_channel_id: channelIds.messageChannelId,
+            }
+          : {}),
       }),
       signal: controller.signal,
     });

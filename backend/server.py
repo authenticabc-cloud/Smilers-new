@@ -5,6 +5,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 import asyncio
+import re
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List
@@ -529,6 +530,12 @@ class RegisterPushBody(BaseModel):
     user_id: str
     platform: str  # "android" | "ios"
     device_token: str
+    # iter-182: the app's CURRENT Android channel ids (versioned per the
+    # user's selected ringtone/notification tone — Android channels are
+    # immutable so a tone change = a new channel id). When present, FCM
+    # sends route into these channels so the chosen sound actually plays.
+    call_channel_id: str | None = None
+    message_channel_id: str | None = None
 
 
 @api_router.post("/register-push", status_code=201)
@@ -549,6 +556,17 @@ async def register_push(body: RegisterPushBody):
     # device_token) tuple as the natural key so re-registrations from
     # the same device just touch the updatedAt timestamp.
     try:
+        update_set: dict = {
+            "user_id": body.user_id,
+            "platform": body.platform,
+            "device_token": body.device_token,
+            "updated_at": datetime.now(timezone.utc),
+        }
+        # iter-182: persist the device's current channel ids when sent.
+        if body.call_channel_id:
+            update_set["call_channel_id"] = body.call_channel_id
+        if body.message_channel_id:
+            update_set["message_channel_id"] = body.message_channel_id
         await db.push_tokens.update_one(
             {
                 "user_id": body.user_id,
@@ -556,12 +574,7 @@ async def register_push(body: RegisterPushBody):
                 "device_token": body.device_token,
             },
             {
-                "$set": {
-                    "user_id": body.user_id,
-                    "platform": body.platform,
-                    "device_token": body.device_token,
-                    "updated_at": datetime.now(timezone.utc),
-                },
+                "$set": update_set,
                 "$setOnInsert": {
                     "created_at": datetime.now(timezone.utc),
                 },
@@ -578,7 +591,8 @@ async def register_push(body: RegisterPushBody):
     try:
         resp = await _push_client.post(
             "/api/v1/push/users/register",
-            json=body.model_dump(),
+            # Relay only understands the original three fields.
+            json=body.model_dump(include={"user_id", "platform", "device_token"}),
         )
         # Only surface the response status; don't fail the request.
         if resp.status_code not in (200, 201, 202):
@@ -590,6 +604,41 @@ async def register_push(body: RegisterPushBody):
         logger.warning(f"register-push: Emergent relay unreachable (continuing): {e}")
 
     return {"status": "registered"}
+
+
+def _resolve_android_channel(data: dict, token_doc: dict | None = None) -> str:
+    """
+    iter-182: decide which Android notification channel a push lands in.
+
+    The user-facing regression this fixes: incoming-call pushes were
+    falling into the default "messages-v3" channel (one short beep +
+    short vibration) because Convex doesn't always send `channel_id`.
+    We now DERIVE call-ness from the payload itself, and honor the
+    per-device channel ids registered by the app (versioned per the
+    user's selected ringtone — Android channels are immutable, so a
+    tone change = a new channel id).
+
+    Resolution order:
+      1. Per-token override (call_channel_id / message_channel_id)
+      2. Explicit data["channel_id"] from Convex
+      3. Type-derived default: "calls" for call payloads, else "messages-v3"
+    """
+    explicit = str(data.get("channel_id") or "").strip()
+    title = str(data.get("title") or "")
+    action_url = str(data.get("action_url") or "")
+    is_call = (
+        explicit.startswith("calls")
+        or str(data.get("type") or "").strip() == "call"
+        or action_url.startswith("/call")
+        or bool(re.search(r"\b(incoming|missed)\b[^.]*\bcall\b", title, re.IGNORECASE))
+    )
+    if token_doc:
+        override = token_doc.get("call_channel_id" if is_call else "message_channel_id")
+        if override:
+            return str(override)
+    if explicit:
+        return explicit
+    return "calls" if is_call else "messages-v3"
 
 
 async def send_push(
@@ -646,13 +695,15 @@ async def send_push(
                         title=title,
                         message=message,
                         data=fcm_data,
-                        # iter-132: default to "messages-v3" to match mobile's
-                        # MESSAGES_CHANNEL constant. Convex can override per
-                        # call by sending `channel_id: "calls"` for incoming/
-                        # missed-call pushes. Aligning the channel ID is what
-                        # makes Android play the channel-configured custom
-                        # sound (smile beep) instead of the default tone.
-                        android_channel_id=str(data.get("channel_id") or "messages-v3"),
+                        # iter-182: channel resolved per token — honors the
+                        # device's registered (tone-versioned) channel ids,
+                        # then Convex's explicit channel_id, then a
+                        # type-derived default. This is what makes incoming
+                        # calls RING on the calls channel instead of landing
+                        # in "messages-v3" with a single short beep.
+                        android_channel_id=_resolve_android_channel(
+                            {**data, "title": title}, t
+                        ),
                     )
                     for t in tokens
                 ]
@@ -865,7 +916,11 @@ async def self_test_push(body: dict):
                     title="Smilers self-test",
                     message="If you can read this, FCM v1 push delivery works.",
                     data={"type": "diagnostic-fcm-v1-self-test", "action_url": "/notifications"},
-                    android_channel_id="messages",
+                    # iter-182: token-aware channel (was hardcoded legacy
+                    # 'messages' which no build ever creates).
+                    android_channel_id=_resolve_android_channel(
+                        {"title": "Smilers self-test"}, t
+                    ),
                 )
                 if ok:
                     fcm_result["success_count"] += 1

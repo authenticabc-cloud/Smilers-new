@@ -26,6 +26,8 @@ import { useAuth } from '../src/providers/AuthProvider';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { readStoredJson, writeStoredJson } from '../src/lib/settingsStorage';
 import { safeMutation } from '../src/lib/safeMutation';
+import { applyNotificationChannelPrefs } from '../src/push/notificationChannels';
+import { reregisterPushDevice } from '../src/push/useEmergentPush';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 import {
   DEFAULT_RING_ID,
@@ -254,29 +256,22 @@ export default function RingtonesScreen() {
       } catch (errorValue: any) {
         console.warn('updateProfile(ringtonePrefs) failed:', errorValue?.message);
       }
-      if (Platform.OS === 'android' && Notifications) {
+      if (Platform.OS === 'android') {
+        // iter-182 FIX: this previously called setNotificationChannelAsync
+        // on 'calls'/'messages' — the wrong ids ('messages' is never used
+        // by any push) AND Android silently ignores sound changes on
+        // existing channels anyway. The shared helper creates NEW
+        // tone-versioned channels (calls-v4-<sound> / messages-v4-<sound>)
+        // and the re-registration tells the backend to route FCM pushes
+        // into them — which is what makes the selected tone actually play.
         try {
-          await Notifications.setNotificationChannelAsync('calls', {
-            name: 'Incoming Calls',
-            importance: Notifications.AndroidImportance.MAX,
-            sound: resolveCallChannelSound(next.ringtone),
-            vibrationPattern: [0, 1000, 500, 1000, 500, 1000],
-            lightColor: '#E4B53B',
-            lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-            bypassDnd: true,
-            enableVibrate: next.vibrate,
-          });
-          await Notifications.setNotificationChannelAsync('messages', {
-            name: 'Messages',
-            importance: Notifications.AndroidImportance.HIGH,
-            sound: resolveMessageChannelSound(next.notificationSound),
-            vibrationPattern: [0, 250, 250, 250],
-            lightColor: '#E4B53B',
-            lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
-          });
+          await applyNotificationChannelPrefs(next);
         } catch (channelError: any) {
-          console.warn('failed to update call notification channel:', channelError?.message);
+          console.warn('failed to apply notification channels:', channelError?.message);
         }
+        try {
+          await reregisterPushDevice();
+        } catch {}
       }
     },
     [refetch, updateProfile],

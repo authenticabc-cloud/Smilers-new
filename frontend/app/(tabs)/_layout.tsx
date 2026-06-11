@@ -11,6 +11,10 @@ import { Colors, FontSize, FontWeight } from '../../src/theme';
 
 export default function TabsLayout() {
   const rootNavigationState = useRootNavigationState();
+  // iter-182: bottom inset for the OS navigation bar (small phones).
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { useSafeAreaInsets } = require('react-native-safe-area-context');
+  const insets = useSafeAreaInsets();
   const { isLoading, isAuthenticated } = useAuth();
   const updateCurrentUser = useMutation(api.users.updateCurrentUser);
   // Reactive subscription: changes from verifyOtp/savePhoneVerified propagate instantly.
@@ -170,9 +174,13 @@ export default function TabsLayout() {
           backgroundColor: Colors.surface,
           borderTopWidth: 1,
           borderTopColor: Colors.border,
-          height: 68,
+          // iter-182: respect the OS navigation bar (gesture pill /
+          // 3-button nav). On phones with on-screen nav bars the fixed
+          // 68px bar was sitting BEHIND the system bar, covering the
+          // tab labels. Grow the bar by the bottom inset instead.
+          height: 58 + Math.max(insets.bottom, 10),
           paddingTop: 6,
-          paddingBottom: 10,
+          paddingBottom: Math.max(insets.bottom, 10),
         },
         tabBarLabelStyle: {
           fontSize: FontSize.xs,

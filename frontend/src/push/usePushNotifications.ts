@@ -426,6 +426,17 @@ async function setupCategoriesAndChannels(prefs?: { ringtone?: string | null; no
       showBadge: true,
     });
   }
+  // iter-182: ALSO create the tone-versioned channels (calls-v4-<sound> /
+  // messages-v4-<sound>, with MAX importance for calls). The backend
+  // routes FCM pushes into these once the device registers their ids —
+  // this is how a tone change actually takes effect (Android channels
+  // are immutable, so new sound = new channel id).
+  try {
+    const { applyNotificationChannelPrefs } = require('./notificationChannels');
+    await applyNotificationChannelPrefs(prefs || null);
+  } catch {
+    /* best-effort */
+  }
 }
 
 async function hasGrantedNotificationPermissions() {
