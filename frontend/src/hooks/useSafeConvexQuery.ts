@@ -107,3 +107,67 @@ export function useSafeConvexQuery<T>(
 
   return { data, loading, refetch };
 }
+
+/**
+ * Reactive variant of useSafeConvexQuery (iter-180, call-log pills fix).
+ *
+ * `useSafeConvexQuery` runs ONE `convex.query()` on mount. That races the
+ * Convex auth handshake on cold launch (query lands unauthenticated →
+ * backend returns []/throws → fallback cached forever) and never refreshes
+ * when server data changes (a call ended while the chat is open never
+ * appears). This hook uses a real `watchQuery` SUBSCRIPTION — the same
+ * primitive `useQuery` uses — so results re-evaluate automatically when
+ * auth completes and live-update on every backend write, while still
+ * degrading gracefully to `fallback` if the function is missing/throws
+ * (never crashes the screen like a raw `useQuery` would).
+ */
+export function useSafeConvexSubscription<T>(
+  queryRef: any,
+  args: Record<string, unknown>,
+  fallback: T,
+  enabled = true
+) {
+  const convex = useConvex();
+  const fallbackRef = useRef(fallback);
+  const queryRefRef = useRef(queryRef);
+  const argsKey = JSON.stringify(args ?? {});
+  const [data, setData] = useState<T>(fallback);
+
+  useEffect(() => {
+    queryRefRef.current = queryRef;
+  }, [queryRef]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let unsubscribe: (() => void) | undefined;
+    try {
+      const watch = (convex as any).watchQuery(queryRefRef.current, JSON.parse(argsKey));
+      const read = () => {
+        try {
+          const result = watch.localQueryResult();
+          if (result !== undefined) {
+            setData((result ?? fallbackRef.current) as T);
+          }
+        } catch (errorValue) {
+          // Server-side error for this subscription — keep showing fallback.
+          console.warn('Convex subscription failed:', queryRefRef.current?.udfPath || 'unknown', errorValue);
+          setData(fallbackRef.current);
+        }
+      };
+      unsubscribe = watch.onUpdate(read);
+      read();
+    } catch (errorValue) {
+      console.warn('Convex watchQuery setup failed:', errorValue);
+      setData(fallbackRef.current);
+    }
+    return () => {
+      try {
+        unsubscribe?.();
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [convex, argsKey, enabled]);
+
+  return { data };
+}

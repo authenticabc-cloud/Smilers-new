@@ -32,7 +32,7 @@ import GiphyPicker, { GiphyAsset } from '../../src/components/GiphyPicker';
 import MediaBubble from '../../src/components/MediaBubble';
 import PollComposer from '../../src/components/PollComposer';
 import { api } from '../../src/convexApi';
-import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
+import { useSafeConvexQuery, useSafeConvexSubscription } from '../../src/hooks/useSafeConvexQuery';
 import { useScreenCaptureProtection } from '../../src/hooks/useScreenCaptureProtection';
 import { useEngagementTracker } from '../../src/hooks/useEngagementTracker';
 import { recordDiagnostic } from '../../src/lib/diagnostics';
@@ -219,8 +219,12 @@ export default function ChatScreen() {
   const messagesLoading = canQueryConversation && messagesPage === undefined;
   // iter 156: call-log pills in chat timeline (per Smilers web parity).
   // Backed by canonical contract api.calls.listCallLogsForConversation.
-  // Graceful fallback → [] when offline / function unavailable.
-  const { data: callLogsForConvo } = useSafeConvexQuery<any[]>(
+  // iter-180: switched from one-shot useSafeConvexQuery to a LIVE
+  // subscription — the one-shot fetch raced the Convex auth handshake on
+  // cold launch (landed unauthenticated → cached [] forever) and never
+  // refreshed after a call ended while the chat was open. Both made the
+  // pills invisible in practice. Still degrades to [] on backend errors.
+  const { data: callLogsForConvo } = useSafeConvexSubscription<any[]>(
     (api as any).calls.listCallLogsForConversation,
     { conversationId },
     EMPTY_CALL_LOGS,
@@ -626,6 +630,15 @@ export default function ChatScreen() {
       return displayMessages;
     }
     const myId = me?._id ? String(me._id) : '';
+    // iter-180: `startedAt` may arrive as an ISO string (backend convention
+    // for several tables) — Number(ISO) is NaN, which silently broke the
+    // timeline sort + day-chip grouping. Parse both numeric and ISO forms.
+    const toMillis = (value: any): number => {
+      const n = Number(value);
+      if (Number.isFinite(n) && n > 0) return n;
+      const parsed = Date.parse(String(value || ''));
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
     const pills = callLogsForConvo.map((c: any) => {
       const outcome = String(c?.outcome || '');
       // Derive direction defensively — backend may set it; otherwise infer
@@ -637,7 +650,7 @@ export default function ChatScreen() {
         __kind: 'call' as const,
         _id: `call::${String(c._id)}`,
         _callId: String(c._id),
-        _creationTime: Number(c.startedAt || c._creationTime || 0),
+        _creationTime: toMillis(c.startedAt) || toMillis(c._creationTime),
         callType: c?.callType === 'video' ? 'video' : 'voice',
         outcome,
         direction,
