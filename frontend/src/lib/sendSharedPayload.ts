@@ -51,6 +51,9 @@ export interface SendOutcome {
   ok: boolean;
   /** Free-form reason on failure ("blocked", "upload_failed", etc). */
   reason?: string;
+  /** True when the security scanner intentionally blocked the item
+   * (risky file type) — distinct from a technical send failure. */
+  blocked?: boolean;
   /** Resulting message id on success, when the backend returns one. */
   messageId?: string;
 }
@@ -98,7 +101,8 @@ export async function sendSharedPayloadToConversation(
     if (scan.shouldAutoDelete) {
       outcomes.push({
         ok: false,
-        reason: scan.findings[0]?.reason || 'Blocked: risky file type',
+        blocked: true,
+        reason: scan.findings[0]?.reason || 'Risky file type',
       });
       continue;
     }

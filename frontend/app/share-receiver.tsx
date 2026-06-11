@@ -474,7 +474,7 @@ function ShareReceiverNative() {
           for (const file of (payload.files || [])) {
             const scan = scanMessageDeep({ fileName: file.fileName, mimeType: file.mimeType });
             if (scan.shouldAutoDelete) {
-              outcomes.push({ ok: false, reason: scan.findings[0]?.reason || 'Blocked: risky file type' });
+              outcomes.push({ ok: false, blocked: true, reason: scan.findings[0]?.reason || 'Risky file type' });
               continue;
             }
             try {
@@ -575,13 +575,21 @@ function ShareReceiverNative() {
     let sentChats = 0;
     let blockedCount = 0;
     let failedCount = 0;
+    const blockedReasons = new Set<string>();
+    const failedReasons = new Set<string>();
     for (const row of allOutcomes) {
       const anyOk = row.outcomes.some((o) => o.ok);
       if (anyOk) sentChats += 1;
-      const blocked = row.outcomes.filter((o) => !o.ok && /block/i.test(o.reason || '')).length;
-      const failed = row.outcomes.filter((o) => !o.ok && !/block/i.test(o.reason || '')).length;
-      blockedCount += blocked;
-      failedCount += failed;
+      for (const o of row.outcomes) {
+        if (o.ok) continue;
+        if (o.blocked) {
+          blockedCount += 1;
+          if (o.reason) blockedReasons.add(o.reason);
+        } else {
+          failedCount += 1;
+          if (o.reason) failedReasons.add(o.reason);
+        }
+      }
     }
 
     // Clear native payload so the next launch starts clean.
@@ -602,8 +610,19 @@ function ShareReceiverNative() {
     }
 
     const lines = [`Sent to ${sentChats} chat${sentChats === 1 ? '' : 's'}`];
-    if (blockedCount > 0) lines.push(`${blockedCount} item(s) blocked (risky file)`);
-    if (failedCount > 0) lines.push(`${failedCount} send(s) failed`);
+    if (blockedCount > 0) {
+      lines.push(
+        `${blockedCount} item(s) blocked for your safety` +
+          (blockedReasons.size > 0 ? `\n(${Array.from(blockedReasons).join('; ')})` : ''),
+      );
+      lines.push('Smilers blocks risky file types like .apk and .exe.');
+    }
+    if (failedCount > 0) {
+      lines.push(
+        `${failedCount} send(s) failed` +
+          (failedReasons.size > 0 ? `\n(${Array.from(failedReasons).join('; ')})` : ''),
+      );
+    }
 
     // Stay in-app: if any conversation was sent to, route into the first
     // one. If ONLY the Diary was selected, route to the Diary screen so
