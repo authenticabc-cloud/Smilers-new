@@ -36,6 +36,14 @@ HONEST LIMIT: full screen-wake on locked phones still requires the CallKeep/full
 Backend verified FINE via direct Convex probes: `trustees:getMyTrustees` ✓, `trustees:addTrustee` ✓, `trustees:removeTrustee` ✓, `contacts:getContacts` ✓, `conversations:listConversations` ✓ all exist on deployment (no Convex/web changes needed — communicated to user).
 Root cause was mobile-side: `useSafeConvexQuery` awaited a ONE-SHOT `convex.query()` that the client can queue FOREVER when racing the auth handshake → `loading:true` for eternity (same failure class as the languages-save hang and call-pills emptiness). REWROTE the hook internals to a `watchQuery` SUBSCRIPTION (same public API `{data, loading, refetch}`): auto-recovers when auth completes, live-updates on server writes, 12s safety timer guarantees no infinite spinner, still degrades to fallback on errors. Benefits ALL consumer screens (trustees, contacts pickers, admin tabs, recordings, share picker...). Preserved iter-138 (no flicker on enabled toggles) and iter-141 (spinner only on first load) behaviors.
 
+### iter-184: Chat screen refactor — Phase 1 (structure, zero behavior change)
+`app/chat/[conversationId].tsx` reduced 4,626 → 3,853 lines by extracting verbatim into focused modules:
+- `src/lib/chatFormat.ts` — formatChatDayChip, isSameCalendarDay, isGifAsset, formatCallDuration
+- `src/components/chat/MessageBubble.tsx` — ActionRow (used by action sheet) + MessageBubble (NOTE: MessageBubble was ALREADY dead code in the timeline — MediaBubble renders everything; kept exported for future use)
+- `src/components/chat/CallPill.tsx`, `src/components/chat/RecordingPlayback.tsx`, `src/components/chat/ChatOptionsMenu.tsx`
+31 bubble/action style keys moved out of the main StyleSheet (verified exclusive via usage scan; only flexOne shared → copied). All code moved VERBATIM; tsc/eslint clean; boot smoke pass.
+**Phase 2 candidates (next):** extract the three in-JSX modals (action sheet ~line 2700, disappearing sheet, template picker), then split composer + header into components, then hook-extraction for the ~90 hooks at top of ChatScreen.
+
 ## Overview
 Native iOS + Android port of **smilers.online** (a Convex-backed real-time messaging app). Connects directly to the existing Convex backend (`https://aware-newt-456.convex.cloud`) using the official Convex React Native SDK. Authenticates via Hercules Auth OIDC (same provider as web app). Web and mobile share the same database in real time.
 
