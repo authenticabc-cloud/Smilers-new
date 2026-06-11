@@ -301,6 +301,15 @@ function CallScreenInner() {
   // only want to fire start() once per CallSession — subsequent audioOutput
   // changes go through chooseAudioRoute() / setSpeakerOn() instead.
   const inCallStartedRef = useRef(false);
+  // iter-187: while an INCOMING call is still ringing (unanswered), DON'T
+  // start the native in-call session yet. MODE_IN_COMMUNICATION mutes the
+  // media stream, which silenced the expo-audio ringtone the moment all
+  // permissions were granted (the "rings only before allowing
+  // notifications" bug). The session starts the instant the call is
+  // answered (effect below). Mirrored as a ref so applyAudioMode
+  // (declared earlier than the role derivation) can read it without
+  // TDZ issues.
+  const suppressSessionStartRef = useRef(false);
   // sessionReadyTick — bumped each time sessionRef.current transitions from
   // null → a real CallSession instance. The signal-processing useEffect at
   // line ~864 used to bail out early if `sessionRef.current` was null,
@@ -347,13 +356,18 @@ function CallScreenInner() {
     // change routes through the chooseAudioRoute path for every subsequent
     // audioOutput change.
     // ─────────────────────────────────────────────────────────────────────
-    if (!inCallStartedRef.current) {
+    if (!inCallStartedRef.current && !suppressSessionStartRef.current) {
       InCallAudio.start(callType === 'video' ? 'video' : 'audio');
       inCallStartedRef.current = true;
       callDebug.push(
         'AUDIO',
         `InCallManager.start(${callType === 'video' ? 'video' : 'audio'})`,
       );
+    }
+    if (!inCallStartedRef.current) {
+      // Session not started yet (incoming still ringing) — skip routing
+      // calls below; they'll be applied when the session starts.
+      return;
     }
     if (audioOutput === 'speaker') {
       InCallAudio.setSpeakerOn(true);
@@ -440,6 +454,31 @@ function CallScreenInner() {
   );
   const isOutgoingRinging = isCaller && activeCall?.status === 'ringing';
   const isActive = activeCall?.status === 'active';
+
+  // iter-187: keep the session-suppression ref in sync with the role.
+  // While an incoming call rings we hold the native audio session back so
+  // the in-app ringtone (expo-audio, media stream) is audible; the moment
+  // the call is answered (status → active) we lift the gate and start the
+  // session right here.
+  useEffect(() => {
+    suppressSessionStartRef.current = !!isIncoming && !isScreenOnly;
+    if (!suppressSessionStartRef.current && audioModeReady && !inCallStartedRef.current) {
+      void applyAudioMode();
+    }
+  }, [isIncoming, isScreenOnly, audioModeReady, applyAudioMode]);
+
+  // iter-187: CALLER-SIDE RINGBACK through InCallManager's native ringback
+  // (voice-call stream — not muted by MODE_IN_COMMUNICATION). Replaces the
+  // expo-audio ringback that fell silent as soon as the in-call session
+  // started (= as soon as all permissions were granted).
+  useEffect(() => {
+    if (Platform.OS === 'web' || isScreenOnly) return undefined;
+    if (!isOutgoingRinging) return undefined;
+    InCallAudio.startRingback();
+    return () => {
+      InCallAudio.stopRingback();
+    };
+  }, [isOutgoingRinging, isScreenOnly]);
 
   // Capture callId once we know it
   useEffect(() => {
@@ -1502,10 +1541,12 @@ function CallScreenInner() {
     !cameraOff &&
     RTCViewImpl != null;
 
-  // Play the caller's selected ringtone while dialing, and the callee's while receiving.
-  // Screen-only mode never rings — it's a silent system-share session.
+  // Play the callee's selected ringtone while an INCOMING call rings.
+  // iter-187: outgoing ringback moved to InCallManager's native ringback
+  // (see effect above) — the expo-audio player was muted by the in-call
+  // audio session. Screen-only mode never rings.
   useRingtonePlayer(
-    !isScreenOnly && (!!isIncoming || !!isOutgoingRinging),
+    !isScreenOnly && !!isIncoming,
     { vibrate: !isScreenOnly && !!isIncoming },
   );
 
@@ -1672,7 +1713,7 @@ function CallScreenInner() {
             </View>
 
             <Text style={styles.privacyMessage}>
-              Would you like to hide <Text style={styles.privacyMessageStrong}>{getDisplayNameFromUser(pendingAddContact, 'this contact')}</Text>'s
+              Would you like to hide <Text style={styles.privacyMessageStrong}>{getDisplayNameFromUser(pendingAddContact, 'this contact')}</Text>&apos;s
               {' '}number from the other participants in this call?
             </Text>
 

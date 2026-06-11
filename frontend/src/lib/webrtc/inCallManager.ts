@@ -251,6 +251,28 @@ export async function isWiredHeadsetPluggedIn(): Promise<boolean> {
   }
 }
 
+/**
+ * Caller-side ringback (iter-187). Plays the bundled Smilers theme
+ * (`res/raw/incallmanager_ringback.mp3`, the library's `_BUNDLE_` naming
+ * convention) on Android's VOICE-CALL stream while the outgoing call is
+ * ringing. This stream is NOT muted by MODE_IN_COMMUNICATION — unlike the
+ * old expo-audio ringback (media stream), which went silent the moment
+ * the in-call audio session started. That was the "ringback only plays
+ * before permissions are granted" bug: granted permissions = instant
+ * session start = media stream muted.
+ */
+export function startNativeRingback() {
+  const native = getNative();
+  if (!native || typeof native.startRingback !== 'function') return;
+  safeCall(() => native.startRingback!('_BUNDLE_'), 'startRingback');
+}
+
+export function stopNativeRingback() {
+  const native = getNative();
+  if (!native || typeof native.stopRingback !== 'function') return;
+  safeCall(() => native.stopRingback!(), 'stopRingback');
+}
+
 export const InCallAudio = {
   start: startCallAudio,
   stop: stopCallAudio,
@@ -260,4 +282,6 @@ export const InCallAudio = {
   setMicMuted,
   onAudioRouteChange,
   isWiredHeadsetPluggedIn,
+  startRingback: startNativeRingback,
+  stopRingback: stopNativeRingback,
 };

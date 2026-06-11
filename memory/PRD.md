@@ -52,6 +52,15 @@ Replying on mobile always failed (message stayed unsent; web worked). Root cause
 2. **Languages save error**: probed deployment — ONLY `users.updateProfile` exists (updateLanguages/setLanguages/languages.update are FunctionPathNotFound). Reordered candidates so updateProfile variants go FIRST and raised the save timeout 10s→20s for slow/roaming networks.
 3. **Scheduled messages Once/duplicates/not-on-web**: confirmed mobile uses deployed canonical fns (scheduling.scheduleMessageMobile, scheduledMessages.listMine/update/remove/setActive) — the duplication-as-once AND the web-sync gap are CONVEX BACKEND defects. Extended `/app/CONVEX_BACKEND_INSTRUCTIONS_SCHEDULED_REPEAT.md` with the one-canonical-store sync requirement. USER MUST APPLY THIS DOC IN THE WEB PROJECT — mobile cannot fix it.
 
+### iter-187: Caller-side ringback silence — ROOT CAUSE + native fix
+User insight confirmed: outgoing-call ringback (Smilers theme on the CALLER's phone) only played when permissions weren't granted yet. Mechanism: once permissions are granted, the call screen starts InCallManager (MODE_IN_COMMUNICATION) immediately during outgoing "ringing" — Android mutes the media stream where the expo-audio ringback played. Fix:
+1. Bundled `assets/sounds/incallmanager_ringback.mp3` (copy of smilers_never_cry.mp3, the library's `_BUNDLE_` naming, verified in InCallManagerModule.java) + added to app.json sounds → lands in res/raw.
+2. `InCallAudio.startRingback()/stopRingback()` wrappers in `src/lib/webrtc/inCallManager.ts` — ringback now plays on the VOICE-CALL stream (immune to communication mode) during outgoing ringing.
+3. Callee-side: native session start now SUPPRESSED while incoming-ringing (suppressSessionStartRef) and started on answer — so the in-app ringtone (user's selected tone) stays audible; WebRTC callee setup begins at answer anyway.
+4. useRingtonePlayer now incoming-only.
+ALSO acknowledged to user: wake-screen + CallKeep still requires EAS CLI build (Emergent pipeline rejects the config plugin) — per earlier diagnosis; backend redeploy still needed for the push channel routing (iter-182).
+NOTE: during editing, two search_replace ops mis-applied leaving duplicate trailing lines in call/[conversationId].tsx — repaired by truncation; file verified clean (tsc/eslint pass).
+
 ## Overview
 Native iOS + Android port of **smilers.online** (a Convex-backed real-time messaging app). Connects directly to the existing Convex backend (`https://aware-newt-456.convex.cloud`) using the official Convex React Native SDK. Authenticates via Hercules Auth OIDC (same provider as web app). Web and mobile share the same database in real time.
 

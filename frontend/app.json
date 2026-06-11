@@ -158,7 +158,8 @@
             "./assets/sounds/smilers_never_cry_1.mp3",
             "./assets/sounds/smilers_never_cry_2.mp3",
             "./assets/sounds/smilers_never_cry_3.mp3",
-            "./assets/sounds/smilers_notification.mp3"
+            "./assets/sounds/smilers_notification.mp3",
+            "./assets/sounds/incallmanager_ringback.mp3"
           ]
         }
       ],
