@@ -67,7 +67,16 @@ import {
   type SharedPayload,
   type SendOutcome,
 } from '../src/lib/sendSharedPayload';
-import { getDisplayNameFromUser, getDisplayInitials } from '../src/lib/displayName';
+import {
+  getDisplayNameFromUser,
+  getDisplayInitials,
+  getResolvedDisplayName,
+  getResolvedConversationDisplayName,
+} from '../src/lib/displayName';
+import {
+  useDeviceContactIndex,
+  lookupDeviceContactName,
+} from '../src/lib/deviceContactIndex';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
 // Local aliases — these helpers used to be named `resolveDisplayName`
@@ -183,6 +192,11 @@ function ShareReceiverNative() {
   const [selected, setSelected] = useState<Record<string, Recipient>>({});
   const [sending, setSending] = useState(false);
 
+  // iter-177: device address-book index — recipient names must match what
+  // the user saved on their phone (same override as Chats/Contacts tabs),
+  // NOT the Smilers/Google account name.
+  const deviceIndex = useDeviceContactIndex();
+
   // Normalize the share intent into our `SharedPayload` shape. Recomputed
   // whenever the intent changes (a new share can arrive while this screen
   // is open if the user backgrounds + re-shares).
@@ -267,9 +281,14 @@ function ShareReceiverNative() {
         // Group: render with group icon + member-count subtitle, no peer.
         // Direct: render with peer name + avatar.
         const peer = conv.otherUser || conv.peer || {};
+        // iter-177: device-saved contact name takes priority (exactly like
+        // the Chats tab). Falls back to the Smilers profile name chain.
         const name = isGroup
           ? (conv.title || conv.name || conv.groupName || 'Group chat')
-          : (resolveContactName(peer) || conv.title || conv.name || 'Direct chat');
+          : (getResolvedConversationDisplayName(conv, myUserId, deviceIndex, lookupDeviceContactName, '')
+            || getResolvedDisplayName(peer, deviceIndex, lookupDeviceContactName, '')
+            || resolveContactName(peer)
+            || conv.title || conv.name || 'Direct chat');
         const userId = !isGroup && peer?._id ? String(peer._id) : undefined;
         const key = `conv:${conv._id}`;
         map.set(key, {
@@ -313,7 +332,10 @@ function ShareReceiverNative() {
         map.set(key, {
           key,
           userId,
-          name: resolveContactName(contact) || 'Contact',
+          // iter-177: device-saved contact name first, Smilers name after.
+          name: getResolvedDisplayName(contact, deviceIndex, lookupDeviceContactName, '')
+            || resolveContactName(contact)
+            || 'Contact',
           avatarUrl: contact.avatarUrl || contact.profilePictureUrl || null,
           lastActivity: 0,
         });
@@ -353,7 +375,7 @@ function ShareReceiverNative() {
     }
 
     return list;
-  }, [contacts, conversations, myUserId, search]);
+  }, [contacts, conversations, deviceIndex, myUserId, search]);
 
   const toggleSelected = useCallback((r: Recipient) => {
     setSelected((prev) => {
