@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { buildInviteUrl, buildInviteMessage } from '../../src/lib/inviteLink';
 import { useRouter } from 'expo-router';
 import { useMutation, useQuery } from 'convex/react';
 import * as Contacts from 'expo-contacts';
@@ -142,12 +143,10 @@ export default function ContactsScreen() {
     (earningsProfile?.referralCode && String(earningsProfile.referralCode)) ||
     (earningsProfile?.code && String(earningsProfile.code)) ||
     '';
-  const inviteUrl = referralCode
-    ? `https://smilers.online/?ref=${referralCode}`
-    : 'https://smilers.online/';
-  const inviteMessage = referralCode
-    ? `Join me on Smilers! Use my referral code ${referralCode} when you sign up. ${inviteUrl}`
-    : `Join me on Smilers — a smarter, safer messenger. ${inviteUrl}`;
+  // iter-186: invites now deep-link to the published Play Store listing
+  // (with the referral code in both the referrer param and the text).
+  const inviteUrl = buildInviteUrl(referralCode);
+  const inviteMessage = buildInviteMessage(referralCode);
 
   // iter-138: read the current user so we can derive a default country
   // hint for phone-number normalization in invite flows.

@@ -1,8 +1,24 @@
 # CONVEX BACKEND INSTRUCTIONS — Scheduled Messages: recurring repeat handling
 
-**From:** Smilers mobile team (iter-181)
+**From:** Smilers mobile team (iter-181, extended iter-186)
 **To:** Web/Convex backend team
-**Priority:** HIGH — user-visible data corruption (duplicate rows accumulating daily)
+**Priority:** HIGH — user-visible data corruption (duplicate rows accumulating daily) + mobile/web sync gap
+
+## NEW (iter-186): Mobile ↔ Web sync requirement
+
+User report: schedules created on MOBILE do not appear in the WEB app at
+all ("Not synced to the web app"). Mobile uses these functions (all
+confirmed deployed):
+- create: `scheduling.scheduleMessageMobile` (fallback `scheduledMessages.create`)
+- list:   `scheduledMessages.listMine`
+- update/remove/toggle: `scheduledMessages.update` / `.remove` / `.setActive`
+
+REQUIREMENT: the web app's scheduled-messages UI MUST read from the SAME
+canonical store that `scheduledMessages.listMine` reads and that
+`scheduling.scheduleMessageMobile` writes. If web currently uses a
+different table/functions, either point web at these, or make
+`scheduleMessageMobile` write into web's canonical table — ONE store,
+both clients.
 
 ## Observed defect (screenshots from production user, 2026-06-11)
 

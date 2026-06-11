@@ -47,6 +47,11 @@ Root cause was mobile-side: `useSafeConvexQuery` awaited a ONE-SHOT `convex.quer
 ### iter-185: Reply-to-message send failure FIXED
 Replying on mobile always failed (message stayed unsent; web worked). Root cause: mobile sent BOTH `replyToId` AND `replyToMessageId` on every reply payload (iter-101 dual-compat) — the deployed `messages.send` strict validator rejects the unknown extra field → mutation throws → composer restored silently. Web sends only `replyToId` → works. Fix: ALL 8 send sites in chat screen now send ONLY `replyToId` (text, edit-fallback, image, file, GIF, voice, video, poll/location paths). Renderer still reads both names on rows. Also: send failure now restores the reply banner AND shows a "Message not sent" alert instead of failing silently. Contract doc section 5 updated.
 
+### iter-186: Play Store invite links + languages save + scheduled sync doc
+1. **Invite links → Play Store**: new `src/lib/inviteLink.ts` (PLAY_STORE_URL = play.google.com/store/apps/details?id=com.smilers.app). All invites (Contacts tab invite + Earnings "Share code") now link to the Play listing with the referral code in BOTH the Play `referrer` param (Install Referrer-ready) and the message text ("Use my referral code X") so earnings referrals keep counting.
+2. **Languages save error**: probed deployment — ONLY `users.updateProfile` exists (updateLanguages/setLanguages/languages.update are FunctionPathNotFound). Reordered candidates so updateProfile variants go FIRST and raised the save timeout 10s→20s for slow/roaming networks.
+3. **Scheduled messages Once/duplicates/not-on-web**: confirmed mobile uses deployed canonical fns (scheduling.scheduleMessageMobile, scheduledMessages.listMine/update/remove/setActive) — the duplication-as-once AND the web-sync gap are CONVEX BACKEND defects. Extended `/app/CONVEX_BACKEND_INSTRUCTIONS_SCHEDULED_REPEAT.md` with the one-canonical-store sync requirement. USER MUST APPLY THIS DOC IN THE WEB PROJECT — mobile cannot fix it.
+
 ## Overview
 Native iOS + Android port of **smilers.online** (a Convex-backed real-time messaging app). Connects directly to the existing Convex backend (`https://aware-newt-456.convex.cloud`) using the official Convex React Native SDK. Authenticates via Hercules Auth OIDC (same provider as web app). Web and mobile share the same database in real time.
 

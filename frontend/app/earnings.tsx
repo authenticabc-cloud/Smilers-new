@@ -34,6 +34,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { buildInviteMessage } from '../src/lib/inviteLink';
 import {
   Feather,
   Ionicons,
@@ -265,7 +266,10 @@ function EarningsScreenInner() {
     }
     try {
       await Share.share({
-        message: `Join me on Smilers! Use my referral code ${code} when you sign up. https://smilers.online/?ref=${code}`,
+        // iter-186: link to the published Play Store listing with the
+        // referral code in both the referrer param and the message text
+        // so referrals keep getting credited.
+        message: buildInviteMessage(String(code)),
         title: 'Join me on Smilers',
       });
     } catch (errorValue: any) {

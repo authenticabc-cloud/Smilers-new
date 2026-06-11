@@ -127,13 +127,33 @@ function LegacyLanguagesScreen() {
 
     // iter-149: server contract for "skip translation languages" varies
     // by deployment. Try the canonical mutation + field-name candidates
-    // in order until one succeeds. This mirrors what the web app does
-    // when negotiating against an older/newer backend.
+    // in order until one succeeds.
+    // iter-186 REORDER: probing the live deployment showed ONLY
+    // `users.updateProfile` exists (updateLanguages / setLanguages /
+    // languages.update are all FunctionPathNotFound). Trying the missing
+    // ones first wasted whole round-trips before reaching the one that
+    // works — on slow/roaming connections that alone exceeded the save
+    // timeout ("Could not save to server"). updateProfile now goes FIRST.
     const candidates: Array<{
       label: string;
       run?: (args: any) => Promise<any>;
       payload: any;
     }> = [
+      {
+        label: 'users.updateProfile(skipTranslationLanguages)',
+        run: updateProfile as any,
+        payload: { skipTranslationLanguages: selected },
+      },
+      {
+        label: 'users.updateProfile(languages)',
+        run: updateProfile as any,
+        payload: { languages: selected },
+      },
+      {
+        label: 'users.updateProfile(spokenLanguages)',
+        run: updateProfile as any,
+        payload: { spokenLanguages: selected },
+      },
       {
         label: 'users.updateLanguages',
         run: updateLanguagesM as any,
@@ -149,21 +169,6 @@ function LegacyLanguagesScreen() {
         run: updateUserLanguagesM as any,
         payload: { languages: selected },
       },
-      {
-        label: 'users.updateProfile(languages)',
-        run: updateProfile as any,
-        payload: { languages: selected },
-      },
-      {
-        label: 'users.updateProfile(skipTranslationLanguages)',
-        run: updateProfile as any,
-        payload: { skipTranslationLanguages: selected },
-      },
-      {
-        label: 'users.updateProfile(spokenLanguages)',
-        run: updateProfile as any,
-        payload: { spokenLanguages: selected },
-      },
     ];
 
     for (const candidate of candidates) {
@@ -174,10 +179,12 @@ function LegacyLanguagesScreen() {
         // resolving or rejecting — which left the Save spinner turning "till
         // eternity". On timeout we stop trying, keep the local copy, and
         // release the UI.
+        // iter-186: 20s timeout (was 10s — too tight for roaming/slow
+        // networks and produced false "Could not save" alerts).
         await Promise.race([
           safeMutation(candidate.label, () => candidate.run!(candidate.payload), candidate.payload),
           new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Request timed out — please check your connection.')), 10_000),
+            setTimeout(() => reject(new Error('Request timed out — please check your connection.')), 20_000),
           ),
         ]);
         serverOk = true;
