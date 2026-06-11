@@ -18,6 +18,11 @@ The "Sent to 0 chats / 1 send(s) failed" report was the iter-164 security scanne
 ### iter-180: Call-log pills missing in chat — fetch layer fix
 Call pills (CallPill, `__kind:'call'` merge, `api.calls.listCallLogsForConversation`) all existed since iter-156, but the data was fetched with one-shot `useSafeConvexQuery` which (a) raced the Convex auth handshake on cold launch → unauthenticated result `[]` cached for the whole visit, and (b) never refreshed after a call ended while chat was open. Fix: new `useSafeConvexSubscription` (reactive `watchQuery`+`onUpdate`, error-safe fallback) in `src/hooks/useSafeConvexQuery.ts`; chat screen now subscribes live. Also fixed `Number(ISO startedAt)`→NaN timestamp parsing (toMillis handles numeric + ISO). NOTE for next agent: if pills STILL don't appear on device after this, the Convex backend (web codebase, not ours) is likely not writing call-log rows for mobile-initiated calls — would need a CONVEX_BACKEND_INSTRUCTIONS doc for the web team.
 
+### iter-181: Settings green Earnings + Scheduled repeat fix + Trustees picker fix
+1. **Earnings row** in Settings now renders green (#16A34A icon/title, #DCFCE7 chip) via new `success` flag — mirrors the red `danger` styling on Emergency/Blocked.
+2. **Scheduled messages**: (a) local-draft sync was hardcoding `repeat:'once'` — now maps recurring frequency properly; (b) chat composer recipient label now uses device-contact-resolved names (fixes "Unknown" recipients); (c) the DAILY-CLONE-AS-ONCE row duplication is a BACKEND defect — wrote `/app/CONVEX_BACKEND_INSTRUCTIONS_SCHEDULED_REPEAT.md` for the web team (fire → update same row date in place, keep repeat, no clones, cleanup migration).
+3. **Trustees picker** "No Smilers contacts available": picker now merges DM conversation peers (guaranteed registered users) with contacts rows, accepts row `_id` as user reference (same as Contacts tab's getContactUserId), still excludes pending invites, and shows device-saved names.
+
 ## Overview
 Native iOS + Android port of **smilers.online** (a Convex-backed real-time messaging app). Connects directly to the existing Convex backend (`https://aware-newt-456.convex.cloud`) using the official Convex React Native SDK. Authenticates via Hercules Auth OIDC (same provider as web app). Web and mobile share the same database in real time.
 

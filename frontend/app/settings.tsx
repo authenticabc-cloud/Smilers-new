@@ -18,6 +18,8 @@ type Row = {
   icon: string;
   lib: IconLib;
   danger?: boolean;
+  /** Green accent (e.g. Earnings) — mirrors how `danger` renders red. */
+  success?: boolean;
   adminOnly?: boolean;
   /**
    * iter-173 — mirrors the web app's "👑 Premium" badge next to gated
@@ -39,7 +41,7 @@ const ITEMS: Row[] = [
   { key: 'notifications', route: '/notifications', title: 'Notifications', sub: 'Message, group, and call alerts', icon: 'notifications-outline', lib: 'ion' },
   { key: 'call-recording', route: '/call-recording', title: 'Call Recording', sub: 'Auto-record voice & video calls with exceptions', icon: 'record-rec', lib: 'mc' },
   { key: 'admin', route: '/admin', title: 'Admin Dashboard', sub: 'Manage users, reports, and app data', icon: 'crown-outline', lib: 'mc', adminOnly: true },
-  { key: 'earnings', route: '/earnings', title: 'Earnings', sub: 'Levels, engagements, and referrals', icon: 'gift-outline', lib: 'ion' },
+  { key: 'earnings', route: '/earnings', title: 'Earnings', sub: 'Levels, engagements, and referrals', icon: 'gift-outline', lib: 'ion', success: true },
   { key: 'blocked', route: '/blocked', title: 'Blocked Users', sub: 'Manage your block list', icon: 'ban-outline', lib: 'ion', danger: true },
   { key: 'scheduled', route: '/scheduled', title: 'Scheduled Messages', sub: 'View and manage scheduled messages', icon: 'time-outline', lib: 'ion' },
   { key: 'screen-share', route: '/screen-share', title: 'Share Screen', sub: 'Share your screen with another user, even outside a call', icon: 'monitor-share', lib: 'mc' },
@@ -75,24 +77,24 @@ export default function SettingsScreen() {
             testID={`settings-${item.key}`}
             onPress={() => router.push(item.route as any)}
           >
-            <View style={[styles.iconWrap, item.danger ? { backgroundColor: '#FEE2E2' } : undefined]}>
+            <View style={[styles.iconWrap, item.danger ? { backgroundColor: '#FEE2E2' } : item.success ? { backgroundColor: '#DCFCE7' } : undefined]}>
               {item.lib === 'mc' ? (
                 <MaterialCommunityIcons
                   name={item.icon as any}
                   size={22}
-                  color={item.danger ? Colors.danger : Colors.primary}
+                  color={item.danger ? Colors.danger : item.success ? '#16A34A' : Colors.primary}
                 />
               ) : (
                 <Ionicons
                   name={item.icon as any}
                   size={22}
-                  color={item.danger ? Colors.danger : Colors.primary}
+                  color={item.danger ? Colors.danger : item.success ? '#16A34A' : Colors.primary}
                 />
               )}
             </View>
             <View style={styles.rowMid}>
               <View style={styles.titleRow}>
-                <Text style={[styles.rowTitle, item.danger ? { color: Colors.danger } : null]}>{item.title}</Text>
+                <Text style={[styles.rowTitle, item.danger ? { color: Colors.danger } : item.success ? { color: '#16A34A' } : null]}>{item.title}</Text>
                 {item.premium ? (
                   <View style={styles.premiumBadge} testID={`settings-premium-${item.key}`}>
                     <MaterialCommunityIcons name="crown-outline" size={11} color={Colors.primaryDark} />

@@ -878,6 +878,16 @@ export default function ChatScreen() {
         // string — never an Id, never the conversationId.
         const myIdForRecipient = me?._id ? String(me._id) : undefined;
         const recipientLabel =
+          // iter-181: device-saved contact name first (same override as
+          // Chats/share-picker) — fixes "Unknown" recipients on rows
+          // created before the profile name was hydrated.
+          getResolvedConversationDisplayName(
+            hydratedConversation || conversation,
+            myIdForRecipient,
+            deviceContactIndex,
+            lookupDeviceContactName,
+            '',
+          ) ||
           getConversationDisplayName(
             hydratedConversation || conversation,
             myIdForRecipient,
@@ -1099,7 +1109,7 @@ export default function ChatScreen() {
         );
       }
     },
-    [conversationId, conversation, createScheduledMessage, text],
+    [conversationId, conversation, createScheduledMessage, deviceContactIndex, me, text],
   );
 
   const sendImageFromUri = useCallback(

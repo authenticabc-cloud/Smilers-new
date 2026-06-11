@@ -19,6 +19,8 @@ import { useMutation } from 'convex/react';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../src/providers/AuthProvider';
+import { getResolvedDisplayName } from '../src/lib/displayName';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../src/lib/deviceContactIndex';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
 const MAX_TRUSTEES = 5;
@@ -67,6 +69,18 @@ export default function TrusteesScreen() {
     [],
     isAuthenticated,
   );
+  // iter-181: DM conversation peers are GUARANTEED registered Smilers
+  // users (they have a user `_id`), unlike `contacts.getContacts` rows
+  // whose user-link field varies by backend shape. Merging both sources
+  // fixes "No Smilers contacts available" appearing for users who
+  // clearly have active chats.
+  const { data: conversations, loading: conversationsLoading } = useSafeConvexQuery<any[]>(
+    api.conversations.listConversations,
+    {},
+    [],
+    isAuthenticated,
+  );
+  const deviceIndex = useDeviceContactIndex();
   const addTrustee = useMutation(api.trustees.addTrustee);
   const removeTrustee = useMutation(api.trustees.removeTrustee);
 
@@ -90,31 +104,68 @@ export default function TrusteesScreen() {
   }, [trusteeList]);
 
   const availableContacts = useMemo(() => {
-    const source = Array.isArray(contacts) ? contacts : [];
     const query = search.trim().toLowerCase();
-    return source
-      .filter((contact) => {
-        // iter-148: only registered Smilers users can be trustees.
-        // The Convex `contacts.getContacts` query returns both
-        // registered-Smilers contacts AND locally-added pending-invite
-        // contacts (the latter have no `userId`). The picker MUST hide
-        // the pending ones — otherwise tapping them triggers the
-        // "Not a Smilers user" alert. Mirrors the web app behavior.
-        const trusteeUserId =
-          (contact as any)?.userId ||
-          (contact as any)?.user?._id ||
-          (contact as any)?.user?.userId ||
-          (contact as any)?.contactUserId ||
-          (contact as any)?.targetUserId ||
-          (contact as any)?.otherUserId ||
-          (contact as any)?.linkedUserId;
-        if (!trusteeUserId) return false;
+    const byUser = new Map<string, SmilersContact & { userId: string }>();
+    const seenPhones = new Set<string>();
 
+    const pushCandidate = (raw: any, userIdValue: string) => {
+      const id = String(userIdValue || '').trim();
+      if (!id || byUser.has(id)) return;
+      const phoneRaw = raw?.phone || raw?.phoneE164 || '';
+      const phoneKey = normalizePhone(phoneRaw);
+      if (phoneKey && seenPhones.has(phoneKey)) return;
+      // iter-181: device-saved contact name first (matches Chats/Contacts).
+      const name =
+        getResolvedDisplayName(raw, deviceIndex, lookupDeviceContactName, '') ||
+        (typeof raw?.name === 'string' && raw.name.trim()) ||
+        'Smilers Contact';
+      byUser.set(id, { userId: id, name, phone: phoneRaw || undefined, email: raw?.email });
+      if (phoneKey) seenPhones.add(phoneKey);
+    };
+
+    // Source 1 — DM conversation peers: guaranteed registered users.
+    for (const conv of Array.isArray(conversations) ? conversations : []) {
+      if (conv?.isGroup || conv?.type === 'group') continue;
+      const peer = conv?.otherUser || conv?.peer || {};
+      const peerId = peer?._id || peer?.userId || conv?.otherUserId;
+      if (peerId) pushCandidate(peer, String(peerId));
+    }
+
+    // Source 2 — Smilers contacts. iter-181: ALSO accept the row `_id`
+    // as the user reference (exactly like the Contacts tab's
+    // getContactUserId helper, which successfully opens chats with it).
+    // The previous strict field list filtered out EVERY contact on
+    // backends that return user-shaped rows → "No Smilers contacts
+    // available". Pending invites (status pending/invited/requested)
+    // are still excluded — they're not registered users yet.
+    for (const contact of Array.isArray(contacts) ? contacts : []) {
+      const status = normalizeValue((contact as any)?.status);
+      if (/pending|invit|request/.test(status)) continue;
+      const linkedUserId =
+        (contact as any)?.userId ||
+        (contact as any)?.user?._id ||
+        (contact as any)?.user?.userId ||
+        (contact as any)?.contactUserId ||
+        (contact as any)?.targetUserId ||
+        (contact as any)?.otherUserId ||
+        (contact as any)?.linkedUserId ||
+        (contact as any)?._id ||
+        (contact as any)?.id;
+      if (linkedUserId) pushCandidate(contact, String(linkedUserId));
+    }
+
+    return Array.from(byUser.values())
+      .filter((contact) => {
         const phoneKey = normalizePhone(contact.phone);
         const emailKey = normalizeValue(contact.email);
-        const idKey = normalizeValue(String(contact.userId || contact._id || contact.id || ''));
+        const idKey = normalizeValue(contact.userId);
         const nameKey = normalizeValue(contact.name);
-        if (existingTrusteeKeys.has(idKey) || existingTrusteeKeys.has(phoneKey) || existingTrusteeKeys.has(emailKey) || existingTrusteeKeys.has(nameKey)) {
+        if (
+          (idKey && existingTrusteeKeys.has(idKey)) ||
+          (phoneKey && existingTrusteeKeys.has(phoneKey)) ||
+          (emailKey && existingTrusteeKeys.has(emailKey)) ||
+          (nameKey && existingTrusteeKeys.has(nameKey))
+        ) {
           return false;
         }
         if (!query) return true;
@@ -122,7 +173,7 @@ export default function TrusteesScreen() {
         return haystack.includes(query);
       })
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  }, [contacts, existingTrusteeKeys, search]);
+  }, [contacts, conversations, deviceIndex, existingTrusteeKeys, search]);
 
   const openAdd = useCallback(() => {
     if (atCap) {
@@ -304,7 +355,7 @@ export default function TrusteesScreen() {
             </View>
 
             <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.modalListContent} testID="trustees-modal-list">
-              {contactsLoading ? (
+              {contactsLoading || conversationsLoading ? (
                 <View style={styles.loadingWrap} testID="trustees-contacts-loading">
                   <ActivityIndicator color={Colors.primary} />
                 </View>
@@ -313,7 +364,7 @@ export default function TrusteesScreen() {
                   <Ionicons name="people-outline" size={34} color={Colors.textMuted} />
                   <Text style={styles.emptyModalTitle}>No Smilers contacts available</Text>
                   <Text style={styles.emptyModalBody}>
-                    Trustees must be registered Smilers users. Invite a contact from the Contacts tab — once they accept and install Smilers, they'll appear here.
+                    Trustees must be registered Smilers users. Invite a contact from the Contacts tab — once they accept and install Smilers, they&apos;ll appear here.
                   </Text>
                 </View>
               ) : (

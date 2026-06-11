@@ -127,12 +127,23 @@ export default function ScheduledScreen() {
         // We keep the dual-endpoint probe as belt-and-suspenders (in case
         // one endpoint is briefly redeployed without the other) but the
         // fallback now sends the SAME confirmed payload — no schema drift.
+        // iter-181 FIX: this previously hardcoded `repeat: 'once'`,
+        // silently stripping the recurrence off every draft synced from
+        // the chat composer — daily messages became one-shots. Map the
+        // draft's frequency exactly like the chat composer does.
+        const draftRepeat: Repeat = !draft.recurring
+          ? 'once'
+          : draft.frequency === 'daily' || draft.frequency === 'hourly'
+            ? 'daily'
+            : draft.frequency === 'weekly'
+              ? 'weekly'
+              : 'monthly';
         const args = {
           recipient: String(draft.recipient || 'Conversation').slice(0, 200),
           message: String(draft.message || '').slice(0, 5000),
           date,
           time,
-          repeat: 'once' as const,
+          repeat: draftRepeat,
           active: true,
         };
         try {
