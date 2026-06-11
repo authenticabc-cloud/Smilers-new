@@ -7,9 +7,7 @@ import {
   InteractionManager,
   Keyboard,
   KeyboardAvoidingView,
-  Modal,
   Platform,
-  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -77,21 +75,19 @@ import ScheduleMessageSheet, { ScheduleSelection } from '../../src/components/Sc
 import CameraCapture from '../../src/components/CameraCapture';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 import { formatChatDayChip, isSameCalendarDay } from '../../src/lib/chatFormat';
-import { ActionRow } from '../../src/components/chat/MessageBubble';
 import { CallPill } from '../../src/components/chat/CallPill';
 import { RecordingPlaybackModal } from '../../src/components/chat/RecordingPlayback';
 import { ChatOptionsMenu } from '../../src/components/chat/ChatOptionsMenu';
+import { SwipeToReply } from '../../src/components/chat/SwipeToReply';
+import { MessageActionSheet } from '../../src/components/chat/MessageActionSheet';
+import { DeleteMessageSheet } from '../../src/components/chat/DeleteMessageSheet';
+import { DisappearingSheet, DISAPPEARING_OPTIONS } from '../../src/components/chat/DisappearingSheet';
+import { ForwardPickerSheet } from '../../src/components/chat/ForwardPickerSheet';
+import { TemplatePickerSheet } from '../../src/components/chat/TemplatePickerSheet';
 
-const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 const EMPTY_MESSAGES_PAGE = { page: [] as any[] };
 const EMPTY_FORWARD_CONVERSATIONS: any[] = [];
 const EMPTY_CALL_LOGS: any[] = [];
-const DISAPPEARING_OPTIONS = [
-  { key: 'off', label: 'Off', ms: 0 },
-  { key: '24h', label: '24 hours', ms: 24 * 60 * 60 * 1000 },
-  { key: '7d', label: '7 days', ms: 7 * 24 * 60 * 60 * 1000 },
-  { key: '90d', label: '90 days', ms: 90 * 24 * 60 * 60 * 1000 },
-] as const;
 
 function formatPresenceSubtitle(conversation: any) {
   if (!conversation) return 'tap for info';
@@ -2459,40 +2455,51 @@ export default function ChatScreen() {
                       <Text style={styles.dayChipText}>{formatChatDayChip(item?._creationTime)}</Text>
                     </View>
                   ) : null}
-                  <MediaBubble
-                    msg={item}
-                    isMine={item.senderId === me?._id}
-                    myUserId={me?._id}
-                    parentMsg={(() => {
-                      // Backend field name normalisation (iter-101):
-                      // Smilers Convex stores the parent reference under
-                      // `replyToId` per the public spec, but the mobile
-                      // client historically wrote `replyToMessageId`.
-                      // Look up by either to be robust against both
-                      // historical AND fresh messages.
-                      const parentId = item.replyToId || item.replyToMessageId;
-                      return parentId ? msgById.get(parentId) : undefined;
-                    })()}
-                    appearance={chatAppearance}
-                    e2eeStatus={e2eeStatus}
-                    onLongPress={viewerSuspension ? () => {} : () => {
-                      // While in multi-select mode, long-press is reserved
-                      // for toggling selection (matching the easier muscle
-                      // memory of "tap to toggle, long-press to enter").
-                      if (multiSelectIds) {
-                        onToggleMultiSelect(String(item._id));
-                        return;
-                      }
-                      onLongPressMessage(item);
+                  <SwipeToReply
+                    // iter-185 WhatsApp-style swipe-to-reply. Disabled in
+                    // multi-select mode (pan conflicts with tap-to-toggle),
+                    // for suspended viewers, and on deleted messages.
+                    enabled={!viewerSuspension && !multiSelectIds && !item.deletedAt && isConversationAvailable}
+                    onReply={() => {
+                      setReplyTo(item);
+                      messageInputRef.current?.focus();
                     }}
-                    onPress={multiSelectIds ? () => onToggleMultiSelect(String(item._id)) : undefined}
-                    multiSelected={multiSelectIds ? multiSelectIds.includes(String(item._id)) : undefined}
-                    onToggleReaction={
-                      viewerSuspension || multiSelectIds
-                        ? () => {}
-                        : (emoji) => onToggleMyReaction(item._id, emoji)
-                    }
-                  />
+                  >
+                    <MediaBubble
+                      msg={item}
+                      isMine={item.senderId === me?._id}
+                      myUserId={me?._id}
+                      parentMsg={(() => {
+                        // Backend field name normalisation (iter-101):
+                        // Smilers Convex stores the parent reference under
+                        // `replyToId` per the public spec, but the mobile
+                        // client historically wrote `replyToMessageId`.
+                        // Look up by either to be robust against both
+                        // historical AND fresh messages.
+                        const parentId = item.replyToId || item.replyToMessageId;
+                        return parentId ? msgById.get(parentId) : undefined;
+                      })()}
+                      appearance={chatAppearance}
+                      e2eeStatus={e2eeStatus}
+                      onLongPress={viewerSuspension ? () => {} : () => {
+                        // While in multi-select mode, long-press is reserved
+                        // for toggling selection (matching the easier muscle
+                        // memory of "tap to toggle, long-press to enter").
+                        if (multiSelectIds) {
+                          onToggleMultiSelect(String(item._id));
+                          return;
+                        }
+                        onLongPressMessage(item);
+                      }}
+                      onPress={multiSelectIds ? () => onToggleMultiSelect(String(item._id)) : undefined}
+                      multiSelected={multiSelectIds ? multiSelectIds.includes(String(item._id)) : undefined}
+                      onToggleReaction={
+                        viewerSuspension || multiSelectIds
+                          ? () => {}
+                          : (emoji) => onToggleMyReaction(item._id, emoji)
+                      }
+                    />
+                  </SwipeToReply>
                 </>
               );
             }}
@@ -2819,395 +2826,146 @@ export default function ChatScreen() {
         }}
       />
 
-      <Modal visible={!!selectedMsg} transparent animationType="fade" onRequestClose={closeActionSheet}>
-        <Pressable style={styles.sheetBackdrop} onPress={closeActionSheet}>
-          <Pressable style={styles.sheet} onPress={() => {}} testID="message-action-sheet">
-            <View style={styles.reactionPickerRow}>
-              {QUICK_REACTIONS.map((emoji) => (
-                <TouchableOpacity
-                  key={emoji}
-                  style={styles.reactionBtn}
-                  onPress={() => onPickReaction(emoji)}
-                  testID={`react-${emoji}`}
-                >
-                  <Text style={styles.reactionEmoji}>{emoji}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <View style={styles.sheetActions}>
-              <ActionRow icon="corner-up-left" lib="feather" label="Reply" onPress={onReply} />
-              <ActionRow icon="copy" lib="feather" label="Copy text" onPress={onCopy} />
-              {isMineSelected && (selectedMsg?.type === 'text' || !selectedMsg?.type) ? (
-                <ActionRow icon="edit-2" lib="feather" label="Edit" onPress={onEdit} />
-              ) : null}
-              <ActionRow icon="corner-up-right" lib="feather" label="Forward" onPress={onForward} />
-              <ActionRow icon="share-2" lib="feather" label="Share" onPress={onShare} />
-              <ActionRow icon="check-square" lib="feather" label="Select multiple to forward" onPress={onSelectMultiple} />
-              <ActionRow
-                icon="star"
-                lib="feather"
-                label={selectedMsg?.starred ? 'Unstar' : 'Star'}
-                onPress={onStar}
-              />
-              <ActionRow icon="bookmark" lib="feather" label="Pin" onPress={onPin} />
-              <ActionRow icon="smile" lib="feather" label="More reactions" onPress={onMoreReactions} />
-              <ActionRow icon="info" lib="feather" label="Message info" onPress={onMessageInfo} />
-              <ActionRow icon="trash-2" lib="feather" label="Delete message" onPress={onDelete} danger />
-            </View>
-            <TouchableOpacity
-              style={styles.sheetCancelBtn}
-              onPress={closeActionSheet}
-              testID="action-sheet-cancel"
-            >
-              <Text style={styles.sheetCancelText}>Cancel</Text>
-            </TouchableOpacity>
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <MessageActionSheet
+        message={selectedMsg}
+        canEdit={!!(isMineSelected && (selectedMsg?.type === 'text' || !selectedMsg?.type))}
+        onClose={closeActionSheet}
+        onPickReaction={onPickReaction}
+        onReply={onReply}
+        onCopy={onCopy}
+        onEdit={onEdit}
+        onForward={onForward}
+        onShare={onShare}
+        onSelectMultiple={onSelectMultiple}
+        onStar={onStar}
+        onPin={onPin}
+        onMoreReactions={onMoreReactions}
+        onMessageInfo={onMessageInfo}
+        onDelete={onDelete}
+      />
 
       {/* Tri-state delete-mode sheet (WhatsApp-style). For sent messages we
           expose Delete for me / receiver / everyone; for received messages
           we expose Delete for me / Ask sender to delete for everyone. */}
-      <Modal
-        visible={!!deleteTarget}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setDeleteTarget(null)}
-      >
-        <Pressable style={styles.sheetBackdrop} onPress={() => setDeleteTarget(null)}>
-          <Pressable style={styles.deleteSheet} onPress={() => {}} testID="delete-sheet">
-            <Text style={styles.deleteSheetTitle}>Delete message?</Text>
-            <Text style={styles.deleteSheetSubtitle}>Choose how to delete this message</Text>
-            {deleteTarget && (deleteTarget.senderId === me?._id) ? (
-              <>
-                <TouchableOpacity
-                  style={styles.deleteRow}
-                  onPress={() => performDelete('me')}
-                  testID="delete-for-me"
-                >
-                  <Feather name="trash-2" size={22} color={Colors.textSecondary} />
-                  <Text style={styles.deleteRowLabel}>Delete for me</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.deleteRow}
-                  onPress={() => performDelete('receiver')}
-                  testID="delete-for-receiver"
-                >
-                  <Feather name="trash-2" size={22} color="#f59e0b" />
-                  <Text style={styles.deleteRowLabel}>Delete for receiver</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.deleteRow}
-                  onPress={() => performDelete('everyone')}
-                  testID="delete-for-everyone"
-                >
-                  <Feather name="trash-2" size={22} color={Colors.danger} />
-                  <Text style={[styles.deleteRowLabel, { color: Colors.danger }]}>Delete for everyone</Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <>
-                <TouchableOpacity
-                  style={styles.deleteRow}
-                  onPress={() => performDelete('me')}
-                  testID="delete-for-me"
-                >
-                  <Feather name="trash-2" size={22} color={Colors.textSecondary} />
-                  <Text style={styles.deleteRowLabel}>Delete for me</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.deleteRow}
-                  onPress={() => performDelete('request_everyone')}
-                  testID="delete-request-everyone"
-                >
-                  <Feather name="message-circle" size={22} color={Colors.primary} />
-                  <Text style={styles.deleteRowLabel}>Ask sender to delete for everyone</Text>
-                </TouchableOpacity>
-              </>
-            )}
-            <TouchableOpacity
-              style={styles.sheetCancelBtn}
-              onPress={() => setDeleteTarget(null)}
-              testID="delete-cancel"
-            >
-              <Text style={styles.sheetCancelText}>Cancel</Text>
-            </TouchableOpacity>
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <DeleteMessageSheet
+        target={deleteTarget}
+        isMine={!!(deleteTarget && deleteTarget.senderId === me?._id)}
+        onClose={() => setDeleteTarget(null)}
+        onSelect={performDelete}
+      />
 
-      <Modal visible={showDisappearingSheet} transparent animationType="fade" onRequestClose={() => setShowDisappearingSheet(false)}>
-        <Pressable style={styles.sheetBackdrop} onPress={() => setShowDisappearingSheet(false)}>
-          <Pressable style={[styles.sheet, styles.disappearingSheet]} onPress={() => {}} testID="disappearing-sheet">
-            <Text style={styles.disappearingTitle}>Disappearing messages</Text>
-            {DISAPPEARING_OPTIONS.map((option) => {
-              const selected = disappearingMode === option.key;
-              return (
-                <TouchableOpacity
-                  key={option.key}
-                  style={styles.disappearingRow}
-                  onPress={async () => {
-                    setDisappearingMode(option.key);
-                    if (conversationId) {
-                      await writeStoredJson(`disappearing_mode_${conversationId}`, option.key);
-                    }
-                    // iter-151: canonical contract = `setDisappearingMessages`
-                    // with `disappearAfter` in SECONDS. Our local option
-                    // `ms` is in milliseconds (or 0 for "off"), so convert.
-                    try {
-                      if (
-                        conversationId &&
-                        typeof setDisappearingMessagesM === 'function'
-                      ) {
-                        const seconds = option.key === 'off' ? 0 : Math.round(option.ms / 1000);
-                        await (setDisappearingMessagesM as any)({
-                          conversationId,
-                          disappearAfter: seconds,
-                        });
-                      }
-                    } catch (errorValue: any) {
-                      const message = String(errorValue?.message || '');
-                      if (
-                        !message.includes('CouldNotFindFunction') &&
-                        !message.includes('not found') &&
-                        !message.includes('ArgumentValidationError')
-                      ) {
-                        console.warn('[chat] disappearAfter save failed', message);
-                      }
-                    }
-                    setShowDisappearingSheet(false);
-                  }}
-                  testID={`disappearing-option-${option.key}`}
-                >
-                  <Text style={[styles.disappearingLabel, selected ? styles.disappearingLabelSelected : null]}>{option.label}</Text>
-                  {selected ? <Ionicons name="checkmark-circle" size={20} color={Colors.primary} /> : null}
-                </TouchableOpacity>
-              );
-            })}
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <DisappearingSheet
+        visible={showDisappearingSheet}
+        mode={disappearingMode}
+        onClose={() => setShowDisappearingSheet(false)}
+        onSelect={async (option) => {
+          setDisappearingMode(option.key);
+          if (conversationId) {
+            await writeStoredJson(`disappearing_mode_${conversationId}`, option.key);
+          }
+          // iter-151: canonical contract = `setDisappearingMessages`
+          // with `disappearAfter` in SECONDS. Our local option
+          // `ms` is in milliseconds (or 0 for "off"), so convert.
+          try {
+            if (
+              conversationId &&
+              typeof setDisappearingMessagesM === 'function'
+            ) {
+              const seconds = option.key === 'off' ? 0 : Math.round(option.ms / 1000);
+              await (setDisappearingMessagesM as any)({
+                conversationId,
+                disappearAfter: seconds,
+              });
+            }
+          } catch (errorValue: any) {
+            const message = String(errorValue?.message || '');
+            if (
+              !message.includes('CouldNotFindFunction') &&
+              !message.includes('not found') &&
+              !message.includes('ArgumentValidationError')
+            ) {
+              console.warn('[chat] disappearAfter save failed', message);
+            }
+          }
+          setShowDisappearingSheet(false);
+        }}
+      />
 
-      <Modal
+      <ForwardPickerSheet
         visible={showForwardPicker}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowForwardPicker(false)}
-      >
-        <Pressable style={styles.sheetBackdrop} onPress={() => setShowForwardPicker(false)}>
-          <Pressable style={[styles.sheet, styles.forwardSheet]} onPress={() => {}} testID="forward-picker-sheet">
-            <Text style={styles.forwardTitle} testID="forward-picker-title">
-              Forward to
-            </Text>
-            <FlatList
-              data={
-                (Array.isArray(conversationsForForward) ? conversationsForForward : []).filter(
-                  (item: any) => item._id !== conversationId,
-                )
-              }
-              keyExtractor={(item: any) => item._id}
-              contentContainerStyle={styles.forwardListContent}
-              ListHeaderComponent={
-                // iter-111: Diary pinned at the TOP — now saves the
-                // forwarded message to the LOCAL diary store via
-                // diaryStore.appendDiaryEntry. Never touches the Convex
-                // backend, so it's safe to surface in every chat without
-                // any cross-user contamination risk.
-                <TouchableOpacity
-                  style={[styles.forwardRow, styles.forwardRowDiary]}
-                  onPress={async () => {
-                    try {
-                      // Determine which messages we're forwarding — mirror
-                      // the doForwardTo logic so multi-select also flows.
-                      let targets: any[] = [];
-                      if (multiSelectIds && multiSelectIds.length > 0) {
-                        targets = multiSelectIds
-                          .map((id) => msgById.get(id))
-                          .filter((m: any) => !!m);
-                      } else if (selectedMsg) {
-                        targets = [selectedMsg];
-                      }
-                      if (targets.length === 0) {
-                        setShowForwardPicker(false);
-                        return;
-                      }
-                      const sourceConversationName =
-                        savedContactTitle ||
-                        getConversationDisplayName(
-                          hydratedConversation,
-                          me?._id ? String(me._id) : undefined,
-                          'Chat',
-                        );
-                      for (const m of targets) {
-                        const senderName =
-                          m?.senderName ||
-                          m?.sender?.name ||
-                          (me?._id && m?.senderId === me._id ? 'You' : 'a contact');
-                        const entry = chatMessageToDiaryEntry(m, {
-                          conversationId: conversationId as string,
-                          conversationName: sourceConversationName,
-                          originalSenderName: senderName,
-                          originalMessageId: m?._id || null,
-                          originalCreationTime: m?._creationTime || null,
-                        });
-                        // eslint-disable-next-line no-await-in-loop
-                        await appendDiaryEntry(me?._id ? String(me._id) : null, entry);
-                      }
-                      setShowForwardPicker(false);
-                      setMultiSelectIds(null);
-                      closeActionSheet();
-                      Alert.alert(
-                        targets.length === 1 ? 'Saved to Diary' : `${targets.length} notes saved`,
-                        'Open Diary from the Chats tab to see your saved notes.',
-                      );
-                    } catch (errorValue: any) {
-                      Alert.alert(
-                        'Could not save to Diary',
-                        errorToMessage(errorValue) || 'Please try again.',
-                      );
-                    }
-                  }}
-                  testID="forward-target-diary"
-                >
-                  <View style={[styles.forwardAvatar, styles.forwardAvatarDiary]}>
-                    <MaterialCommunityIcons
-                      name="book-account-outline"
-                      size={20}
-                      color={Colors.warningDark}
-                    />
-                  </View>
-                  <View style={styles.flexOne}>
-                    <Text style={styles.forwardName} numberOfLines={1}>Diary</Text>
-                    <Text style={styles.forwardPreview} numberOfLines={1}>
-                      Save to your personal diary
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              }
-              renderItem={({ item }: any) => {
-                // Use the centralised display-name resolver — it walks the
-                // members/otherUser/firstName chains and avoids the 'Chat'
-                // placeholder unless every candidate is truly empty. Mirrors
-                // the chats list (see /app/(tabs)/chats.tsx ConversationRow).
-                const savedName = findSavedContactDisplayName(
-                  contacts,
-                  item,
-                  me?._id ? String(me._id) : undefined,
-                );
-                const displayName =
-                  savedName ||
-                  getConversationDisplayName(
-                    item,
-                    me?._id ? String(me._id) : undefined,
-                    'Smilers user',
-                  );
-                // Sanitise the last-message preview — if the backend returned
-                // an undecrypted E2EE ciphertext (base64 blob), don't expose
-                // it. The web app uses 'Encrypted message' as the safe
-                // fallback. We treat any string that has >50% non-alphanum
-                // density OR ends in '=' as ciphertext.
-                const raw = String(item.lastMessageText || '').trim();
-                let preview = raw;
-                if (raw) {
-                  const looksEncrypted =
-                    /^[A-Za-z0-9+/]{30,}={0,2}$/.test(raw) ||
-                    raw.length > 200;
-                  if (looksEncrypted) preview = 'Encrypted message';
-                } else {
-                  preview = 'Open conversation';
-                }
-                return (
-                  <TouchableOpacity
-                    style={styles.forwardRow}
-                    onPress={() => doForwardTo(item._id)}
-                    testID={`forward-target-${item._id}`}
-                  >
-                    <View style={styles.forwardAvatar}>
-                      <Text style={styles.forwardAvatarText}>
-                        {getDisplayInitials(displayName, 1)}
-                      </Text>
-                    </View>
-                    <View style={styles.flexOne}>
-                      <Text style={styles.forwardName}>{displayName}</Text>
-                      <Text style={styles.forwardSub} numberOfLines={1}>
-                        {preview}
-                      </Text>
-                    </View>
-                    <Feather name="send" size={18} color={Colors.primary} />
-                  </TouchableOpacity>
-                );
-              }}
-              ListEmptyComponent={
-                <Text style={styles.forwardEmpty} testID="forward-picker-empty">
-                  No other chats to forward to.
-                </Text>
-              }
-            />
-          </Pressable>
-        </Pressable>
-      </Modal>
+        conversations={Array.isArray(conversationsForForward) ? conversationsForForward : []}
+        currentConversationId={conversationId as string}
+        contacts={contacts}
+        myUserId={me?._id ? String(me._id) : undefined}
+        onClose={() => setShowForwardPicker(false)}
+        onForwardTo={doForwardTo}
+        onSaveToDiary={async () => {
+          try {
+            // Determine which messages we're forwarding — mirror
+            // the doForwardTo logic so multi-select also flows.
+            let targets: any[] = [];
+            if (multiSelectIds && multiSelectIds.length > 0) {
+              targets = multiSelectIds
+                .map((id) => msgById.get(id))
+                .filter((m: any) => !!m);
+            } else if (selectedMsg) {
+              targets = [selectedMsg];
+            }
+            if (targets.length === 0) {
+              setShowForwardPicker(false);
+              return;
+            }
+            const sourceConversationName =
+              savedContactTitle ||
+              getConversationDisplayName(
+                hydratedConversation,
+                me?._id ? String(me._id) : undefined,
+                'Chat',
+              );
+            for (const m of targets) {
+              const senderName =
+                m?.senderName ||
+                m?.sender?.name ||
+                (me?._id && m?.senderId === me._id ? 'You' : 'a contact');
+              const entry = chatMessageToDiaryEntry(m, {
+                conversationId: conversationId as string,
+                conversationName: sourceConversationName,
+                originalSenderName: senderName,
+                originalMessageId: m?._id || null,
+                originalCreationTime: m?._creationTime || null,
+              });
+              // eslint-disable-next-line no-await-in-loop
+              await appendDiaryEntry(me?._id ? String(me._id) : null, entry);
+            }
+            setShowForwardPicker(false);
+            setMultiSelectIds(null);
+            closeActionSheet();
+            Alert.alert(
+              targets.length === 1 ? 'Saved to Diary' : `${targets.length} notes saved`,
+              'Open Diary from the Chats tab to see your saved notes.',
+            );
+          } catch (errorValue: any) {
+            Alert.alert(
+              'Could not save to Diary',
+              errorToMessage(errorValue) || 'Please try again.',
+            );
+          }
+        }}
+      />
 
-      <Modal visible={showTemplatePicker} transparent animationType="slide" onRequestClose={() => setShowTemplatePicker(false)}>
-        <Pressable style={styles.sheetBackdrop} onPress={() => setShowTemplatePicker(false)}>
-          <Pressable style={[styles.sheet, styles.forwardSheet]} onPress={() => {}} testID="template-picker-sheet">
-            <View style={styles.templatePickerHeader}>
-              <Text style={styles.forwardTitle} testID="template-picker-title">
-                Quick Replies
-              </Text>
-              <TouchableOpacity
-                onPress={() => {
-                  setShowTemplatePicker(false);
-                  router.push('/templates' as any);
-                }}
-                testID="template-picker-manage-button"
-              >
-                <Text style={styles.templatePickerManage}>Manage</Text>
-              </TouchableOpacity>
-            </View>
-            <FlatList
-              data={Array.isArray(quickTemplates) ? quickTemplates : []}
-              keyExtractor={(item: any) => item.id}
-              contentContainerStyle={styles.forwardListContent}
-              renderItem={({ item, index }: any) => (
-                <TouchableOpacity
-                  style={styles.templatePickerRow}
-                  onPress={() => {
-                    setText((current) => (current.trim().length ? `${current}\n${item.message}` : item.message || ''));
-                    setShowTemplatePicker(false);
-                  }}
-                  testID={`template-picker-item-${index}`}
-                >
-                  <View style={styles.templatePickerBadge}>
-                    <MaterialCommunityIcons name="message-text-outline" size={18} color={Colors.primary} />
-                  </View>
-                  <View style={styles.flexOne}>
-                    <Text style={styles.forwardName}>{item.label || 'Quick Reply'}</Text>
-                    <Text style={styles.forwardSub} numberOfLines={2}>
-                      {item.message || ''}
-                    </Text>
-                  </View>
-                  <Feather name="corner-down-left" size={18} color={Colors.primary} />
-                </TouchableOpacity>
-              )}
-              ListEmptyComponent={
-                <View style={styles.templatePickerEmptyWrap} testID="template-picker-empty">
-                  <Text style={styles.forwardEmpty}>No quick replies yet.</Text>
-                  <TouchableOpacity
-                    style={styles.templatePickerCreateBtn}
-                    onPress={() => {
-                      setShowTemplatePicker(false);
-                      router.push('/templates' as any);
-                    }}
-                    testID="template-picker-create-button"
-                  >
-                    <Text style={styles.templatePickerCreateText}>Create one</Text>
-                  </TouchableOpacity>
-                </View>
-              }
-            />
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <TemplatePickerSheet
+        visible={showTemplatePicker}
+        templates={quickTemplates}
+        onClose={() => setShowTemplatePicker(false)}
+        onInsert={(message) => {
+          setText((current) => (current.trim().length ? `${current}\n${message}` : message));
+          setShowTemplatePicker(false);
+        }}
+        onManage={() => {
+          setShowTemplatePicker(false);
+          router.push('/templates' as any);
+        }}
+      />
 
       <ChatOptionsMenu
         visible={showOptionsMenu}
@@ -3559,13 +3317,6 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#D9C9AE',
   },
-  iconBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   input: {
     flex: 1,
     minHeight: 38,
@@ -3655,227 +3406,6 @@ const styles = StyleSheet.create({
   recTimer: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textPrimary, fontVariant: ['tabular-nums'] as any },
   recPauseBtn: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EEE4D1' },
   recSendBtn: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.primary },
-  emojiBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
-  emojiSheet: {
-    backgroundColor: '#FFF8EC',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: 18,
-    paddingTop: 14,
-    paddingBottom: 18,
-  },
-  emojiSheetHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-  },
-  emojiSheetTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: FontWeight.bold,
-    color: Colors.textPrimary,
-  },
-  emojiSection: {
-    marginTop: 10,
-  },
-  emojiSectionTitle: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    color: Colors.textSecondary,
-    marginBottom: 8,
-  },
-  emojiGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  emojiOption: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
-    backgroundColor: '#F4E7D2',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  emojiOptionText: {
-    fontSize: 22,
-  },
-  sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
-  sheet: {
-    backgroundColor: Colors.surface,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingTop: Spacing.sm,
-    paddingHorizontal: Spacing.base,
-    paddingBottom: Spacing.lg,
-    ...Shadow.lg,
-  },
-  reactionPickerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    paddingVertical: Spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
-  },
-  reactionBtn: { padding: 6 },
-  reactionEmoji: { fontSize: 28 },
-  sheetActions: { paddingVertical: Spacing.sm },
-  sheetCancelBtn: {
-    marginTop: 8,
-    paddingVertical: 14,
-    alignItems: 'center',
-    borderRadius: Radius.md,
-    backgroundColor: Colors.surface,
-  },
-  sheetCancelText: { fontSize: FontSize.base, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
-
-  // Tri-state delete sheet (WhatsApp-style)
-  deleteSheet: {
-    backgroundColor: Colors.background,
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.lg,
-    paddingBottom: Spacing.base,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-  },
-  deleteSheetTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: FontWeight.bold,
-    color: Colors.textPrimary,
-    marginBottom: 4,
-  },
-  deleteSheetSubtitle: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    marginBottom: Spacing.base,
-  },
-  deleteRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 4,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.borderLight,
-  },
-  deleteRowLabel: {
-    fontSize: FontSize.base,
-    color: Colors.textPrimary,
-    fontWeight: FontWeight.medium,
-  },
-  forwardTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: FontWeight.bold,
-    color: Colors.textPrimary,
-    paddingVertical: Spacing.md,
-    textAlign: 'center',
-  },
-  forwardRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
-  },
-  forwardAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  forwardAvatarText: { color: Colors.primary, fontWeight: FontWeight.bold },
-  // iter-109 — Diary tile pinned at the TOP of the forward sheet.
-  // Amber palette per web app screenshot so it visually pairs with the
-  // existing "saved on this device" badges + warning Colors block.
-  forwardRowDiary: {
-    backgroundColor: '#FFFBEB', // amber-50 — soft highlight
-    borderBottomColor: 'transparent',
-    marginBottom: 4,
-    borderRadius: Radius.md,
-    paddingHorizontal: 12,
-  },
-  forwardAvatarDiary: {
-    backgroundColor: Colors.warningLight, // amber-100 — pairs with the book icon below
-  },
-  forwardName: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
-  forwardSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
-  // forwardPreview — same visual treatment as forwardSub, kept as a
-  // separate style so the Diary "Save to your personal diary" subtitle
-  // can be tweaked independently later without touching every chat row.
-  forwardPreview: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
-  forwardEmpty: { textAlign: 'center', color: Colors.textMuted, paddingVertical: Spacing.lg },
-  forwardSheet: { maxHeight: '70%' },
-  disappearingSheet: { paddingHorizontal: 16, paddingBottom: 24 },
-  disappearingTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary, paddingHorizontal: 4, paddingBottom: 12 },
-  disappearingRow: {
-    minHeight: 50,
-    borderRadius: Radius.lg,
-    paddingHorizontal: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  disappearingLabel: { fontSize: FontSize.base, color: Colors.textPrimary },
-  disappearingLabelSelected: { color: Colors.primaryDark, fontWeight: FontWeight.semibold },
-  templatePickerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  templatePickerManage: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    color: Colors.primary,
-  },
-  templatePickerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
-  },
-  templatePickerBadge: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  templatePickerEmptyWrap: {
-    alignItems: 'center',
-    paddingVertical: Spacing.lg,
-    gap: Spacing.sm,
-  },
-  templatePickerCreateBtn: {
-    minHeight: 40,
-    paddingHorizontal: 14,
-    borderRadius: Radius.pill,
-    backgroundColor: Colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  templatePickerCreateText: {
-    fontSize: FontSize.sm,
-    fontWeight: FontWeight.semibold,
-    color: Colors.primaryDark,
-  },
-  deletedContent: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  // deletedTimeText — italic + slightly muted to match the web app's
-  // "This message was deleted  6:45 PM" timestamp on the right.
-  // iter-107 — security-block bubble. Same visual treatment as the
-  // "This message was deleted" bubble (italic + muted text + opacity-
-  // dimmed background) so users instantly recognise it as a "missing"
-  // message, BUT preceded with a small shield icon so they understand
-  // it was removed for SAFETY rather than by the sender.
-  // editedBadge — italic "edited HH:MM" rendered before the real time
-  // stamp inside the bubble meta row. Per web-app design parity.
-  forwardListContent: { paddingBottom: Spacing.lg },
   flexOne: { flex: 1 },
 });
 

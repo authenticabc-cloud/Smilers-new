@@ -34,6 +34,7 @@ import {
 import { Colors } from '../src/theme';
 import { DeviceContactProvider } from '../src/lib/deviceContactIndex';
 import { AppShareIntentProvider, useAppShareIntent } from '../src/lib/shareIntentContext';
+import { ReferralAttribution } from '../src/lib/referralAttribution';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { api } from '../src/convexApi';
 import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js';
@@ -353,6 +354,7 @@ export default function RootLayout() {
           <ConvexClientProvider>
             <AppShareIntentProvider>
             <DeviceContactBridge>
+            <ReferralAttribution />
             <GlobalNotificationSound />
             <GlobalNotificationServices />
             <PresenceHeartbeat />

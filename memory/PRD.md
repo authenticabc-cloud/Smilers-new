@@ -317,3 +317,14 @@ The Earnings/Engagement system is already built into the backend. The mobile app
 - `/app/CONVEX_BACKEND_INSTRUCTIONS_CONTACTS_POLISH.md` — Required backend support for outgoing requests, reject/cancel, phone invites, and QR contacts
 - `/app/CONVEX_BACKEND_INSTRUCTIONS_AD_CREDIT_CODES.md` — Required backend support for Ad Credit Codes, redeem flow, and per-click billing deductions
 - `/app/HERCULES_MOBILE_SIGNIN_BRIDGE.md` — Exact web/Hercules-side instructions to redirect successful web sign-in back into the native app
+
+## Session: Feb 2026 — Chat Refactor Phase 2 + Swipe-to-Reply
+- **Swipe-to-Reply (NEW)**: WhatsApp-style swipe-right gesture on any message bubble opens the reply composer with haptic feedback. Implemented in `/app/frontend/src/components/chat/SwipeToReply.tsx` (react-native-gesture-handler Pan + reanimated v4). Native-only (disabled on web); disabled in multi-select mode, for suspended viewers, and on deleted messages. NEEDS DEVICE VERIFICATION (gesture is native-only).
+- **Chat Screen Refactor Phase 2 (DONE)**: Extracted 5 more components from `chat/[conversationId].tsx` (3,882 → 3,411 lines):
+  - `MessageActionSheet.tsx` — long-press sheet w/ quick reactions + action rows (owns QUICK_REACTIONS)
+  - `DeleteMessageSheet.tsx` — tri-state delete sheet
+  - `DisappearingSheet.tsx` — duration picker (owns canonical DISAPPEARING_OPTIONS, re-imported by chat screen)
+  - `ForwardPickerSheet.tsx` — forward-to picker incl. pinned Diary tile (diary save logic stays in parent via onSaveToDiary)
+  - `TemplatePickerSheet.tsx` — Quick Replies picker
+- All testIDs preserved exactly. Removed ~470 lines of dead styles/JSX from the chat screen. ESLint + tsc clean; web bundle renders (smoke-tested).
+- User confirmed fixed this session: small-phone tab spacing, Trustees contact list.
