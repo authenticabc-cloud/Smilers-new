@@ -58,6 +58,7 @@ import { useAuth } from '../src/providers/AuthProvider';
 import { useAppShareIntent } from '../src/lib/shareIntentContext';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { appendDiaryEntry, type DiaryEntryKind } from '../src/lib/diaryStore';
+import { getRecentShareTargets, recordShareTargets } from '../src/lib/recentShareTargets';
 import { uploadFile } from '../src/lib/uploadFile';
 import { scanMessage as scanMessageDeep } from '../src/lib/messageSecurityScanner';
 import Header from '../src/components/Header';
@@ -84,6 +85,11 @@ import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 const resolveContactName = (entity: any) => getDisplayNameFromUser(entity, '');
 const initialsOf = (name: string) => getDisplayInitials(name, 1);
 
+/** iter-178: Stable identity for share-frequency tracking — survives a
+ * contact row becoming a conversation row on later shares. */
+const stableIdOf = (r: { userId?: string; conversationId?: string }): string | null =>
+  r.userId ? `u:${r.userId}` : r.conversationId ? `c:${r.conversationId}` : null;
+
 interface Recipient {
   /** Either conversationId (preferred when known) or `user:<userId>`. */
   key: string;
@@ -95,6 +101,8 @@ interface Recipient {
   isGroup?: boolean;
   /** True when this row is the user's own Diary (self-conversation). */
   isDiary?: boolean;
+  /** True when this row is pinned because the user shares to it often. */
+  isFrequent?: boolean;
   /** Optional member count to surface as a subtitle for groups. */
   memberCount?: number;
   name: string;
@@ -196,6 +204,21 @@ function ShareReceiverNative() {
   // the user saved on their phone (same override as Chats/Contacts tabs),
   // NOT the Smilers/Google account name.
   const deviceIndex = useDeviceContactIndex();
+
+  // iter-178: "Frequently shared" — stable ids (`u:<userId>` / `c:<convId>`)
+  // of past share targets, ranked by use count. Loaded once per mount.
+  const [frequentRank, setFrequentRank] = useState<Map<string, number>>(new Map());
+  useEffect(() => {
+    let cancelled = false;
+    if (!myUserId) return;
+    getRecentShareTargets(myUserId).then((stats) => {
+      if (cancelled) return;
+      setFrequentRank(new Map(stats.map((s, i) => [s.id, i])));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [myUserId]);
 
   // Normalize the share intent into our `SharedPayload` shape. Recomputed
   // whenever the intent changes (a new share can arrive while this screen
@@ -359,6 +382,28 @@ function ShareReceiverNative() {
       return a.name.localeCompare(b.name);
     });
 
+    // iter-178: pin up to 3 "Frequently shared" targets right below the
+    // Diary row, ranked by past share usage (stable across visits).
+    if (frequentRank.size > 0) {
+      const frequent: Recipient[] = [];
+      const rest: Recipient[] = [];
+      for (const r of list) {
+        const id = r.userId ? `u:${r.userId}` : r.conversationId ? `c:${r.conversationId}` : null;
+        const rank = id != null ? frequentRank.get(id) : undefined;
+        if (rank !== undefined && frequent.length < 3) {
+          frequent.push({ ...r, isFrequent: true });
+        } else {
+          rest.push(r);
+        }
+      }
+      frequent.sort((a, b) => {
+        const idA = a.userId ? `u:${a.userId}` : `c:${a.conversationId}`;
+        const idB = b.userId ? `u:${b.userId}` : `c:${b.conversationId}`;
+        return (frequentRank.get(idA) ?? 99) - (frequentRank.get(idB) ?? 99);
+      });
+      list = [...frequent, ...rest];
+    }
+
     // iter-172: synthetic "My Diary" row pinned at the very top so the
     // user can quickly save anything to their own self-conversation.
     // We only surface it when the user is authenticated AND the row
@@ -375,7 +420,7 @@ function ShareReceiverNative() {
     }
 
     return list;
-  }, [contacts, conversations, deviceIndex, myUserId, search]);
+  }, [contacts, conversations, deviceIndex, frequentRank, myUserId, search]);
 
   const toggleSelected = useCallback((r: Recipient) => {
     setSelected((prev) => {
@@ -546,6 +591,16 @@ function ShareReceiverNative() {
       /* ignore */
     }
 
+    // iter-178: remember successful targets for the "Frequently shared"
+    // pins on the next share. Best-effort, never blocks navigation.
+    const successfulIds = allOutcomes
+      .filter((row) => !row.recipient.isDiary && row.outcomes.some((o) => o.ok))
+      .map((row) => stableIdOf(row.recipient))
+      .filter((id): id is string => !!id);
+    if (successfulIds.length > 0) {
+      recordShareTargets(myUserId, successfulIds).catch(() => {});
+    }
+
     const lines = [`Sent to ${sentChats} chat${sentChats === 1 ? '' : 's'}`];
     if (blockedCount > 0) lines.push(`${blockedCount} item(s) blocked (risky file)`);
     if (failedCount > 0) lines.push(`${failedCount} send(s) failed`);
@@ -574,6 +629,8 @@ function ShareReceiverNative() {
         ? 'Save to your private notes'
         : item.isGroup
         ? `${typeof item.memberCount === 'number' ? item.memberCount : 0} members`
+        : item.isFrequent
+        ? 'Frequently shared'
         : null;
       return (
         <TouchableOpacity

@@ -8,6 +8,9 @@
 ### Follow-up (same day): device-contact names in share picker
 Share screen recipient list was showing Smilers/Google account names instead of device-saved contact names. Fixed by wiring `useDeviceContactIndex` + `getResolvedDisplayName` / `getResolvedConversationDisplayName` (same iter-176 override used in Chats/Contacts) into the share-receiver recipient builder (DM rows + contact rows; groups untouched). Verification on device pending — requires new Android build.
 
+### iter-178: "Frequently shared" pins in share picker
+New `src/lib/recentShareTargets.ts` (AsyncStorage, per-user, stable ids `u:<userId>` / `c:<convId>`, capped 8). After each successful share, targets are recorded; on next share up to 3 most-used recipients are pinned below My Diary with a "Frequently shared" subtitle. Local-only, best-effort, never blocks send.
+
 ## Overview
 Native iOS + Android port of **smilers.online** (a Convex-backed real-time messaging app). Connects directly to the existing Convex backend (`https://aware-newt-456.convex.cloud`) using the official Convex React Native SDK. Authenticates via Hercules Auth OIDC (same provider as web app). Web and mobile share the same database in real time.
 
