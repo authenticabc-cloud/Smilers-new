@@ -13,6 +13,7 @@ New `src/lib/recentShareTargets.ts` (AsyncStorage, per-user, stable ids `u:<user
 
 ### iter-179: APK sharing allowed + clear "blocked" reporting
 The "Sent to 0 chats / 1 send(s) failed" report was the iter-164 security scanner silently blocking an .apk share — not a real failure. Fixes: (1) `SendOutcome.blocked` flag replaces fragile regex tally; share-complete alert now states the block reason explicitly. (2) Per user decision (option b, WhatsApp-style), `.apk` removed from DANGEROUS_EXTENSIONS in BOTH `messageSecurityScanner.ts` (send boundary) and `securityScanner.ts` (incoming render/auto-delete). `.exe/.bat/.ipa/etc.` remain blocked. Verified via tsx unit run: apk allowed, exe/bat/ipa blocked, jpg safe — ALL PASS.
+(3) Caution banner: received .apk file messages show an amber "App install file — only install if you trust the sender" strip under the file bubble (`FileMessage` in `src/components/MediaBubble.tsx`, testID `apk-caution-<msgId>`). Sender's own bubble stays clean.
 
 ## Overview
 Native iOS + Android port of **smilers.online** (a Convex-backed real-time messaging app). Connects directly to the existing Convex backend (`https://aware-newt-456.convex.cloud`) using the official Convex React Native SDK. Authenticates via Hercules Auth OIDC (same provider as web app). Web and mobile share the same database in real time.

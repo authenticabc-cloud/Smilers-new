@@ -1276,6 +1276,12 @@ function PollMessage({ msg }: { msg: any }) {
 function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e2eeStatus: E2EEStatus | null }) {
   const { url: src, error: srcError } = useDecryptedMediaUrl(msg, e2eeStatus);
 
+  // iter-179: APKs are allowed (WhatsApp-style policy) but received ones
+  // carry an explicit caution so less tech-savvy users don't sideload
+  // blindly. Sender's own bubble stays clean.
+  const isApk = /\.apk$/i.test(msg.fileName || '');
+  const showApkCaution = isApk && !isMine;
+
   const onOpen = async () => {
     if (!src) return;
     try {
@@ -1284,28 +1290,38 @@ function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e
   };
 
   return (
-    <TouchableOpacity
-      style={styles.fileBody}
-      onPress={onOpen}
-      disabled={!src}
-      activeOpacity={0.7}
-      testID={`file-open-${msg._id}`}
-    >
-      <View style={[styles.fileIcon, isMine ? styles.fileIconMine : null, !src ? { opacity: 0.5 } : null]}>
-        <Feather name="file-text" size={22} color={isMine ? '#2C4129' : Colors.white} />
-      </View>
-      <View style={styles.flexOne}>
-        <Text style={[styles.fileName, isMine ? styles.fileNameMine : null]} numberOfLines={2}>{msg.fileName || 'Document'}</Text>
-        <Text style={[styles.fileMeta, isMine ? styles.fileMetaMine : null]}>
-          {[formatBytes(msg.fileSize), msg.mimeType?.split('/')?.pop()?.toUpperCase()].filter(Boolean).join(' · ') || 'File'}
-        </Text>
-      </View>
-      <Feather
-        name={srcError ? 'lock' : src ? 'download' : 'loader'}
-        size={20}
-        color={srcError ? Colors.danger : isMine ? '#F6FFF9' : Colors.primary}
-      />
-    </TouchableOpacity>
+    <View>
+      <TouchableOpacity
+        style={styles.fileBody}
+        onPress={onOpen}
+        disabled={!src}
+        activeOpacity={0.7}
+        testID={`file-open-${msg._id}`}
+      >
+        <View style={[styles.fileIcon, isMine ? styles.fileIconMine : null, !src ? { opacity: 0.5 } : null]}>
+          <Feather name="file-text" size={22} color={isMine ? '#2C4129' : Colors.white} />
+        </View>
+        <View style={styles.flexOne}>
+          <Text style={[styles.fileName, isMine ? styles.fileNameMine : null]} numberOfLines={2}>{msg.fileName || 'Document'}</Text>
+          <Text style={[styles.fileMeta, isMine ? styles.fileMetaMine : null]}>
+            {[formatBytes(msg.fileSize), msg.mimeType?.split('/')?.pop()?.toUpperCase()].filter(Boolean).join(' · ') || 'File'}
+          </Text>
+        </View>
+        <Feather
+          name={srcError ? 'lock' : src ? 'download' : 'loader'}
+          size={20}
+          color={srcError ? Colors.danger : isMine ? '#F6FFF9' : Colors.primary}
+        />
+      </TouchableOpacity>
+      {showApkCaution ? (
+        <View style={styles.apkCaution} testID={`apk-caution-${msg._id}`}>
+          <Feather name="alert-triangle" size={13} color={Colors.warning} />
+          <Text style={styles.apkCautionText}>
+            App install file — only install if you trust the sender
+          </Text>
+        </View>
+      ) : null}
+    </View>
   );
 }
 
@@ -1665,6 +1681,22 @@ const styles = StyleSheet.create({
   fileIconMine: { backgroundColor: '#E3F2D7' },
   fileName: { fontSize: 14, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   fileNameMine: { color: '#F6FFF9' },
+  apkCaution: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: Colors.warningLight,
+  },
+  apkCautionText: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: FontWeight.medium,
+    color: '#92400E',
+  },
   fileMeta: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
   fileMetaMine: { color: 'rgba(246,255,249,0.78)' },
   viewerWrap: { flex: 1, backgroundColor: '#000' },
