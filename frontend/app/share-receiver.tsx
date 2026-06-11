@@ -200,16 +200,36 @@ function ShareReceiverNative() {
       result.text = rawText;
     }
     if (Array.isArray(shareIntent.files) && shareIntent.files.length > 0) {
-      result.files = shareIntent.files.map((file: any) => {
-        const mimeType = file.mimeType || 'application/octet-stream';
-        return {
-          uri: file.path,
-          mimeType,
-          fileName: file.fileName || 'shared',
-          fileSize: typeof file.size === 'number' ? file.size : undefined,
-          kind: classifyFile(mimeType),
-        };
+      // iter-176 defense-in-depth: an older upstream bug in
+      // expo-share-intent@5.1.1 could produce a malformed array where
+      // single-file SEND intents emitted `[fileInfo, ["type", "file"]]`
+      // (a stray Pair element). We patch the lib (scripts/patch-expo-
+      // share-intent.js), but even if that ever regresses, the filter
+      // below tolerates the malformed shape by keeping only entries
+      // that have a usable URI.
+      const validFiles = shareIntent.files.filter((file: any) => {
+        if (!file || typeof file !== 'object') return false;
+        return !!(file.path || file.contentUri || file.filePath || file.uri);
       });
+      if (validFiles.length > 0) {
+        result.files = validFiles.map((file: any) => {
+          const mimeType = file.mimeType || file.type || 'application/octet-stream';
+          const uri = file.path
+            || file.contentUri
+            || (file.filePath ? `file://${file.filePath}` : null)
+            || file.uri
+            || '';
+          return {
+            uri,
+            mimeType,
+            fileName: file.fileName || 'shared',
+            fileSize: typeof file.size === 'number'
+              ? file.size
+              : (typeof file.fileSize === 'string' ? Number(file.fileSize) : undefined),
+            kind: classifyFile(mimeType),
+          };
+        });
+      }
     }
     return result;
   }, [shareIntent]);

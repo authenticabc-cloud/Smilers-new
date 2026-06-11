@@ -322,6 +322,12 @@ export default function NotificationsScreen() {
           </Text>
         ) : null}
 
+        {/* iter-176: 'Push diagnostics' section hidden for production
+            publish. Diagnostic data is still collected behind the scenes
+            (registration retry, token preview, etc.) — only the user-
+            facing UI is gated. To re-enable for internal builds:
+            wrap the JSX block back in. */}
+        {false ? (
         <View style={styles.diagnosticsCard} testID="push-diagnostics-card">
           <View style={styles.diagnosticsHeaderRow}>
             <View style={styles.diagnosticsHeaderTextWrap}>
@@ -406,6 +412,7 @@ export default function NotificationsScreen() {
           <DiagnosticRow label="Last registered" value={pushDiagnostics.lastRegisteredAt || 'Not yet'} testID="push-diagnostics-last-registered" multiline />
           <DiagnosticRow label="Last error" value={pushDiagnostics.lastError || 'None'} testID="push-diagnostics-last-error" multiline />
         </View>
+        ) : null}
 
         {ITEMS.map((item) => (
           <View key={item.key} style={styles.row} testID={`notifications-row-${item.key}`}>
