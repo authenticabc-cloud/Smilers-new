@@ -33,6 +33,7 @@ import {
 } from '../src/lib/diagnostics';
 import { Colors } from '../src/theme';
 import { DeviceContactProvider } from '../src/lib/deviceContactIndex';
+import { AppShareIntentProvider, useAppShareIntent } from '../src/lib/shareIntentContext';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { api } from '../src/convexApi';
 import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js';
@@ -264,16 +265,20 @@ function ShareIntentRouter() {
   if (Platform.OS === 'web') {
     return null;
   }
-  // Lazy-require to avoid breaking Web bundling when the native module
-  // isn't present in some environments.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { useShareIntent } = require('expo-share-intent');
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { useRouter, usePathname } = require('expo-router');
 
+  // Platform.OS is process-constant, so the early return above is
+  // render-stable and these hooks always run in the same order.
+  /* eslint-disable react-hooks/rules-of-hooks */
   const router = useRouter();
   const pathname = usePathname();
-  const { hasShareIntent, shareIntent } = useShareIntent({ debug: false });
+  // iter-177 ROOT-CAUSE FIX for "Nothing shared yet": read the SHARED
+  // share-intent state from AppShareIntentProvider instead of creating a
+  // second private `useShareIntent()` instance. Previously this router's
+  // instance consumed the one-shot native payload, so the /share-receiver
+  // screen's own instance always came up empty.
+  const { hasShareIntent, shareIntent } = useAppShareIntent();
 
   React.useEffect(() => {
     if (!hasShareIntent) return;
@@ -292,6 +297,7 @@ function ShareIntentRouter() {
     if (pathname === '/share-receiver') return;
     router.push('/share-receiver' as any);
   }, [hasShareIntent, pathname, router, shareIntent]);
+  /* eslint-enable react-hooks/rules-of-hooks */
 
   return null;
 }
@@ -345,6 +351,7 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <AuthProvider>
           <ConvexClientProvider>
+            <AppShareIntentProvider>
             <DeviceContactBridge>
             <GlobalNotificationSound />
             <GlobalNotificationServices />
@@ -412,6 +419,7 @@ export default function RootLayout() {
               </View>
             </AppLockGate>
             </DeviceContactBridge>
+            </AppShareIntentProvider>
           </ConvexClientProvider>
         </AuthProvider>
       </SafeAreaProvider>

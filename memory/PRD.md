@@ -1,5 +1,10 @@
 # Smilers Mobile App — PRD
 
+## Latest fix (Feb 2026 — iter-177): OS Share Sheet "Nothing shared yet" ROOT CAUSE
+**Recurring bug finally root-caused.** The app called `useShareIntent()` in TWO places (global `ShareIntentRouter` in `_layout.tsx` + `share-receiver.tsx`). Each hook instance has private state and the native payload is one-shot: the router consumed it, navigated, and the screen's late-mounted instance was always empty.
+**Fix:** Single `ShareIntentProvider` mounted at app root (`src/lib/shareIntentContext.tsx` — platform-safe wrapper `AppShareIntentProvider` / `useAppShareIntent`). Both router and screen now read the SAME shared state. Screen also snapshots the first non-empty payload so background/reset can't wipe it mid-flow. Pure JS fix — ships in any new Emergent Android build (no native change needed). Earlier Kotlin/JS library patches (`scripts/patch-expo-share-intent.js`) remain in place and are still required.
+**Status:** lint + tsc + web smoke test PASS. Android device verification by user PENDING (requires new build).
+
 ## Overview
 Native iOS + Android port of **smilers.online** (a Convex-backed real-time messaging app). Connects directly to the existing Convex backend (`https://aware-newt-456.convex.cloud`) using the official Convex React Native SDK. Authenticates via Hercules Auth OIDC (same provider as web app). Web and mobile share the same database in real time.
 

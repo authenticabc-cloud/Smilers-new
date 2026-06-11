@@ -55,6 +55,7 @@ import { useConvex, useMutation } from 'convex/react';
 // We load it dynamically inside ShareReceiverNative instead.
 import { api } from '../src/convexApi';
 import { useAuth } from '../src/providers/AuthProvider';
+import { useAppShareIntent } from '../src/lib/shareIntentContext';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { appendDiaryEntry, type DiaryEntryKind } from '../src/lib/diaryStore';
 import { uploadFile } from '../src/lib/uploadFile';
@@ -125,17 +126,18 @@ function ShareReceiverWeb() {
 }
 
 function ShareReceiverNative() {
-  // iter-170: dynamic require — keeps the static dep graph free of the
-  // expo-share-intent native binding so web bundling doesn't pull in
-  // unreachable native code paths.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { useShareIntent } = require('expo-share-intent');
   const router = useRouter();
   const convex = useConvex();
   const { isAuthenticated } = useAuth();
 
+  // iter-177 ROOT-CAUSE FIX: read the SHARED share-intent state from
+  // AppShareIntentProvider (mounted once at the app root) instead of
+  // creating a private `useShareIntent()` instance here. The private
+  // instance mounted AFTER the global ShareIntentRouter had already
+  // consumed the one-shot native payload, so this screen's copy was
+  // permanently empty → "Nothing shared yet" every time.
   const { isReady, hasShareIntent, shareIntent, resetShareIntent, error } =
-    useShareIntent({ debug: false });
+    useAppShareIntent();
 
   const sendMessage = useMutation(api.messages.send);
   const getOrCreateDirect = useMutation(api.conversations.getOrCreateDirect);
@@ -184,7 +186,7 @@ function ShareReceiverNative() {
   // Normalize the share intent into our `SharedPayload` shape. Recomputed
   // whenever the intent changes (a new share can arrive while this screen
   // is open if the user backgrounds + re-shares).
-  const payload: SharedPayload = useMemo(() => {
+  const livePayload: SharedPayload = useMemo(() => {
     if (!shareIntent) return {};
     const result: SharedPayload = {};
     // Text + URL: prefer the URL field if present, fall back to text.
@@ -233,6 +235,20 @@ function ShareReceiverNative() {
     }
     return result;
   }, [shareIntent]);
+
+  // iter-177 hardening: SNAPSHOT the first non-empty payload into local
+  // state. The library resets its state on app-background
+  // (`resetOnBackground`) and after any consumer calls resetShareIntent —
+  // without this snapshot a brief interruption (notification shade,
+  // app-switch) while picking recipients would wipe the share and dump
+  // the user back on "Nothing shared yet" mid-flow.
+  const [payloadSnapshot, setPayloadSnapshot] = useState<SharedPayload | null>(null);
+  useEffect(() => {
+    if (livePayload.text || (livePayload.files && livePayload.files.length > 0)) {
+      setPayloadSnapshot(livePayload);
+    }
+  }, [livePayload]);
+  const payload: SharedPayload = payloadSnapshot ?? livePayload;
 
   /**
    * Build the recipient list:
