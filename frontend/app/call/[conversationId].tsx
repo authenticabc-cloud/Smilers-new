@@ -481,6 +481,28 @@ function CallScreenInner() {
     callDebug.push('AUDIO', `route=${audioOutput} mode=${callType}`);
   }, [audioOutput, callType]);
 
+  // iter-194: auto-switch audio to Bluetooth when a headset connects
+  // mid-call, and fall back (earpiece for voice / speaker for video) when
+  // it disconnects — mirrors the system dialer so users never talk into a
+  // dead route. Android-only; iOS AVAudioSession already does this.
+  const btWasAvailableRef = useRef(false);
+  useEffect(() => {
+    const unsubscribe = InCallAudio.addAudioDeviceChangedListener(({ available }) => {
+      const btAvailable = available.includes('BLUETOOTH');
+      if (btAvailable && !btWasAvailableRef.current) {
+        callDebug.push('AUDIO', 'Bluetooth headset connected — auto-switching route');
+        setAudioOutput('bluetooth');
+      } else if (!btAvailable && btWasAvailableRef.current) {
+        callDebug.push('AUDIO', 'Bluetooth headset disconnected — falling back');
+        setAudioOutput((current) =>
+          current === 'bluetooth' ? (callType === 'video' ? 'speaker' : 'earpiece') : current,
+        );
+      }
+      btWasAvailableRef.current = btAvailable;
+    });
+    return unsubscribe;
+  }, [callType]);
+
   useEffect(() => {
     if (Platform.OS !== 'android') {
       setScreenReady(true);

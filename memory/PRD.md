@@ -378,3 +378,9 @@ FIXES THIS ROUND:
 3. Killed-app ringing (beep+short vibration) → TWO causes: (a) backend _resolve_android_channel only scanned the TITLE for "incoming call" but Convex sends WhatsApp-style pushes (title=caller name, body="Incoming voice call") → routed to messages channel; now scans title+message+subtext (kept (incoming|missed) guard to avoid false positives from chat texts like "let's video call"). (b) DEPLOYED backend (app-migration-75.emergent.host) is an OLD version without iter-182 per-token channel storage → USER MUST REDEPLOY the backend via Emergent Deploy. 30/30 pytest pass (2 new regression tests).
 4. Screen share signaling: backend `screenSharing.sendSignal` Server-Errors EVEN AFTER acceptance → Convex backend bug; wrote /app/WEB_AGENT_SCREEN_SHARE_SENDSIGNAL_FIX.md for the user to hand to the web agent (likely wrong table id in ctx.db.get, status guard throw, or 'ice-candidate' literal mismatch).
 Zip regenerated (24MB).
+
+## Session: Feb 2026 — Bluetooth auto-switch (iter-194)
+- New `addAudioDeviceChangedListener` in inCallManager.ts (Android `onAudioDeviceChanged` event from react-native-incall-manager; parses JSON availableAudioDeviceList; no-op on iOS).
+- Call screen: auto-switches route to Bluetooth when a headset connects mid-call; falls back to earpiece (voice) / speaker (video) on disconnect. Works with the iter-193 BLUETOOTH_CONNECT permission request.
+- Clarified to user: killed-app ringing fix requires BACKEND REDEPLOY via Emergent Deploy button (no zip/download involved — zip is frontend-only for EAS).
+- eslint 0 errors, tsc baseline unchanged. Zip regenerated.

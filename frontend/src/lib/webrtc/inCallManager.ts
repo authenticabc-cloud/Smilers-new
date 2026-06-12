@@ -310,6 +310,46 @@ export function stopNativeRingback() {
   safeCall(() => native.stopRingback!(), 'stopRingback');
 }
 
+/**
+ * iter-194: subscribe to Android's audio-device list changes
+ * (react-native-incall-manager emits `onAudioDeviceChanged` whenever a
+ * Bluetooth headset connects/disconnects or the selected route changes).
+ * The payload's `availableAudioDeviceList` is a JSON-encoded string array
+ * like '["SPEAKER_PHONE","EARPIECE","BLUETOOTH"]'.
+ * Returns an unsubscribe function. No-ops on iOS (AVAudioSession already
+ * auto-routes to Bluetooth there).
+ */
+export function addAudioDeviceChangedListener(
+  callback: (info: { available: string[]; selected: string | null }) => void,
+): () => void {
+  if (Platform.OS !== 'android') return () => undefined;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { DeviceEventEmitter } = require('react-native');
+    const sub = DeviceEventEmitter.addListener('onAudioDeviceChanged', (event: any) => {
+      try {
+        const rawList = event?.availableAudioDeviceList;
+        const available: string[] = Array.isArray(rawList)
+          ? rawList
+          : JSON.parse(String(rawList || '[]'));
+        callback({
+          available,
+          selected: event?.selectedAudioDevice ? String(event.selectedAudioDevice) : null,
+        });
+      } catch {
+        callback({ available: [], selected: null });
+      }
+    });
+    return () => {
+      try {
+        sub.remove();
+      } catch {}
+    };
+  } catch {
+    return () => undefined;
+  }
+}
+
 export const InCallAudio = {
   start: startCallAudio,
   stop: stopCallAudio,
@@ -319,6 +359,7 @@ export const InCallAudio = {
   setMicMuted,
   onAudioRouteChange,
   isWiredHeadsetPluggedIn,
+  addAudioDeviceChangedListener,
   startRingback: startNativeRingback,
   stopRingback: stopNativeRingback,
 };
