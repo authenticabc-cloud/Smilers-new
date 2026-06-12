@@ -33,6 +33,9 @@ interface ScreenShareOverlayProps {
   muted: boolean;
   onToggleMic: () => void;
   screenSharing: boolean;
+  /** iter-189: true only once the WebRTC connection is actually live —
+   * drives honest "Waiting for recipient…" copy on the sharer side. */
+  peerConnected?: boolean;
   onToggleScreenShare: () => void | Promise<void>;
   onStop: () => void;
   RTCViewImpl: any;
@@ -49,6 +52,7 @@ export default function ScreenShareOverlay({
   muted,
   onToggleMic,
   screenSharing,
+  peerConnected = false,
   onToggleScreenShare,
   onStop,
   RTCViewImpl,
@@ -167,18 +171,22 @@ export default function ScreenShareOverlay({
           </View>
         </View>
 
-        <Text style={styles.senderHeading}>
+        <Text style={styles.senderHeading} testID="screen-share-sender-heading">
           {screenSharing
-            ? 'You\u2019re sharing your screen'
+            ? peerConnected
+              ? 'You\u2019re sharing your screen'
+              : 'Waiting for the recipient to accept\u2026'
             : Platform.OS === 'ios'
               ? 'Tap "Start sharing" — iOS will show its broadcast picker'
               : 'Tap "Start sharing" to begin'}
         </Text>
-        <Text style={styles.senderSubtitle}>
+        <Text style={styles.senderSubtitle} testID="screen-share-sender-subtitle">
           {screenSharing
-            ? `The recipient can see everything on your screen${
-                allowMic && !muted ? ' and hear you talking.' : '.'
-              }`
+            ? peerConnected
+              ? `The recipient can see everything on your screen${
+                  allowMic && !muted ? ' and hear you talking.' : '.'
+                }`
+              : 'Your screen will start broadcasting the moment they accept your request.'
             : 'You\u2019ll be asked to confirm screen recording before broadcasting starts.'}
         </Text>
 

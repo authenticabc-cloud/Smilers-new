@@ -261,6 +261,92 @@ function CallScreenInner() {
   const sendScreenSignal = useMutation((api as any).screenSharing?.sendSignal);
   const markScreenSignalsConsumed = useMutation((api as any).screenSharing?.markSignalsConsumed);
 
+  // iter-189: drains `screenSignalQueueRef` IN ORDER with patient retries.
+  // The backend Server-Errors on `sendSignal` until the recipient ACCEPTS
+  // the request (the session row only becomes signalable then), so giving
+  // up after 3 fast attempts (~2s) dropped the offer forever. We retry the
+  // head of the queue every 2.5s for up to 2 minutes instead.
+  const flushScreenSignalQueue = useCallback(async () => {
+    if (screenSignalFlushActiveRef.current) return;
+    screenSignalFlushActiveRef.current = true;
+    const RETRY_MS = 2500;
+    const DEADLINE_MS = 120000;
+    try {
+      while (screenSignalQueueRef.current.length > 0) {
+        const sig = screenSignalQueueRef.current[0];
+        if (!conversationId || !peerUserIdParam) {
+          console.warn('screen-share signal dropped — missing sessionId or peerUserId');
+          screenSignalQueueRef.current.shift();
+          continue;
+        }
+        try {
+          await (sendScreenSignal as any)({
+            sessionId: conversationId,
+            toUserId: peerUserIdParam,
+            type: sig.type,
+            payload: sig.payload,
+          });
+          screenSignalQueueRef.current.shift();
+          if (screenSignalFirstFailAtRef.current) {
+            callDebug.push(
+              'SIG',
+              `→ ${sig.type} screen-share delivered (recipient accepted) — flushing ${screenSignalQueueRef.current.length} queued signal(s)`,
+            );
+            screenSignalFirstFailAtRef.current = null;
+          }
+        } catch (errorValue: any) {
+          const message = String(errorValue?.message || '');
+          const isValidation =
+            message.includes('ArgumentValidationError') ||
+            message.includes('Validator error') ||
+            message.toLowerCase().includes('union') ||
+            message.toLowerCase().includes('literal');
+          if (isValidation && sig.type === 'ice-candidate') {
+            // Literal-name compat: some deployments validate 'iceCandidate'.
+            try {
+              await (sendScreenSignal as any)({
+                sessionId: conversationId,
+                toUserId: peerUserIdParam,
+                type: 'iceCandidate',
+                payload: sig.payload,
+              });
+              screenSignalQueueRef.current.shift();
+              callDebug.push('SIG', '→ iceCandidate screen-share (camel variant) ok');
+              continue;
+            } catch {
+              /* fall through to the retry/backoff path */
+            }
+          }
+          if (!screenSignalFirstFailAtRef.current) {
+            screenSignalFirstFailAtRef.current = Date.now();
+            callDebug.push(
+              'SIG',
+              `→ ${sig.type} rejected — queued, retrying every ${RETRY_MS / 1000}s until the recipient accepts. Backend said: ${message.slice(0, 160)}`,
+            );
+          }
+          if (Date.now() - screenSignalFirstFailAtRef.current > DEADLINE_MS) {
+            callDebug.push(
+              'ERR',
+              `screen-share signaling gave up after ${DEADLINE_MS / 1000}s (${screenSignalQueueRef.current.length} undelivered). Last backend error: ${message.slice(0, 300)}`,
+            );
+            screenSignalQueueRef.current = [];
+            screenSignalFirstFailAtRef.current = null;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
+        }
+      }
+    } finally {
+      screenSignalFlushActiveRef.current = false;
+    }
+  }, [sendScreenSignal, conversationId, peerUserIdParam]);
+  // Stable ref so the CallSession closure (created once per session) always
+  // calls the freshest flusher.
+  const flushScreenSignalQueueRef = useRef(flushScreenSignalQueue);
+  useEffect(() => {
+    flushScreenSignalQueueRef.current = flushScreenSignalQueue;
+  }, [flushScreenSignalQueue]);
+
   const [callId, setCallId] = useState<string | null>(null);
   const [callType, setCallType] = useState<CallType>(requestedType);
   const [localStreamURL, setLocalStreamURL] = useState<string | null>(null);
@@ -272,6 +358,10 @@ function CallScreenInner() {
   const [screenSharing, setScreenSharing] = useState(startInScreenShare);
   const [statusText, setStatusText] = useState('Connecting…');
   const [permissionDenied, setPermissionDenied] = useState(false);
+  // iter-189: true once the WebRTC connection actually reaches 'connected'.
+  // The screen-only sharer UI uses this to say "Waiting for the recipient
+  // to accept…" instead of falsely claiming the screen is being seen.
+  const [peerConnected, setPeerConnected] = useState(false);
 
   // Derived values that depend on `callType` MUST come after the useState
   // above to avoid temporal-dead-zone errors when Metro hot-reloads this file.
@@ -294,6 +384,17 @@ function CallScreenInner() {
 
   const sessionRef = useRef<any>(null);
   const initStartedRef = useRef(false);
+  // iter-189 screen-share signaling queue. The sharer enters this screen
+  // IMMEDIATELY after `requestScreenShare` — before the recipient accepts —
+  // and the backend's `screenSharing.sendSignal` Server-Errors on signals
+  // for a session that isn't active yet. The user's debug overlay showed
+  // offer + ICE all dying within ~2s (3 fast retries). Signals are now kept
+  // in an ORDERED queue (offer must land before ICE) and retried every
+  // 2.5s for up to 2 minutes, so they deliver the moment the recipient
+  // accepts the request.
+  const screenSignalQueueRef = useRef<Array<{ type: string; payload: any }>>([]);
+  const screenSignalFlushActiveRef = useRef(false);
+  const screenSignalFirstFailAtRef = useRef<number | null>(null);
   const callStartedAtRef = useRef<number | null>(null);
   const incomingCallSeenRef = useRef(false);
   const incomingCallAnsweredRef = useRef(false);
@@ -729,76 +830,12 @@ function CallScreenInner() {
               );
               return;
             }
-            // Retry with exponential backoff to absorb transient backend
-            // "Server Error" responses (iter-96 showed 4× CONVEX
-            // screenSharing:sendSignal Server Error within 110ms while
-            // sharing — sometimes the Convex transaction layer hits a
-            // contention or schema retry. With 3 retries (150/450/1200ms)
-            // a single hiccup is recoverable instead of dropping the
-            // offer entirely → no more "Connecting to screen…" forever.
-            const MAX_ATTEMPTS = 3;
-            const BACKOFF_MS = [150, 450, 1200];
-            let lastError: any = null;
-            for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
-              try {
-                await (sendScreenSignal as any)({
-                  sessionId: conversationId,
-                  toUserId: peerUserIdParam,
-                  type: sig.type,
-                  payload: sig.payload,
-                });
-                if (attempt > 0) {
-                  callDebug.push(
-                    'SIG',
-                    `→ ${sig.type} screen-share recovered after ${attempt + 1} attempts`,
-                  );
-                }
-                lastError = null;
-                break;
-              } catch (errorValue: any) {
-                lastError = errorValue;
-                const message = String(errorValue?.message || '');
-                const isValidation =
-                  message.includes('ArgumentValidationError') ||
-                  message.includes('Validator error') ||
-                  message.toLowerCase().includes('union') ||
-                  message.toLowerCase().includes('literal');
-                if (isValidation && sig.type === 'ice-candidate') {
-                  try {
-                    await (sendScreenSignal as any)({
-                      sessionId: conversationId,
-                      toUserId: peerUserIdParam,
-                      type: 'iceCandidate',
-                      payload: sig.payload,
-                    });
-                    callDebug.push(
-                      'SIG',
-                      `→ iceCandidate screen-share (camel variant) ok`,
-                    );
-                    lastError = null;
-                    break;
-                  } catch (retryErr: any) {
-                    lastError = retryErr;
-                  }
-                }
-                const isLast = attempt === MAX_ATTEMPTS - 1;
-                if (!isLast) {
-                  callDebug.push(
-                    'SIG',
-                    `→ ${sig.type} screen-share failed (attempt ${attempt + 1}/${MAX_ATTEMPTS}): ${message.slice(0, 80)} — retrying in ${BACKOFF_MS[attempt]}ms`,
-                  );
-                  await new Promise((resolve) => setTimeout(resolve, BACKOFF_MS[attempt]));
-                }
-              }
-            }
-            if (lastError) {
-              const finalMessage = String(lastError?.message || 'unknown');
-              callDebug.push(
-                'ERR',
-                `screen-share sendSignal(${sig.type}) FAILED after ${MAX_ATTEMPTS} attempts: ${finalMessage.slice(0, 120)}`,
-              );
-              console.warn('screen-share sendSignal failed permanently:', finalMessage);
-            }
+            // iter-189: enqueue + patient flush (see flushScreenSignalQueue).
+            // The old inline 3-attempt/2s retry dropped the offer forever
+            // when the recipient hadn't accepted yet. Order is preserved —
+            // the offer always lands before its ICE candidates.
+            screenSignalQueueRef.current.push({ type: sig.type, payload: sig.payload });
+            void flushScreenSignalQueueRef.current();
             return;
           }
 
@@ -849,7 +886,11 @@ function CallScreenInner() {
         },
         onConnectionStateChange: (state) => {
           console.log('[Call] connection state:', state);
+          if (state === 'connected') {
+            setPeerConnected(true);
+          }
           if (state === 'failed' || state === 'closed' || state === 'disconnected') {
+            setPeerConnected(false);
             // ICE may temporarily disconnect; only act on fatal states
             if (state === 'failed' || state === 'closed') {
               setStatusText('Connection lost');
@@ -1320,6 +1361,10 @@ function CallScreenInner() {
       sessionRef.current?.close();
       sessionRef.current = null;
       initStartedRef.current = false;
+      // iter-189: drop any queued screen-share signals — they belong to the
+      // session that just ended; the flush loop exits on the empty queue.
+      screenSignalQueueRef.current = [];
+      screenSignalFirstFailAtRef.current = null;
       if (inCallStartedRef.current) {
         InCallAudio.stop();
         inCallStartedRef.current = false;
@@ -1811,6 +1856,7 @@ function CallScreenInner() {
           muted={muted}
           onToggleMic={() => setMuted((current) => !current)}
           screenSharing={screenSharing}
+          peerConnected={peerConnected}
           onToggleScreenShare={toggleScreenShare}
           onStop={() => {
             // Best-effort: tell the backend we're ending the session, then
