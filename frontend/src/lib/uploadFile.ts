@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { ConvexReactClient } from 'convex/react';
 import { api } from '../convexApi';
 
@@ -16,6 +18,12 @@ import { api } from '../convexApi';
  * Earlier attempts to use `api.files.generateUploadUrl` or
  * `api.ads.generateUploadUrl` were misdiagnoses — `api.messages.*` is the
  * canonical surface.
+ *
+ * iter-195 (APK-share crash fix): on native we now STREAM the file from
+ * disk via FileSystem.uploadAsync instead of `fetch(uri) → blob → POST`.
+ * The blob path loaded the ENTIRE file into RAM — fine for photos, but a
+ * 185 MB APK OOM-killed the app the moment the user tapped Send
+ * ("Smilers has stopped"). Streaming keeps memory flat regardless of size.
  */
 export async function uploadFile(
   convex: ConvexReactClient,
@@ -36,20 +44,43 @@ export async function uploadFile(
     throw new Error('Upload URL response was empty');
   }
 
-  const response = await fetch(uri);
-  const blob = await response.blob();
-  const result = await fetch(uploadUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': mime },
-    body: blob,
-  });
+  const isLocalNativeFile =
+    Platform.OS !== 'web' && (uri.startsWith('file://') || uri.startsWith('content://'));
 
-  if (!result.ok) {
-    const errBody = await result.text().catch(() => '');
-    throw new Error(`Upload failed (${result.status})${errBody ? `: ${errBody.slice(0, 200)}` : ''}`);
+  let status: number;
+  let bodyText: string;
+  if (isLocalNativeFile) {
+    // Streaming path — constant memory, works for 100 MB+ documents/APKs.
+    const result = await LegacyFileSystem.uploadAsync(uploadUrl, uri, {
+      httpMethod: 'POST',
+      headers: { 'Content-Type': mime },
+      uploadType: LegacyFileSystem.FileSystemUploadType.BINARY_CONTENT,
+    });
+    status = result.status;
+    bodyText = result.body || '';
+  } else {
+    // Web (or remote http uri): blob path is fine — browsers stream blobs.
+    const response = await fetch(uri);
+    const blob = await response.blob();
+    const result = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': mime },
+      body: blob,
+    });
+    status = result.status;
+    bodyText = await result.text().catch(() => '');
   }
 
-  const json = await result.json();
+  if (status < 200 || status >= 300) {
+    throw new Error(`Upload failed (${status})${bodyText ? `: ${bodyText.slice(0, 200)}` : ''}`);
+  }
+
+  let json: any = null;
+  try {
+    json = JSON.parse(bodyText);
+  } catch {
+    throw new Error('Upload returned a non-JSON response');
+  }
   const storageId = (json && (json.storageId || json.id)) as string | undefined;
   if (!storageId) {
     throw new Error('Upload returned no storageId');

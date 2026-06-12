@@ -67,6 +67,7 @@ import Header from '../src/components/Header';
 import {
   classifyFile,
   sendSharedPayloadToConversation,
+  checkShareFileSize,
   type SharedPayload,
   type SendOutcome,
 } from '../src/lib/sendSharedPayload';
@@ -547,6 +548,12 @@ function ShareReceiverNative() {
             const scan = scanMessageDeep({ fileName: file.fileName, mimeType: file.mimeType });
             if (scan.shouldAutoDelete) {
               outcomes.push({ ok: false, blocked: true, reason: scan.findings[0]?.reason || 'Risky file type' });
+              continue;
+            }
+            // iter-195: size gate before upload (same as chat sends).
+            const sizeError = await checkShareFileSize(file);
+            if (sizeError) {
+              outcomes.push({ ok: false, reason: sizeError });
               continue;
             }
             try {

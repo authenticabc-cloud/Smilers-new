@@ -384,3 +384,10 @@ Zip regenerated (24MB).
 - Call screen: auto-switches route to Bluetooth when a headset connects mid-call; falls back to earpiece (voice) / speaker (video) on disconnect. Works with the iter-193 BLUETOOTH_CONNECT permission request.
 - Clarified to user: killed-app ringing fix requires BACKEND REDEPLOY via Emergent Deploy button (no zip/download involved — zip is frontend-only for EAS).
 - eslint 0 errors, tsc baseline unchanged. Zip regenerated.
+
+## Session: Feb 2026 — APK share crash fix (iter-195)
+User: sharing a photo to Smilers works, but sharing a 185MB APK crashes the app on Send ("Smilers has stopped"). ROOT CAUSE: uploadFile did `fetch(uri) → blob() → POST`, loading the ENTIRE file into RAM → OOM kill on large files; plus the share path never ran a size check. FIXES:
+1. uploadFile.ts: native uploads now STREAM from disk via `expo-file-system/legacy` `uploadAsync` (BINARY_CONTENT) — constant memory regardless of file size; blob path kept for web.
+2. MAX_UPLOAD_BYTES.document raised 100MB → 250MB (user's APKs are ~185MB; safe now that uploads stream).
+3. sendSharedPayload.ts: new `checkShareFileSize` (resolves size via fileSize or getInfoAsync) gates BEFORE upload in both the conversation and diary share branches — clear "too large (X MB — max Y MB)" outcome instead of crash/doomed upload.
+- eslint + tsc clean. Zip REGENERATED (must rebuild via EAS to get the fix — crash was native-memory, requires new build).

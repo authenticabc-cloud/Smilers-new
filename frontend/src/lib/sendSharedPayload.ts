@@ -30,8 +30,10 @@
  */
 
 import type { ConvexReactClient } from 'convex/react';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { uploadFile } from './uploadFile';
 import { scanMessage as scanMessageDeep } from './messageSecurityScanner';
+import { MAX_UPLOAD_BYTES } from './dataFriendlyDefaults';
 
 export interface SharedPayload {
   /** Plain text or a URL — sent as a chat text message. */
@@ -71,6 +73,44 @@ export function classifyFile(mimeType: string | null | undefined): 'image' | 'vi
   return 'file';
 }
 
+/** iter-195: actual on-disk size — share intents don't always carry it. */
+export async function resolveShareFileSize(file: {
+  uri: string;
+  fileSize?: number;
+}): Promise<number | null> {
+  if (typeof file.fileSize === 'number' && file.fileSize > 0) return file.fileSize;
+  try {
+    const info: any = await LegacyFileSystem.getInfoAsync(file.uri, { size: true } as any);
+    if (info?.exists && typeof info.size === 'number' && info.size > 0) return info.size;
+  } catch {}
+  return null;
+}
+
+export function uploadLimitFor(kind: 'image' | 'video' | 'file'): number {
+  if (kind === 'image') return MAX_UPLOAD_BYTES.image;
+  if (kind === 'video') return MAX_UPLOAD_BYTES.video;
+  return MAX_UPLOAD_BYTES.document;
+}
+
+/** Returns a human-readable rejection reason, or null when the file is OK
+ * to upload. Checked BEFORE any upload so oversized files produce a clear
+ * message instead of a long doomed upload (or, pre-iter-195, an OOM crash). */
+export async function checkShareFileSize(file: {
+  uri: string;
+  fileName: string;
+  fileSize?: number;
+  kind: 'image' | 'video' | 'file';
+}): Promise<string | null> {
+  const size = await resolveShareFileSize(file);
+  const limit = uploadLimitFor(file.kind);
+  if (size !== null && size > limit) {
+    const sizeMb = Math.round(size / (1024 * 1024));
+    const limitMb = Math.round(limit / (1024 * 1024));
+    return `"${file.fileName}" is too large (${sizeMb} MB — max ${limitMb} MB)`;
+  }
+  return null;
+}
+
 /**
  * Drive the entire send for one (text + N attachments) payload to one
  * conversation. Sends in this order:
@@ -104,6 +144,14 @@ export async function sendSharedPayloadToConversation(
         blocked: true,
         reason: scan.findings[0]?.reason || 'Risky file type',
       });
+      continue;
+    }
+
+    // iter-195: size gate BEFORE upload — clear error instead of a crash
+    // or a doomed multi-minute upload.
+    const sizeError = await checkShareFileSize(file);
+    if (sizeError) {
+      outcomes.push({ ok: false, reason: sizeError });
       continue;
     }
 

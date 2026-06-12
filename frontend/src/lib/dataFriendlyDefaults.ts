@@ -93,11 +93,11 @@ export const MAX_UPLOAD_BYTES = {
   image: 8 * 1024 * 1024,        //  8 MB
   video: 25 * 1024 * 1024,       // 25 MB
   audio: 10 * 1024 * 1024,       // 10 MB
-  // iter-193: raised 20 MB → 100 MB. The user shares APKs (the Smilers
-  // build itself is 60+ MB) and the old cap rejected every APK with
-  // "File too large" — which read as ".apk is blocked" even though the
-  // security scanner deliberately allows it.
-  document: 100 * 1024 * 1024,   // 100 MB
+  // iter-195: raised again 100 MB → 250 MB now that uploads STREAM from
+  // disk (FileSystem.uploadAsync) instead of loading the whole file into
+  // RAM. The user's own APK builds are ~185 MB. Convex storage accepts
+  // files well beyond this via signed upload URLs.
+  document: 250 * 1024 * 1024,   // 250 MB
 } as const;
 
 /**
