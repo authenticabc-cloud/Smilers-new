@@ -438,3 +438,18 @@ Evidence from DEPLOYED backend trigger log (user redeployed backend tonight via 
 iter-199 changes (preview; USER MUST REDEPLOY BACKEND to ship): _recent_call_push_to_user() — semantic per-recipient 25s call-push dedupe collapsing Convex-trigger + caller-device doubles (different keys/urls so generic dedupe can't catch); push-debug tokens now show has_convex_id. 41/41 pytest. Live test confirmed pruning of dead preview tokens.
 NEW DOC: /app/WEB_AGENT_REQUESTS_iter199.md — canonical-contract questions for web agent: (1) screenSharing.sendSignal offer rejection (P0), (2) users.updateProfile language fields Server Error (P0 — mobile tried skipTranslationLanguages/languages/spokenLanguages), (3) scheduledMessages.listMine recipient 'Unknown', (4) earnings.getOrCreateReferralCode existence (invite shared without code).
 USER ACTIONS: (1) redeploy backend (no app rebuild needed), (2) RE-TEST pushes NOW with current build (killed app), (3) relay WEB_AGENT_REQUESTS_iter199.md to web agent.
+
+## Session: Feb 2026 cont. (iter-200) — Canonical contracts wired + production-URL build zip
+Web agent provided canonical answers (user relayed): screenSharing.sendSignal FIXED server-side (accepts offer/ice any casing — mobile just re-tests); languages = users.updateProfile({preferredLanguage, selectedLanguages}); scheduled names = scheduling.getAllMyScheduledMessages → conversationName; referral = earnings.getOrCreateReferralCode (lazy, idempotent).
+Evidence from user's 22:27 re-test (deployed trigger log): Convex call trigger fired + FCM SUCCESS yet phone showed NOTHING → device-display layer issue (likely channel mismatch) + both fresh deployed tokens have has_convex_id=false (registration not carrying convex id).
+MOBILE FIXES (in zip, need EAS CLI build):
+- languages.tsx: single canonical updateProfile({selectedLanguages}) — removed dead fallback mutations.
+- scheduled.tsx: useSafeConvexQuery(scheduling.getAllMyScheduledMessages) → conversationNameById map → displayRecipient() (fixes 'Unknown').
+- contacts.tsx: unconditional getOrCreateReferralCode on mount (was gated on profile query resolving).
+- notificationChannels.ts: creates ALL backend-target fallback channels (calls-v4-smilers_never_cry, legacy 'calls', messages-v4-message_notification, legacy 'messages-v3') — Android drops pushes aimed at non-existent channels.
+- useEmergentPush.ts: reportConvexUserIdForPush() exported setter + effectiveConvexUserId (query OR reported); chat screen reports me._id → guarantees convex_user_id reaches backend.
+BACKEND (preview; next redeploy ships): push-debug tokens now include call_channel_id/message_channel_id.
+ZIP regenerated 22:45 WITH EXPO_PUBLIC_BACKEND_URL=https://app-migration-75.emergent.host (production) — CRITICAL: EAS build must target deployed backend because Convex posts there. Workspace .env stays preview for dev.
+TESTS: 41/41 pytest; tsc/eslint clean on touched files.
+ARCHITECTURE NOTE: production topology = APK (deployed URL) + Convex→deployed + deployed FastAPI w/ FCM. Preview pod = dev only.
+NEXT: user EAS CLI build from zip → install both phones → test killed-app ring/messages, screen share (server fixed), languages save, scheduled names, referral in invite. If FCM success but still nothing visible: check Samsung Settings→Apps→Smilers→Notifications categories.

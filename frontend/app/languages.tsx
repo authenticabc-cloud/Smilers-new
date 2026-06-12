@@ -38,12 +38,6 @@ function LegacyLanguagesScreen() {
     isAuthenticated,
   );
   const updateProfile = useMutation(api.users.updateProfile);
-  // iter-149: try alternative canonical mutation names — the user's
-  // server may expose languages on a dedicated mutation rather than as
-  // a field of `updateProfile`. We attempt each in turn during save.
-  const updateLanguagesM = useMutation((api as any).users?.updateLanguages);
-  const setLanguagesM = useMutation((api as any).users?.setLanguages);
-  const updateUserLanguagesM = useMutation((api as any).languages?.update);
 
   const [selected, setSelected] = useState<string[]>([]);
   const [initialized, setInitialized] = useState(false);
@@ -125,49 +119,22 @@ function LegacyLanguagesScreen() {
     let serverOk = false;
     let lastError: any = null;
 
-    // iter-149: server contract for "skip translation languages" varies
-    // by deployment. Try the canonical mutation + field-name candidates
-    // in order until one succeeds.
-    // iter-186 REORDER: probing the live deployment showed ONLY
-    // `users.updateProfile` exists (updateLanguages / setLanguages /
-    // languages.update are all FunctionPathNotFound). Trying the missing
-    // ones first wasted whole round-trips before reaching the one that
-    // works — on slow/roaming connections that alone exceeded the save
-    // timeout ("Could not save to server"). updateProfile now goes FIRST.
+    // iter-200: CANONICAL CONTRACT confirmed by the web/backend agent
+    // (WEB_AGENT_ANSWERS_iter199): `users.updateProfile` accepts
+    // `selectedLanguages: string[]` (the "do not translate" list) and
+    // `preferredLanguage: string` (default language — saved separately
+    // when the user taps a default). The previously-tried field names
+    // (skipTranslationLanguages/languages/spokenLanguages) DO NOT exist
+    // and were rejected by the validator ("Server Error").
     const candidates: Array<{
       label: string;
       run?: (args: any) => Promise<any>;
       payload: any;
     }> = [
       {
-        label: 'users.updateProfile(skipTranslationLanguages)',
+        label: 'users.updateProfile(selectedLanguages)',
         run: updateProfile as any,
-        payload: { skipTranslationLanguages: selected },
-      },
-      {
-        label: 'users.updateProfile(languages)',
-        run: updateProfile as any,
-        payload: { languages: selected },
-      },
-      {
-        label: 'users.updateProfile(spokenLanguages)',
-        run: updateProfile as any,
-        payload: { spokenLanguages: selected },
-      },
-      {
-        label: 'users.updateLanguages',
-        run: updateLanguagesM as any,
-        payload: { languages: selected },
-      },
-      {
-        label: 'users.setLanguages',
-        run: setLanguagesM as any,
-        payload: { languages: selected },
-      },
-      {
-        label: 'languages.update',
-        run: updateUserLanguagesM as any,
-        payload: { languages: selected },
+        payload: { selectedLanguages: selected },
       },
     ];
 
@@ -235,7 +202,7 @@ function LegacyLanguagesScreen() {
         `${detail}\n\nYour selection is kept locally and will retry next time you save.`,
       );
     }
-  }, [refetch, saving, selected, setLanguagesM, updateLanguagesM, updateProfile, updateUserLanguagesM]);
+  }, [refetch, saving, selected, updateProfile]);
 
   const onBack = useCallback(() => {
     if (!dirty) {

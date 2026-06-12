@@ -146,4 +146,48 @@ export async function applyNotificationChannelPrefs(prefs?: RingtonePrefs | null
     // eslint-disable-next-line no-console
     console.warn('[channels] applyNotificationChannelPrefs failed:', errorValue?.message);
   }
+
+  // iter-200: ALSO create every channel id the BACKEND may target as a
+  // fallback (used when a token was registered without channel ids).
+  // Android silently drops/reroutes notifications aimed at channels that
+  // don't exist on the device — production showed FCM "success" with
+  // nothing visible on the phone. Idempotent: recreating with identical
+  // params is a no-op.
+  const fallbackCallOpts = {
+    name: 'Incoming Calls',
+    importance: Notifications.AndroidImportance.MAX,
+    sound: 'smilers_never_cry' as string | undefined,
+    vibrationPattern: [0, 1000, 500, 1000, 500, 1000],
+    lightColor: '#E4B53B',
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+    bypassDnd: true,
+    enableVibrate: true,
+    enableLights: true,
+    showBadge: false,
+  };
+  const fallbackMessageOpts = {
+    name: 'Messages',
+    importance: Notifications.AndroidImportance.HIGH,
+    sound: 'message_notification' as string | undefined,
+    vibrationPattern: [0, 250, 250, 250],
+    lightColor: '#E4B53B',
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+    enableVibrate: true,
+    showBadge: true,
+  };
+  const fallbacks: Array<[string, any]> = [
+    ['calls-v4-smilers_never_cry', fallbackCallOpts],
+    [LEGACY_CALLS_CHANNEL, fallbackCallOpts],
+    ['messages-v4-message_notification', fallbackMessageOpts],
+    [LEGACY_MESSAGES_CHANNEL, fallbackMessageOpts],
+  ];
+  for (const [channelId, opts] of fallbacks) {
+    if (channelId === callChannelId || channelId === messageChannelId) continue;
+    try {
+      await Notifications.setNotificationChannelAsync(channelId, opts);
+    } catch (errorValue: any) {
+      // eslint-disable-next-line no-console
+      console.warn(`[channels] fallback channel ${channelId} failed:`, errorValue?.message);
+    }
+  }
 }

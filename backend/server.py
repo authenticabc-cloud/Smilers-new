@@ -1271,6 +1271,11 @@ async def push_debug(user_id: str | None = None, triggers: int = 0):
                     # carried the Convex user id (required for client-
                     # triggered recipient matching).
                     "has_convex_id": bool(r.get("convex_user_id")),
+                    # iter-200: registered channel ids — pushes targeting a
+                    # channel that doesn't exist on the device can be
+                    # silently dropped, so this matters for diagnosis.
+                    "call_channel_id": r.get("call_channel_id"),
+                    "message_channel_id": r.get("message_channel_id"),
                     "updated_at": (
                         r["updated_at"].isoformat()
                         if r.get("updated_at")

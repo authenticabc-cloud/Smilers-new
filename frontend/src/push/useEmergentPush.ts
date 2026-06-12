@@ -61,6 +61,29 @@ let lastConvexUserId: string | null = null;
  * the backend immediately learns the NEW tone-versioned channel ids
  * (instead of waiting for the next app foreground). Best-effort.
  */
+/**
+ * iter-200: feed the Convex users._id into the push registration from ANY
+ * screen that already loads the current user (chat screen does). The
+ * useQuery inside the hook is kept as the primary source, but this setter
+ * guarantees the id reaches the backend even if that query is slow or
+ * unavailable in the hook's provider context — production tokens were
+ * observed with has_convex_id=false despite the hook being mounted.
+ */
+export function reportConvexUserIdForPush(id: string | null | undefined): void {
+  const value = id == null ? '' : String(id).trim();
+  if (!value || lastConvexUserId === value) return;
+  lastConvexUserId = value;
+  // If we already registered without the id, re-POST so the backend can
+  // match client-triggered pushes addressed by Convex id.
+  void reregisterPushDevice();
+}
+
+/**
+ * Re-POST the current registration with updated channel ids. Called by
+ * the ringtones screen after the user picks a new tone (which creates a
+ * new versioned channel) so the BACKEND routes future FCM pushes into
+ * the new channel immediately.
+ */
 export async function reregisterPushDevice(): Promise<void> {
   if (Platform.OS === 'web') return;
   const token = lastDeviceToken;
@@ -227,11 +250,12 @@ export function useEmergentPush() {
         // Throttle redundant re-registrations for the same user+token
         // within a 5-minute window — UNLESS the Convex user id just
         // became available (we must persist the id mapping promptly).
+        const effectiveConvexUserId = convexUserId || lastConvexUserId;
         const now = Date.now();
         if (
           lastDeviceToken === deviceToken &&
           lastRegisteredUserId === userId &&
-          (!convexUserId || lastConvexUserId === convexUserId) &&
+          (!effectiveConvexUserId || lastConvexUserId === effectiveConvexUserId) &&
           now - lastRegisteredAt < 5 * 60 * 1000
         ) {
           stateRef.current = 'registered';
@@ -243,12 +267,12 @@ export function useEmergentPush() {
           userId,
           platform: Platform.OS as 'ios' | 'android',
           deviceToken,
-          convexUserId,
+          convexUserId: effectiveConvexUserId,
         });
 
         lastDeviceToken = deviceToken;
         lastRegisteredUserId = userId;
-        if (convexUserId) lastConvexUserId = convexUserId;
+        if (effectiveConvexUserId) lastConvexUserId = effectiveConvexUserId;
         lastRegisteredAt = now;
         stateRef.current = 'registered';
         try {

@@ -46,6 +46,7 @@ import { shareMessage } from '../../src/lib/messageMedia';
 import { appendDiaryEntry, chatMessageToDiaryEntry } from '../../src/lib/diaryStore';
 import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
 import { notifyEventPush, previewForMessageType } from '../../src/lib/notifyPush';
+import { reportConvexUserIdForPush } from '../../src/push/useEmergentPush';
 import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { getLanguageByCode } from '../../src/lib/languages';
@@ -2093,6 +2094,9 @@ export default function ChatScreen() {
     });
     const senderName = String(me?.name || me?.displayName || 'New message');
     pushNotifyCtxRef.current = { recipients: Array.from(ids).slice(0, 20), senderName };
+    // iter-200: guarantee the backend learns my Convex id → enables
+    // recipient matching for client-triggered pushes (see useEmergentPush).
+    reportConvexUserIdForPush(meId);
   }, [hydratedConversation, me]);
 
   const mergedPresenceSource = useMemo(

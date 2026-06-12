@@ -139,20 +139,19 @@ export default function ContactsScreen() {
   // invite Share message carries a deep link with the code (matches
   // earnings page behavior). Falls back to a plain link.
   const earningsProfile = useQuery((api as any).earnings?.getMyProfile, {}) as any | undefined;
-  // iter-198: ALWAYS have a referral code ready — mirror the earnings
-  // page's auto-create pattern. Previously, users who never opened the
-  // Earnings screen had no code yet, so their invites went out WITHOUT
-  // referral attribution (user confirmed this happened in production).
+  // iter-200: ALWAYS ensure a referral code exists — the backend creates
+  // it lazily (canonical: earnings.getOrCreateReferralCode, idempotent,
+  // no args). Previously gated on the profile query resolving first,
+  // which left invites code-less when that query was slow or unavailable.
   const generateCodeM = useMutation((api as any).earnings?.getOrCreateReferralCode);
   const [localReferralCode, setLocalReferralCode] = useState<string | null>(null);
   const triedCreateCodeRef = useRef(false);
-  const profileLoaded = earningsProfile !== undefined;
   const profileCode: string =
     (earningsProfile?.referralCode && String(earningsProfile.referralCode)) ||
     (earningsProfile?.code && String(earningsProfile.code)) ||
     '';
   useEffect(() => {
-    if (!profileLoaded || profileCode || triedCreateCodeRef.current) return;
+    if (triedCreateCodeRef.current) return;
     if (typeof generateCodeM !== 'function') return;
     triedCreateCodeRef.current = true;
     (async () => {
@@ -165,7 +164,7 @@ export default function ContactsScreen() {
         console.warn('[contacts] getOrCreateReferralCode failed:', errorValue?.message);
       }
     })();
-  }, [profileLoaded, profileCode, generateCodeM]);
+  }, [generateCodeM]);
   const referralCode: string = profileCode || localReferralCode || '';
   // iter-186: invites now deep-link to the published Play Store listing
   // (with the referral code in both the referrer param and the text).

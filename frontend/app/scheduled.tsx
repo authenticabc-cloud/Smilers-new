@@ -1,6 +1,6 @@
 // Scheduled Messages — backed by `api.scheduledMessages.*`.
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -79,6 +79,35 @@ export default function ScheduledScreen() {
   const updateSchedule = useMutation(api.scheduledMessages.update);
   const removeSchedule = useMutation(api.scheduledMessages.remove);
   const setActiveSchedule = useMutation(api.scheduledMessages.setActive);
+  // iter-200: CANONICAL (web agent): `scheduling.getAllMyScheduledMessages`
+  // returns each schedule with `conversationName` resolved server-side —
+  // fixes the "Unknown" recipient labels that `listMine` produces.
+  const { data: allScheduledQ } = useSafeConvexQuery<any[]>(
+    (api as any).scheduling?.getAllMyScheduledMessages,
+    {},
+    [],
+  );
+  const conversationNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    if (Array.isArray(allScheduledQ)) {
+      for (const row of allScheduledQ) {
+        const id = row?._id ? String(row._id) : '';
+        const name = row?.conversationName ? String(row.conversationName) : '';
+        if (id && name) map.set(id, name);
+      }
+    }
+    return map;
+  }, [allScheduledQ]);
+  const displayRecipient = useCallback(
+    (item: any): string => {
+      const resolved = item?._id ? conversationNameById.get(String(item._id)) : undefined;
+      if (resolved) return resolved;
+      const raw = String(item?.recipient || '').trim();
+      if (raw && raw.toLowerCase() !== 'unknown') return raw;
+      return 'Recipient';
+    },
+    [conversationNameById],
+  );
   const [editing, setEditing] = useState<Schedule | null>(null);
   const [showCompose, setShowCompose] = useState(false);
   const [localDrafts, setLocalDrafts] = useState<LocalScheduleDraft[]>([]);
@@ -398,7 +427,7 @@ export default function ScheduledScreen() {
           <View style={styles.card} testID={`schedule-${item._id}`}>
             <View style={styles.cardTopRow}>
               <View style={[styles.dot, { backgroundColor: item.active ? Colors.primary : Colors.textMuted }]} />
-              <Text style={styles.cardRecipient} numberOfLines={1}>{item.recipient || 'Recipient'}</Text>
+              <Text style={styles.cardRecipient} numberOfLines={1}>{displayRecipient(item)}</Text>
               <View style={styles.flexOne} />
               <Switch value={item.active} onValueChange={() => onToggleActive(item)} trackColor={{ false: Colors.border, true: Colors.primary }} thumbColor={Colors.white} testID={`toggle-${item._id}`} />
             </View>
