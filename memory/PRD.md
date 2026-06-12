@@ -428,3 +428,13 @@ FRONTEND (in zip, NEEDS REBUILD):
 - contacts.tsx: referral code auto-create fallback (getOrCreateReferralCode) so invite links ALWAYS carry the referral code (user's invite went out without code because profile had none).
 ZIP regenerated 18:05 (24MB) with all of the above + Smilers branding.
 REMAINING after user rebuild: verify killed-app ring/messages e2e; production migration (redeploy backend + Convex MOBILE_BACKEND_URL + bake deployed URL — all three together); foreground suppression of banners for the actively-open chat (polish).
+
+## Session: Feb 2026 cont. (iter-199) — PUSH SYSTEM CAME ALIVE AT 21:24; remaining items are Convex-side
+Evidence from DEPLOYED backend trigger log (user redeployed backend tonight via Emergent build/deploy):
+- Convex DOES trigger call pushes → POSTs send-push-internal to the DEPLOYED URL (recipients = OIDC subs, correct). At 21:24:11 a real "Incoming voice call" push was DELIVERED to phone 2 (matched + fcm_success=1) — ~10 min AFTER the user stopped testing (screenshots 21:09-21:12). Before 21:24 production had only dead tokens.
+- The installed Emergent android build CONTAINS iter-198 (client trigger fired at 21:24:11.296 with Convex-id recipient; scheduled filter visible in screenshot). Build bakes the DEPLOYED backend URL.
+- Self-test pushes via deployed backend delivered to BOTH phones.
+- convex_user_id matching not confirmed yet (probe token_count=0; may be 3rd account or registration timing) — has_convex_id now exposed in push-debug tokens (next redeploy).
+iter-199 changes (preview; USER MUST REDEPLOY BACKEND to ship): _recent_call_push_to_user() — semantic per-recipient 25s call-push dedupe collapsing Convex-trigger + caller-device doubles (different keys/urls so generic dedupe can't catch); push-debug tokens now show has_convex_id. 41/41 pytest. Live test confirmed pruning of dead preview tokens.
+NEW DOC: /app/WEB_AGENT_REQUESTS_iter199.md — canonical-contract questions for web agent: (1) screenSharing.sendSignal offer rejection (P0), (2) users.updateProfile language fields Server Error (P0 — mobile tried skipTranslationLanguages/languages/spokenLanguages), (3) scheduledMessages.listMine recipient 'Unknown', (4) earnings.getOrCreateReferralCode existence (invite shared without code).
+USER ACTIONS: (1) redeploy backend (no app rebuild needed), (2) RE-TEST pushes NOW with current build (killed app), (3) relay WEB_AGENT_REQUESTS_iter199.md to web agent.

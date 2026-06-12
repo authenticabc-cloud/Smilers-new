@@ -785,6 +785,33 @@ async def _prune_dead_token(token_doc: dict, error_message: str | None) -> bool:
         return False
 
 
+async def _recent_call_push_to_user(token_user_id: str) -> bool:
+    """
+    iter-199: SEMANTIC call-push dedupe. Incoming-call pushes can originate
+    from BOTH the Convex trigger (recipient keyed by OIDC sub) and the
+    caller's device (recipient keyed by Convex id) — different idempotency
+    keys and different action_urls, so the generic dedupe can't catch the
+    pair. Collapse them here: at most ONE call push per recipient (token
+    owner) per 25 seconds.
+    """
+    key = f"callpush:{token_user_id}"
+    now = datetime.now(timezone.utc)
+    try:
+        existing = await db.push_dedupe.find_one({"k": key})
+        if existing and existing.get("ts"):
+            ts = existing["ts"]
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if (now - ts).total_seconds() < 25:
+                return True
+        await db.push_dedupe.update_one(
+            {"k": key}, {"$set": {"k": key, "ts": now}}, upsert=True
+        )
+    except Exception as e:
+        logger.warning(f"call-push dedupe failed (treating as not-duplicate): {e}")
+    return False
+
+
 async def send_push(
     recipients: list[str],
     data: dict,
@@ -866,6 +893,22 @@ async def send_push(
                     routing["type"] = "call" if probe_channel.startswith("calls") else "message"
                 fcm_data.update(routing)
                 is_call_push = routing.get("type") == "call"
+
+                # iter-199: collapse Convex-trigger + caller-device call
+                # pushes into ONE ring per recipient (25 s window).
+                if is_call_push:
+                    kept_tokens = []
+                    for t in tokens:
+                        if await _recent_call_push_to_user(str(t.get("user_id") or "")):
+                            logger.info(
+                                f"send_push: call-push dedupe — skipping token for "
+                                f"user={t.get('user_id')} (already rang <25s ago)"
+                            )
+                            continue
+                        kept_tokens.append(t)
+                    tokens = kept_tokens
+                    if not tokens:
+                        logger.info("send_push: all call tokens deduped — nothing to send")
 
                 send_tasks = [
                     fcm_send_v1(
@@ -1224,6 +1267,10 @@ async def push_debug(user_id: str | None = None, triggers: int = 0):
                 {
                     "platform": r.get("platform"),
                     "device_token_preview": (r.get("device_token") or "")[:16] + "…",
+                    # iter-199: visibility into whether this registration
+                    # carried the Convex user id (required for client-
+                    # triggered recipient matching).
+                    "has_convex_id": bool(r.get("convex_user_id")),
                     "updated_at": (
                         r["updated_at"].isoformat()
                         if r.get("updated_at")
