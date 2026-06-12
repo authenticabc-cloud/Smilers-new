@@ -574,11 +574,24 @@ function CallScreenInner() {
       // PC actually exists. The useEffect already gates the "should we start
       // at all" question; this check only needs to guard against a literal
       // duplicate call after a PC is alive.
-      if (!callId || sessionRef.current || !CallSessionCtor) {
+      // Idempotency: a live PC means we're done — never release the slot.
+      if (sessionRef.current) {
+        callDebug.push('CALL', 'startPeerConnection skipped (session already live)');
+        return;
+      }
+      if (!callId || !CallSessionCtor) {
         callDebug.push(
           'CALL',
           `startPeerConnection skipped (callId=${!!callId} session=${!!sessionRef.current} ctor=${!!CallSessionCtor})`,
         );
+        // iter-188 (screen share "from day one" bug): this bail used to keep
+        // `initStartedRef.current = true`, permanently blocking every retry.
+        // On Android the WebRTC module loads ~350ms AFTER mount (screenReady
+        // timer), so the screen-only bootstrap ALWAYS hit `ctor=false` here
+        // and screen sharing never created a peer connection (the
+        // MediaProjection picker never appeared). Release the slot so the
+        // kick-off effects can retry once the module is loaded.
+        initStartedRef.current = false;
         return;
       }
       if (Platform.OS === 'web') {
@@ -959,6 +972,7 @@ function CallScreenInner() {
       isCaller &&
       callId &&
       remoteResolved &&
+      CallSessionCtor &&
       !sessionRef.current &&
       !initStartedRef.current
     ) {
@@ -968,7 +982,7 @@ function CallScreenInner() {
     // intentionally NOT depending on startPeerConnection — we deref via the
     // ref so heartbeat-driven activeCall re-emits never re-fire this effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isCaller, callId, remoteResolved]);
+  }, [isCaller, callId, remoteResolved, CallSessionCtor]);
 
   // Callee: kick off peer-connection when answered (status → active)
   useEffect(() => {
@@ -977,6 +991,7 @@ function CallScreenInner() {
       isActive &&
       callId &&
       remoteResolved &&
+      CallSessionCtor &&
       !sessionRef.current &&
       !initStartedRef.current
     ) {
@@ -984,7 +999,7 @@ function CallScreenInner() {
       void startPeerConnectionRef.current(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isCaller, isActive, callId, remoteResolved]);
+  }, [isCaller, isActive, callId, remoteResolved, CallSessionCtor]);
 
   // ====== Screen-only mode: bootstrap peer-connection directly ======
   //
@@ -1034,6 +1049,16 @@ function CallScreenInner() {
     if (!isScreenOnly) return;
     if (!conversationId) return;
     if (callId !== conversationId) return; // wait for Effect A
+    // iter-188: WAIT for the WebRTC module. On Android `CallSessionCtor`
+    // loads ~350ms after mount (screenReady timer → require()). The old
+    // version claimed the init slot immediately, startPeerConnection bailed
+    // with `ctor=false`, and nothing ever retried — screen sharing never
+    // got as far as the MediaProjection picker. With `CallSessionCtor` in
+    // the dep array this effect simply re-fires once the module is ready.
+    if (!CallSessionCtor) {
+      callDebug.push('CALL', 'screen-only bootstrap: waiting for WebRTC module…');
+      return;
+    }
     if (!peerUserIdParam) {
       callDebug.push(
         'ERR',
@@ -1060,7 +1085,7 @@ function CallScreenInner() {
       initStartedRef.current = false;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isScreenOnly, isScreenOnlyReceiver, conversationId, peerUserIdParam, callId]);
+  }, [isScreenOnly, isScreenOnlyReceiver, conversationId, peerUserIdParam, callId, CallSessionCtor]);
 
   // ====== Heartbeat — REQUIRED by the backend's expireDeadCalls cron ======
   //

@@ -30,6 +30,11 @@ import { api } from '../convexApi';
 import { useReactiveSafeConvexQuery } from '../hooks/useReactiveSafeConvexQuery';
 import { useAuth } from '../providers/AuthProvider';
 import { getDisplayInitials } from '../lib/displayName';
+import {
+  useDeviceContactIndex,
+  resolveDeviceContactNameFromUser,
+  type DeviceContactIndex,
+} from '../lib/deviceContactIndex';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../theme';
 
 interface IncomingRequest {
@@ -44,7 +49,7 @@ interface IncomingRequest {
   requesterId: string | null;
 }
 
-function normalizeRequest(record: any): IncomingRequest | null {
+function normalizeRequest(record: any, deviceIndex: DeviceContactIndex): IncomingRequest | null {
   if (!record) return null;
   // Session id can be `_id` (Convex doc), `sessionId`, `shareId`, or `id`.
   const shareId = record._id || record.sessionId || record.shareId || record.id;
@@ -52,7 +57,13 @@ function normalizeRequest(record: any): IncomingRequest | null {
   // Backend may flat-attach the sharer's name/avatar or nest them under
   // `sender` / `from` / `requester` / `sharer`. Handle every variant we've seen.
   const nested = record.sharer || record.sender || record.from || record.requester || {};
+  // iter-188: prefer the name saved in THIS user's phone address book over
+  // the sharer's Convex profile name (Google-account name / raw number).
+  const deviceName =
+    resolveDeviceContactNameFromUser(deviceIndex, nested) ||
+    resolveDeviceContactNameFromUser(deviceIndex, record);
   const name =
+    deviceName ||
     record.sharerName ||
     record.requesterName ||
     record.senderName ||
@@ -116,13 +127,14 @@ export default function IncomingScreenShareModal() {
 
   const acceptMutation = useMutation((api as any).screenSharing?.acceptScreenShare);
   const declineMutation = useMutation((api as any).screenSharing?.declineScreenShare);
+  const deviceIndex = useDeviceContactIndex();
 
   const pending = useMemo<IncomingRequest[]>(() => {
     const list = Array.isArray(incomingRaw) ? incomingRaw : [];
     return list
-      .map((r) => normalizeRequest(r))
+      .map((r) => normalizeRequest(r, deviceIndex))
       .filter((r): r is IncomingRequest => !!r && !dismissedShareIds.has(r.shareId));
-  }, [incomingRaw, dismissedShareIds]);
+  }, [incomingRaw, dismissedShareIds, deviceIndex]);
 
   const current = pending[0] || null;
 

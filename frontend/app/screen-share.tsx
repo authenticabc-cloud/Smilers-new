@@ -10,7 +10,7 @@
  * request/accept Convex contract this screen targets.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -31,6 +31,7 @@ import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../src/providers/AuthProvider';
 import { getDisplayNameFromUser, getDisplayInitials } from '../src/lib/displayName';
+import { useDeviceContactIndex, resolveDeviceContactNameFromUser } from '../src/lib/deviceContactIndex';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
 interface ContactRow {
@@ -80,17 +81,28 @@ export default function ScreenShareSenderScreen() {
   const requestMutation = useMutation((api as any).screenSharing?.requestScreenShare);
   const getOrCreateDirect = useMutation((api as any).conversations.getOrCreateDirect);
 
+  // iter-188: prefer the name saved in the user's own phone address book
+  // over the Convex profile name (which is the Google-account name or a
+  // raw phone number). Same resolution the Chats list and Share Picker use.
+  const deviceIndex = useDeviceContactIndex();
+
   const contactRows = useMemo<ContactRow[]>(() => {
     const list = Array.isArray(contacts) ? contacts : [];
     const normalized = list
-      .map((r) => normalizeContact(r))
+      .map((r) => {
+        const row = normalizeContact(r);
+        if (!row) return null;
+        const deviceName = resolveDeviceContactNameFromUser(deviceIndex, r);
+        if (deviceName) row.displayName = deviceName;
+        return row;
+      })
       .filter((c): c is ContactRow => !!c);
     const query = search.trim().toLowerCase();
     if (!query) return normalized;
     return normalized.filter((c) =>
       c.displayName.toLowerCase().includes(query),
     );
-  }, [contacts, search]);
+  }, [contacts, search, deviceIndex]);
 
   const selected: ContactRow | null = useMemo(() => {
     if (!selectedId) return null;

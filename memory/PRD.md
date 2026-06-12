@@ -337,3 +337,9 @@ Built per web team's DESKTOP_LOGIN_APPROVAL_NATIVE_CONTRACT.md (pasted in chat):
 - Settings row "Approve Desktop Login" (after Face ID).
 - ⚠️ FOLLOW-UP FOR WEB AGENT: push must include `categoryId: "login-approval"` for the Approve/Deny buttons to render on the notification (tap-to-open works without it).
 - Verified: eslint + tsc clean, web bundle renders. Device verification needed (push, biometrics, QR scan are native-only).
+
+## Session: Feb 2026 — Screen Share fixes (iter-188)
+User-reported bugs (with debug overlay screenshot):
+1. **Screen share never connected ("from day one")** — ROOT CAUSE: `startPeerConnection skipped (ctor=false)`. The screen-only bootstrap in `app/call/[conversationId].tsx` claimed `initStartedRef` and called startPeerConnection immediately on mount, but on Android the WebRTC module (`CallSessionCtor`) is require()d ~350ms later (screenReady timer). The bail path never released the slot and nothing retried → no PC → no MediaProjection picker. FIXES: (a) bail path now releases `initStartedRef` when ctor/callId missing (keeps it for live-session idempotency), (b) screen-only Effect B + caller/callee kick-off effects now gate on `CallSessionCtor` and include it in deps so they re-fire when the module loads.
+2. **Google-account names instead of device contact names** — Share Screen picker (`app/screen-share.tsx`) and incoming request modal (`IncomingScreenShareModal.tsx`) now resolve names via `resolveDeviceContactNameFromUser(useDeviceContactIndex())`, same as Chats list.
+- Verified: eslint 0 errors, tsc no new errors (6 pre-existing in call screen), web bundle renders. NEEDS DEVICE VERIFICATION (WebRTC/MediaProjection native-only): expect the share-app/entire-screen picker to appear again after EAS build.
