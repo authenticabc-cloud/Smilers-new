@@ -29,7 +29,12 @@ export async function uploadFile(
   convex: ConvexReactClient,
   uri: string,
   mime: string,
-  uploadUrlMutation: any = api.messages.generateUploadUrl
+  uploadUrlMutation: any = api.messages.generateUploadUrl,
+  // iter-196: live progress (0..1) + cancellation for large uploads.
+  opts?: {
+    onProgress?: (fraction: number) => void;
+    cancelRef?: { current: null | (() => void) };
+  }
 ): Promise<string> {
   let uploadUrl: string;
   try {
@@ -51,11 +56,38 @@ export async function uploadFile(
   let bodyText: string;
   if (isLocalNativeFile) {
     // Streaming path — constant memory, works for 100 MB+ documents/APKs.
-    const result = await LegacyFileSystem.uploadAsync(uploadUrl, uri, {
-      httpMethod: 'POST',
-      headers: { 'Content-Type': mime },
-      uploadType: LegacyFileSystem.FileSystemUploadType.BINARY_CONTENT,
-    });
+    // createUploadTask gives us progress callbacks + cancelAsync (iter-196).
+    const task = LegacyFileSystem.createUploadTask(
+      uploadUrl,
+      uri,
+      {
+        httpMethod: 'POST',
+        headers: { 'Content-Type': mime },
+        uploadType: LegacyFileSystem.FileSystemUploadType.BINARY_CONTENT,
+      },
+      opts?.onProgress
+        ? ({ totalBytesSent, totalBytesExpectedToSend }) => {
+            if (totalBytesExpectedToSend > 0) {
+              opts.onProgress!(Math.min(1, totalBytesSent / totalBytesExpectedToSend));
+            }
+          }
+        : undefined,
+    );
+    if (opts?.cancelRef) {
+      opts.cancelRef.current = () => {
+        void task.cancelAsync().catch(() => {});
+      };
+    }
+    let result: LegacyFileSystem.FileSystemUploadResult | undefined;
+    try {
+      result = (await task.uploadAsync()) ?? undefined;
+    } finally {
+      if (opts?.cancelRef) opts.cancelRef.current = null;
+    }
+    if (!result) {
+      // cancelAsync resolves uploadAsync with undefined.
+      throw new Error('Upload cancelled');
+    }
     status = result.status;
     bodyText = result.body || '';
   } else {

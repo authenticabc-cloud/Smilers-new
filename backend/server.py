@@ -10,7 +10,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 
@@ -479,6 +479,7 @@ async def fcm_send_v1(
     message: str,
     data: dict[str, str] | None = None,
     android_channel_id: str = "default",
+    ttl_seconds: int | None = None,
 ) -> tuple[bool, str | None]:
     """
     Send a push notification directly via Firebase Cloud Messaging v1 API
@@ -507,6 +508,10 @@ async def fcm_send_v1(
             data=safe_data,
             android=fcm_messaging.AndroidConfig(
                 priority="high",
+                # iter-197: call pushes carry a short TTL so a missed
+                # delivery window doesn't produce a ghost ring minutes
+                # later when the device comes back online.
+                **({"ttl": timedelta(seconds=ttl_seconds)} if ttl_seconds else {}),
                 notification=fcm_messaging.AndroidNotification(
                     channel_id=android_channel_id,
                     sound="default",
@@ -662,11 +667,62 @@ def _resolve_android_channel(data: dict, token_doc: dict | None = None) -> str:
     return "calls" if is_call else "messages-v3"
 
 
+def _derive_push_routing(data: dict) -> dict[str, str]:
+    """
+    iter-197: synthesize the routing fields the MOBILE tap-handler expects
+    (`type`, `conversationId`, `callId`, `displayName`) from the
+    Convex-provided `action_url`. Without these, taps on backend pushes
+    did NOTHING because the handler only routes on `payload.type`.
+    """
+    out: dict[str, str] = {}
+    action_url = str(data.get("action_url") or "")
+    if not action_url.startswith("/"):
+        return out
+    path, _, query = action_url.partition("?")
+    parts = [p for p in path.split("/") if p]
+    if len(parts) >= 2 and parts[0] == "call":
+        out["type"] = "call"
+        out["conversationId"] = parts[1]
+        out["callId"] = parts[1]
+    elif len(parts) >= 2 and parts[0] == "chat":
+        out["type"] = "message"
+        out["conversationId"] = parts[1]
+    if query:
+        try:
+            from urllib.parse import parse_qs
+            display_name = (parse_qs(query).get("displayName") or [""])[0]
+            if display_name:
+                out["displayName"] = display_name
+        except Exception:
+            pass
+    return out
+
+
+_DEAD_TOKEN_MARKERS = ("UnregisteredError", "Requested entity was not found", "NotFoundError")
+
+
+async def _prune_dead_token(token_doc: dict, error_message: str | None) -> bool:
+    """Remove FCM tokens that Firebase reports as permanently dead so the
+    store stays healthy (stale tokens from uninstalled/rebuilt apps)."""
+    if not error_message or not any(m in error_message for m in _DEAD_TOKEN_MARKERS):
+        return False
+    try:
+        await db.push_tokens.delete_one({"_id": token_doc["_id"]})
+        logger.info(
+            f"send_push: pruned dead token {str(token_doc.get('device_token') or '')[:12]}… "
+            f"(user={token_doc.get('user_id')})"
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"send_push: dead-token prune failed: {e}")
+        return False
+
+
 async def send_push(
     recipients: list[str],
     data: dict,
     idempotency_key: str | None = None,
-) -> None:
+) -> dict:
     """
     Server-side helper. Sends a push notification to all device tokens
     registered for the given recipient user IDs.
@@ -676,11 +732,22 @@ async def send_push(
     works once EMERGENT_PUSH_KEY is real). Both paths fire in parallel
     — the OS dedupes by content so the user never sees doubles.
 
+    iter-197: now RETURNS real delivery stats
+    {token_count, success_count, error_count, errors, pruned_count}
+    and prunes permanently-dead tokens (UnregisteredError).
+
     Wrap calls in try/except — push delivery failures never block the
     primary operation.
     """
+    stats: dict = {
+        "token_count": 0,
+        "success_count": 0,
+        "error_count": 0,
+        "errors": [],
+        "pruned_count": 0,
+    }
     if not recipients:
-        return
+        return stats
     if len(recipients) > 100:
         raise ValueError("max 100 recipients per send_push call; chunk before sending")
     if "title" not in data or "message" not in data:
@@ -696,6 +763,7 @@ async def send_push(
         try:
             cursor = db.push_tokens.find({"user_id": {"$in": recipients}})
             tokens = await cursor.to_list(length=500)
+            stats["token_count"] = len(tokens)
             if tokens:
                 # FCM data payload: keep small + string-only. Include
                 # the deeplink so the mobile tap-handler can route.
@@ -709,6 +777,18 @@ async def send_push(
                     fcm_data["subtext"] = str(data["subtext"])
                 if idempotency_key:
                     fcm_data["idempotency_key"] = idempotency_key
+                # iter-197: include type/conversationId/callId so the
+                # mobile tap-handler actually routes (it ignores
+                # action_url-only payloads), and the in-app receive
+                # listener can mark messages delivered.
+                routing = _derive_push_routing(data)
+                # Fall back to title/body call detection when there is
+                # no parseable action_url (mirrors _resolve_android_channel).
+                if "type" not in routing:
+                    probe_channel = _resolve_android_channel({**data, "title": title}, None)
+                    routing["type"] = "call" if probe_channel.startswith("calls") else "message"
+                fcm_data.update(routing)
+                is_call_push = routing.get("type") == "call"
 
                 send_tasks = [
                     fcm_send_v1(
@@ -725,20 +805,33 @@ async def send_push(
                         android_channel_id=_resolve_android_channel(
                             {**data, "title": title}, t
                         ),
+                        # iter-197: incoming-call pushes expire fast so a
+                        # device that was offline doesn't get a ghost ring
+                        # minutes after the caller hung up.
+                        ttl_seconds=45 if is_call_push else None,
                     )
                     for t in tokens
                 ]
                 results = await asyncio.gather(*send_tasks, return_exceptions=True)
-                successes = sum(
-                    1 for r in results
-                    if isinstance(r, tuple) and r[0]
-                )
+                for token_doc, result in zip(tokens, results):
+                    if isinstance(result, tuple) and result[0]:
+                        stats["success_count"] += 1
+                        continue
+                    stats["error_count"] += 1
+                    error_message = (
+                        result[1] if isinstance(result, tuple) else str(result)
+                    )
+                    if error_message:
+                        stats["errors"].append(error_message[:200])
+                    if await _prune_dead_token(token_doc, error_message):
+                        stats["pruned_count"] += 1
                 logger.info(
-                    f"send_push FCM v1: {successes}/{len(tokens)} delivered "
-                    f"(recipients={len(recipients)})"
+                    f"send_push FCM v1: {stats['success_count']}/{len(tokens)} delivered "
+                    f"(recipients={len(recipients)}, pruned={stats['pruned_count']})"
                 )
         except Exception as e:
             logger.warning(f"send_push FCM v1 path failed: {e}")
+            stats["errors"].append(f"FCM v1 path failed: {e}")
 
     # ── Secondary path: Emergent relay (only works once key is real) ──
     payload: dict = {"recipients": recipients, "data": data}
@@ -758,6 +851,8 @@ async def send_push(
                 logger.warning(f"send_push Emergent relay non-2xx: {e}")
     except httpx.HTTPError as e:
         logger.warning(f"send_push Emergent relay HTTP error (continuing): {e}")
+
+    return stats
 
 
 class SendPushBody(BaseModel):
@@ -837,43 +932,94 @@ async def send_push_internal(
         f"send-push-internal: recipients={delivery['requested_count']} "
         f"matched={len(delivery['matched_recipients'])} "
         f"unmatched={len(delivery['unmatched_recipients'])} "
-        f"title={body.title!r}"
+        f"title={body.title!r} "
+        # iter-197: log the ACTUAL ids — the single most important piece of
+        # evidence for diagnosing Convex↔mobile user_id format mismatches.
+        f"requested_ids={body.recipients} "
+        f"unmatched_ids={delivery['unmatched_recipients']}"
     )
 
     # Now actually fire the pushes via send_push() (which itself uses
     # FCM v1 + Emergent relay)
     try:
-        await send_push(
+        push_stats = await send_push(
             recipients=body.recipients,
             data=data,
             idempotency_key=body.idempotency_key,
         )
-        # Approximation: assume every matched token got a delivery attempt.
-        # The real count is logged inside send_push() but not surfaced
-        # back here — good enough for the debug report.
-        delivery["fcm_success_count"] = len(tokens)
+        # iter-197: REAL per-token delivery stats from send_push.
+        delivery["fcm_success_count"] = push_stats.get("success_count", 0)
+        delivery["fcm_error_count"] = push_stats.get("error_count", 0)
+        delivery["fcm_errors"] = push_stats.get("errors", [])
+        delivery["pruned_token_count"] = push_stats.get("pruned_count", 0)
     except Exception as e:
         logger.warning(f"send-push-internal: send_push raised: {e}")
         delivery["fcm_errors"].append(f"send_push raised: {e}")
+
+    # iter-197: persist every trigger to a capped diagnostic collection so
+    # /api/push-debug?triggers=N can show EXACTLY what Convex sent and what
+    # happened — without needing shell access to the deployed pod.
+    try:
+        await db.push_trigger_log.insert_one(
+            {
+                "ts": datetime.now(timezone.utc),
+                "title": body.title,
+                "message": (body.message or "")[:200],
+                "action_url": body.action_url,
+                "channel_id": body.channel_id,
+                "recipients": body.recipients,
+                "matched": delivery["matched_recipients"],
+                "unmatched": delivery["unmatched_recipients"],
+                "fcm_success_count": delivery["fcm_success_count"],
+                "fcm_error_count": delivery["fcm_error_count"],
+                "fcm_errors": delivery["fcm_errors"][:5],
+            }
+        )
+        total = await db.push_trigger_log.count_documents({})
+        if total > 300:
+            old_cursor = (
+                db.push_trigger_log.find({}, {"_id": 1}).sort("ts", 1).limit(total - 300)
+            )
+            old_ids = [doc["_id"] async for doc in old_cursor]
+            if old_ids:
+                await db.push_trigger_log.delete_many({"_id": {"$in": old_ids}})
+    except Exception as e:
+        logger.warning(f"send-push-internal: trigger log write failed: {e}")
 
     return {"status": "accepted", "delivery": delivery}
 
 
 @api_router.get("/push-debug")
-async def push_debug(user_id: str | None = None):
+async def push_debug(user_id: str | None = None, triggers: int = 0):
     """
     iter-130 diagnostic — no auth, read-only. Returns what's registered
     for the given user_id (or summary stats if user_id omitted) so we
     can verify the format Convex sends matches what mobile registered.
+
+    iter-197: pass ?triggers=N to ALSO get the last N send-push-internal
+    triggers (what Convex sent, which recipients matched, FCM results).
 
     Usage from mobile:
       GET /api/push-debug?user_id=<userInfo.sub>
       → { user_id, token_count, tokens: [{platform, device_token: <preview>, updated_at}] }
 
     Usage from terminal:
-      curl https://app-migration-75.emergent.host/api/push-debug
-      → { total_tokens, unique_user_ids, sample_user_ids: [first 10] }
+      curl https://app-migration-75.emergent.host/api/push-debug?triggers=20
+      → { total_tokens, ..., recent_triggers: [...] }
     """
+    recent_triggers = []
+    if triggers > 0:
+        try:
+            cursor = db.push_trigger_log.find({}).sort("ts", -1).limit(min(triggers, 100))
+            rows = await cursor.to_list(length=100)
+            for r in rows:
+                r.pop("_id", None)
+                if r.get("ts"):
+                    r["ts"] = r["ts"].isoformat()
+                recent_triggers.append(r)
+        except Exception as e:
+            recent_triggers = [{"error": f"trigger lookup failed: {e}"}]
+
     if user_id:
         try:
             cursor = db.push_tokens.find({"user_id": user_id})
@@ -895,6 +1041,7 @@ async def push_debug(user_id: str | None = None):
                 }
                 for r in rows
             ],
+            **({"recent_triggers": recent_triggers} if triggers > 0 else {}),
         }
     # Summary mode
     try:
@@ -908,6 +1055,7 @@ async def push_debug(user_id: str | None = None):
         "total_tokens": total,
         "unique_user_ids_in_first_50": len(unique),
         "sample_user_ids": unique[:10],
+        **({"recent_triggers": recent_triggers} if triggers > 0 else {}),
     }
 
 

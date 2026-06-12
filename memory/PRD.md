@@ -391,3 +391,22 @@ User: sharing a photo to Smilers works, but sharing a 185MB APK crashes the app 
 2. MAX_UPLOAD_BYTES.document raised 100MB → 250MB (user's APKs are ~185MB; safe now that uploads stream).
 3. sendSharedPayload.ts: new `checkShareFileSize` (resolves size via fileSize or getInfoAsync) gates BEFORE upload in both the conversation and diary share branches — clear "too large (X MB — max Y MB)" outcome instead of crash/doomed upload.
 - eslint + tsc clean. Zip REGENERATED (must rebuild via EAS to get the fix — crash was native-memory, requires new build).
+
+## Session: Feb 2026 — PUSH NOTIFICATIONS ROOT CAUSE FOUND + FIXED (iter-197)
+User reported pushes NEVER work (no banners when app open/backgrounded; total silence when killed; previous "fixes" were never device-verified). FULL-PIPELINE AUDIT findings (hard evidence):
+1. DEPLOYED backend (app-migration-75.emergent.host): ALL 17 stored FCM tokens DEAD (UnregisteredError) — stale tokens from old builds; every push attempted there dies. Also runs pre-iter-182 code.
+2. PREVIEW backend: live tokens (current build registers here, EXPO_PUBLIC_BACKEND_URL=preview) and FCM v1 send DELIVERED to BOTH user phones in live tests (call-style → 01KQVQFG… SM-A075F ✓, message-style → 01KQD0V5… ✓). Delivery infra (smilers-a4e07 project, admin SDK, channels) is HEALTHY.
+3. Convex triggers: every historical send-push-internal showed matched=0; no real triggers logged since Jun 7 → whether Convex still POSTs (and to which URL) is THE remaining unknown — needs user test call + trigger-log check.
+4. Tap-routing bug: backend FCM data lacked type/conversationId/callId and the app never read action_url → taps did nothing.
+FIXES (backend, hot-reloaded on preview; REDEPLOY needed for production):
+- _derive_push_routing(): fcm data now carries type/conversationId/callId/displayName parsed from action_url.
+- 45s TTL on incoming-call pushes (no ghost rings).
+- Dead-token auto-pruning on UnregisteredError.
+- send-push-internal returns REAL per-token FCM stats; full recipient ids logged; persistent push_trigger_log (capped 300) exposed via GET /api/push-debug?triggers=N.
+FIXES (frontend, in regenerated zip):
+- handleResponse action_url deeplink fallback (contract §3: /chat, /call, /user, /notifications, https).
+- share-receiver.tsx missing useRef import (left by iter-196) + uploadFile.ts null/undefined tsc fix — upload progress + cancel UI now compiles clean.
+- BRANDING: official Smilers logo pulled from smilers.online → icon.png (1024), adaptive-icon.png (safe-zone composed), splash-image.png, favicon, NEW notification-icon.png (white bubble silhouette); app.json: notification icon + splash bg #FEF9F4; react template assets deleted.
+TESTS: 36/36 pytest (new tests/test_push_routing.py), eslint 0 errors, tsc baseline clean for touched files. Zip REGENERATED (24MB).
+DOC: /app/PUSH_PIPELINE_STATUS_iter197.md — Convex env checklist (MOBILE_BACKEND_URL must = preview URL for now; recipients = OIDC sub) + verification steps.
+PENDING USER VERIFICATION: (1) test call+message between phones with receiver app killed → then check /api/push-debug?triggers=10 to confirm Convex triggers; (2) rebuild via EAS from new zip → verify Smilers icon, tap-routing, upload progress UI, Bluetooth auto-switch, large APK sharing.

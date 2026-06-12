@@ -126,11 +126,24 @@ export async function sendSharedPayloadToConversation(
   sendMessage: (args: any) => Promise<any>,
   conversationId: string,
   payload: SharedPayload,
+  // iter-196: live upload progress + cancellation for big files (APKs!).
+  opts?: {
+    onFileProgress?: (fileIndex: number, fileCount: number, fraction: number) => void;
+    cancelRef?: { current: null | (() => void) };
+    shouldAbort?: () => boolean;
+  },
 ): Promise<SendOutcome[]> {
   const outcomes: SendOutcome[] = [];
+  const fileCount = (payload.files || []).length;
+  let fileIndex = -1;
 
   // Attachments first.
   for (const file of payload.files || []) {
+    fileIndex += 1;
+    if (opts?.shouldAbort?.()) {
+      outcomes.push({ ok: false, reason: 'Cancelled' });
+      continue;
+    }
     // Pre-send security scan — blocks dangerous file types at the SEND
     // boundary so they never reach the recipient. Same heuristic that
     // protects the in-chat picker.
@@ -156,7 +169,12 @@ export async function sendSharedPayloadToConversation(
     }
 
     try {
-      const storageId = await uploadFile(convex, file.uri, file.mimeType);
+      const storageId = await uploadFile(convex, file.uri, file.mimeType, undefined, {
+        onProgress: opts?.onFileProgress
+          ? (fraction) => opts.onFileProgress!(fileIndex, fileCount, fraction)
+          : undefined,
+        cancelRef: opts?.cancelRef,
+      });
       const sendType = file.kind;
       const args: any = {
         conversationId,

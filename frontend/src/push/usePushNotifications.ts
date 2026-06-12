@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react';
-import { AppState, Platform } from 'react-native';
+import { AppState, Linking, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
@@ -856,6 +856,25 @@ export function usePushNotifications() {
       if (type === 'message' && conversationId) {
         router.push(`/chat/${conversationId}` as any);
         return;
+      }
+
+      // iter-197: action_url deeplink fallback (EMERGENT_PUSH_BACKEND_CONTRACT §3).
+      // Backend pushes carry `action_url` (e.g. /user/<id>, /notifications,
+      // /chat/<id>?focus=<msg>); when none of the typed branches above
+      // matched, route it directly so taps are never dead.
+      const actionUrl =
+        toNonEmptyString(payload.action_url) || toNonEmptyString((payload as any).deeplink);
+      if (actionUrl) {
+        if (/^https?:\/\//i.test(actionUrl)) {
+          await Linking.openURL(actionUrl).catch((errorValue: any) => {
+            console.warn('[push] action_url openURL failed:', errorValue?.message);
+          });
+          return;
+        }
+        if (actionUrl.startsWith('/')) {
+          router.push(actionUrl as any);
+          return;
+        }
       }
     },
     [router, declineCall, denyLoginApproval]

@@ -186,5 +186,8 @@ class TestSendPushHelper:
     @pytest.mark.asyncio
     async def test_send_push_empty_recipients_returns_silently(self, send_push_fn):
         # Should NOT raise even with missing data — empty recipients short-circuits.
+        # iter-197: send_push now returns a stats dict instead of None.
         result = await send_push_fn([], {})
-        assert result is None
+        assert isinstance(result, dict)
+        assert result["token_count"] == 0
+        assert result["success_count"] == 0

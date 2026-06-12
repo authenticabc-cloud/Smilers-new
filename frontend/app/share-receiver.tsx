@@ -33,7 +33,7 @@
  * stranding the user on a blank screen.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -272,6 +272,15 @@ function ShareReceiverNative() {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Record<string, Recipient>>({});
   const [sending, setSending] = useState(false);
+  // iter-196: live upload progress + cancellation (big APKs aren't a
+  // silent spinner anymore).
+  const [uploadProgress, setUploadProgress] = useState<null | {
+    index: number;
+    total: number;
+    fraction: number;
+  }>(null);
+  const uploadCancelRef = useRef<null | (() => void)>(null);
+  const cancelRequestedRef = useRef(false);
 
   // iter-177: device address-book index — recipient names must match what
   // the user saved on their phone (same override as Chats/Contacts tabs),
@@ -528,6 +537,8 @@ function ShareReceiverNative() {
       return;
     }
     setSending(true);
+    cancelRequestedRef.current = false;
+    setUploadProgress(null);
     // Track per-recipient outcomes so we can report a useful summary at the
     // end (e.g. "Sent to 3 chats, 1 file blocked").
     const allOutcomes: { recipient: Recipient; outcomes: SendOutcome[] }[] = [];
@@ -557,7 +568,11 @@ function ShareReceiverNative() {
               continue;
             }
             try {
-              const storageId = await uploadFile(convex, file.uri, file.mimeType);
+              const storageId = await uploadFile(convex, file.uri, file.mimeType, undefined, {
+                onProgress: (fraction) =>
+                  setUploadProgress({ index: 0, total: (payload.files || []).length, fraction }),
+                cancelRef: uploadCancelRef,
+              });
               const kind: DiaryEntryKind = file.kind === 'image'
                 ? 'image'
                 : file.kind === 'video'
@@ -644,11 +659,19 @@ function ShareReceiverNative() {
         sendMessage as any,
         convId,
         payload,
+        {
+          onFileProgress: (index, total, fraction) =>
+            setUploadProgress({ index, total, fraction }),
+          cancelRef: uploadCancelRef,
+          shouldAbort: () => cancelRequestedRef.current,
+        },
       );
       allOutcomes.push({ recipient: r, outcomes });
+      if (cancelRequestedRef.current) break;
     }
 
     setSending(false);
+    setUploadProgress(null);
 
     // Tally success / failure for the toast.
     let sentChats = 0;
@@ -904,6 +927,41 @@ function ShareReceiverNative() {
           )}
         </TouchableOpacity>
       </View>
+
+      {/* iter-196: upload progress overlay (percent + cancel) — big files
+          like APKs are no longer a silent spinner. */}
+      {sending && uploadProgress ? (
+        <View style={styles.progressOverlay} testID="upload-progress-overlay">
+          <View style={styles.progressCard}>
+            <Text style={styles.progressTitle}>
+              {uploadProgress.total > 1
+                ? `Uploading file ${Math.min(uploadProgress.index + 1, uploadProgress.total)} of ${uploadProgress.total}…`
+                : 'Uploading…'}
+            </Text>
+            <View style={styles.progressTrack}>
+              <View
+                style={[
+                  styles.progressFill,
+                  { width: `${Math.round(uploadProgress.fraction * 100)}%` },
+                ]}
+              />
+            </View>
+            <Text style={styles.progressPercent} testID="upload-progress-percent">
+              {Math.round(uploadProgress.fraction * 100)}%
+            </Text>
+            <TouchableOpacity
+              style={styles.progressCancelBtn}
+              onPress={() => {
+                cancelRequestedRef.current = true;
+                uploadCancelRef.current?.();
+              }}
+              testID="upload-cancel-button"
+            >
+              <Text style={styles.progressCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -1004,6 +1062,41 @@ const styles = StyleSheet.create({
   checkboxOn: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.borderLight, marginLeft: 44 + 12 },
   empty: { alignItems: 'center', padding: Spacing.xl, gap: Spacing.sm, marginTop: 40 },
+  progressOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+  },
+  progressCard: {
+    alignSelf: 'stretch',
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: 20,
+    alignItems: 'center',
+    gap: 12,
+  },
+  progressTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  progressTrack: {
+    alignSelf: 'stretch',
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: Colors.borderLight,
+    overflow: 'hidden',
+  },
+  progressFill: { height: 8, borderRadius: 4, backgroundColor: Colors.primary },
+  progressPercent: { fontSize: FontSize.sm, color: Colors.textSecondary, fontVariant: ['tabular-nums'] as any },
+  progressCancelBtn: {
+    minHeight: 42,
+    paddingHorizontal: 22,
+    borderRadius: Radius.pill,
+    borderWidth: 1.5,
+    borderColor: Colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  progressCancelText: { color: Colors.danger, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   emptyTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   emptyBody: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center', lineHeight: 20 },
   errorText: { color: Colors.danger, fontSize: FontSize.sm, marginTop: Spacing.sm },
