@@ -30,6 +30,12 @@ export const RINGTONE_PREFS_KEY = 'smilers_ringtone_prefs';
 export const LEGACY_CALLS_CHANNEL = 'calls';
 export const LEGACY_MESSAGES_CHANNEL = 'messages-v3';
 
+/** iter-186: dedicated channel for desktop login approval pushes. The
+ * Convex backend sends `channelId: "login-approvals-v1"` for these (see
+ * DESKTOP_LOGIN_APPROVAL_NATIVE_CONTRACT.md). High-importance heads-up
+ * banner so the user sees the Approve/Deny prompt immediately. */
+export const LOGIN_APPROVALS_CHANNEL = 'login-approvals-v1';
+
 export interface RingtonePrefs {
   ringtone?: string | null;
   notificationSound?: string | null;
@@ -120,6 +126,19 @@ export async function applyNotificationChannelPrefs(prefs?: RingtonePrefs | null
       vibrationPattern: [0, 250, 250, 250],
       lightColor: '#E4B53B',
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+      enableVibrate: vibrate,
+      showBadge: true,
+    });
+    // iter-186: desktop login approval channel — MAX importance so the
+    // heads-up banner with Approve/Deny actions pops over whatever the
+    // user is doing. Requests expire in 2 minutes, so visibility matters.
+    await Notifications.setNotificationChannelAsync(LOGIN_APPROVALS_CHANNEL, {
+      name: 'Desktop Login Approvals',
+      importance: Notifications.AndroidImportance.MAX,
+      sound: resolveMessageChannelSound(prefs?.notificationSound),
+      vibrationPattern: [0, 400, 200, 400],
+      lightColor: '#E4B53B',
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
       enableVibrate: vibrate,
       showBadge: true,
     });

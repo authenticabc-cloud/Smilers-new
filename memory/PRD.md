@@ -328,3 +328,12 @@ The Earnings/Engagement system is already built into the backend. The mobile app
   - `TemplatePickerSheet.tsx` — Quick Replies picker
 - All testIDs preserved exactly. Removed ~470 lines of dead styles/JSX from the chat screen. ESLint + tsc clean; web bundle renders (smoke-tested).
 - User confirmed fixed this session: small-phone tab spacing, Trustees contact list.
+
+## Session: Feb 2026 — Desktop Login Approval (native side, iter-186)
+Built per web team's DESKTOP_LOGIN_APPROVAL_NATIVE_CONTRACT.md (pasted in chat):
+- `/app/frontend/app/approve-login.tsx` — approval screen: pending list (live `api.loginApprovals.listPendingForMe` subscription), per-request detail w/ 2-min countdown, Approve gated by device biometrics/PIN (expo-local-authentication, blocks if no screen lock), Deny without gate, in-app QR scanner (parses `?code=` URL or raw 8-char hex), success/error states mapped to contract error codes (BAD_REQUEST=expired, CONFLICT=handled, FORBIDDEN, NOT_FOUND, UNAUTHENTICATED).
+- `/app/frontend/src/components/LoginApprovalBanner.tsx` — amber banner atop Chats tab when pending approvals exist (contract §5.5), live-updating.
+- Push: `login-approvals-v1` channel (MAX importance heads-up) in notificationChannels.ts; `login-approval` notification category with Approve (opens app → biometric) / Deny (background mutation) action buttons; response handler + foreground receive listener route to /approve-login with code (usePushNotifications.ts).
+- Settings row "Approve Desktop Login" (after Face ID).
+- ⚠️ FOLLOW-UP FOR WEB AGENT: push must include `categoryId: "login-approval"` for the Approve/Deny buttons to render on the notification (tap-to-open works without it).
+- Verified: eslint + tsc clean, web bundle renders. Device verification needed (push, biometrics, QR scan are native-only).

@@ -8,6 +8,7 @@ import Header from '../../src/components/Header';
 import Avatar from '../../src/components/Avatar';
 import FabStack from '../../src/components/FabStack';
 import SosButton from '../../src/components/SosButton';
+import { LoginApprovalBanner } from '../../src/components/LoginApprovalBanner';
 import { api } from '../../src/convexApi';
 import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName } from '../../src/lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
@@ -167,6 +168,8 @@ export default function ChatsScreen() {
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
           <>
+            {/* iter-186: pending desktop login approvals (contract §5.5) */}
+            <LoginApprovalBanner />
             <PinnedRow
               iconBg={Colors.aiBadge}
               iconBgDark={Colors.aiBadgeDark}

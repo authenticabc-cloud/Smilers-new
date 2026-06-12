@@ -24,6 +24,11 @@ if (Platform.OS !== 'web') {
 }
 
 const CALL_CATEGORY = 'incoming-call';
+// iter-186: category for desktop login approval pushes — gives the
+// heads-up notification Approve/Deny action buttons. NOTE: the buttons
+// only appear when the push carries `categoryId: "login-approval"`;
+// a plain tap routes to /approve-login either way.
+const LOGIN_APPROVAL_CATEGORY = 'login-approval';
 const BACKGROUND_NOTIFICATION_TASK = 'smilers-background-notification-task';
 const CALLS_CHANNEL = 'calls';
 // iter-127: bumped channel ids again. Android caches importance per
@@ -385,6 +390,22 @@ async function setupCategoriesAndChannels(prefs?: { ringtone?: string | null; no
     },
   ]);
 
+  // iter-186: Approve/Deny buttons on the desktop-login-approval push.
+  // Approve MUST open the app (the biometric/PIN gate lives there);
+  // Deny resolves silently in the background response handler.
+  await Notifications.setNotificationCategoryAsync(LOGIN_APPROVAL_CATEGORY, [
+    {
+      identifier: 'approve',
+      buttonTitle: 'Approve',
+      options: { opensAppToForeground: true },
+    },
+    {
+      identifier: 'deny',
+      buttonTitle: 'Deny',
+      options: { opensAppToForeground: false, isDestructive: true },
+    },
+  ]);
+
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync(CALLS_CHANNEL, {
       name: 'Incoming Calls',
@@ -459,6 +480,9 @@ export function usePushNotifications() {
   const unregisterLegacyDevice = useMutation((api as any).pushNotifications.unregisterMobileDevice);
   const declineCall = useMutation(api.calls.declineCall);
   const markDelivered = useMutation((api as any).messages.markDelivered);
+  // iter-186: desktop login approval — Deny from the notification action
+  // button resolves silently without opening the app.
+  const denyLoginApproval = useMutation((api as any).loginApprovals.deny);
   const lastResponse = useRef<string | null>(null);
   const lastKnownPushToken = useRef<string | null>(null);
   const registrationRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -786,6 +810,29 @@ export function usePushNotifications() {
 
       console.log('[push] Response:', { type, action, conversationId, callId });
 
+      // iter-186: desktop login approval (contract section 2). Approve
+      // (or a plain tap) routes to the approval screen where the
+      // biometric/PIN gate lives — NEVER auto-approve from here. Deny
+      // resolves in the background without opening the app.
+      if (type === 'login-approval') {
+        const approvalCode = toNonEmptyString(payload.loginApprovalCode);
+        if (action === 'deny' && approvalCode) {
+          try {
+            await denyLoginApproval({ code: approvalCode, resolvedByDevice: Device.deviceName || 'Smilers phone' });
+          } catch (e: any) {
+            console.warn('[push] Login approval deny failed:', e?.message);
+          }
+          await Notifications.dismissNotificationAsync(id);
+          return;
+        }
+        router.push(
+          approvalCode
+            ? (`/approve-login?code=${encodeURIComponent(approvalCode)}` as any)
+            : ('/approve-login' as any),
+        );
+        return;
+      }
+
       if (type === 'call' && action === 'decline' && callId) {
         try {
           await declineCall({ callId });
@@ -811,7 +858,7 @@ export function usePushNotifications() {
         return;
       }
     },
-    [router, declineCall]
+    [router, declineCall, denyLoginApproval]
   );
 
   useEffect(() => {
@@ -838,6 +885,18 @@ export function usePushNotifications() {
         markDelivered({ conversationId }).catch((errorValue: any) => {
           console.warn('[push] markDelivered failed:', errorValue?.message || errorValue);
         });
+      }
+      // iter-186: desktop login approval arriving while the app is OPEN —
+      // contract section 2: "If the app is in the foreground, show the
+      // prompt in-app". Requests expire in 2 minutes, so route straight
+      // to the approval screen instead of relying on a banner tap.
+      if (type === 'login-approval') {
+        const approvalCode = toNonEmptyString(payload.loginApprovalCode);
+        router.push(
+          approvalCode
+            ? (`/approve-login?code=${encodeURIComponent(approvalCode)}` as any)
+            : ('/approve-login' as any),
+        );
       }
     });
 
