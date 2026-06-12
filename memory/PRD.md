@@ -365,3 +365,7 @@ FIXES:
 2. getFreshIdToken: waits up to 5s for discovery (live or cached) before attempting refresh, and calls refreshTokens via a ref (stale-closure fix: old closure captured discovery=null).
 3. Cache-key fix: `me` persisted under fixed key ('me','self') by chats tab + share-receiver; share-receiver resolves user id from this cache when Convex is unauthenticated, so conversation/contact caches hit correctly.
 - eslint 0 errors, no new tsc errors. Zip REGENERATED. User raised billing complaint → support_agent response delivered verbatim (support@emergent.sh with job ID).
+
+## Session: Feb 2026 — Connection status pill on share screen (iter-192)
+- New `/app/frontend/src/components/ConnectionStatusPill.tsx`: 🟢 Connected (socket + Convex auth), 🟡 Signing in… (socket up / auth handshake), ⚪ Offline — showing saved contacts. Uses `useConvexAuth` + `useConvexConnectionState` (convex ^1.37). Mounted under the header in share-receiver.tsx.
+- eslint/tsc clean. Zip regenerated.

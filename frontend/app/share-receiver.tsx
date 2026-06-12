@@ -59,6 +59,7 @@ import { useAppShareIntent } from '../src/lib/shareIntentContext';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { appendDiaryEntry, type DiaryEntryKind } from '../src/lib/diaryStore';
 import { readCacheMeta, writeCache } from '../src/lib/offlineCache';
+import { ConnectionStatusPill } from '../src/components/ConnectionStatusPill';
 import { getRecentShareTargets, recordShareTargets } from '../src/lib/recentShareTargets';
 import { uploadFile } from '../src/lib/uploadFile';
 import { scanMessage as scanMessageDeep } from '../src/lib/messageSecurityScanner';
@@ -823,6 +824,10 @@ function ShareReceiverNative() {
         onBack={() => router.back()}
         variant="dark"
       />
+
+      {/* iter-192: live connection indicator — removes ambiguity between
+          "still reconnecting" and "genuinely no contacts". */}
+      <ConnectionStatusPill />
 
       {/* Payload summary card */}
       <View style={styles.summary}>
