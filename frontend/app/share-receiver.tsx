@@ -173,7 +173,27 @@ function ShareReceiverNative() {
     null,
     !!isAuthenticated,
   );
-  const myUserId: string | null = meData?._id ? String(meData._id) : null;
+  const liveUserId: string | null = meData?._id ? String(meData._id) : null;
+  // iter-191: last-known user id from the offline cache. When Convex is
+  // (temporarily) unauthenticated on a share-sheet cold start,
+  // getCurrentUser is null — which previously made the cache lookup use
+  // the 'anon' key and MISS the cache written under the real user id.
+  const [cachedUserId, setCachedUserId] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    readCacheMeta<any>('me', 'self')
+      .then((meta) => {
+        if (alive && meta?.data?._id) setCachedUserId(String(meta.data._id));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (meData?._id) void writeCache('me', 'self', meData);
+  }, [meData]);
+  const myUserId: string | null = liveUserId || cachedUserId;
 
   // Recent chats — same query as the chats tab. Used to surface frequent
   // recipients at the top so the user can fan-out with one tap.

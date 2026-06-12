@@ -134,8 +134,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshInFlightRef = useRef<Promise<string | null> | null>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const discoveryReadyRef = useRef(false);
+  // iter-191: persisted copy of the OIDC discovery document. On a cold start
+  // (especially when Android launches us straight into the share sheet flow)
+  // `useAutoDiscovery` needs a network round-trip — and `refreshTokens`
+  // used to return null until it landed, handing Convex an EXPIRED id_token.
+  // Convex then silently ran UNAUTHENTICATED (null user, empty contacts /
+  // conversations) while the UI showed the user as signed in. The cached
+  // endpoints let us refresh immediately on every launch after the first.
+  const cachedDiscoveryRef = useRef<any>(null);
 
   const discovery = AuthSession.useAutoDiscovery(OIDC_AUTHORITY);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await storage.getItem('smilers_oidc_discovery');
+        if (raw) cachedDiscoveryRef.current = JSON.parse(raw);
+      } catch {}
+    })();
+  }, []);
+  useEffect(() => {
+    if (discovery?.tokenEndpoint) {
+      cachedDiscoveryRef.current = discovery;
+      storage
+        .setItem(
+          'smilers_oidc_discovery',
+          JSON.stringify({
+            tokenEndpoint: discovery.tokenEndpoint,
+            authorizationEndpoint: discovery.authorizationEndpoint,
+            revocationEndpoint: (discovery as any).revocationEndpoint,
+            userInfoEndpoint: (discovery as any).userInfoEndpoint,
+            endSessionEndpoint: (discovery as any).endSessionEndpoint,
+          }),
+        )
+        .catch(() => {});
+    }
+  }, [discovery]);
 
   const directRedirectUri =
     Platform.OS === 'web'
@@ -316,7 +350,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshTokens = useCallback(
     async (refreshToken: string): Promise<string | null> => {
-      if (!discovery) return null;
+      // iter-191: fall back to the persisted discovery document so token
+      // refresh works even while (or if) the live discovery fetch is slow
+      // or failing on a flaky connection.
+      const disco = discovery || cachedDiscoveryRef.current;
+      if (!disco) return null;
       // Deduplicate concurrent refresh attempts so multiple Convex callers
       // hitting `getFreshIdToken` at once all share the same network round-trip.
       if (refreshInFlightRef.current) {
@@ -326,7 +364,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           const tokenResult = await AuthSession.refreshAsync(
             { clientId: OIDC_CLIENT_ID, refreshToken },
-            discovery
+            disco
           );
           await storeTokens(tokenResult);
           lastRefreshAtRef.current = Date.now();
@@ -404,6 +442,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await clearTokens();
   }, []);
 
+  // Always call the LATEST refreshTokens (its closure captures `discovery`,
+  // which is null on the very first calls after a cold start).
+  const refreshTokensRef = useRef(refreshTokens);
+  useEffect(() => {
+    refreshTokensRef.current = refreshTokens;
+  }, [refreshTokens]);
+
   const getFreshIdToken = useCallback(async (): Promise<string | null> => {
     const expiryStr = await storage.getItem(STORAGE_KEYS.TOKEN_EXPIRY);
     const expiry = expiryStr ? parseInt(expiryStr, 10) : 0;
@@ -411,7 +456,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const idToken = await storage.getItem(STORAGE_KEYS.ID_TOKEN);
 
     if (Date.now() > expiry - 60000 && refreshToken) {
-      const refreshed = await refreshTokens(refreshToken);
+      // iter-191: on a cold start Convex asks for a token within ~100ms,
+      // long before `useAutoDiscovery` has fetched the OIDC endpoints.
+      // Returning the EXPIRED cached id_token here made Convex run
+      // unauthenticated for the whole session (empty contacts/chats in the
+      // share sheet). Wait up to 5s for discovery (live or cached) so the
+      // refresh can actually happen.
+      if (!discoveryReadyRef.current && !cachedDiscoveryRef.current) {
+        for (let i = 0; i < 20; i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          if (discoveryReadyRef.current || cachedDiscoveryRef.current) break;
+        }
+      }
+      const refreshed = await refreshTokensRef.current(refreshToken);
       if (refreshed) return refreshed;
       // Refresh failed (network blip etc) — fall through and return the
       // cached id_token. Convex may 401 a few times until our background

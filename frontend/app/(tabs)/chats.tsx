@@ -62,6 +62,12 @@ export default function ChatsScreen() {
       setCachedTs(Date.now());
     }
   }, [conversations, userKey]);
+  // iter-191: persist a copy of `me` under a FIXED key so screens that can
+  // mount while Convex is still (re)authenticating — the share sheet — can
+  // resolve the correct per-user cache key instead of falling back to 'anon'.
+  useEffect(() => {
+    if (me?._id) void writeCache('me', 'self', me);
+  }, [me]);
 
   // Prefer live data; fall back to cache while loading.
   const liveList: any[] | null = Array.isArray(conversations) ? conversations : null;

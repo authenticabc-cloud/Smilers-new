@@ -356,3 +356,12 @@ User screenshot: Share-to-Smilers picker showed "No matches" (no Diary row eithe
 - share-receiver now hydrates from the SAME offline cache (readCacheMeta 'conversations'/userKey) + a new 'contacts' scope, with write-through when live data arrives. Live data wins when non-empty.
 - Loading-aware empty state: spinner + "Loading your chats and contacts…" while queries resolve; honest "couldn't load — check connection" copy otherwise (search-specific copy when filtering).
 - eslint 0 errors, tsc 0 errors for the file. Zip at /api/download/frontend-zip REGENERATED (includes iter-188/189/190).
+
+## Session: Feb 2026 — Share sheet REAL root cause: OIDC discovery race (iter-191)
+iter-190 cache fix didn't help (user confirmed with new build). TRUE ROOT CAUSE found in AuthProvider.tsx:
+- On share-sheet cold start, the stored id_token is expired. Convex requests a token within ~100ms, but `refreshTokens()` returned null whenever `useAutoDiscovery` hadn't loaded the OIDC discovery doc yet (network race lost every time). `getFreshIdToken` then handed Convex the EXPIRED token → Convex ran silently UNAUTHENTICATED for the session → getCurrentUser=null, getContacts=[], listConversations=[] (valid empty results, no errors). Chats tab masked it via cache; share-receiver showed "No matches". iter-190's cache fallback ALSO missed because with getCurrentUser=null the cache key fell back to 'anon' while data was cached under the real user id.
+FIXES:
+1. AuthProvider: OIDC discovery document persisted to storage (`smilers_oidc_discovery`); refreshTokens falls back to it — refresh works instantly on every launch after the first.
+2. getFreshIdToken: waits up to 5s for discovery (live or cached) before attempting refresh, and calls refreshTokens via a ref (stale-closure fix: old closure captured discovery=null).
+3. Cache-key fix: `me` persisted under fixed key ('me','self') by chats tab + share-receiver; share-receiver resolves user id from this cache when Convex is unauthenticated, so conversation/contact caches hit correctly.
+- eslint 0 errors, no new tsc errors. Zip REGENERATED. User raised billing complaint → support_agent response delivered verbatim (support@emergent.sh with job ID).
