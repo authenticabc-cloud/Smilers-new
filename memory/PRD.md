@@ -369,3 +369,12 @@ FIXES:
 ## Session: Feb 2026 — Connection status pill on share screen (iter-192)
 - New `/app/frontend/src/components/ConnectionStatusPill.tsx`: 🟢 Connected (socket + Convex auth), 🟡 Signing in… (socket up / auth handshake), ⚪ Offline — showing saved contacts. Uses `useConvexAuth` + `useConvexConnectionState` (convex ^1.37). Mounted under the header in share-receiver.tsx.
 - eslint/tsc clean. Zip regenerated.
+
+## Session: Feb 2026 — User device-test feedback round (iter-193)
+CONFIRMED WORKING by user: desktop login approval ✓, swipe-to-reply ✓, share picker contacts ✓ (iter-191 auth fix verified), earpiece/speaker call audio ✓, MediaProjection picker now appears ✓ (iter-188 verified).
+FIXES THIS ROUND:
+1. APK sharing blocked → root cause was MAX_UPLOAD_BYTES.document=20MB (Smilers APK is 60+MB); raised to 100MB in dataFriendlyDefaults.ts. Scanner already allowed .apk.
+2. Bluetooth call audio → BLUETOOTH_CONNECT runtime permission (Android 12+) was never requested in the call flow; setBluetoothOn() now requests it before SCO routing + extra route re-issue at 1.2s for slow headsets (inCallManager.ts).
+3. Killed-app ringing (beep+short vibration) → TWO causes: (a) backend _resolve_android_channel only scanned the TITLE for "incoming call" but Convex sends WhatsApp-style pushes (title=caller name, body="Incoming voice call") → routed to messages channel; now scans title+message+subtext (kept (incoming|missed) guard to avoid false positives from chat texts like "let's video call"). (b) DEPLOYED backend (app-migration-75.emergent.host) is an OLD version without iter-182 per-token channel storage → USER MUST REDEPLOY the backend via Emergent Deploy. 30/30 pytest pass (2 new regression tests).
+4. Screen share signaling: backend `screenSharing.sendSignal` Server-Errors EVEN AFTER acceptance → Convex backend bug; wrote /app/WEB_AGENT_SCREEN_SHARE_SENDSIGNAL_FIX.md for the user to hand to the web agent (likely wrong table id in ctx.db.get, status guard throw, or 'ice-candidate' literal mismatch).
+Zip regenerated (24MB).

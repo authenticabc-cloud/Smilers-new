@@ -155,32 +155,69 @@ export function setSpeakerOn(on: boolean) {
 export function setBluetoothOn(media: 'audio' | 'video' = 'audio') {
   const native = getNative();
   if (!native) return;
-  safeCall(() => {
-    // 1. Ensure audio session is started — sets system audio mode to
-    //    MODE_IN_COMMUNICATION which is a precondition for SCO.
+  // iter-193: Android 12+ requires the BLUETOOTH_CONNECT *runtime*
+  // permission before the audio service lets an app start Bluetooth SCO.
+  // It was declared in the manifest but never requested at runtime, so
+  // chooseAudioRoute('BLUETOOTH') was silently ignored — "calls work on
+  // earpiece/speaker but not Bluetooth". Request it, then route.
+  void (async () => {
     try {
-      native.start({ media, auto: false });
-    } catch {}
-    if (typeof native.chooseAudioRoute === 'function') {
-      // 2. First call — tells the audio service to prepare BT routing.
-      native.chooseAudioRoute('BLUETOOTH');
-      // 3. Re-issue after 250ms — workaround for Android Audio Service
-      //    occasionally rejecting the first route switch because SCO
-      //    isn't connected yet at that exact tick. Calling twice with
-      //    a small delay is the recommended pattern (mirrors what
-      //    Telegram & Signal do in their native code).
-      setTimeout(() => {
-        try {
-          native.chooseAudioRoute?.('BLUETOOTH');
-        } catch {}
-      }, 250);
-    } else {
-      // Older react-native-incall-manager versions lacked chooseAudioRoute
-      // — there's no clean BT path on those, but we at least don't crash.
-      native.setForceSpeakerphoneOn(false);
-      native.setSpeakerphoneOn(false);
+      if (Platform.OS === 'android' && Platform.Version >= 31) {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { PermissionsAndroid } = require('react-native');
+        const perm = (PermissionsAndroid.PERMISSIONS as any).BLUETOOTH_CONNECT;
+        if (perm) {
+          const has = await PermissionsAndroid.check(perm);
+          if (!has) {
+            const result = await PermissionsAndroid.request(perm);
+            if (result !== PermissionsAndroid.RESULTS.GRANTED) {
+              if (__DEV__) {
+                // eslint-disable-next-line no-console
+                console.warn('[inCallManager] BLUETOOTH_CONNECT denied — BT routing unavailable');
+              }
+              return;
+            }
+          }
+        }
+      }
+    } catch {
+      /* permission API unavailable — fall through and try anyway */
     }
-  }, 'setBluetoothOn');
+    safeCall(() => {
+      // 1. Ensure audio session is started — sets system audio mode to
+      //    MODE_IN_COMMUNICATION which is a precondition for SCO.
+      try {
+        native.start({ media, auto: false });
+      } catch {}
+      if (typeof native.chooseAudioRoute === 'function') {
+        // 2. First call — tells the audio service to prepare BT routing.
+        native.chooseAudioRoute('BLUETOOTH');
+        // 3. Re-issue after 250ms — workaround for Android Audio Service
+        //    occasionally rejecting the first route switch because SCO
+        //    isn't connected yet at that exact tick. Calling twice with
+        //    a small delay is the recommended pattern (mirrors what
+        //    Telegram & Signal do in their native code).
+        setTimeout(() => {
+          try {
+            native.chooseAudioRoute?.('BLUETOOTH');
+          } catch {}
+        }, 250);
+        // 4. iter-193: one more late re-issue at 1.2s — SCO link setup on
+        //    some headsets (especially buds with multipoint) takes ~1s;
+        //    without this the route falls back to earpiece.
+        setTimeout(() => {
+          try {
+            native.chooseAudioRoute?.('BLUETOOTH');
+          } catch {}
+        }, 1200);
+      } else {
+        // Older react-native-incall-manager versions lacked chooseAudioRoute
+        // — there's no clean BT path on those, but we at least don't crash.
+        native.setForceSpeakerphoneOn(false);
+        native.setSpeakerphoneOn(false);
+      }
+    }, 'setBluetoothOn');
+  })();
 }
 
 /**

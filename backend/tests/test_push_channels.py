@@ -70,3 +70,29 @@ def test_title_with_word_call_but_not_a_call_stays_message():
         _resolve_android_channel({"title": "Ana replied. Call me maybe lyrics"})
         == "messages-v3"
     )
+
+
+def test_whatsapp_style_call_push_routes_to_calls():
+    """iter-193 regression: Convex sends title=<caller name>, body='Incoming
+    voice call…' — the old title-only regex classified these as messages,
+    causing the killed-app beep+short-vibration instead of a full ring."""
+    assert _resolve_android_channel(
+        {"title": "Edward Marku", "message": "Incoming voice call"}
+    ) == "calls"
+    assert _resolve_android_channel(
+        {"title": "Edward Marku", "message": "📹 Incoming video call from Edward"}
+    ) == "calls"
+    assert _resolve_android_channel(
+        {"title": "Edward Marku", "subtext": "Missed voice call"}
+    ) == "calls"
+    # Sanity: a normal text message about a phone call must NOT ring.
+    assert _resolve_android_channel(
+        {"title": "Edward Marku", "message": "see you at 5"}
+    ) == "messages-v3"
+
+
+def test_per_token_call_channel_override_with_body_detection():
+    token_doc = {"call_channel_id": "calls-v4-smilers_never_cry"}
+    assert _resolve_android_channel(
+        {"title": "Edward Marku", "message": "Incoming voice call"}, token_doc
+    ) == "calls-v4-smilers_never_cry"

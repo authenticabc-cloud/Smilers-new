@@ -639,13 +639,19 @@ def _resolve_android_channel(data: dict, token_doc: dict | None = None) -> str:
       3. Type-derived default: "calls" for call payloads, else "messages-v3"
     """
     explicit = str(data.get("channel_id") or "").strip()
-    title = str(data.get("title") or "")
+    # iter-193: scan title AND body AND subtext. Convex sends WhatsApp-style
+    # call pushes (title = caller's NAME, body = "Incoming voice call…"),
+    # so a title-only regex classified them as messages → short beep +
+    # short vibration instead of the full ring when the app is killed.
+    haystack = " ".join(
+        str(data.get(k) or "") for k in ("title", "message", "subtext")
+    )
     action_url = str(data.get("action_url") or "")
     is_call = (
         explicit.startswith("calls")
-        or str(data.get("type") or "").strip() == "call"
+        or str(data.get("type") or "").strip() in ("call", "incoming-call")
         or action_url.startswith("/call")
-        or bool(re.search(r"\b(incoming|missed)\b[^.]*\bcall\b", title, re.IGNORECASE))
+        or bool(re.search(r"\b(incoming|missed)\b[^.]*\bcall", haystack, re.IGNORECASE))
     )
     if token_doc:
         override = token_doc.get("call_channel_id" if is_call else "message_channel_id")
