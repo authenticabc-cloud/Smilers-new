@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -139,10 +139,34 @@ export default function ContactsScreen() {
   // invite Share message carries a deep link with the code (matches
   // earnings page behavior). Falls back to a plain link.
   const earningsProfile = useQuery((api as any).earnings?.getMyProfile, {}) as any | undefined;
-  const referralCode: string =
+  // iter-198: ALWAYS have a referral code ready — mirror the earnings
+  // page's auto-create pattern. Previously, users who never opened the
+  // Earnings screen had no code yet, so their invites went out WITHOUT
+  // referral attribution (user confirmed this happened in production).
+  const generateCodeM = useMutation((api as any).earnings?.getOrCreateReferralCode);
+  const [localReferralCode, setLocalReferralCode] = useState<string | null>(null);
+  const triedCreateCodeRef = useRef(false);
+  const profileLoaded = earningsProfile !== undefined;
+  const profileCode: string =
     (earningsProfile?.referralCode && String(earningsProfile.referralCode)) ||
     (earningsProfile?.code && String(earningsProfile.code)) ||
     '';
+  useEffect(() => {
+    if (!profileLoaded || profileCode || triedCreateCodeRef.current) return;
+    if (typeof generateCodeM !== 'function') return;
+    triedCreateCodeRef.current = true;
+    (async () => {
+      try {
+        const result: any = await (generateCodeM as any)({});
+        const value =
+          typeof result === 'string' ? result : (result?.code || result?.referralCode || '');
+        if (value) setLocalReferralCode(String(value));
+      } catch (errorValue: any) {
+        console.warn('[contacts] getOrCreateReferralCode failed:', errorValue?.message);
+      }
+    })();
+  }, [profileLoaded, profileCode, generateCodeM]);
+  const referralCode: string = profileCode || localReferralCode || '';
   // iter-186: invites now deep-link to the published Play Store listing
   // (with the referral code in both the referrer param and the text).
   const inviteUrl = buildInviteUrl(referralCode);

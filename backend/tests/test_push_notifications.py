@@ -103,16 +103,21 @@ class TestSendPushInternal:
     def test_correct_header_returns_202(self, api_client, base_url):
         if not INTERNAL_PUSH_TOKEN:
             pytest.skip("INTERNAL_PUSH_TOKEN not configured in /app/backend/.env")
+        # iter-198: payload must be unique per run — the backend now dedupes
+        # repeated idempotency keys / identical content (cross-trigger dedupe).
+        import uuid
+
+        unique = uuid.uuid4().hex
         resp = api_client.post(
             f"{base_url}/api/send-push-internal",
             json={
                 "recipients": ["TEST_user_send_internal"],
                 "title": "TEST Title",
-                "message": "TEST Message",
+                "message": f"TEST Message {unique}",
                 "subtext": "subtext",
                 "image_url": "https://example.com/img.png",
                 "action_url": "/chats/abc",
-                "idempotency_key": "TEST_idem_001",
+                "idempotency_key": f"TEST_idem_{unique}",
             },
             headers={"X-Internal-Push-Token": INTERNAL_PUSH_TOKEN},
         )

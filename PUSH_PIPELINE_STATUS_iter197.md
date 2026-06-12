@@ -1,7 +1,29 @@
-# PUSH PIPELINE — STATUS & WEB-AGENT/CONVEX CHECKLIST (iter-197)
+# PUSH PIPELINE — STATUS & WEB-AGENT/CONVEX CHECKLIST (iter-197/198)
 
-> Date: 2026-06-12. Author: mobile agent. Audience: the user + the web agent
-> maintaining the Convex deployment (`aware-newt-456.convex.cloud`).
+> Updated 2026-06-12 (iter-198). Author: mobile agent.
+
+## iter-198 UPDATE — pushes no longer depend on Convex triggers
+
+The user's killed-app test produced ZERO entries in the trigger log →
+**Convex never POSTed /api/send-push-internal for real messages/calls.**
+Rather than wait for the web agent, the mobile app now fires pushes
+ITSELF (sender-side trigger):
+
+- New endpoint `POST /api/notify-event` (no auth, recipients = CONVEX user
+  ids, validated + rate-capped at 20 recipients).
+- The sender's device calls it right after a successful
+  `api.messages.send` / `api.calls.initiateCall`.
+- Push registration now also stores `convex_user_id` (from
+  `api.users.getCurrentUser`) so the backend can match recipients by
+  EITHER the OIDC sub or the Convex id.
+- Cross-trigger dedupe (idempotency key 10 min + content hash 60 s):
+  if Convex triggers ever come back, recipients still get exactly ONE
+  notification. VERIFIED live: duplicate POST → `{"status":"duplicate"}`.
+
+**Live-verified 2026-06-12 18:02 UTC:** message push → phone 1 delivered;
+call push (rings on calls channel) → phone 2 delivered; duplicate
+suppressed. 41/41 backend tests pass.
+
 
 ## What was proven working today (live device tests)
 

@@ -40,6 +40,7 @@ import ScreenShareOverlay from '../../src/components/ScreenShareOverlay';
 import ScreenShareSwitchControls from '../../src/components/ScreenShareSwitchControls';
 import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials, getDisplayNameFromUser } from '../../src/lib/displayName';
 import { useAuth } from '../../src/providers/AuthProvider';
+import { notifyEventPush } from '../../src/lib/notifyPush';
 import { useConversationOtherUser } from '../../src/hooks/useConversationOtherUser';
 import { useReactiveSafeConvexQuery } from '../../src/hooks/useReactiveSafeConvexQuery';
 import { useEngagementTracker } from '../../src/hooks/useEngagementTracker';
@@ -638,6 +639,32 @@ function CallScreenInner() {
       try {
         const id: any = await initiateCall({ conversationId, callType: requestedType });
         if (!cancelled && id) setCallId(id);
+        // iter-198 SENDER-SIDE CALL PUSH: ring the callee's device even when
+        // their app is killed. The Convex backend's own push trigger was
+        // proven absent during live diagnosis (2026-06-12), so the caller's
+        // device fires the FCM push directly via our FastAPI backend. The
+        // backend dedupes by call id if Convex triggers ever come back.
+        if (id) {
+          try {
+            const meId = me?._id ? String(me._id) : null;
+            const recipients = getConversationMemberIds(
+              { ...(conversation || {}), otherUser: (conversation as any)?.otherUser || fetchedOtherUser },
+              meId,
+            );
+            const callerName = getDisplayNameFromUser(me, 'Smilers');
+            notifyEventPush({
+              recipients,
+              event: 'call',
+              title: callerName,
+              message: requestedType === 'video' ? 'Incoming video call' : 'Incoming voice call',
+              conversationId: String(conversationId),
+              callId: String(id),
+              callType: requestedType === 'video' ? 'video' : 'voice',
+              displayName: callerName,
+              idempotencyKey: String(id),
+            });
+          } catch {}
+        }
       } catch (errorValue: any) {
         if (!cancelled) {
           console.warn('initiateCall failed:', errorValue?.message);
@@ -647,7 +674,7 @@ function CallScreenInner() {
     return () => {
       cancelled = true;
     };
-  }, [activeCall, activeCallLoading, callId, canRunCallQueries, conversation, conversationId, conversationLoading, initiateCall, isAuthenticated, isConferenceMode, isScreenOnly, me, meLoading, requestedType]);
+  }, [activeCall, activeCallLoading, callId, canRunCallQueries, conversation, conversationId, conversationLoading, fetchedOtherUser, initiateCall, isAuthenticated, isConferenceMode, isScreenOnly, me, meLoading, requestedType]);
 
   // ====== Update status text based on state ======
   useEffect(() => {

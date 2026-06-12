@@ -24,6 +24,8 @@ import { useCallback, useEffect, useRef } from 'react';
 import { AppState, AppStateStatus, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
+import { useQuery } from 'convex/react';
+import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
 import { recordDiagnostic } from '../lib/diagnostics';
 import {
@@ -48,6 +50,10 @@ type RegisterState =
 let lastDeviceToken: string | null = null;
 let lastRegisteredUserId: string | null = null;
 let lastRegisteredAt = 0;
+// iter-198: the Convex users._id registered alongside the OIDC sub —
+// client-triggered pushes (/api/notify-event) address recipients by
+// Convex id, so the backend needs this mapping.
+let lastConvexUserId: string | null = null;
 
 /**
  * iter-182: re-POST the registration for the last known device/user —
@@ -67,6 +73,7 @@ export async function reregisterPushDevice(): Promise<void> {
       userId,
       platform: Platform.OS as 'ios' | 'android',
       deviceToken: token,
+      convexUserId: lastConvexUserId,
     });
     lastRegisteredAt = Date.now();
   } catch (errorValue: any) {
@@ -84,6 +91,7 @@ async function postRegisterPush(opts: {
   userId: string;
   platform: 'ios' | 'android';
   deviceToken: string;
+  convexUserId?: string | null;
 }): Promise<void> {
   if (!BACKEND_URL) {
     throw new Error('EXPO_PUBLIC_BACKEND_URL is not configured.');
@@ -167,6 +175,13 @@ export function useEmergentPush() {
   const inFlightRef = useRef<Promise<void> | null>(null);
 
   const userId = userInfo?.sub || null;
+  // iter-198: capture the Convex users._id alongside the OIDC sub so the
+  // backend can match client-triggered pushes addressed by Convex id.
+  const me = useQuery(
+    api.users.getCurrentUser,
+    isAuthenticated && Platform.OS !== 'web' ? {} : 'skip',
+  ) as any | null | undefined;
+  const convexUserId: string | null = me?._id ? String(me._id) : null;
 
   const register = useCallback(async () => {
     if (Platform.OS === 'web') {
@@ -210,11 +225,13 @@ export function useEmergentPush() {
         }
 
         // Throttle redundant re-registrations for the same user+token
-        // within a 5-minute window.
+        // within a 5-minute window — UNLESS the Convex user id just
+        // became available (we must persist the id mapping promptly).
         const now = Date.now();
         if (
           lastDeviceToken === deviceToken &&
           lastRegisteredUserId === userId &&
+          (!convexUserId || lastConvexUserId === convexUserId) &&
           now - lastRegisteredAt < 5 * 60 * 1000
         ) {
           stateRef.current = 'registered';
@@ -226,10 +243,12 @@ export function useEmergentPush() {
           userId,
           platform: Platform.OS as 'ios' | 'android',
           deviceToken,
+          convexUserId,
         });
 
         lastDeviceToken = deviceToken;
         lastRegisteredUserId = userId;
+        if (convexUserId) lastConvexUserId = convexUserId;
         lastRegisteredAt = now;
         stateRef.current = 'registered';
         try {
@@ -254,7 +273,7 @@ export function useEmergentPush() {
       }
     })();
     return inFlightRef.current;
-  }, [isAuthenticated, userId]);
+  }, [isAuthenticated, userId, convexUserId]);
 
   // 1) Register once on auth ready
   useEffect(() => {

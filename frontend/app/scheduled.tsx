@@ -280,7 +280,22 @@ export default function ScheduledScreen() {
     );
   }
 
-  const list = Array.isArray(items) ? items : [];
+  // iter-198: hide one-time schedules whose fire time has already passed —
+  // they either fired or expired. The web app's scheduled list does the
+  // same, so this keeps both UIs in sync (the user reported the mobile
+  // list showing a pile of stale Jun-11/Jun-12 entries the web app hides).
+  const list = (Array.isArray(items) ? items : []).filter((s: any) => {
+    if (!s || s.repeat !== 'once') return true;
+    try {
+      const [y, mo, d] = String(s.date || '').split('-').map((n: string) => parseInt(n, 10));
+      const [h, mi] = String(s.time || '00:00').split(':').map((n: string) => parseInt(n, 10));
+      if (!y || !mo || !d) return true;
+      const when = new Date(y, (mo || 1) - 1, d || 1, h || 0, mi || 0, 0, 0);
+      return when.getTime() > Date.now() - 5 * 60_000;
+    } catch {
+      return true;
+    }
+  });
   const hasLocalDrafts = localDrafts.length > 0;
 
   return (

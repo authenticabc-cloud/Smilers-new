@@ -410,3 +410,21 @@ FIXES (frontend, in regenerated zip):
 TESTS: 36/36 pytest (new tests/test_push_routing.py), eslint 0 errors, tsc baseline clean for touched files. Zip REGENERATED (24MB).
 DOC: /app/PUSH_PIPELINE_STATUS_iter197.md — Convex env checklist (MOBILE_BACKEND_URL must = preview URL for now; recipients = OIDC sub) + verification steps.
 PENDING USER VERIFICATION: (1) test call+message between phones with receiver app killed → then check /api/push-debug?triggers=10 to confirm Convex triggers; (2) rebuild via EAS from new zip → verify Smilers icon, tap-routing, upload progress UI, Bluetooth auto-switch, large APK sharing.
+
+## Session: Feb 2026 cont. (iter-198) — SENDER-SIDE PUSH TRIGGERS (Convex-independent)
+User re-tested killed-app: still nothing → trigger log proved Convex NEVER POSTs send-push-internal for real messages/calls. Decision: make pushes independent of Convex triggers.
+BACKEND (preview, live):
+- POST /api/notify-event — client-fired push trigger (recipients = Convex user ids, event message|call|missed-call, validation caps, builds action_url, reuses send_push channels/TTL/routing).
+- push_tokens now store convex_user_id (sent at registration); send_push matches $or(user_id, convex_user_id).
+- Cross-trigger dedupe: _is_duplicate_push (idempotency_key 10min + content sha1 60s window, push_dedupe collection) applied to BOTH notify-event and send-push-internal → exactly one notification if Convex triggers ever return.
+- send-push-internal logs full recipient ids (requested_ids/unmatched_ids).
+LIVE E2E VERIFIED 18:02 UTC: message push delivered (1/1), duplicate suppressed, call push delivered (1/1, rings calls channel). 41/41 pytest (new dedupe/hash tests; pytest.ini loop scope session fix; uuid-unique test payloads).
+FRONTEND (in zip, NEEDS REBUILD):
+- src/lib/notifyPush.ts (fire-and-forget notifyEventPush + previewForMessageType).
+- chat/[conversationId].tsx: sendMessage wrapped → fires message push to all other participants (Convex ids via pushNotifyCtxRef populated from hydratedConversation; works for groups). Preview: text or 📷/🎥/🎤/📎.
+- call/[conversationId].tsx: after initiateCall success → fires call push (callerName, voice/video, callId as idempotency key).
+- useEmergentPush: registers convex_user_id (api.users.getCurrentUser), throttle busts when convex id appears.
+- scheduled.tsx: hides past one-time schedules (matches web; fixes duplicate stale Jun-11/12 entries complaint). NOTE: 'Unknown' recipient label is server-side data (web agent's listMine should return display names).
+- contacts.tsx: referral code auto-create fallback (getOrCreateReferralCode) so invite links ALWAYS carry the referral code (user's invite went out without code because profile had none).
+ZIP regenerated 18:05 (24MB) with all of the above + Smilers branding.
+REMAINING after user rebuild: verify killed-app ring/messages e2e; production migration (redeploy backend + Convex MOBILE_BACKEND_URL + bake deployed URL — all three together); foreground suppression of banners for the actively-open chat (polish).

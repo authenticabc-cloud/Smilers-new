@@ -66,3 +66,51 @@ class TestDeadTokenMarkers:
         markers = server_module._DEAD_TOKEN_MARKERS
         transient = "DeadlineExceeded: timed out"
         assert not any(m in transient for m in markers)
+
+
+class TestPushContentHash:
+    def test_deterministic_and_order_insensitive(self, server_module):
+        h1 = server_module._push_content_hash(
+            ["b", "a"], {"title": "T", "message": "M", "action_url": "/chat/1"}
+        )
+        h2 = server_module._push_content_hash(
+            ["a", "b"], {"title": "T", "message": "M", "action_url": "/chat/1"}
+        )
+        assert h1 == h2
+
+    def test_differs_on_content(self, server_module):
+        h1 = server_module._push_content_hash(["a"], {"title": "T", "message": "M1"})
+        h2 = server_module._push_content_hash(["a"], {"title": "T", "message": "M2"})
+        assert h1 != h2
+
+
+class TestDuplicatePushDetection:
+    """iter-198 cross-trigger dedupe: client-fired (/api/notify-event) and
+    Convex-fired (/api/send-push-internal) pushes for the same message must
+    collapse into ONE notification."""
+
+    @pytest.mark.asyncio
+    async def test_second_call_with_same_key_is_duplicate(self, server_module):
+        import uuid
+
+        key = f"test-{uuid.uuid4()}"
+        first = await server_module._is_duplicate_push(key, None)
+        second = await server_module._is_duplicate_push(key, None)
+        assert first is False
+        assert second is True
+
+    @pytest.mark.asyncio
+    async def test_same_content_hash_within_window_is_duplicate(self, server_module):
+        import uuid
+
+        content = server_module._push_content_hash(
+            [f"u-{uuid.uuid4()}"], {"title": "T", "message": "M"}
+        )
+        first = await server_module._is_duplicate_push(None, content)
+        second = await server_module._is_duplicate_push(None, content)
+        assert first is False
+        assert second is True
+
+    @pytest.mark.asyncio
+    async def test_no_keys_never_duplicate(self, server_module):
+        assert await server_module._is_duplicate_push(None, None) is False

@@ -45,6 +45,7 @@ import { readCache, writeCache } from '../../src/lib/offlineCache';
 import { shareMessage } from '../../src/lib/messageMedia';
 import { appendDiaryEntry, chatMessageToDiaryEntry } from '../../src/lib/diaryStore';
 import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
+import { notifyEventPush, previewForMessageType } from '../../src/lib/notifyPush';
 import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { getLanguageByCode } from '../../src/lib/languages';
@@ -343,7 +344,36 @@ export default function ChatScreen() {
     (api as any).conversations?.setDisappearingMessages,
   );
 
-  const sendMessage = useMutation(api.messages.send);
+  const sendMessageRaw = useMutation(api.messages.send);
+  // iter-198 SENDER-SIDE MESSAGE PUSH: the Convex backend's push trigger was
+  // proven absent during live diagnosis (2026-06-12) — no
+  // /api/send-push-internal call ever arrived for real messages. So the
+  // sender's device now fires the recipient's push itself right after a
+  // successful send. The backend dedupes (message id + content hash), so
+  // recipients get exactly ONE notification even if Convex triggers return.
+  // Context (recipients + sender name) is kept in a ref because the
+  // hydrated conversation is computed much later in this component.
+  const pushNotifyCtxRef = useRef<{ recipients: string[]; senderName: string } | null>(null);
+  const sendMessage = useCallback(
+    async (args: any) => {
+      const result = await sendMessageRaw(args);
+      try {
+        const ctx = pushNotifyCtxRef.current;
+        if (ctx && ctx.recipients.length > 0) {
+          notifyEventPush({
+            recipients: ctx.recipients,
+            event: 'message',
+            title: ctx.senderName,
+            message: previewForMessageType(args?.type, typeof args?.text === 'string' ? args.text : null),
+            conversationId: String(args?.conversationId || conversationId || ''),
+            idempotencyKey: result != null ? String(result) : null,
+          });
+        }
+      } catch {}
+      return result;
+    },
+    [sendMessageRaw, conversationId],
+  );
   const setTyping = useMutation(api.typing.setTyping);
   const markDelivered = useMutation((api as any).messages.markDelivered);
   const markRead = useMutation(api.messages.markRead);
@@ -2033,6 +2063,37 @@ export default function ChatScreen() {
     if (!fetchedOtherUser) return conversation;
     return { ...conversation, otherUser: fetchedOtherUser };
   }, [conversation, fetchedOtherUser]);
+
+  // iter-198: keep the sender-side push context fresh (see sendMessage
+  // wrapper above). Recipients = every other participant's Convex id.
+  useEffect(() => {
+    const meId = me?._id ? String(me._id) : null;
+    const ids = new Set<string>();
+    const addId = (value: any) => {
+      const s = value == null ? '' : String(value).trim();
+      if (s && s !== meId) ids.add(s);
+    };
+    const conv: any = hydratedConversation || {};
+    addId(conv?.otherUser?._id);
+    addId(conv?.otherUser?.userId);
+    addId(conv?.otherUserId);
+    [conv?.memberIds, conv?.participantIds, conv?.userIds].forEach((list: any) => {
+      if (Array.isArray(list)) list.forEach(addId);
+    });
+    [conv?.participants, conv?.members].forEach((list: any) => {
+      if (!Array.isArray(list)) return;
+      list.forEach((p: any) => {
+        if (p && typeof p === 'object') {
+          addId(p.userId);
+          addId(p._id);
+        } else {
+          addId(p);
+        }
+      });
+    });
+    const senderName = String(me?.name || me?.displayName || 'New message');
+    pushNotifyCtxRef.current = { recipients: Array.from(ids).slice(0, 20), senderName };
+  }, [hydratedConversation, me]);
 
   const mergedPresenceSource = useMemo(
     () => ({

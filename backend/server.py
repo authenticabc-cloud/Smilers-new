@@ -556,6 +556,11 @@ class RegisterPushBody(BaseModel):
     # sends route into these channels so the chosen sound actually plays.
     call_channel_id: str | None = None
     message_channel_id: str | None = None
+    # iter-198: the user's Convex `users._id`. Mobile clients only know
+    # OTHER participants by their Convex id (conversation.otherUser._id),
+    # so client-triggered pushes (/api/notify-event) address recipients
+    # by Convex id. Storing it here lets send_push match on EITHER id.
+    convex_user_id: str | None = None
 
 
 @api_router.post("/register-push", status_code=201)
@@ -587,6 +592,9 @@ async def register_push(body: RegisterPushBody):
             update_set["call_channel_id"] = body.call_channel_id
         if body.message_channel_id:
             update_set["message_channel_id"] = body.message_channel_id
+        # iter-198: persist the Convex user id for client-triggered pushes.
+        if body.convex_user_id:
+            update_set["convex_user_id"] = body.convex_user_id
         await db.push_tokens.update_one(
             {
                 "user_id": body.user_id,
@@ -701,6 +709,65 @@ def _derive_push_routing(data: dict) -> dict[str, str]:
 _DEAD_TOKEN_MARKERS = ("UnregisteredError", "Requested entity was not found", "NotFoundError")
 
 
+async def _is_duplicate_push(
+    idempotency_key: str | None,
+    content_hash: str | None,
+) -> bool:
+    """
+    iter-198: cross-trigger dedupe. Pushes can now originate from TWO
+    sources — Convex server triggers (/api/send-push-internal) and the
+    sender's own device (/api/notify-event). If both fire for the same
+    message/call, the recipient must still get exactly ONE notification.
+
+    - idempotency_key (the Convex message/call id) dedupes for 10 min.
+    - content_hash (recipients+title+body+action_url) dedupes for 60 s,
+      catching double-triggers even when the two sources use different
+      keys.
+    Records are written with a `ts` used by a TTL index (best-effort).
+    """
+    now = datetime.now(timezone.utc)
+    try:
+        keys = []
+        if idempotency_key:
+            keys.append(f"key:{idempotency_key}")
+        if content_hash:
+            keys.append(f"hash:{content_hash}")
+        if not keys:
+            return False
+        existing = await db.push_dedupe.find({"k": {"$in": keys}}).to_list(length=4)
+        for doc in existing:
+            ts = doc.get("ts")
+            if not ts:
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            age = (now - ts).total_seconds()
+            window = 600 if str(doc.get("k", "")).startswith("key:") else 60
+            if age < window:
+                return True
+        for k in keys:
+            await db.push_dedupe.update_one(
+                {"k": k}, {"$set": {"k": k, "ts": now}}, upsert=True
+            )
+    except Exception as e:
+        logger.warning(f"push dedupe check failed (treating as not-duplicate): {e}")
+    return False
+
+
+def _push_content_hash(recipients: list[str], data: dict) -> str:
+    import hashlib
+
+    raw = "|".join(
+        [
+            ",".join(sorted(recipients)),
+            str(data.get("title") or ""),
+            str(data.get("message") or ""),
+            str(data.get("action_url") or ""),
+        ]
+    )
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
 async def _prune_dead_token(token_doc: dict, error_message: str | None) -> bool:
     """Remove FCM tokens that Firebase reports as permanently dead so the
     store stays healthy (stale tokens from uninstalled/rebuilt apps)."""
@@ -761,7 +828,17 @@ async def send_push(
     # in parallel via Firebase Admin SDK.
     if _ensure_firebase_initialized():
         try:
-            cursor = db.push_tokens.find({"user_id": {"$in": recipients}})
+            # iter-198: match on the OIDC sub (what mobile registers as
+            # user_id) OR the Convex users._id (what client-triggered
+            # pushes know recipients by).
+            cursor = db.push_tokens.find(
+                {
+                    "$or": [
+                        {"user_id": {"$in": recipients}},
+                        {"convex_user_id": {"$in": recipients}},
+                    ]
+                }
+            )
             tokens = await cursor.to_list(length=500)
             stats["token_count"] = len(tokens)
             if tokens:
@@ -903,6 +980,17 @@ async def send_push_internal(
     if body.channel_id:
         data["channel_id"] = body.channel_id
 
+    # iter-198: cross-trigger dedupe — the sender's device may have already
+    # fired this exact push via /api/notify-event.
+    if await _is_duplicate_push(
+        body.idempotency_key, _push_content_hash(body.recipients, data)
+    ):
+        logger.info(
+            f"send-push-internal: DUPLICATE suppressed title={body.title!r} "
+            f"key={body.idempotency_key!r}"
+        )
+        return {"status": "duplicate", "delivery": {"deduped": True}}
+
     delivery: dict = {
         "requested_recipients": body.recipients,
         "requested_count": len(body.recipients),
@@ -987,6 +1075,109 @@ async def send_push_internal(
         logger.warning(f"send-push-internal: trigger log write failed: {e}")
 
     return {"status": "accepted", "delivery": delivery}
+
+
+class NotifyEventBody(BaseModel):
+    """iter-198: client-triggered push. The SENDER's device calls this
+    right after a successful Convex send/initiateCall so the recipient
+    gets a push even if the Convex backend's own trigger is missing or
+    misconfigured. Recipients are CONVEX user ids (the only id the
+    client knows other users by); send_push matches them against the
+    `convex_user_id` field captured at registration."""
+
+    recipients: List[str]
+    event: str  # "message" | "call" | "missed-call"
+    title: str
+    message: str
+    conversation_id: str | None = None
+    call_id: str | None = None
+    call_type: str | None = None  # "voice" | "video"
+    display_name: str | None = None
+    idempotency_key: str | None = None
+
+
+@api_router.post("/notify-event", status_code=202)
+async def notify_event(body: NotifyEventBody):
+    from urllib.parse import quote
+
+    recipients = [str(r).strip() for r in (body.recipients or []) if str(r).strip()]
+    if not recipients:
+        raise HTTPException(400, "recipients is required")
+    if len(recipients) > 20:
+        recipients = recipients[:20]
+    event = body.event if body.event in ("message", "call", "missed-call") else "message"
+    title = (body.title or "").strip()[:120] or "Smilers"
+    message = (body.message or "").strip()[:300] or (
+        "Incoming call" if event == "call" else "New message"
+    )
+    conv = (body.conversation_id or "").strip()[:128]
+
+    if event == "call":
+        display = (body.display_name or title).strip()[:80]
+        action_url = f"/call/{conv}" if conv else "/"
+        params = []
+        if display:
+            params.append(f"displayName={quote(display)}")
+        if body.call_type in ("voice", "video"):
+            params.append(f"type={body.call_type}")
+        if params:
+            action_url += "?" + "&".join(params)
+    elif event == "missed-call":
+        action_url = f"/chat/{conv}" if conv else "/notifications"
+    else:
+        action_url = f"/chat/{conv}" if conv else "/notifications"
+
+    data: dict = {"title": title, "message": message, "action_url": action_url}
+
+    if await _is_duplicate_push(
+        body.idempotency_key, _push_content_hash(recipients, data)
+    ):
+        logger.info(f"notify-event: DUPLICATE suppressed title={title!r} key={body.idempotency_key!r}")
+        return {"status": "duplicate"}
+
+    stats: dict = {}
+    try:
+        stats = await send_push(
+            recipients=recipients,
+            data=data,
+            idempotency_key=body.idempotency_key,
+        )
+    except Exception as e:
+        logger.warning(f"notify-event: send_push raised: {e}")
+        stats = {"errors": [str(e)]}
+
+    logger.info(
+        f"notify-event: event={event} recipients={recipients} "
+        f"tokens={stats.get('token_count', 0)} delivered={stats.get('success_count', 0)} "
+        f"title={title!r}"
+    )
+
+    # Same diagnostic trail as Convex triggers — visible via
+    # /api/push-debug?triggers=N with source="client".
+    try:
+        await db.push_trigger_log.insert_one(
+            {
+                "ts": datetime.now(timezone.utc),
+                "source": "client",
+                "event": event,
+                "title": title,
+                "message": message[:200],
+                "action_url": action_url,
+                "recipients": recipients,
+                "fcm_success_count": stats.get("success_count", 0),
+                "fcm_error_count": stats.get("error_count", 0),
+                "fcm_errors": (stats.get("errors") or [])[:5],
+                "token_count": stats.get("token_count", 0),
+            }
+        )
+    except Exception as e:
+        logger.warning(f"notify-event: trigger log write failed: {e}")
+
+    return {
+        "status": "accepted",
+        "token_count": stats.get("token_count", 0),
+        "delivered": stats.get("success_count", 0),
+    }
 
 
 @api_router.get("/push-debug")
