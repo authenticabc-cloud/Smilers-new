@@ -64,6 +64,21 @@ async def root():
     return {"message": "Hello World"}
 
 
+@api_router.get("/download/frontend-zip")
+async def download_frontend_zip():
+    """Serve the frontend source zip (created for the user's local EAS build
+    when their network couldn't clone the full repository)."""
+    from fastapi.responses import FileResponse
+    zip_path = Path(__file__).parent / "downloads" / "smilers-frontend.zip"
+    if not zip_path.exists():
+        raise HTTPException(status_code=404, detail="Zip not found")
+    return FileResponse(
+        path=str(zip_path),
+        media_type="application/zip",
+        filename="smilers-frontend.zip",
+    )
+
+
 @api_router.post("/translate", response_model=TranslationResponse)
 async def translate_text(payload: TranslationRequest):
     text = (payload.text or "").strip()
