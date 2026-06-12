@@ -350,3 +350,9 @@ After iter-188 fix, user's debug overlay showed the NEXT failure layer: `screenS
 - `peerConnected` state from onConnectionStateChange → ScreenShareOverlay sharer copy now says "Waiting for the recipient to accept…" until WebRTC is actually connected.
 - Queue cleared on unmount. eslint 0 errors, tsc no new errors. NEEDS DEVICE VERIFICATION (2 phones: request → accept → picker → stream).
 - NOTE: frontend zip download endpoint `/api/download/frontend-zip` (added this session) — zip REGENERATED after this fix.
+
+## Session: Feb 2026 — Share Sheet "contacts do not appear" fix (iter-190)
+User screenshot: Share-to-Smilers picker showed "No matches" (no Diary row either) despite a full address book. ROOT CAUSE: `app/share-receiver.tsx` had no offline/cold-start resilience — its useSafeConvexQuery calls silently settle to [] when the Convex websocket is down (roaming/flaky network) or the auth handshake races; the Chats tab masks the same condition via its iter-160 AsyncStorage cache. FIXES:
+- share-receiver now hydrates from the SAME offline cache (readCacheMeta 'conversations'/userKey) + a new 'contacts' scope, with write-through when live data arrives. Live data wins when non-empty.
+- Loading-aware empty state: spinner + "Loading your chats and contacts…" while queries resolve; honest "couldn't load — check connection" copy otherwise (search-specific copy when filtering).
+- eslint 0 errors, tsc 0 errors for the file. Zip at /api/download/frontend-zip REGENERATED (includes iter-188/189/190).

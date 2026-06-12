@@ -58,6 +58,7 @@ import { useAuth } from '../src/providers/AuthProvider';
 import { useAppShareIntent } from '../src/lib/shareIntentContext';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { appendDiaryEntry, type DiaryEntryKind } from '../src/lib/diaryStore';
+import { readCacheMeta, writeCache } from '../src/lib/offlineCache';
 import { getRecentShareTargets, recordShareTargets } from '../src/lib/recentShareTargets';
 import { uploadFile } from '../src/lib/uploadFile';
 import { scanMessage as scanMessageDeep } from '../src/lib/messageSecurityScanner';
@@ -179,22 +180,72 @@ function ShareReceiverNative() {
   // Using `useSafeConvexQuery` (the same wrapper Contacts uses) is the
   // safer pattern here — it tolerates a missing function ref on early
   // mounts and dynamically toggles `enabled` based on auth.
-  const { data: conversationsData } = useSafeConvexQuery<any[]>(
+  const { data: conversationsData, loading: conversationsLoading } = useSafeConvexQuery<any[]>(
     api.conversations.listConversations,
     {},
     [],
     !!isAuthenticated,
   );
-  const conversations: any[] | undefined = conversationsData;
 
   // Contacts — full directory for search-by-name.
-  const { data: contactsData } = useSafeConvexQuery<any[]>(
+  const { data: contactsData, loading: contactsLoading } = useSafeConvexQuery<any[]>(
     api.contacts.getContacts,
     {},
     [],
     !!isAuthenticated,
   );
-  const contacts: any[] | undefined = contactsData;
+
+  // iter-190 ("contacts do not appear" fix): hydrate from the SAME offline
+  // cache the Chats tab maintains (scope 'conversations', iter-160). On a
+  // flaky connection / cold-start auth race the live queries silently
+  // settle to [] — the Chats tab masks that with its cache, but this
+  // screen showed "No matches" with a full address book. Live data still
+  // wins the moment it arrives, and we write-through both scopes so the
+  // picker keeps working fully offline.
+  const userKey = myUserId || 'anon';
+  const [cachedConversations, setCachedConversations] = useState<any[] | null>(null);
+  const [cachedContacts, setCachedContacts] = useState<any[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const [convMeta, contactMeta] = await Promise.all([
+        readCacheMeta<any[]>('conversations', userKey),
+        readCacheMeta<any[]>('contacts', userKey),
+      ]);
+      if (!alive) return;
+      if (convMeta && Array.isArray(convMeta.data)) setCachedConversations(convMeta.data);
+      if (contactMeta && Array.isArray(contactMeta.data)) setCachedContacts(contactMeta.data);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [userKey]);
+  useEffect(() => {
+    if (Array.isArray(conversationsData) && conversationsData.length > 0) {
+      void writeCache('conversations', userKey, conversationsData);
+    }
+  }, [conversationsData, userKey]);
+  useEffect(() => {
+    if (Array.isArray(contactsData) && contactsData.length > 0) {
+      void writeCache('contacts', userKey, contactsData);
+    }
+  }, [contactsData, userKey]);
+
+  // Prefer live data when it has rows; otherwise fall back to the cache.
+  const conversations: any[] | undefined =
+    Array.isArray(conversationsData) && conversationsData.length > 0
+      ? conversationsData
+      : (cachedConversations ?? conversationsData);
+  const contacts: any[] | undefined =
+    Array.isArray(contactsData) && contactsData.length > 0
+      ? contactsData
+      : (cachedContacts ?? contactsData);
+  // True while we have nothing at all to show but the queries are still
+  // resolving — drives a spinner instead of a misleading "No matches".
+  const directoryLoading =
+    (conversationsLoading || contactsLoading) &&
+    (!conversations || conversations.length === 0) &&
+    (!contacts || contacts.length === 0);
 
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Record<string, Recipient>>({});
@@ -782,12 +833,21 @@ function ShareReceiverNative() {
         contentContainerStyle={styles.listContent}
         ItemSeparatorComponent={() => <View style={styles.divider} />}
         ListEmptyComponent={
-          <View style={styles.empty}>
-            <Text style={styles.emptyTitle}>No matches</Text>
-            <Text style={styles.emptyBody}>
-              Add a contact in the Contacts tab and they will appear here.
-            </Text>
-          </View>
+          directoryLoading ? (
+            <View style={styles.empty} testID="share-directory-loading">
+              <ActivityIndicator color={Colors.primary} />
+              <Text style={styles.emptyBody}>Loading your chats and contacts…</Text>
+            </View>
+          ) : (
+            <View style={styles.empty}>
+              <Text style={styles.emptyTitle}>No matches</Text>
+              <Text style={styles.emptyBody}>
+                {search.trim().length > 0
+                  ? 'No chat or contact matches your search.'
+                  : 'We couldn\u2019t load your chats — check your connection and try again. New contacts can be added in the Contacts tab.'}
+              </Text>
+            </View>
+          )
         }
       />
 
