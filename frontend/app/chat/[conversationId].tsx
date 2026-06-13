@@ -743,16 +743,31 @@ export default function ChatScreen() {
     return () => clearTimeout(timer);
   }, [composerFocused]);
 
+  // iter-200 (fix "Conversation unavailable" flash): the fallback timer
+  // used to hard-flip the UI to the terminal "unavailable" state after
+  // 2.5s — that was wrong because Convex returns `undefined` while a
+  // query is still in flight (during websocket reconnect / auth
+  // handshake / slow network) and only returns `null` when the
+  // conversation truly doesn't exist. We now:
+  //   • Hold the spinner indefinitely while `conversation === undefined`
+  //   • Only render "unavailable" when `conversation === null`
+  //   • Use `fallbackReady` purely as a hint to surface a friendly
+  //     "still loading…" sub-line + manual retry/back affordance,
+  //     never as a terminal lock-out.
   useEffect(() => {
     if (!canQueryConversation) {
       setFallbackReady(true);
       return;
     }
     setFallbackReady(false);
-    const timer = setTimeout(() => setFallbackReady(true), 2500);
+    const timer = setTimeout(() => setFallbackReady(true), 6000);
     return () => clearTimeout(timer);
   }, [canQueryConversation, conversationId]);
 
+  // `conversation === null` is the ONLY definitive "not found" signal
+  // from Convex. `undefined` always means still loading.
+  const isConversationDefinitelyMissing =
+    !canQueryConversation || (canQueryConversation && conversation === null);
   const isConversationAvailable = !!conversation;
   const composerTextColor = resolveDraftColor(draftColor) || Colors.textPrimary;
   const showComposerFormatting = showComposerFormattingPinned || composerFocused || text.trim().length > 0 || showColorPicker;
@@ -2129,7 +2144,9 @@ export default function ChatScreen() {
   const title =
     deviceTitle ||
     savedContactTitle ||
-    getConversationDisplayName(hydratedConversation, me?._id ? String(me._id) : undefined, 'Chat');
+    (conversationLoading
+      ? 'Loading…'
+      : getConversationDisplayName(hydratedConversation, me?._id ? String(me._id) : undefined, 'Chat'));
   const isMineSelected = selectedMsg && me && selectedMsg.senderId === me._id;
   const subtitle = formatPresenceSubtitle(mergedPresenceSource);
   const avatarInitial = getDisplayInitials(title);
@@ -2464,11 +2481,25 @@ export default function ChatScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={0}
       >
-        {(messagesLoading || conversationLoading) && !fallbackReady ? (
+        {conversationLoading || messagesLoading ? (
           <View style={styles.loadingWrap}>
             <ActivityIndicator size="large" color={Colors.primary} />
+            {fallbackReady ? (
+              <>
+                <Text style={[styles.unavailableText, { marginTop: 16 }]}>
+                  Still loading… check your connection.
+                </Text>
+                <TouchableOpacity
+                  onPress={() => router.back()}
+                  style={{ marginTop: 12, paddingVertical: 8, paddingHorizontal: 16 }}
+                  testID="chat-loading-back"
+                >
+                  <Text style={{ color: Colors.primary, fontWeight: '600' }}>Back to chats</Text>
+                </TouchableOpacity>
+              </>
+            ) : null}
           </View>
-        ) : !isConversationAvailable ? (
+        ) : isConversationDefinitelyMissing ? (
           <View style={styles.unavailableWrap} testID="chat-unavailable-state">
             <MaterialCommunityIcons name="message-alert-outline" size={52} color={Colors.primary} />
             <Text style={styles.unavailableTitle}>Conversation unavailable</Text>

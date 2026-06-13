@@ -36,7 +36,6 @@ export default function ChatsScreen() {
   const me = useQuery(api.users.getCurrentUser, {});
   const contacts = useQuery(api.contacts.getContacts, {});
   const conversations = useQuery(api.conversations.listConversations);
-  const loading = conversations === undefined && cachedList === null;
 
   // iter 160 (offline persistence): hydrate the conversation list from
   // AsyncStorage on cold launch so users see their last-known chats
@@ -45,6 +44,28 @@ export default function ChatsScreen() {
   const userKey = me?._id ? String(me._id) : 'anon';
   const [cachedList, setCachedList] = useState<any[] | null>(null);
   const [cachedTs, setCachedTs] = useState<number | undefined>(undefined);
+
+  // iter-200 (fix "No chats yet" flash): `loading` must be declared
+  // AFTER `cachedList` — the previous ordering was a TDZ error that
+  // silently evaluated `cachedList` as `undefined`, making `loading`
+  // permanently false. As a result, the empty state was rendered the
+  // moment the Convex websocket dropped to `undefined` during a
+  // reconnect / auth handshake, even though real chats existed.
+  //
+  // We now also treat "live query still resolving AND we have no
+  // cached fallback" as loading, and we additionally hold the loading
+  // state for a brief moment after auth/me resolves so a freshly
+  // mounted screen never flickers an empty state while the first
+  // query is on the wire.
+  const [authSettleElapsed, setAuthSettleElapsed] = useState(false);
+  useEffect(() => {
+    setAuthSettleElapsed(false);
+    const t = setTimeout(() => setAuthSettleElapsed(true), 1500);
+    return () => clearTimeout(t);
+  }, [userKey]);
+  const liveResolved = Array.isArray(conversations);
+  const loading =
+    !liveResolved && (cachedList === null || cachedList.length === 0 || !authSettleElapsed);
   useEffect(() => {
     let alive = true;
     (async () => {
