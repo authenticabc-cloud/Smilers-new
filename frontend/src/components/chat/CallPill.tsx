@@ -60,11 +60,16 @@ function formatPillTime(startedAt: any): string {
 export function CallPill({
   item,
   onPress,
+  onCallBack,
   hasRecording,
   testID,
 }: {
   item: any;
+  /** Recording playback. Only fires when there IS an attached recording. */
   onPress?: () => void;
+  /** Tap-to-call-back — fires on EVERY pill tap, matching the web behavior
+   *  ("when the log in the conversation is tapped, it initiates a call"). */
+  onCallBack?: (callType: 'voice' | 'video') => void;
   hasRecording?: boolean;
   testID?: string;
 }) {
@@ -105,12 +110,22 @@ export function CallPill({
 
   const timeText = formatPillTime(item?.startedAt) || formatPillTime(item?._creationTime);
 
-  // Whole pill is tappable IFF there's an associated recording attachment.
-  const Wrapper: any = onPress && hasRecording ? TouchableOpacity : View;
-  const wrapperProps: any =
-    onPress && hasRecording
-      ? { onPress, activeOpacity: 0.7, accessibilityRole: 'button' as const }
-      : {};
+  // iter-204: the pill is now ALWAYS tappable — tap initiates a callback
+  // (matches web "tap log → call contact"). Playback of a recorded call,
+  // when one exists, has moved to a dedicated tap target on the
+  // "● Recorded" badge so the two gestures don't conflict.
+  const callTypeForBack: 'voice' | 'video' = isVideo ? 'video' : 'voice';
+  const handlePillPress = () => {
+    if (onCallBack) onCallBack(callTypeForBack);
+  };
+  const handleRecordingPress = () => {
+    if (onPress) onPress();
+  };
+  const pressable = !!onCallBack;
+  const Wrapper: any = pressable ? TouchableOpacity : View;
+  const wrapperProps: any = pressable
+    ? { onPress: handlePillPress, activeOpacity: 0.7, accessibilityRole: 'button' as const }
+    : {};
 
   return (
     <View style={callPillStyles.row} testID={testID}>
@@ -156,10 +171,17 @@ export function CallPill({
             </Text>
           ) : null}
           {item?.wasRecorded ? (
-            <View style={callPillStyles.recordedBadge}>
+            <TouchableOpacity
+              onPress={hasRecording && onPress ? handleRecordingPress : undefined}
+              disabled={!(hasRecording && onPress)}
+              style={callPillStyles.recordedBadge}
+              testID="call-pill-recorded"
+            >
               <View style={callPillStyles.recordedDot} />
-              <Text style={callPillStyles.recordedText}>Recorded</Text>
-            </View>
+              <Text style={callPillStyles.recordedText}>
+                {hasRecording ? 'Play recording' : 'Recorded'}
+              </Text>
+            </TouchableOpacity>
           ) : null}
         </View>
       </Wrapper>

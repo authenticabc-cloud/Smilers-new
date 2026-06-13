@@ -2666,6 +2666,21 @@ export default function ChatScreen() {
                           });
                         }
                       }}
+                      onCallBack={(callType) => {
+                        // iter-204 (web parity): tapping a call log in
+                        // conversation initiates a callback to the same
+                        // peer with the same call type (voice/video).
+                        // We always re-use the open conversation id, so
+                        // we just navigate to /call/:id?type=… and let
+                        // the call screen call `api.calls.initiateCall`.
+                        const safeConvId = String(conversationId || '');
+                        if (!safeConvId) return;
+                        router.push(
+                          `/call/${encodeURIComponent(safeConvId)}?type=${
+                            callType === 'video' ? 'video' : 'voice'
+                          }` as any
+                        );
+                      }}
                       testID={`chat-call-pill-${item._id}`}
                     />
                   </>
