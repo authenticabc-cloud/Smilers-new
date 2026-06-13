@@ -191,11 +191,44 @@ export default function ChatScreen() {
     typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
   const canQueryConversation = !!conversationId && hasValidConversationId && isAuthenticated;
 
-  const conversation = useQuery(
+  // iter-202: prefer `listConversations` as the primary source for the
+  // conversation object — it's the canonical query the web app uses,
+  // it's already subscribed by the Chats tab so cache is usually warm,
+  // AND (critically) it embeds `otherUser`. The previous reliance on
+  // `getConversation` alone caused chats to hang on "Taking longer
+  // than usual" whenever that single-shot query returned undefined
+  // (e.g. when the conversation existed in the user's list but the
+  // direct-fetch path had a stale cache / dropped subscription).
+  //
+  // Strategy:
+  //   1. Query `listConversations` (the web canonical) and locate by id.
+  //   2. Also keep `getConversation` as a fallback for conversations
+  //      not surfaced in the user's list (e.g. archived, broadcasts).
+  //   3. The effective `conversation` is whichever resolves first.
+  //   4. `conversationLoading` is true only when BOTH are still pending.
+  const conversationList = useQuery(
+    api.conversations.listConversations,
+    canQueryConversation ? ({} as any) : 'skip'
+  ) as any[] | undefined;
+  const conversationFromList = useMemo(() => {
+    if (!Array.isArray(conversationList) || !conversationId) return null;
+    const match = conversationList.find(
+      (c: any) => String(c?._id || c?.id) === String(conversationId)
+    );
+    return match || null;
+  }, [conversationList, conversationId]);
+  const conversationDirect = useQuery(
     api.conversations.getConversation,
-    canQueryConversation ? { conversationId } : 'skip'
+    canQueryConversation && !conversationFromList ? { conversationId } : 'skip'
   ) as any | null | undefined;
-  const conversationLoading = canQueryConversation && conversation === undefined;
+  // Effective conversation: list result wins (it has otherUser embedded).
+  const conversation: any | null | undefined =
+    conversationFromList ?? conversationDirect;
+  // Loading = neither source has resolved AND the user is signed in.
+  const conversationLoading =
+    canQueryConversation &&
+    conversationList === undefined &&
+    conversationDirect === undefined;
   const messagesPage = useQuery(
     api.messages.list,
     canQueryConversation ? { conversationId, paginationOpts: { numItems: 50, cursor: null } } : 'skip'
