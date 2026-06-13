@@ -1046,10 +1046,37 @@ async def send_push_internal(
 
     # Look up which recipients have stored tokens BEFORE calling send_push
     # so we can populate the delivery report.
+    #
+    # iter-203 (critical regression fix): the lookup MUST include both
+    # `user_id` AND `convex_user_id` fields. The native app registers
+    # push tokens with `convex_user_id` populated (the Convex Id<"users">
+    # value), while message notify-events arrive with the Convex id as
+    # the recipient. The previous single-field lookup silently returned
+    # zero matches, breaking ALL message + missed-call notifications
+    # when the app was backgrounded or killed (logs showed
+    # `tokens=0 delivered=0` for every message). `send_push` itself
+    # uses the correct `$or` query — this lookup just needs to mirror it
+    # so the delivery report counts and dedupe matching are accurate.
     try:
-        cursor = db.push_tokens.find({"user_id": {"$in": body.recipients}})
+        cursor = db.push_tokens.find(
+            {
+                "$or": [
+                    {"user_id": {"$in": body.recipients}},
+                    {"convex_user_id": {"$in": body.recipients}},
+                ]
+            }
+        )
         tokens = await cursor.to_list(length=500)
-        matched_ids = set(t["user_id"] for t in tokens)
+        matched_ids = set()
+        for tok in tokens:
+            # A token row could match via either field — record whichever
+            # value appears in the recipient list so the delivery report
+            # accurately reflects what the caller requested.
+            requested = set(body.recipients)
+            if tok.get("convex_user_id") in requested:
+                matched_ids.add(tok["convex_user_id"])
+            elif tok.get("user_id") in requested:
+                matched_ids.add(tok["user_id"])
         delivery["matched_recipients"] = sorted(matched_ids)
         delivery["unmatched_recipients"] = sorted(
             set(body.recipients) - matched_ids

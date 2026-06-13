@@ -697,11 +697,16 @@ export default function ChatScreen() {
         _id: `call::${String(c._id)}`,
         _callId: String(c._id),
         _creationTime: toMillis(c.startedAt) || toMillis(c._creationTime),
+        // Preserve the raw ISO `startedAt` so the pill can render time text
+        // ("6:50 AM") exactly as the web does. Without this the pill had no
+        // way to format the local-time sub-line.
+        startedAt: c?.startedAt,
         callType: c?.callType === 'video' ? 'video' : 'voice',
         outcome,
         direction,
         durationSeconds: Number(c?.durationSeconds || 0),
         wasRecorded: !!c?.wasRecorded,
+        isConference: !!c?.isConference,
       };
     });
     return [...displayMessages, ...pills].sort(

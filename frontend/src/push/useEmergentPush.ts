@@ -143,6 +143,18 @@ async function postRegisterPush(opts: {
         user_id: opts.userId,
         platform: opts.platform,
         device_token: opts.deviceToken,
+        // iter-203 (CRITICAL regression fix): without `convex_user_id` in
+        // the registration body, the backend stores push tokens keyed
+        // ONLY by the OIDC `user_id`. But `/api/notify-event` resolves
+        // message recipients to their Convex `users._id` — so every
+        // background / killed-app push lookup returned ZERO tokens and
+        // ZERO deliveries (visible in server.err.log as
+        // `notify-event: ... tokens=0 delivered=0`). The iter-199 fix
+        // for this regressed during a later refactor that dropped this
+        // field from the POST payload while keeping the function arg.
+        ...(opts.convexUserId
+          ? { convex_user_id: opts.convexUserId }
+          : {}),
         ...(channelIds
           ? {
               call_channel_id: channelIds.callChannelId,

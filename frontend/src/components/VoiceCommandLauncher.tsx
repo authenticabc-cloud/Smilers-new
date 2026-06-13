@@ -21,6 +21,7 @@ import { useAuth } from '../providers/AuthProvider';
 import { readStoredJson, writeStoredJson } from '../lib/settingsStorage';
 import { parseVoiceCommand, isStopCommand, VoiceCommand } from '../lib/voiceCommandParser';
 import { uploadFile } from '../lib/uploadFile';
+import { triggerTranscription } from '../lib/triggerTranscription';
 import { subscribeTouchActivity } from '../lib/touchActivity';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../theme';
 
@@ -421,7 +422,7 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
     try {
       const mime = 'audio/m4a';
       const storageId = await uploadFile(convex, uri, mime);
-      await sendMessage({
+      const result: any = await sendMessage({
         conversationId: recordingTarget.conversationId as any,
         type: 'voice',
         storageId,
@@ -429,6 +430,27 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
         duration: Math.max(1, Math.round(totalMs / 1000)),
         fileName: 'voice-task-note.m4a',
       });
+      // iter-203: kick off Whisper transcription so the recipient's chat
+      // doesn't sit stuck on "Transcribing…" forever. The normal chat
+      // composer calls this after every voice send — our voice-task
+      // path was silently skipping it.
+      const messageId =
+        (typeof result === 'string' && result) ||
+        (result && (result._id || result.messageId)) ||
+        null;
+      if (messageId) {
+        try {
+          await triggerTranscription({
+            convex,
+            messageId: String(messageId),
+            storageId: String(storageId),
+            localFileUri: uri,
+            fileName: 'voice-task-note.m4a',
+          });
+        } catch {
+          // Transcription failure is non-fatal — the message is already sent.
+        }
+      }
     } catch (errorValue: any) {
       Alert.alert(
         'Couldn\u2019t send voice note',
