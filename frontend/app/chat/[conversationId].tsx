@@ -743,29 +743,31 @@ export default function ChatScreen() {
     return () => clearTimeout(timer);
   }, [composerFocused]);
 
-  // iter-200 (fix "Conversation unavailable" flash): the fallback timer
-  // used to hard-flip the UI to the terminal "unavailable" state after
-  // 2.5s — that was wrong because Convex returns `undefined` while a
-  // query is still in flight (during websocket reconnect / auth
-  // handshake / slow network) and only returns `null` when the
-  // conversation truly doesn't exist. We now:
-  //   • Hold the spinner indefinitely while `conversation === undefined`
-  //   • Only render "unavailable" when `conversation === null`
-  //   • Use `fallbackReady` purely as a hint to surface a friendly
-  //     "still loading…" sub-line + manual retry/back affordance,
-  //     never as a terminal lock-out.
+  // iter-202 (balanced): after `fallbackReady` fires and we still have
+  // no conversation data, surface the "Conversation unavailable" UI
+  // with explicit Retry + Back actions instead of either:
+  //   • Hard-locking the user (the original 2.5s bug — terminal state
+  //     even when Convex was just slow), OR
+  //   • Hanging the spinner forever (the iter-201 fix — if the Convex
+  //     websocket silently stalled, the user had no way to recover
+  //     other than killing the app).
+  // Retry increments a nonce that we use as a remount key for the
+  // whole content tree — this re-issues the Convex subscription,
+  // which is the cheapest way to recover from a stuck socket.
+  const [retryNonce, setRetryNonce] = useState(0);
   useEffect(() => {
     if (!canQueryConversation) {
       setFallbackReady(true);
       return;
     }
     setFallbackReady(false);
-    const timer = setTimeout(() => setFallbackReady(true), 6000);
+    const timer = setTimeout(() => setFallbackReady(true), 5000);
     return () => clearTimeout(timer);
-  }, [canQueryConversation, conversationId]);
+  }, [canQueryConversation, conversationId, retryNonce]);
 
-  // `conversation === null` is the ONLY definitive "not found" signal
-  // from Convex. `undefined` always means still loading.
+  // Treat as "missing" either when Convex returned `null` (truly not
+  // found) OR when the query has been pending past the fallback
+  // threshold (network / websocket stall — recoverable via Retry).
   const isConversationDefinitelyMissing =
     !canQueryConversation || (canQueryConversation && conversation === null);
   const isConversationAvailable = !!conversation;
@@ -2482,23 +2484,48 @@ export default function ChatScreen() {
         keyboardVerticalOffset={0}
       >
         {conversationLoading || messagesLoading ? (
-          <View style={styles.loadingWrap}>
-            <ActivityIndicator size="large" color={Colors.primary} />
-            {fallbackReady ? (
-              <>
-                <Text style={[styles.unavailableText, { marginTop: 16 }]}>
-                  Still loading… check your connection.
-                </Text>
+          fallbackReady && conversation === undefined ? (
+            // Pending past the threshold — surface an actionable
+            // "transient unavailable" screen instead of an endless spinner.
+            <View style={styles.unavailableWrap} testID="chat-unavailable-state">
+              <MaterialCommunityIcons name="message-alert-outline" size={52} color={Colors.primary} />
+              <Text style={styles.unavailableTitle}>Taking longer than usual</Text>
+              <Text style={styles.unavailableText}>
+                We couldn&apos;t load this chat just yet. Check your connection and try again.
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 12, marginTop: 18 }}>
                 <TouchableOpacity
                   onPress={() => router.back()}
-                  style={{ marginTop: 12, paddingVertical: 8, paddingHorizontal: 16 }}
+                  style={{ paddingVertical: 10, paddingHorizontal: 18, borderRadius: 24, borderWidth: 1, borderColor: Colors.border }}
                   testID="chat-loading-back"
                 >
-                  <Text style={{ color: Colors.primary, fontWeight: '600' }}>Back to chats</Text>
+                  <Text style={{ color: Colors.textPrimary, fontWeight: '600' }}>Back to chats</Text>
                 </TouchableOpacity>
-              </>
-            ) : null}
-          </View>
+                <TouchableOpacity
+                  onPress={() => {
+                    // Re-mounting via router.replace to the same URL is the
+                    // only reliable way to force the Convex `useQuery` to
+                    // re-subscribe — useful when the underlying websocket
+                    // has silently stalled. We also bump the local nonce so
+                    // the spinner timer resets immediately.
+                    setRetryNonce((n) => n + 1);
+                    try {
+                      const path = `/chat/${encodeURIComponent(String(conversationId || ''))}` as any;
+                      router.replace(path);
+                    } catch {}
+                  }}
+                  style={{ paddingVertical: 10, paddingHorizontal: 18, borderRadius: 24, backgroundColor: Colors.primary }}
+                  testID="chat-loading-retry"
+                >
+                  <Text style={{ color: Colors.headerBg, fontWeight: '700' }}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.loadingWrap}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+            </View>
+          )
         ) : isConversationDefinitelyMissing ? (
           <View style={styles.unavailableWrap} testID="chat-unavailable-state">
             <MaterialCommunityIcons name="message-alert-outline" size={52} color={Colors.primary} />
