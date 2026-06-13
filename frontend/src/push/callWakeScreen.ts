@@ -59,7 +59,20 @@ type ConvexAction = (args: any) => Promise<any>;
  * AndroidManifest entries (either via a working config plugin or via the
  * EAS prebuild hooks).
  */
-const WAKE_SCREEN_ENABLED = false;
+/**
+ * iter-202: wake-screen is now enabled. The two prerequisites that were
+ * keeping this hard-off are both in place:
+ *   1. The `withCallWakeScreen` config plugin injects
+ *      `android:showWhenLocked="true"` + `android:turnScreenOn="true"`
+ *      onto MainActivity at prebuild time (see plugins/withCallWakeScreen.js).
+ *   2. `USE_FULL_SCREEN_INTENT` and `WAKE_LOCK` permissions are declared
+ *      in app.json's android.permissions block.
+ *
+ * iOS VoIP cert is still pending — the iOS branch below is therefore a
+ * no-op when there's no VoIP token, so leaving wake enabled is safe
+ * for iOS (it just keeps using the standard FCM-style notification).
+ */
+const WAKE_SCREEN_ENABLED = true;
 
 let initialised = false;
 let registeredRouter: Router | null = null;

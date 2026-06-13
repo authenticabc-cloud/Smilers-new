@@ -15,10 +15,12 @@ import {
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter, usePathname } from 'expo-router';
 import { useConvex, useMutation } from 'convex/react';
+import { useAudioRecorder, useAudioRecorderState, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
 import { readStoredJson, writeStoredJson } from '../lib/settingsStorage';
-import { parseVoiceCommand, ParsedVoiceCommand } from '../lib/voiceCommandParser';
+import { parseVoiceCommand, isStopCommand, VoiceCommand } from '../lib/voiceCommandParser';
+import { uploadFile } from '../lib/uploadFile';
 import { subscribeTouchActivity } from '../lib/touchActivity';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../theme';
 
@@ -48,7 +50,7 @@ interface Assignment {
 
 type AssignmentMap = Record<number, Assignment>;
 
-type FlowState = 'idle' | 'listening' | 'recognized' | 'no-match' | 'error';
+type FlowState = 'idle' | 'listening' | 'recognized' | 'no-match' | 'error' | 'recording-voice' | 'sending';
 
 interface VoiceCommandSheetProps {
   visible: boolean;
@@ -62,13 +64,24 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
   const [transcript, setTranscript] = useState('');
   const [flow, setFlow] = useState<FlowState>('idle');
   const [assignments, setAssignments] = useState<AssignmentMap>({});
-  const [parsedCommand, setParsedCommand] = useState<ParsedVoiceCommand | null>(null);
+  const [parsedCommand, setParsedCommand] = useState<VoiceCommand | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [executing, setExecuting] = useState(false);
+  // iter-202: hands-free voice-note recording state. We open the recorder
+  // INSIDE the sheet for `voice_note` commands so the user never leaves
+  // the launcher — exactly like the web `voice-task-commander` overlay.
+  const [recordingTarget, setRecordingTarget] = useState<{
+    conversationId: string;
+    name: string;
+  } | null>(null);
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(audioRecorder, 250);
+  const recordingStartedAtRef = useRef<number>(0);
+  const sendMessage = useMutation(api.messages.send);
   const pulseAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(300)).current;
   const sessionActiveRef = useRef(false);
-  // iter-201: refs to break the speech-recognition event race condition.
+  // iter-202: refs to break the speech-recognition event race condition.
   // The native `end` event fires immediately after `result(isFinal)` on
   // Android — its closure captured the previous render's `flow` value
   // (`'listening'`) and overwrote the just-set `'recognized'` state with
@@ -76,6 +89,12 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
   // result?" via a ref the `end` handler can read synchronously.
   const finalHandledRef = useRef(false);
   const flowRef = useRef<FlowState>('idle');
+  // Forward declarations for recording — defined later as useCallback;
+  // we expose them through refs so the speech-recognition event
+  // listeners (which close over a stale render) can always call the
+  // freshest implementation.
+  const stopRecordingAndSendRef = useRef<null | (() => void)>(null);
+  const startRawListenerRef = useRef<null | (() => void)>(null);
   useEffect(() => {
     flowRef.current = flow;
   }, [flow]);
@@ -183,6 +202,7 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
       setParsedCommand(null);
       setErrorMessage(null);
       setExecuting(false);
+      setRecordingTarget(null);
       finalHandledRef.current = false;
       if (sessionActiveRef.current) {
         try {
@@ -192,24 +212,50 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
         }
         sessionActiveRef.current = false;
       }
+      // Abort any in-progress recording on close (don't send).
+      if (recorderState.isRecording) {
+        try { audioRecorder.stop(); } catch {}
+      }
     }
+    // We intentionally only depend on `visible` — recorder refs are stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
   // Live transcription event
-  useSpeechRecognitionEvent('result', (event) => {
+  useSpeechRecognitionEvent('result', (event: any) => {
     const text = event.results?.[0]?.transcript || '';
     setTranscript(text);
+    // iter-202: during hands-free recording, check the canonical
+    // "smiley" stop-word on EVERY result (interim and final) so the
+    // send fires with minimal latency — exactly like the web
+    // commander's interim-result handler.
+    if (flowRef.current === 'recording-voice' && isStopCommand(text)) {
+      finalHandledRef.current = true;
+      stopRecordingAndSendRef.current?.();
+      return;
+    }
     if (event.isFinal) {
-      // iter-201: mark the ref synchronously BEFORE the `end` event can
-      // fire — Android dispatches `end` immediately after `result(isFinal)`
-      // and the previous closure-based check raced with React's render.
+      // iter-201: mark the ref synchronously BEFORE the `end` event
+      // can fire — Android dispatches `end` immediately after
+      // `result(isFinal)` and the previous closure-based check raced
+      // with React's render.
       finalHandledRef.current = true;
       handleFinalTranscript(text);
     }
   });
 
-  useSpeechRecognitionEvent('error', (event) => {
+  useSpeechRecognitionEvent('error', (event: any) => {
     sessionActiveRef.current = false;
+    // iter-202: during recording, auto-restart the recognizer instead
+    // of bailing out — the web app does the same (200ms restart).
+    if (flowRef.current === 'recording-voice') {
+      setTimeout(() => {
+        try {
+          startRawListenerRef.current?.();
+        } catch {}
+      }, 300);
+      return;
+    }
     finalHandledRef.current = true;
     setFlow('error');
     setErrorMessage(event.error || 'Could not recognize speech');
@@ -217,6 +263,15 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
 
   useSpeechRecognitionEvent('end', () => {
     sessionActiveRef.current = false;
+    // iter-202: keep recognizer running during recording — auto-restart.
+    if (flowRef.current === 'recording-voice') {
+      setTimeout(() => {
+        try {
+          startRawListenerRef.current?.();
+        } catch {}
+      }, 200);
+      return;
+    }
     // iter-201: only fall back to "no-match" if we never received a
     // final result. Reading the ref (not state) makes this synchronous
     // and immune to the result→end render race that previously
@@ -293,35 +348,118 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
     return undefined;
   }, [flow, startListening, visible]);
 
+  // iter-202: hands-free voice-note recording. After Convex creates/finds
+  // the direct conversation we:
+  //   1. Switch the sheet to its recording UI.
+  //   2. Configure audio mode for recording + start the audio recorder.
+  //   3. Re-arm the speech recognizer in continuous mode listening for
+  //      the "smiley" stop-word (interim results, ~200ms restart loop —
+  //      same behavior as the web commander).
+  //   4. When `isStopCommand` fires (interim OR final), `stopRecordingAndSend`
+  //      stops capture, uploads via the canonical `messages.generateUploadUrl`
+  //      flow, and sends a `messages.send({ type: 'voice', ... })`.
+  const startRawListener = useCallback(() => {
+    if (!ExpoSpeechRecognitionModule) return;
+    try {
+      sessionActiveRef.current = true;
+      ExpoSpeechRecognitionModule.start({
+        lang: 'en-US',
+        interimResults: true,
+        continuous: true,
+        requiresOnDeviceRecognition: false,
+        addsPunctuation: false,
+      });
+    } catch {
+      sessionActiveRef.current = false;
+    }
+  }, []);
+  useEffect(() => {
+    startRawListenerRef.current = startRawListener;
+  }, [startRawListener]);
+
+  const stopRecordingAndSend = useCallback(async () => {
+    if (!recordingTarget) return;
+    if (flowRef.current === 'sending') return; // already in flight
+    setFlow('sending');
+    // Stop the recognizer.
+    try {
+      ExpoSpeechRecognitionModule?.stop();
+    } catch {}
+    sessionActiveRef.current = false;
+
+    let uri: string | undefined;
+    try {
+      await audioRecorder.stop();
+      uri = audioRecorder.uri || undefined;
+    } catch {
+      /* recorder may already be stopped */
+    }
+    const totalMs = Math.max(0, Date.now() - recordingStartedAtRef.current);
+    if (!uri || totalMs < 600) {
+      Alert.alert('Recording too short', 'Try saying a few more words before "Smiley".');
+      setFlow('idle');
+      setRecordingTarget(null);
+      onClose();
+      return;
+    }
+    try {
+      const mime = 'audio/m4a';
+      const storageId = await uploadFile(convex, uri, mime);
+      await sendMessage({
+        conversationId: recordingTarget.conversationId as any,
+        type: 'voice',
+        storageId,
+        mimeType: mime,
+        duration: Math.max(1, Math.round(totalMs / 1000)),
+        fileName: 'voice-task-note.m4a',
+      });
+    } catch (errorValue: any) {
+      Alert.alert(
+        'Couldn\u2019t send voice note',
+        errorValue?.message || 'Please try again from the chat composer.'
+      );
+    }
+    setRecordingTarget(null);
+    setFlow('idle');
+    onClose();
+  }, [audioRecorder, convex, onClose, recordingTarget, sendMessage]);
+  useEffect(() => {
+    stopRecordingAndSendRef.current = stopRecordingAndSend;
+  }, [stopRecordingAndSend]);
+
   const executeCommand = useCallback(async () => {
     if (!parsedCommand || executing) return;
-    const { type, position } = parsedCommand;
+    // stop_command on its own (no active recording) — just nudge the user.
+    if (parsedCommand.type === 'stop_command') {
+      Alert.alert(
+        'Say a command first',
+        '"Smiley" sends a recorded voice note. Try saying "Call 1" or "Voice note to 2" first.'
+      );
+      onClose();
+      return;
+    }
+    const position = parsedCommand.position;
     const assignment = assignments[position];
     if (!assignment) {
       Alert.alert(
         `No contact at position ${position}`,
-        'Open Settings → Voice Tasks to assign a contact to this number first.'
+        'Open Settings \u2192 Voice Tasks to assign a contact to this number first.'
       );
       onClose();
       return;
     }
 
-    // iter-201: the voice-task contact map stores the OTHER USER's id
-    // (`Id<"users">`), but `/call/:conversationId` and `/chat/:conversationId`
-    // both require a real conversation id. Resolve user → conversation
-    // through the canonical `api.conversations.getOrCreateDirect`
-    // mutation — the same call every other entry point (contact card,
-    // share-receiver, search, user profile) uses. Without this step the
-    // call screen short-circuits because `getConversation` returns null
-    // for a user id and `initiateCall` is never fired.
+    // Resolve the user → conversation. SAME canonical mutation the web
+    // commander uses (`getOrCreateDirect({ otherUserId })`) and that
+    // every other entry point on native uses (contact card, search,
+    // share-receiver, user profile). Without this the /call and /chat
+    // routes can't find the conversation.
     setExecuting(true);
     let conversationId: string | null = null;
     try {
       const result: any = await getOrCreateDirect({ otherUserId: assignment.contactId as any });
       const rawId = result?._id || result?.conversationId || result?.id || result;
-      if (typeof rawId === 'string' && rawId.length > 0) {
-        conversationId = rawId;
-      }
+      if (typeof rawId === 'string' && rawId.length > 0) conversationId = rawId;
     } catch (errorValue: any) {
       setExecuting(false);
       Alert.alert(
@@ -342,27 +480,85 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
 
     const encodedConv = encodeURIComponent(conversationId);
     const displayName = encodeURIComponent(assignment.name);
-    switch (type) {
-      case 'call':
+    switch (parsedCommand.type) {
+      case 'voice_call':
         router.push(`/call/${encodedConv}?type=voice&displayName=${displayName}` as any);
-        break;
-      case 'video':
+        setExecuting(false);
+        onClose();
+        return;
+      case 'video_call':
         router.push(`/call/${encodedConv}?type=video&displayName=${displayName}` as any);
-        break;
-      case 'voiceNote':
-        // Open the chat with intent flag — composer will auto-start recording
-        router.push(`/chat/${encodedConv}?action=voice-note` as any);
-        break;
-      case 'videoMessage':
-        router.push(`/chat/${encodedConv}?action=video-note` as any);
-        break;
-      case 'location':
+        setExecuting(false);
+        onClose();
+        return;
+      case 'share_location':
         router.push(`/share-location/${encodedConv}` as any);
-        break;
+        setExecuting(false);
+        onClose();
+        return;
+      case 'video_message':
+        // Hands-free video in-sheet is a follow-up (needs camera surface).
+        // For now we open the chat with the video-note intent flag — the
+        // chat composer auto-starts video capture.
+        router.push(`/chat/${encodedConv}?action=video-note` as any);
+        setExecuting(false);
+        onClose();
+        return;
+      case 'voice_note': {
+        // Hands-free voice-note recording, in-sheet. Mirrors the web
+        // commander's overlay behavior.
+        try {
+          if (ExpoSpeechRecognitionModule) {
+            const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+            if (!perm?.granted) {
+              setExecuting(false);
+              Alert.alert(
+                'Microphone & speech permission required',
+                'We need both microphone and speech recognition to record voice notes hands-free.'
+              );
+              return;
+            }
+          }
+          await setAudioModeAsync({
+            allowsRecording: true,
+            playsInSilentMode: true,
+            interruptionMode: 'duckOthers',
+            shouldRouteThroughEarpiece: false,
+          });
+          // Stop any prior recognizer session first.
+          try { ExpoSpeechRecognitionModule?.stop(); } catch {}
+          sessionActiveRef.current = false;
+          // Start audio capture.
+          await audioRecorder.prepareToRecordAsync();
+          await audioRecorder.record();
+          recordingStartedAtRef.current = Date.now();
+          setRecordingTarget({ conversationId, name: assignment.name });
+          setFlow('recording-voice');
+          finalHandledRef.current = false;
+          // Re-arm the recognizer in continuous mode — listening for "smiley".
+          startRawListener();
+        } catch (errorValue: any) {
+          setFlow('idle');
+          setRecordingTarget(null);
+          Alert.alert(
+            'Couldn\u2019t start recording',
+            errorValue?.message || 'Please try again.'
+          );
+        }
+        setExecuting(false);
+        return;
+      }
     }
-    setExecuting(false);
-    onClose();
-  }, [assignments, executing, getOrCreateDirect, onClose, parsedCommand, router]);
+  }, [
+    assignments,
+    audioRecorder,
+    executing,
+    getOrCreateDirect,
+    onClose,
+    parsedCommand,
+    router,
+    startRawListener,
+  ]);
 
   const tryAgain = useCallback(() => {
     setTranscript('');
@@ -438,7 +634,20 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
             {flow === 'listening' ? (
               <Text style={styles.transcriptStatus}>Listening…</Text>
             ) : null}
-            {transcript ? (
+            {flow === 'recording-voice' && recordingTarget ? (
+              <>
+                <Text style={[styles.transcriptStatus, { color: Colors.danger }]}>
+                  Recording \u2022 {Math.floor((recorderState.durationMillis || 0) / 1000)}s
+                </Text>
+                <Text style={styles.recognized}>
+                  Voice note to {recordingTarget.name} \u2014 say "Smiley" to send.
+                </Text>
+              </>
+            ) : null}
+            {flow === 'sending' ? (
+              <Text style={styles.transcriptStatus}>Sending\u2026</Text>
+            ) : null}
+            {transcript && (flow === 'listening' || flow === 'recording-voice') ? (
               <Text style={styles.transcript} testID="voice-command-transcript">
                 &quot;{transcript}&quot;
               </Text>
@@ -459,7 +668,32 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
           </View>
 
           <View style={styles.actionsRow}>
-            {flow === 'recognized' && parsedCommand ? (
+            {flow === 'recording-voice' ? (
+              <>
+                <TouchableOpacity
+                  style={[styles.actionBtn, styles.actionSecondary]}
+                  onPress={() => {
+                    // Cancel recording without sending.
+                    try { ExpoSpeechRecognitionModule?.stop(); } catch {}
+                    sessionActiveRef.current = false;
+                    try { audioRecorder.stop(); } catch {}
+                    setRecordingTarget(null);
+                    setFlow('idle');
+                    onClose();
+                  }}
+                  testID="voice-command-record-cancel"
+                >
+                  <Text style={styles.actionSecondaryText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.actionBtn, styles.actionPrimary]}
+                  onPress={() => stopRecordingAndSendRef.current?.()}
+                  testID="voice-command-record-send"
+                >
+                  <Text style={styles.actionPrimaryText}>Send now</Text>
+                </TouchableOpacity>
+              </>
+            ) : flow === 'recognized' && parsedCommand ? (
               <>
                 <TouchableOpacity
                   style={[styles.actionBtn, styles.actionSecondary]}
@@ -496,20 +730,21 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
   );
 }
 
-function commandPreview(cmd: ParsedVoiceCommand, assignments: AssignmentMap): string {
+function commandPreview(cmd: VoiceCommand, assignments: AssignmentMap): string {
+  if (cmd.type === 'stop_command') return 'Say a command like "Call 1" first.';
   const a = assignments[cmd.position];
   const who = a ? a.name : `position ${cmd.position}`;
   switch (cmd.type) {
-    case 'call':
-      return `Calling ${who}…`;
-    case 'video':
-      return `Video calling ${who}…`;
-    case 'voiceNote':
-      return `Sending voice note to ${who}…`;
-    case 'videoMessage':
-      return `Sending video message to ${who}…`;
-    case 'location':
-      return `Sharing location with ${who}…`;
+    case 'voice_call':
+      return `Calling ${who}\u2026`;
+    case 'video_call':
+      return `Video calling ${who}\u2026`;
+    case 'voice_note':
+      return `Voice note to ${who} \u2014 say "Smiley" to send.`;
+    case 'video_message':
+      return `Video message to ${who}\u2026`;
+    case 'share_location':
+      return `Sharing location with ${who}\u2026`;
   }
 }
 

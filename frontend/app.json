@@ -211,6 +211,7 @@
         }
       ],
       "@react-native-community/datetimepicker",
+      "./plugins/withCallWakeScreen",
       [
         "expo-media-library",
         {
