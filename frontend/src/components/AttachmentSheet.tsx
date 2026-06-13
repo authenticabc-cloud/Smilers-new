@@ -12,6 +12,7 @@ interface Props {
   onRecordVideo: () => void;
   onPickDocument?: () => void;
   onShareLocation?: () => void;
+  onShareContact?: () => void;
 }
 
 export default function AttachmentSheet({
@@ -23,6 +24,7 @@ export default function AttachmentSheet({
   onRecordVideo,
   onPickDocument,
   onShareLocation,
+  onShareContact,
 }: Props) {
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -103,6 +105,19 @@ export default function AttachmentSheet({
               }}
               disabled={!onShareLocation}
               testID="attach-location"
+            />
+            <ActionRow
+              color="#FEF9C3"
+              iconColor="#CA8A04"
+              icon="account-arrow-right-outline"
+              lib="mc"
+              label="Contact"
+              onPress={() => {
+                onClose();
+                onShareContact?.();
+              }}
+              disabled={!onShareContact}
+              testID="attach-contact"
             />
           </View>
         </Pressable>

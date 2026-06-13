@@ -25,6 +25,8 @@ import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import AttachmentSheet from '../../src/components/AttachmentSheet';
+import ShareContactsDialog from '../../src/components/ShareContactsDialog';
+import { SharedContactBubble } from '../../src/components/chat/SharedContactBubble';
 import EmojiPickerSheet from '../../src/components/EmojiPickerSheet';
 import GiphyPicker, { GiphyAsset } from '../../src/components/GiphyPicker';
 import MediaBubble from '../../src/components/MediaBubble';
@@ -146,6 +148,7 @@ export default function ChatScreen() {
   const [emojiPickerMode, setEmojiPickerMode] = useState<'compose' | 'react'>('compose');
   const [reactionTargetMsg, setReactionTargetMsg] = useState<any | null>(null);
   const [showAttachSheet, setShowAttachSheet] = useState(false);
+  const [showShareContacts, setShowShareContacts] = useState(false);
   const [showScheduleSheet, setShowScheduleSheet] = useState(false);
   const [showCameraModal, setShowCameraModal] = useState(false);
   const [showPollComposer, setShowPollComposer] = useState(false);
@@ -2991,6 +2994,26 @@ export default function ChatScreen() {
         onRecordVideo={recordVideo}
         onPickDocument={onPickDocument}
         onShareLocation={shareLocation}
+        onShareContact={() => setShowShareContacts(true)}
+      />
+
+      <ShareContactsDialog
+        visible={showShareContacts}
+        onClose={() => setShowShareContacts(false)}
+        presetRecipientId={
+          // Resolve the other-user id of the open direct chat so the
+          // dialog can pre-select it as the default recipient. For
+          // group conversations or unhydrated state we just leave it
+          // null and let the user pick recipients manually.
+          (() => {
+            const other =
+              (hydratedConversation?.otherUser as any)?._id ||
+              (hydratedConversation?.otherUser as any)?.userId ||
+              (hydratedConversation as any)?.otherUserId ||
+              null;
+            return other ? String(other) : null;
+          })()
+        }
       />
 
       <CameraCapture

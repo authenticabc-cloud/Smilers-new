@@ -41,6 +41,7 @@ import { getMessageDurationSec } from '../hooks/useResolvedStorageUrl';
 import { useDecryptedMediaUrl } from '../hooks/useDecryptedMediaUrl';
 import type { E2EEStatus } from '../hooks/useConversationE2EE';
 import { getCachedTranscription, type CachedTranscription, type TranscriptionSegment } from '../lib/triggerTranscription';
+import { SharedContactBubble } from './chat/SharedContactBubble';
 // iter-125: full-screen photo viewer toolbar helpers
 import {
   saveMessageMediaToGallery,
@@ -400,6 +401,17 @@ function BubbleBodyInner({ msg, timeStr, textStyle, isMine, e2eeStatus }: { msg:
     case 'file':
     case 'document':
       return <FileMessage msg={msg} isMine={isMine} e2eeStatus={e2eeStatus} />;
+    case 'contact':
+      // iter-203 Share Contacts (canonical spec: docs/SHARE_CONTACTS_NATIVE_CONTRACT.md).
+      // Each contact message carries an array of cards via `sharedContacts`.
+      // We render the array (one card per contact) and let the inner
+      // component handle the "Message" tap → getOrCreateDirect navigation.
+      return (
+        <SharedContactBubble
+          contacts={Array.isArray(msg.sharedContacts) ? msg.sharedContacts : []}
+          isMine={isMine}
+        />
+      );
     case 'text':
     default:
       if (extractFirstUrl(msg.text || '')) {
