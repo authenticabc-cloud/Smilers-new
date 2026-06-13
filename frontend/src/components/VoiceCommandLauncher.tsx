@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter, usePathname } from 'expo-router';
-import { useConvex } from 'convex/react';
+import { useConvex, useMutation } from 'convex/react';
 import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
 import { readStoredJson, writeStoredJson } from '../lib/settingsStorage';
@@ -58,14 +58,27 @@ interface VoiceCommandSheetProps {
 function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
   const router = useRouter();
   const convex = useConvex();
+  const getOrCreateDirect = useMutation(api.conversations.getOrCreateDirect);
   const [transcript, setTranscript] = useState('');
   const [flow, setFlow] = useState<FlowState>('idle');
   const [assignments, setAssignments] = useState<AssignmentMap>({});
   const [parsedCommand, setParsedCommand] = useState<ParsedVoiceCommand | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [executing, setExecuting] = useState(false);
   const pulseAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(300)).current;
   const sessionActiveRef = useRef(false);
+  // iter-201: refs to break the speech-recognition event race condition.
+  // The native `end` event fires immediately after `result(isFinal)` on
+  // Android — its closure captured the previous render's `flow` value
+  // (`'listening'`) and overwrote the just-set `'recognized'` state with
+  // `'no-match'`. We now atomically track "did we already commit a final
+  // result?" via a ref the `end` handler can read synchronously.
+  const finalHandledRef = useRef(false);
+  const flowRef = useRef<FlowState>('idle');
+  useEffect(() => {
+    flowRef.current = flow;
+  }, [flow]);
 
   // Slide-up animation
   useEffect(() => {
@@ -169,6 +182,8 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
       setFlow('idle');
       setParsedCommand(null);
       setErrorMessage(null);
+      setExecuting(false);
+      finalHandledRef.current = false;
       if (sessionActiveRef.current) {
         try {
           ExpoSpeechRecognitionModule?.stop();
@@ -185,20 +200,28 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
     const text = event.results?.[0]?.transcript || '';
     setTranscript(text);
     if (event.isFinal) {
+      // iter-201: mark the ref synchronously BEFORE the `end` event can
+      // fire — Android dispatches `end` immediately after `result(isFinal)`
+      // and the previous closure-based check raced with React's render.
+      finalHandledRef.current = true;
       handleFinalTranscript(text);
     }
   });
 
   useSpeechRecognitionEvent('error', (event) => {
     sessionActiveRef.current = false;
+    finalHandledRef.current = true;
     setFlow('error');
     setErrorMessage(event.error || 'Could not recognize speech');
   });
 
   useSpeechRecognitionEvent('end', () => {
     sessionActiveRef.current = false;
-    // If we ended without a final result, treat as no-match
-    if (flow === 'listening') {
+    // iter-201: only fall back to "no-match" if we never received a
+    // final result. Reading the ref (not state) makes this synchronous
+    // and immune to the result→end render race that previously
+    // overwrote a freshly-set 'recognized' state.
+    if (!finalHandledRef.current && flowRef.current === 'listening') {
       setFlow('no-match');
     }
   });
@@ -227,6 +250,7 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
     setParsedCommand(null);
     setErrorMessage(null);
     setFlow('listening');
+    finalHandledRef.current = false;
     if (!ExpoSpeechRecognitionModule) {
       setFlow('error');
       setErrorMessage(
@@ -269,8 +293,8 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
     return undefined;
   }, [flow, startListening, visible]);
 
-  const executeCommand = useCallback(() => {
-    if (!parsedCommand) return;
+  const executeCommand = useCallback(async () => {
+    if (!parsedCommand || executing) return;
     const { type, position } = parsedCommand;
     const assignment = assignments[position];
     if (!assignment) {
@@ -281,29 +305,64 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
       onClose();
       return;
     }
-    // Route based on command type
-    const contactId = encodeURIComponent(assignment.contactId);
+
+    // iter-201: the voice-task contact map stores the OTHER USER's id
+    // (`Id<"users">`), but `/call/:conversationId` and `/chat/:conversationId`
+    // both require a real conversation id. Resolve user → conversation
+    // through the canonical `api.conversations.getOrCreateDirect`
+    // mutation — the same call every other entry point (contact card,
+    // share-receiver, search, user profile) uses. Without this step the
+    // call screen short-circuits because `getConversation` returns null
+    // for a user id and `initiateCall` is never fired.
+    setExecuting(true);
+    let conversationId: string | null = null;
+    try {
+      const result: any = await getOrCreateDirect({ otherUserId: assignment.contactId as any });
+      const rawId = result?._id || result?.conversationId || result?.id || result;
+      if (typeof rawId === 'string' && rawId.length > 0) {
+        conversationId = rawId;
+      }
+    } catch (errorValue: any) {
+      setExecuting(false);
+      Alert.alert(
+        'Couldn\u2019t reach this contact',
+        errorValue?.message ||
+          'We couldn\u2019t open a chat with this contact. Please check your connection and try again.'
+      );
+      return;
+    }
+    if (!conversationId) {
+      setExecuting(false);
+      Alert.alert(
+        'Couldn\u2019t reach this contact',
+        'The contact assigned to this slot couldn\u2019t be opened. Please re-assign them in Settings \u2192 Voice Tasks.'
+      );
+      return;
+    }
+
+    const encodedConv = encodeURIComponent(conversationId);
     const displayName = encodeURIComponent(assignment.name);
     switch (type) {
       case 'call':
-        router.push(`/call/${contactId}?type=voice&displayName=${displayName}` as any);
+        router.push(`/call/${encodedConv}?type=voice&displayName=${displayName}` as any);
         break;
       case 'video':
-        router.push(`/call/${contactId}?type=video&displayName=${displayName}` as any);
+        router.push(`/call/${encodedConv}?type=video&displayName=${displayName}` as any);
         break;
       case 'voiceNote':
         // Open the chat with intent flag — composer will auto-start recording
-        router.push(`/chat/${contactId}?action=voice-note` as any);
+        router.push(`/chat/${encodedConv}?action=voice-note` as any);
         break;
       case 'videoMessage':
-        router.push(`/chat/${contactId}?action=video-note` as any);
+        router.push(`/chat/${encodedConv}?action=video-note` as any);
         break;
       case 'location':
-        router.push(`/share-location/${contactId}` as any);
+        router.push(`/share-location/${encodedConv}` as any);
         break;
     }
+    setExecuting(false);
     onClose();
-  }, [assignments, onClose, parsedCommand, router]);
+  }, [assignments, executing, getOrCreateDirect, onClose, parsedCommand, router]);
 
   const tryAgain = useCallback(() => {
     setTranscript('');
@@ -405,16 +464,20 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
                 <TouchableOpacity
                   style={[styles.actionBtn, styles.actionSecondary]}
                   onPress={tryAgain}
+                  disabled={executing}
                   testID="voice-command-retry"
                 >
                   <Text style={styles.actionSecondaryText}>Try again</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.actionBtn, styles.actionPrimary]}
+                  style={[styles.actionBtn, styles.actionPrimary, executing ? styles.actionDisabled : null]}
                   onPress={executeCommand}
+                  disabled={executing}
                   testID="voice-command-go"
                 >
-                  <Text style={styles.actionPrimaryText}>Go</Text>
+                  <Text style={styles.actionPrimaryText}>
+                    {executing ? 'Opening\u2026' : 'Go'}
+                  </Text>
                 </TouchableOpacity>
               </>
             ) : flow === 'no-match' || flow === 'error' ? (
@@ -746,6 +809,9 @@ const styles = StyleSheet.create({
   actionFullWidth: { flex: 1 },
   actionPrimary: {
     backgroundColor: Colors.primary,
+  },
+  actionDisabled: {
+    opacity: 0.6,
   },
   actionPrimaryText: {
     fontSize: FontSize.base,
