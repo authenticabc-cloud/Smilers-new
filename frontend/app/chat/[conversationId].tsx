@@ -765,6 +765,65 @@ export default function ChatScreen() {
     return () => clearTimeout(timer);
   }, [canQueryConversation, conversationId, retryNonce]);
 
+  // iter-202 (self-heal): callers occasionally navigate to `/chat/${userId}`
+  // instead of `/chat/${conversationId}`. When that happens the conversation
+  // query never returns (no conversation with that id exists) — we get
+  // either `null` or, in some Convex states, indefinite `undefined`. After
+  // the fallback timer fires, ATTEMPT to convert the id from a userId via
+  // the canonical `getOrCreateDirect({ otherUserId })` mutation. On success
+  // we redirect to the real conversation; on failure we let the unavailable
+  // UI render with the Retry / Back affordances.
+  const getOrCreateDirectFallback = useMutation(api.conversations.getOrCreateDirect);
+  const [selfHealAttempted, setSelfHealAttempted] = useState(false);
+  useEffect(() => {
+    // Reset on conversationId change.
+    setSelfHealAttempted(false);
+  }, [conversationId]);
+  useEffect(() => {
+    if (selfHealAttempted) return;
+    if (!canQueryConversation) return;
+    if (!conversationId) return;
+    // Trigger immediately when Convex definitively returns null (no
+    // conversation with that id). For the undefined case wait until
+    // `fallbackReady` so a slow but eventually-successful query isn't
+    // pre-empted.
+    if (conversation === null) {
+      // proceed
+    } else if (conversation === undefined && fallbackReady) {
+      // proceed
+    } else {
+      return;
+    }
+    setSelfHealAttempted(true);
+    (async () => {
+      try {
+        const result: any = await getOrCreateDirectFallback({
+          otherUserId: conversationId as any,
+        });
+        const realId = result?._id || result?.conversationId || result?.id || result;
+        if (
+          typeof realId === 'string' &&
+          realId.length > 0 &&
+          realId !== conversationId
+        ) {
+          // Found the real conversation — redirect.
+          const path = `/chat/${encodeURIComponent(String(realId))}` as any;
+          try { router.replace(path); } catch {}
+        }
+      } catch {
+        // Not a userId either — leave the unavailable UI in place.
+      }
+    })();
+  }, [
+    canQueryConversation,
+    conversation,
+    conversationId,
+    fallbackReady,
+    getOrCreateDirectFallback,
+    router,
+    selfHealAttempted,
+  ]);
+
   // Treat as "missing" either when Convex returned `null` (truly not
   // found) OR when the query has been pending past the fallback
   // threshold (network / websocket stall — recoverable via Retry).
