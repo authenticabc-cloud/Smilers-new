@@ -300,6 +300,22 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
     []
   );
 
+  // iter-202: TRUE hands-free — auto-execute as soon as a command is
+  // recognized. The web `voice-task-commander` runs the action
+  // immediately on parse; we removed the "Go" confirmation step to
+  // match. The stop_command case is the lone exception — when said
+  // outside a recording session it's a no-op that just nudges the user.
+  const executeCommandRef = useRef<null | (() => void)>(null);
+  useEffect(() => {
+    if (flow !== 'recognized') return;
+    if (!parsedCommand) return;
+    if (parsedCommand.type === 'stop_command') return; // handled separately
+    const t = setTimeout(() => {
+      try { executeCommandRef.current?.(); } catch {}
+    }, 250); // tiny pause so the green check is visible
+    return () => clearTimeout(t);
+  }, [flow, parsedCommand]);
+
   const startListening = useCallback(async () => {
     setTranscript('');
     setParsedCommand(null);
@@ -559,6 +575,12 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
     router,
     startRawListener,
   ]);
+  // iter-202 hands-free auto-execute: keep the ref fresh so the
+  // useEffect above can fire `executeCommand` the instant a command is
+  // recognized, no "Go" tap required.
+  useEffect(() => {
+    executeCommandRef.current = executeCommand;
+  }, [executeCommand]);
 
   const tryAgain = useCallback(() => {
     setTranscript('');
@@ -694,26 +716,10 @@ function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
                 </TouchableOpacity>
               </>
             ) : flow === 'recognized' && parsedCommand ? (
-              <>
-                <TouchableOpacity
-                  style={[styles.actionBtn, styles.actionSecondary]}
-                  onPress={tryAgain}
-                  disabled={executing}
-                  testID="voice-command-retry"
-                >
-                  <Text style={styles.actionSecondaryText}>Try again</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.actionBtn, styles.actionPrimary, executing ? styles.actionDisabled : null]}
-                  onPress={executeCommand}
-                  disabled={executing}
-                  testID="voice-command-go"
-                >
-                  <Text style={styles.actionPrimaryText}>
-                    {executing ? 'Opening\u2026' : 'Go'}
-                  </Text>
-                </TouchableOpacity>
-              </>
+              // iter-202 hands-free: no buttons — auto-executes via the
+              // useEffect on `flow === 'recognized'`. The visible green
+              // check + "Calling X…" preview is all the feedback needed.
+              null
             ) : flow === 'no-match' || flow === 'error' ? (
               <TouchableOpacity
                 style={[styles.actionBtn, styles.actionPrimary, styles.actionFullWidth]}

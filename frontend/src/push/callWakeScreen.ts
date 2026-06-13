@@ -60,19 +60,22 @@ type ConvexAction = (args: any) => Promise<any>;
  * EAS prebuild hooks).
  */
 /**
- * iter-202: wake-screen is now enabled. The two prerequisites that were
- * keeping this hard-off are both in place:
- *   1. The `withCallWakeScreen` config plugin injects
- *      `android:showWhenLocked="true"` + `android:turnScreenOn="true"`
- *      onto MainActivity at prebuild time (see plugins/withCallWakeScreen.js).
- *   2. `USE_FULL_SCREEN_INTENT` and `WAKE_LOCK` permissions are declared
- *      in app.json's android.permissions block.
+ * iter-202 ROLLBACK: re-disabled. Enabling this caused a SEVERE regression
+ * — message push notifications and call ringing stopped firing entirely
+ * when the app was backgrounded or killed (the user reported "we are
+ * virtually back to square zero"). The most plausible cause is that
+ * CallKeep's foreground service / ConnectionService registration
+ * intercepts the FCM delivery path and short-circuits the Notifee
+ * channel that powers normal background notifications.
  *
- * iOS VoIP cert is still pending — the iOS branch below is therefore a
- * no-op when there's no VoIP token, so leaving wake enabled is safe
- * for iOS (it just keeps using the standard FCM-style notification).
+ * Until we have a permission-aware initialization that gates RNCallKeep
+ * setup behind explicit user consent (and verifies that grants don't
+ * cannibalize the existing message push), this stays off. The previous
+ * build that did NOT touch wake-screen had killed-app ringing working
+ * fine via the standard FCM → Notifee message channel, so we restore
+ * that path.
  */
-const WAKE_SCREEN_ENABLED = true;
+const WAKE_SCREEN_ENABLED = false;
 
 let initialised = false;
 let registeredRouter: Router | null = null;
