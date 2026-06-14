@@ -30,11 +30,11 @@ type Row = {
 };
 
 const ITEMS: Row[] = [
-  // iter-176: 'Diagnostic Logs' row removed for production publish.
-  // Diagnostic logging continues in the background (Sentry + safe-mutation
-  // queue); only the user-facing entry has been hidden. To re-enable for
-  // internal builds, re-add this row:
-  //   { key: 'diagnostic-logs', route: '/diagnostic-logs', title: 'Diagnostic Logs', sub: 'Crash + WebRTC event log (for support)', icon: 'bug-outline', lib: 'ion' },
+  // iter-176: 'Diagnostic Logs' row was removed for production publish.
+  // iter-214: re-enabled because the Test Push / Force Reconnect buttons
+  // inside it are now critical for triaging push & loading regressions
+  // in the wild. Will revisit hiding once those features prove stable.
+  { key: 'diagnostic-logs', route: '/diagnostic-logs', title: 'Diagnostic Logs', sub: 'Test push, force reconnect, crash log', icon: 'bug-outline', lib: 'ion' },
   { key: 'privacy', route: '/privacy', title: 'Privacy', sub: 'Last seen, profile photo, about', icon: 'shield-outline', lib: 'ion' },
   { key: 'app-lock', route: '/app-lock', title: 'App Lock', sub: 'PIN code and biometric unlock', icon: 'fingerprint', lib: 'mc' },
   { key: 'face-id', route: '/face-id', title: 'Face ID', sub: 'Verify identity on new devices', icon: 'face-recognition', lib: 'mc', premium: true },
