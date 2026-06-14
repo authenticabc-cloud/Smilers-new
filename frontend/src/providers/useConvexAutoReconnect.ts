@@ -34,17 +34,27 @@ import type { ConvexReactClient } from 'convex/react';
 import { sentry } from '../lib/sentry';
 
 // How often we poll the connection state while foregrounded.
-const HEARTBEAT_INTERVAL_MS = 30_000;
+// iter-213: tightened 30s → 15s so chat-screen stalls clear faster.
+const HEARTBEAT_INTERVAL_MS = 15_000;
 
 // A request older than this means the server has gone silent while we
 // still hold a "ready" socket — clearest signal of a ghost connection.
-// We bumped this from 15s → 30s (iter-209) to avoid false positives on
-// genuinely slow queries.
-const STALE_INFLIGHT_THRESHOLD_MS = 30_000;
+// iter-213: tightened 30s → 12s. The user reported chat headers stuck
+// on "Loading…" even after the data arrived server-side, i.e. the
+// React subscription never resolved. 12s is a sweet spot — long enough
+// to ignore a genuinely slow query, short enough that the user only
+// stares at the spinner briefly before we recover.
+const STALE_INFLIGHT_THRESHOLD_MS = 12_000;
 
-// Don't run the HEAVY restart path more often than this. The light
-// `tryReconnectImmediately()` path has its own internal idempotency.
-const MIN_HARD_RESTART_INTERVAL_MS = 60_000;
+// Don't run the HEAVY restart path more often than this.
+// iter-213: relaxed 60s → 30s so a flapping network recovers faster.
+const MIN_HARD_RESTART_INTERVAL_MS = 30_000;
+
+// iter-213: explicit module-level pointer to the current Convex client
+// so manual "Tap to reconnect" callers (chat header, diagnostic logs)
+// can force a reconnect WITHOUT having to thread the client through
+// every component. Set by `useConvexAutoReconnect` on mount.
+let activeClient: ConvexReactClient | null = null;
 
 type ConvexConnectionState = {
   isWebSocketConnected: boolean;
@@ -117,6 +127,7 @@ export function useConvexAutoReconnect(client: ConvexReactClient) {
 
   useEffect(() => {
     let cancelled = false;
+    activeClient = client; // iter-213: register for manual reconnect callers.
 
     const safeConnectionState = (): ConvexConnectionState | null => {
       try {
@@ -249,6 +260,9 @@ export function useConvexAutoReconnect(client: ConvexReactClient) {
 
     return () => {
       cancelled = true;
+      if (activeClient === client) {
+        activeClient = null; // iter-213: clear pointer on unmount.
+      }
       try {
         appStateSub.remove();
       } catch {}
@@ -258,6 +272,41 @@ export function useConvexAutoReconnect(client: ConvexReactClient) {
       } catch {}
     };
   }, [client]);
+}
+
+/**
+ * iter-213: Manual escape hatch. Called by the chat header "Loading…"
+ * tap, the diagnostic logs "Force reconnect" button, and pull-to-
+ * refresh inside chat lists. Triggers a SOFT reconnect first (idempotent
+ * and safe); if the socket is "ready" but stale, immediately follows
+ * up with a HARD reconnect (stop + tryRestart). Returns true if a
+ * reconnect attempt was made.
+ */
+export async function forceConvexReconnect(reason: string = 'manual'): Promise<boolean> {
+  const client = activeClient;
+  if (!client) {
+    try {
+      // eslint-disable-next-line no-console
+      console.log(`[convex-auto-reconnect] manual reconnect skipped — no active client (${reason})`);
+    } catch {}
+    return false;
+  }
+  try {
+    sentry.addBreadcrumb({
+      category: 'convex',
+      type: 'info',
+      level: 'info',
+      message: 'convex-auto-reconnect:manual',
+      data: { reason },
+    });
+  } catch {}
+  // eslint-disable-next-line no-console
+  console.log(`[convex-auto-reconnect] manual reconnect reason=${reason}`);
+  const soft = softReconnect(client);
+  // Always also attempt a hard reconnect — the user already waited
+  // long enough to tap a button; we should not let them keep waiting.
+  const hard = await hardReconnect(client);
+  return soft || hard;
 }
 
 export default useConvexAutoReconnect;

@@ -18,6 +18,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useConvex, useMutation, useQuery } from 'convex/react';
+import { forceConvexReconnect } from '../../src/providers/useConvexAutoReconnect';
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
 import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
@@ -805,6 +806,43 @@ export default function ChatScreen() {
     const timer = setTimeout(() => setFallbackReady(true), 5000);
     return () => clearTimeout(timer);
   }, [canQueryConversation, conversationId, retryNonce]);
+
+  // iter-213: PROACTIVE Convex auto-reconnect while a chat is loading.
+  //
+  // Symptom: the chat header is stuck on "Loading…" and the body shows
+  // an endless spinner — but backend logs show our queries ARE being
+  // served. This is the "ghost-connected" Convex WebSocket: the
+  // socket appears open to React but the server's responses never
+  // propagate to the React subscription.
+  //
+  // Heuristic:
+  //   - At T+5s of "still loading" → kick a SOFT reconnect (idempotent,
+  //     same primitive Convex uses for window.online events on web).
+  //   - At T+12s → escalate to a HARD reconnect (stop + tryRestart).
+  //   - At T+20s → escalate again with an additional `retryNonce` bump
+  //     to force the React subtree to re-mount and re-subscribe.
+  // Once a query resolves, the timers are cleared. The escalation runs
+  // ONCE per pending cycle (per retryNonce) so we don't reconnect-spam
+  // on a chat that's genuinely just slow.
+  useEffect(() => {
+    if (!canQueryConversation) return;
+    if (conversation !== undefined && messagesPage !== undefined) return;
+    const t5 = setTimeout(() => {
+      void forceConvexReconnect('chat-stall-5s');
+    }, 5000);
+    const t12 = setTimeout(() => {
+      void forceConvexReconnect('chat-stall-12s');
+    }, 12000);
+    const t20 = setTimeout(() => {
+      void forceConvexReconnect('chat-stall-20s');
+      setRetryNonce((n) => n + 1);
+    }, 20000);
+    return () => {
+      clearTimeout(t5);
+      clearTimeout(t12);
+      clearTimeout(t20);
+    };
+  }, [canQueryConversation, conversation, messagesPage, retryNonce]);
 
   // iter-202 (self-heal): callers occasionally navigate to `/chat/${userId}`
   // instead of `/chat/${conversationId}`. When that happens the conversation
@@ -2603,11 +2641,15 @@ export default function ChatScreen() {
                 </TouchableOpacity>
                 <TouchableOpacity
                   onPress={() => {
-                    // Re-mounting via router.replace to the same URL is the
-                    // only reliable way to force the Convex `useQuery` to
-                    // re-subscribe — useful when the underlying websocket
-                    // has silently stalled. We also bump the local nonce so
-                    // the spinner timer resets immediately.
+                    // iter-213: also force a Convex socket reconnect. The
+                    // previous router.replace re-issued the React subscription
+                    // but if the underlying websocket was the actual problem
+                    // (ghost-connected state), no new subscription would
+                    // resolve either. forceConvexReconnect runs soft+hard
+                    // reconnect via the WebSocketManager so the socket is
+                    // guaranteed to be fresh by the time the re-mounted
+                    // component re-subscribes.
+                    void forceConvexReconnect('chat-retry-button');
                     setRetryNonce((n) => n + 1);
                     try {
                       const path = `/chat/${encodeURIComponent(String(conversationId || ''))}` as any;

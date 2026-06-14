@@ -42,6 +42,7 @@ import {
 } from '../src/lib/diagnostics';
 import { triggerEmergentSelfTestPush } from '../src/push/useEmergentPush';
 import { useAuth } from '../src/providers/AuthProvider';
+import { forceConvexReconnect } from '../src/providers/useConvexAutoReconnect';
 
 const STORAGE_KEY = 'smilers:diagnostic_events:v1';
 const SESSION_KEY = 'smilers:diagnostic_session:v1';
@@ -370,6 +371,32 @@ export default function DiagnosticLogsScreen() {
           >
             {runningPushTest ? 'Sending…' : 'Test Push'}
           </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.toolBtn}
+          onPress={async () => {
+            recordDiagnostic({
+              tag: 'CONVEX-RECONNECT',
+              source: 'diagnostic-logs',
+              message: 'manual force reconnect requested',
+            });
+            const ok = await forceConvexReconnect('diagnostic-logs-button');
+            recordDiagnostic({
+              tag: 'CONVEX-RECONNECT',
+              source: 'diagnostic-logs',
+              message: `result: ${ok ? 'reconnect attempted' : 'no active client'}`,
+            });
+            void refresh();
+            Alert.alert(
+              'Convex socket reconnect',
+              ok
+                ? 'Socket restart triggered. Stuck chats / messages should resolve in ~3-5s.'
+                : 'No active Convex client found. Try signing in first.',
+            );
+          }}
+        >
+          <Feather name="refresh-cw" size={16} color="#ff9800" />
+          <Text style={[styles.toolText, { color: '#ff9800' }]}>Reconnect</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.toolBtn} onPress={handleSentryTest}>
           <Feather name="alert-triangle" size={16} color="#ffb300" />
