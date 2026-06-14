@@ -341,6 +341,50 @@ export function useEmergentPush() {
       sub.remove();
     };
   }, [register]);
+
+  // iter-208 (push reliability — race fix): on cold start the OIDC
+  // userId resolves fast but the Convex `me._id` query can take
+  // noticeably longer, especially when the socket is reconnecting.
+  // That race causes the first /api/register-push to land WITHOUT
+  // convex_user_id, and the row stays that way — which makes
+  // every subsequent message/call notify-event miss the token
+  // lookup (`tokens=0 delivered=0` in server logs).
+  //
+  // To self-heal, we retry registration on a backoff schedule
+  // (5s / 30s / 2min) AS LONG AS we still don't have a convex_user_id
+  // persisted. The retries reset the in-process throttle so the
+  // backend gets a fresh POST that finally includes the mapping.
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    if (!isAuthenticated || !userId) return;
+    const delays = [5_000, 30_000, 120_000];
+    const timers: any[] = [];
+    delays.forEach((delay) => {
+      const t = setTimeout(() => {
+        // Only retry while the mapping is still unknown — once we've
+        // saved a convex_user_id we stop hammering the endpoint.
+        if (!lastConvexUserId) {
+          lastRegisteredAt = 0; // bust the 5-minute throttle
+          void register();
+        }
+      }, delay);
+      timers.push(t);
+    });
+    return () => timers.forEach((t) => clearTimeout(t));
+  }, [isAuthenticated, userId, register]);
+
+  // iter-208: extra safety — every time the Convex `me._id` flips
+  // from null to a real value we explicitly bust the throttle and
+  // re-register, regardless of how long it took. Without this the
+  // arrival of `me._id` 5–30 seconds late could still be silently
+  // swallowed by the throttle's "if lastConvexUserId === current" arm.
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    if (!convexUserId) return;
+    if (lastConvexUserId === convexUserId) return; // already persisted
+    lastRegisteredAt = 0;
+    void register();
+  }, [convexUserId, register]);
 }
 
 /**
