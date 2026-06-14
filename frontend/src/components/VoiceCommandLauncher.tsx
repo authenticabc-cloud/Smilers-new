@@ -58,7 +58,7 @@ interface VoiceCommandSheetProps {
   onClose: () => void;
 }
 
-function VoiceCommandSheet({ visible, onClose }: VoiceCommandSheetProps) {
+function VoiceCommandSheetInner({ visible, onClose }: VoiceCommandSheetProps) {
   const router = useRouter();
   const convex = useConvex();
   const getOrCreateDirect = useMutation(api.conversations.getOrCreateDirect);
@@ -920,9 +920,26 @@ export default function VoiceCommandLauncher() {
       <VoiceCommandSheet
         visible={sheetVisible}
         onClose={() => setSheetVisible(false)}
+        // iter-207 idle-crash fix: the SHEET is now conditionally
+        // mounted via `visible` AND we use a `key` so React fully
+        // tears it down between sessions. Previously the sheet was
+        // always rendered (just with `visible=false`), which kept its
+        // `useAudioRecorder` (native AudioRecorder instance) and
+        // continuous speech-recognition event listeners attached for
+        // the entire app lifetime — that resource hold caused the
+        // "Smilers has stopped" idle crashes the user reported.
       />
     </>
   );
+}
+
+// iter-207: wrap the sheet so the heavy native hooks (audio recorder,
+// speech recognizer) only allocate while it's visible. Conditional
+// rendering at the boundary keeps the sheet component itself simple
+// and idiomatic.
+function VoiceCommandSheet(props: VoiceCommandSheetProps) {
+  if (!props.visible) return null;
+  return <VoiceCommandSheetInner {...props} />;
 }
 
 const styles = StyleSheet.create({
