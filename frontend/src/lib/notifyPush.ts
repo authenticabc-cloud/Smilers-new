@@ -1,5 +1,5 @@
 /**
- * notifyPush (iter-198) — SENDER-side push trigger.
+ * notifyPush (iter-198 / hardened iter-210) — SENDER-side push trigger.
  *
  * WHY THIS EXISTS: live diagnosis on 2026-06-12 proved that the Convex
  * backend was NOT firing /api/send-push-internal for real messages and
@@ -18,6 +18,16 @@
  *
  * Fire-and-forget by design: push failures must NEVER block or slow the
  * actual send.
+ *
+ * iter-210 OBSERVABILITY UPGRADE: previous version was silently
+ * fire-and-forget — when the user reported "push not rendering" we had
+ * NO way to see whether the sender device even attempted a notify-event
+ * call, let alone what response the backend gave. We now:
+ *   - Record a diagnostic on every attempt (skip / start / success / fail).
+ *   - Log to console with a stable prefix [NOTIFY-PUSH] so logcat searches
+ *     work.
+ *   - Capture HTTP status and short response body on non-2xx.
+ *   - Capture the skip REASON when recipients/BACKEND_URL are missing.
  */
 import { recordDiagnostic } from './diagnostics';
 
@@ -42,13 +52,45 @@ export interface NotifyPushOpts {
   idempotencyKey?: string | null;
 }
 
+function safeRecord(message: string) {
+  try {
+    recordDiagnostic({ tag: 'NOTIFY', source: 'notifyPush', message });
+  } catch {
+    /* never block the send path */
+  }
+  try {
+    // eslint-disable-next-line no-console
+    console.log(`[NOTIFY-PUSH] ${message}`);
+  } catch {
+    /* swallow */
+  }
+}
+
 /** Fire-and-forget. Never throws, never blocks the caller. */
 export function notifyEventPush(opts: NotifyPushOpts): void {
   try {
-    const recipients = (opts.recipients || [])
+    const rawRecipients = opts.recipients || [];
+    const recipients = rawRecipients
       .map((r) => (r == null ? '' : String(r).trim()))
       .filter(Boolean);
-    if (!BACKEND_URL || recipients.length === 0) return;
+
+    if (!BACKEND_URL) {
+      safeRecord(
+        `skip: event=${opts.event} reason=no-backend-url raw=${rawRecipients.length}`,
+      );
+      return;
+    }
+    if (recipients.length === 0) {
+      safeRecord(
+        `skip: event=${opts.event} reason=no-recipients raw=${rawRecipients.length}`,
+      );
+      return;
+    }
+
+    safeRecord(
+      `start: event=${opts.event} recipients=${recipients.length} convId=${opts.conversationId || '∅'} idem=${opts.idempotencyKey || '∅'}`,
+    );
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10_000);
     void fetch(`${BACKEND_URL}/api/notify-event`, {
@@ -67,18 +109,27 @@ export function notifyEventPush(opts: NotifyPushOpts): void {
       }),
       signal: controller.signal,
     })
+      .then(async (resp) => {
+        if (!resp.ok) {
+          let detail = '';
+          try {
+            detail = (await resp.text()).slice(0, 200);
+          } catch {}
+          safeRecord(
+            `fail: event=${opts.event} HTTP ${resp.status} detail=${detail || 'n/a'}`,
+          );
+          return;
+        }
+        safeRecord(`ok: event=${opts.event} HTTP ${resp.status}`);
+      })
       .catch((errorValue: any) => {
-        try {
-          recordDiagnostic({
-            tag: 'NOTIFY',
-            source: 'notifyPush',
-            message: `notify-event POST failed: ${errorValue?.message || errorValue}`,
-          });
-        } catch {}
+        safeRecord(
+          `fail: event=${opts.event} fetch error=${errorValue?.message || errorValue}`,
+        );
       })
       .finally(() => clearTimeout(timeoutId));
-  } catch {
-    /* never block the send path */
+  } catch (errorValue: any) {
+    safeRecord(`fail: event=${opts.event} unexpected error=${errorValue?.message || errorValue}`);
   }
 }
 

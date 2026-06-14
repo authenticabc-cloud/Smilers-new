@@ -302,21 +302,36 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
   // (e.g. older build), this is a silent no-op — the existing banner
   // path is what the user has always had.
   //
+  // iter-211 SWITCH: we previously used `callWakeScreen` which combined
+  // Notifee + CallKeep. CallKeep's ConnectionService cannibalized the
+  // FCM message channel (iter-202) so it stayed disabled. We now use
+  // the Notifee-ONLY path `notifeeCallWake` — same full-screen-intent
+  // ring + lockscreen UI, ZERO CallKeep dependency, so it can never
+  // cannibalize FCM. The old `callWakeScreen` remains imported for
+  // backwards-compat (no-op when WAKE_SCREEN_ENABLED=false).
+  //
   // Note: we lazy-require the module so a missing native binding can
   // NEVER throw inside the background task and break the message path.
   if (type === 'call') {
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { presentIncomingCallWake } = require('./callWakeScreen');
+      const { presentIncomingCallNotifeeWake } = require('./notifeeCallWake');
       const callId = toNonEmptyString(payload.callId) || notificationKey;
       const callerName = getDisplayNameFromPayload(payload) || 'Smilers user';
       const callerId = toNonEmptyString(payload.callerId) || callId;
-      const callType = toNonEmptyString(payload.callType) === 'video' ? 'video' : 'audio';
+      const callType = toNonEmptyString(payload.callType) === 'video' ? 'video' : 'voice';
+      const conversationId = toNonEmptyString(payload.conversationId) || '';
       if (callId) {
-        await presentIncomingCallWake({ callId, callerId, callerName, callType });
+        await presentIncomingCallNotifeeWake({
+          callId,
+          callerId,
+          callerName,
+          callType,
+          conversationId,
+        });
       }
     } catch (errorValue: any) {
-      console.warn('[push] presentIncomingCallWake bridge failed:', errorValue?.message);
+      console.warn('[push] presentIncomingCallNotifeeWake bridge failed:', errorValue?.message);
     }
   }
 }
@@ -839,12 +854,28 @@ export function usePushNotifications() {
         } catch (e) {
           console.warn('[push] Decline failed', e);
         }
+        // iter-211: ALSO cancel the Notifee wake-screen ring (no-op if absent).
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const { cancelIncomingCallNotifeeWake } = require('./notifeeCallWake');
+          void cancelIncomingCallNotifeeWake(callId);
+        } catch {}
         await Notifications.dismissNotificationAsync(id);
         return;
       }
 
       if (type === 'call' && conversationId) {
         const displayName = getDisplayNameFromPayload(payload, contentBody) || contentTitle.trim();
+        // iter-211: stop the wake-screen ring as soon as the user
+        // taps the notification to answer — the in-call screen handles
+        // the rest.
+        if (callId) {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const { cancelIncomingCallNotifeeWake } = require('./notifeeCallWake');
+            void cancelIncomingCallNotifeeWake(callId);
+          } catch {}
+        }
         router.push(
           displayName
             ? (`/call/${conversationId}?displayName=${encodeURIComponent(displayName)}` as any)
@@ -916,6 +947,33 @@ export function usePushNotifications() {
             ? (`/approve-login?code=${encodeURIComponent(approvalCode)}` as any)
             : ('/approve-login' as any),
         );
+      }
+      // iter-211: foreground incoming-call wake-screen.
+      //
+      // When a call push arrives while the app is in the foreground
+      // (e.g., user is reading a chat) the OS does NOT auto-display
+      // the banner — our `setNotificationHandler` returns shouldShowBanner
+      // but that gives a *quiet* banner, not the full-screen ring the
+      // user expects from "Incoming call". We additionally fire the
+      // Notifee fullScreenAction notification here so the ring + lock-
+      // screen-style UI shows over the current screen.
+      if (type === 'call') {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const { presentIncomingCallNotifeeWake } = require('./notifeeCallWake');
+          const callId = toNonEmptyString(payload.callId) || toNonEmptyString(payload.messageId);
+          if (callId) {
+            void presentIncomingCallNotifeeWake({
+              callId,
+              callerId: toNonEmptyString(payload.callerId) || callId,
+              callerName: getDisplayNameFromPayload(payload) || 'Smilers user',
+              callType: toNonEmptyString(payload.callType) === 'video' ? 'video' : 'voice',
+              conversationId: conversationId || '',
+            });
+          }
+        } catch (errorValue: any) {
+          console.warn('[push] foreground call wake-screen failed:', errorValue?.message);
+        }
       }
     });
 
