@@ -161,17 +161,30 @@ export default function CallRecordingSettingsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="call-recording-settings">
-      <Header title="Call Recording" showBack onBack={() => router.back()} variant="dark" />
+      <Header
+        title="Call Recording"
+        showBack
+        onBack={() => router.back()}
+        variant="dark"
+        titleIcon={<MaterialCommunityIcons name="microphone-outline" size={20} color={Colors.white} />}
+      />
       <FlatList
         data={showExceptionsList ? contacts || [] : []}
         keyExtractor={(c) => String(c._id || c.userId)}
         contentContainerStyle={{ paddingBottom: 40 }}
         ListHeaderComponent={
           <View>
+            {/* iter-205: long-form legal disclaimer banner matching the
+                web app. The previous one-liner ("both parties will see
+                a recording indicator") undersold the legal weight. The
+                web copy explicitly invokes consent laws so the user is
+                informed before flipping any switch. */}
             <View style={styles.banner} testID="call-recording-banner">
-              <MaterialCommunityIcons name="record-rec" size={20} color={Colors.danger} />
+              <MaterialCommunityIcons name="shield-alert-outline" size={20} color={Colors.danger} />
               <Text style={styles.bannerText}>
-                When you record a call, both parties will see a recording indicator.
+                Recording calls may be illegal without consent in your jurisdiction. By recording, you confirm
+                you have the right to record and to keep a copy of the call. Both parties will see a recording
+                indicator while a call is being recorded.
               </Text>
             </View>
 
@@ -179,7 +192,7 @@ export default function CallRecordingSettingsScreen() {
             <ModeRow
               icon="record-rec"
               title="Always record"
-              subtitle="Every voice & video call is recorded automatically."
+              subtitle="Every voice and video call you make or receive will be recorded."
               selected={local.mode === 'always'}
               onPress={() => handleSelectMode('always')}
               testID="mode-always"
@@ -187,7 +200,7 @@ export default function CallRecordingSettingsScreen() {
             <ModeRow
               icon="close-circle-outline"
               title="Never record"
-              subtitle="Nothing is recorded."
+              subtitle="No calls will be recorded."
               selected={local.mode === 'never'}
               onPress={() => handleSelectMode('never')}
               testID="mode-never"
@@ -195,12 +208,33 @@ export default function CallRecordingSettingsScreen() {
             <ModeRow
               icon="account-multiple-check-outline"
               title="Record with exceptions"
-              subtitle="Choose contacts to include or exclude."
+              subtitle="Choose specific contacts to always record, or to never record."
               selected={local.mode === 'exceptions'}
               onPress={() => handleSelectMode('exceptions')}
               testID="mode-exceptions"
               isLast
             />
+
+            {/* iter-205 My Recordings entry — opens the list of every
+                call recording owned by the viewer, mirroring the web's
+                bottom-of-page card. Uses the canonical
+                `api.callRecording.listMyRecordings` query. */}
+            <Text style={styles.sectionTitle}>YOUR LIBRARY</Text>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => router.push('/my-recordings' as any)}
+              style={styles.libraryRow}
+              testID="open-my-recordings"
+            >
+              <View style={styles.libraryIcon}>
+                <MaterialCommunityIcons name="folder-music-outline" size={20} color={Colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.libraryTitle}>My Recordings</Text>
+                <Text style={styles.librarySubtitle}>Review, play and manage your saved call recordings.</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={Colors.textSecondary} />
+            </TouchableOpacity>
 
             {showExceptionsList ? (
               <View>
@@ -389,6 +423,30 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   behaviorText: { flex: 1, fontSize: 15, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
+
+  // iter-205: "My Recordings" library entry styles.
+  libraryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    paddingHorizontal: Spacing.base,
+    paddingVertical: 14,
+    minHeight: 64,
+    backgroundColor: Colors.surface,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.border,
+  },
+  libraryIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: Colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  libraryTitle: { fontSize: 16, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  librarySubtitle: { fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
 
   contactRow: {
     flexDirection: 'row',

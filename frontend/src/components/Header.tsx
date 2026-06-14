@@ -14,6 +14,10 @@ interface HeaderProps {
   leftAction?: React.ReactNode;
   subtitle?: string;
   variant?: 'light' | 'dark';
+  // iter-205 (Call Recording parity): an optional icon shown immediately
+  // BEFORE the title text — used by Call Recording to surface the mic
+  // glyph the web app shows next to "Call Recording".
+  titleIcon?: React.ReactNode;
 }
 
 export default function Header({
@@ -24,6 +28,7 @@ export default function Header({
   leftAction,
   subtitle,
   variant = 'dark',
+  titleIcon,
 }: HeaderProps) {
   const isDark = variant === 'dark';
   const bg = isDark ? Colors.headerBg : Colors.surface;
@@ -42,9 +47,12 @@ export default function Header({
           <View style={styles.sidePad} />
         )}
         <View style={styles.titleWrap}>
-          <Text style={[styles.title, { color: fg }]} numberOfLines={1}>
-            {title}
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {titleIcon ? <View>{titleIcon}</View> : null}
+            <Text style={[styles.title, { color: fg }]} numberOfLines={1}>
+              {title}
+            </Text>
+          </View>
           {subtitle ? (
             <Text style={[styles.subtitle, { color: isDark ? Colors.primaryLight : Colors.textSecondary }]} numberOfLines={1}>
               {subtitle}
