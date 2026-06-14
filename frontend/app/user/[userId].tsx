@@ -14,10 +14,11 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useMutation } from 'convex/react';
+import { useMutation, useQuery } from 'convex/react';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../../src/providers/AuthProvider';
+import SaveContactDialog from '../../src/components/SaveContactDialog';
 import {
   getDisplayInitials,
   getDisplayNameFromUser,
@@ -57,6 +58,22 @@ export default function UserProfileScreen() {
     null,
     isAuthenticated && hasValidUserId,
   );
+
+  // iter-206: detect whether the viewed user is already saved as a
+  // contact. We hit `api.contacts.getContacts` (warm cache from chats
+  // tab) and look for a row matching this userId. Drives the "Save"
+  // action — per the canonical spec, Save is shown ONLY when
+  // `isContact === false`.
+  const myContacts = useQuery(api.contacts.getContacts, isAuthenticated ? {} : 'skip') as
+    | any[]
+    | undefined;
+  const isContact = useMemo(() => {
+    if (!Array.isArray(myContacts) || !userId) return null; // unknown while loading
+    return myContacts.some(
+      (c: any) => String(c?._id || c?.userId) === String(userId) && c?.contactStatus === 'accepted'
+    );
+  }, [myContacts, userId]);
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
 
   // Shared media is sourced from the existing conversation messages.
   const { data: messagesPage } = useSafeConvexQuery<any>(
@@ -301,6 +318,18 @@ export default function UserProfileScreen() {
               onPress={() => openCall('video')}
               testID="user-profile-video-btn"
             />
+            {/* iter-206 Save Contact (canonical: SAVE_CONTACT_NATIVE_CONTRACT.md).
+                Only shown when the viewer hasn't saved this user yet —
+                `isContact === false`. `null` means contacts list is
+                still loading; we hide the button to avoid flicker. */}
+            {isContact === false ? (
+              <ActionButton
+                icon="user-plus"
+                label="Save"
+                onPress={() => setShowSaveDialog(true)}
+                testID="user-profile-save-btn"
+              />
+            ) : null}
           </View>
         </View>
 
@@ -411,6 +440,19 @@ export default function UserProfileScreen() {
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      {/* iter-206 Save Contact dialog. Renders only when invoked from
+          the action row's Save button. Spec: SAVE_CONTACT_NATIVE_CONTRACT.md */}
+      {hasValidUserId ? (
+        <SaveContactDialog
+          visible={showSaveDialog}
+          onClose={() => setShowSaveDialog(false)}
+          contactId={String(userId)}
+          initialName={user?.name || user?.displayName || ''}
+          defaultPhone={user?.phoneE164 || user?.phone || ''}
+          defaultEmail={user?.email || ''}
+        />
+      ) : null}
 
       {/* Floating mute FAB */}
       <TouchableOpacity

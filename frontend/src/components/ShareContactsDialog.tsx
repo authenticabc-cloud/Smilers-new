@@ -30,13 +30,21 @@ import {
 } from 'react-native';
 import { useMutation, useQuery } from 'convex/react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as Contacts from 'expo-contacts';
 import { api } from '../convexApi';
 import { Colors } from '../theme';
 
 type Step = 'pick-contacts' | 'pick-recipients' | 'sending';
 
-const MAX_CONTACTS = 20;
+const MAX_TOTAL_CONTACTS = 20;
 const MAX_RECIPIENTS = 50;
+
+interface DeviceContact {
+  /** Unique row id for this picker session. */
+  id: string;
+  name?: string;
+  phone: string;
+}
 
 interface Props {
   visible: boolean;
@@ -52,11 +60,22 @@ export default function ShareContactsDialog({ visible, onClose, presetRecipientI
   const [step, setStep] = useState<Step>('pick-contacts');
   const [includeName, setIncludeName] = useState(true);
   const [selectedContactIds, setSelectedContactIds] = useState<Set<string>>(new Set());
+  // iter-206: device-book imports. These don't have a Smilers `_id`; the
+  // server matches them by phone server-side. Per canonical spec we send
+  // them as `rawContacts: Array<{ name?, phone }>`. Selection state for
+  // them is "all of them" (we drop entries the user doesn't want before
+  // showing the picker).
+  const [deviceContacts, setDeviceContacts] = useState<DeviceContact[]>([]);
+  const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<string>>(new Set());
+  const [importing, setImporting] = useState(false);
   const [selectedRecipientIds, setSelectedRecipientIds] = useState<Set<string>>(
     () => new Set(presetRecipientId ? [presetRecipientId] : [])
   );
   const [contactSearch, setContactSearch] = useState('');
   const [recipientSearch, setRecipientSearch] = useState('');
+
+  // Total selected count for cap enforcement.
+  const totalSelected = selectedContactIds.size + selectedDeviceIds.size;
 
   React.useEffect(() => {
     if (!visible) {
@@ -67,8 +86,68 @@ export default function ShareContactsDialog({ visible, onClose, presetRecipientI
       setSelectedRecipientIds(new Set(presetRecipientId ? [presetRecipientId] : []));
       setContactSearch('');
       setRecipientSearch('');
+      setDeviceContacts([]);
+      setSelectedDeviceIds(new Set());
+      setImporting(false);
     }
   }, [visible, presetRecipientId]);
+
+  // iter-206: import contacts from the device address book and add
+  // them to the picker as a "From device" group. We request the
+  // platform permission contextually (only when the user taps Import),
+  // and gracefully fall back if denied.
+  const importFromDevice = useCallback(async () => {
+    if (importing) return;
+    setImporting(true);
+    try {
+      const perm = await Contacts.requestPermissionsAsync();
+      if (perm.status !== 'granted') {
+        Alert.alert(
+          'Contacts permission needed',
+          'Allow access to your device contacts to import them here.'
+        );
+        return;
+      }
+      const { data } = await Contacts.getContactsAsync({
+        fields: [Contacts.Fields.Name, Contacts.Fields.PhoneNumbers],
+        sort: Contacts.SortTypes.FirstName,
+      });
+      const flat: DeviceContact[] = [];
+      for (const c of data) {
+        const phones = (c.phoneNumbers || []).filter((p) => p?.number);
+        for (const p of phones) {
+          const rawNum = String(p.number || '').trim();
+          if (!rawNum) continue;
+          flat.push({
+            id: `dev::${c.id}::${rawNum}`,
+            name: c.name || c.firstName || undefined,
+            phone: rawNum,
+          });
+        }
+      }
+      if (flat.length === 0) {
+        Alert.alert('No phone numbers found', 'None of your device contacts have a phone number to share.');
+        return;
+      }
+      // De-dupe by phone digits.
+      const seen = new Set<string>();
+      const deduped = flat.filter((d) => {
+        const k = d.phone.replace(/[^\d+]/g, '');
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+      setDeviceContacts(deduped);
+      // Auto-select all imports up to the remaining cap.
+      const remaining = Math.max(0, MAX_TOTAL_CONTACTS - selectedContactIds.size);
+      const autoSelected = new Set(deduped.slice(0, remaining).map((d) => d.id));
+      setSelectedDeviceIds(autoSelected);
+    } catch (errorValue: any) {
+      Alert.alert('Import failed', errorValue?.message || 'Could not load device contacts.');
+    } finally {
+      setImporting(false);
+    }
+  }, [importing, selectedContactIds.size]);
 
   // Filter contacts step — by name or phone substring.
   const filteredForContacts = useMemo(() => {
@@ -102,15 +181,33 @@ export default function ShareContactsDialog({ visible, onClose, presetRecipientI
       if (next.has(id)) {
         next.delete(id);
       } else {
-        if (next.size >= MAX_CONTACTS) {
-          Alert.alert('Limit reached', `You can share up to ${MAX_CONTACTS} contacts at once.`);
+        const newTotal = next.size + selectedDeviceIds.size + 1;
+        if (newTotal > MAX_TOTAL_CONTACTS) {
+          Alert.alert('Limit reached', `You can share up to ${MAX_TOTAL_CONTACTS} contacts at once.`);
           return prev;
         }
         next.add(id);
       }
       return next;
     });
-  }, []);
+  }, [selectedDeviceIds.size]);
+
+  const toggleDeviceContact = useCallback((id: string) => {
+    setSelectedDeviceIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        const newTotal = selectedContactIds.size + next.size + 1;
+        if (newTotal > MAX_TOTAL_CONTACTS) {
+          Alert.alert('Limit reached', `You can share up to ${MAX_TOTAL_CONTACTS} contacts at once.`);
+          return prev;
+        }
+        next.add(id);
+      }
+      return next;
+    });
+  }, [selectedContactIds.size]);
 
   const toggleRecipient = useCallback((id: string) => {
     setSelectedRecipientIds((prev) => {
@@ -129,7 +226,7 @@ export default function ShareContactsDialog({ visible, onClose, presetRecipientI
   }, []);
 
   const submit = useCallback(async () => {
-    if (selectedContactIds.size === 0) {
+    if (totalSelected === 0) {
       Alert.alert('Pick at least one contact');
       return;
     }
@@ -138,17 +235,21 @@ export default function ShareContactsDialog({ visible, onClose, presetRecipientI
       return;
     }
     setStep('sending');
+    // Build the rawContacts payload from the device picker selection.
+    // Per canonical spec, `phone` is required; `name` is optional.
+    const rawContacts = deviceContacts
+      .filter((d) => selectedDeviceIds.has(d.id))
+      .map((d) => (d.name ? { name: d.name, phone: d.phone } : { phone: d.phone }));
     try {
       const result: any = await shareContacts({
         contactIds: Array.from(selectedContactIds) as any[],
+        ...(rawContacts.length > 0 ? { rawContacts } : {}),
         recipientIds: Array.from(selectedRecipientIds) as any[],
         includeName,
       });
       const sentTo = Number(result?.sentTo || 0);
       onClose();
-      // Soft feedback — same wording the web app uses.
       if (sentTo > 0) {
-        // No toast lib here; brief Alert for parity.
         setTimeout(() => {
           Alert.alert(
             sentTo === 1 ? 'Contact shared' : 'Contacts shared',
@@ -161,7 +262,16 @@ export default function ShareContactsDialog({ visible, onClose, presetRecipientI
       const msg = errorValue?.data?.message || errorValue?.message || 'Could not share contacts.';
       Alert.alert("Couldn\u2019t share", String(msg));
     }
-  }, [includeName, onClose, selectedContactIds, selectedRecipientIds, shareContacts]);
+  }, [
+    deviceContacts,
+    includeName,
+    onClose,
+    selectedContactIds,
+    selectedDeviceIds,
+    selectedRecipientIds,
+    shareContacts,
+    totalSelected,
+  ]);
 
   const renderContactRow = useCallback(
     ({ item, selected, onPress }: { item: any; selected: boolean; onPress: () => void }) => {
@@ -242,6 +352,30 @@ export default function ShareContactsDialog({ visible, onClose, presetRecipientI
                   testID="sc-search-contacts"
                 />
               </View>
+
+              {/* iter-206 Import from device button. Opens the OS
+                  contacts permission prompt, then reads names + phones
+                  and adds them as a "From device" group below. */}
+              <TouchableOpacity
+                onPress={importFromDevice}
+                disabled={importing}
+                style={styles.importBtn}
+                testID="sc-import-device"
+              >
+                {importing ? (
+                  <ActivityIndicator size="small" color={Colors.primary} />
+                ) : (
+                  <>
+                    <MaterialCommunityIcons name="cellphone-arrow-down" size={18} color={Colors.primary} />
+                    <Text style={styles.importBtnText}>
+                      {deviceContacts.length > 0
+                        ? `Re-import from device (${deviceContacts.length})`
+                        : 'Import from device'}
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
               <View style={styles.toggleRow}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.toggleTitle}>Include name</Text>
@@ -270,6 +404,43 @@ export default function ShareContactsDialog({ visible, onClose, presetRecipientI
                   })
                 }
                 contentContainerStyle={styles.listContent}
+                ListHeaderComponent={
+                  deviceContacts.length > 0 ? (
+                    <View>
+                      <Text style={styles.sectionLabel}>FROM DEVICE</Text>
+                      {deviceContacts.map((d) => (
+                        <TouchableOpacity
+                          key={d.id}
+                          style={styles.row}
+                          onPress={() => toggleDeviceContact(d.id)}
+                          testID={`sc-dev-row-${d.id}`}
+                        >
+                          <View style={[styles.avatar, styles.avatarFallback]}>
+                            <Text style={styles.avatarText}>
+                              {(d.name || d.phone || '?').slice(0, 1).toUpperCase()}
+                            </Text>
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.rowTitle} numberOfLines={1}>
+                              {d.name || d.phone}
+                            </Text>
+                            {d.name ? (
+                              <Text style={styles.rowSubtitle} numberOfLines={1}>{d.phone}</Text>
+                            ) : null}
+                          </View>
+                          <View
+                            style={[styles.checkbox, selectedDeviceIds.has(d.id) ? styles.checkboxOn : null]}
+                          >
+                            {selectedDeviceIds.has(d.id) ? (
+                              <MaterialCommunityIcons name="check" size={14} color="#FFFFFF" />
+                            ) : null}
+                          </View>
+                        </TouchableOpacity>
+                      ))}
+                      <Text style={styles.sectionLabel}>SAVED ON SMILERS</Text>
+                    </View>
+                  ) : null
+                }
                 ListEmptyComponent={
                   <Text style={styles.emptyText}>
                     {Array.isArray(contacts) ? 'No contacts to share.' : 'Loading\u2026'}
@@ -277,15 +448,13 @@ export default function ShareContactsDialog({ visible, onClose, presetRecipientI
                 }
               />
               <TouchableOpacity
-                style={[styles.primaryBtn, selectedContactIds.size === 0 ? styles.btnDisabled : null]}
+                style={[styles.primaryBtn, totalSelected === 0 ? styles.btnDisabled : null]}
                 onPress={() => setStep('pick-recipients')}
-                disabled={selectedContactIds.size === 0}
+                disabled={totalSelected === 0}
                 testID="sc-next"
               >
                 <Text style={styles.primaryBtnText}>
-                  {selectedContactIds.size > 0
-                    ? `Next \u00B7 ${selectedContactIds.size}`
-                    : 'Next'}
+                  {totalSelected > 0 ? `Next \u00B7 ${totalSelected}` : 'Next'}
                 </Text>
               </TouchableOpacity>
             </>
@@ -396,6 +565,32 @@ const styles = StyleSheet.create({
     marginHorizontal: 14,
     backgroundColor: 'rgba(202, 138, 4, 0.08)',
     borderRadius: 12,
+  },
+  importBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginHorizontal: 14,
+    marginTop: 10,
+    paddingVertical: 11,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(202, 138, 4, 0.55)',
+    backgroundColor: 'rgba(202, 138, 4, 0.06)',
+  },
+  importBtnText: {
+    color: Colors.primary,
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    color: Colors.textSecondary,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
   },
   toggleTitle: {
     fontSize: 14,

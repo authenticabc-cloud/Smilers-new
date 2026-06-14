@@ -3,7 +3,7 @@
     "name": "Smilers",
     "slug": "smilers",
     "owner": "abcsimplesend",
-    "version": "2.1.76",
+    "version": "2.1.77",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "smilers",
@@ -37,7 +37,7 @@
     "android": {
       "package": "com.smilers.app",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 2176,
+      "versionCode": 2177,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#E4B53B"
@@ -129,6 +129,7 @@
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
         "READ_CONTACTS",
+        "WRITE_CONTACTS",
         "USE_BIOMETRIC",
         "USE_FINGERPRINT",
         "VIBRATE",
