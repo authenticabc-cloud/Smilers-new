@@ -35,6 +35,7 @@ const ITEMS: Row[] = [
   // inside it are now critical for triaging push & loading regressions
   // in the wild. Will revisit hiding once those features prove stable.
   { key: 'diagnostic-logs', route: '/diagnostic-logs', title: 'Diagnostic Logs', sub: 'Test push, force reconnect, crash log', icon: 'bug-outline', lib: 'ion' },
+  { key: 'lockscreen-wake', route: '/lockscreen-wake', title: 'Lockscreen Wake', sub: 'Allow incoming calls to wake the locked screen', icon: 'cellphone-screenshot', lib: 'mc' },
   { key: 'privacy', route: '/privacy', title: 'Privacy', sub: 'Last seen, profile photo, about', icon: 'shield-outline', lib: 'ion' },
   { key: 'app-lock', route: '/app-lock', title: 'App Lock', sub: 'PIN code and biometric unlock', icon: 'fingerprint', lib: 'mc' },
   { key: 'face-id', route: '/face-id', title: 'Face ID', sub: 'Verify identity on new devices', icon: 'face-recognition', lib: 'mc', premium: true },
