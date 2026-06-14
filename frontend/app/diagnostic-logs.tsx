@@ -38,7 +38,10 @@ import { Colors, FontSize, FontWeight, Spacing } from '../src/theme';
 import {
   flushDiagnostics,
   sendDiagnosticHeartbeat,
+  recordDiagnostic,
 } from '../src/lib/diagnostics';
+import { triggerEmergentSelfTestPush } from '../src/push/useEmergentPush';
+import { useAuth } from '../src/providers/AuthProvider';
 
 const STORAGE_KEY = 'smilers:diagnostic_events:v1';
 const SESSION_KEY = 'smilers:diagnostic_session:v1';
@@ -93,9 +96,11 @@ function colorForTag(tag: string): string {
 
 export default function DiagnosticLogsScreen() {
   const router = useRouter();
+  const { userInfo } = useAuth();
   const [events, setEvents] = useState<Event[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [runningPushTest, setRunningPushTest] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -184,6 +189,89 @@ export default function DiagnosticLogsScreen() {
     );
   }, [refresh]);
 
+  /**
+   * iter-212: Run an END-TO-END push-pipeline self-test.
+   *
+   * 1. Calls POST /api/self-test-push with the current OIDC sub.
+   * 2. Backend resolves the device token(s) we registered earlier via
+   *    `useEmergentPush`, sends a real FCM v1 message AND tries the
+   *    Emergent relay as a backup.
+   * 3. We record the response (token count, success count, errors) as
+   *    a diagnostic event so the result is visible in the log even if
+   *    the actual notification is suppressed by the OS / channel
+   *    settings.
+   * 4. If FCM reports success, the user should see the heads-up banner
+   *    arrive within a few seconds.
+   *
+   * This is the single most valuable verifier we ship: it isolates
+   * registration / delivery / display problems from each other.
+   */
+  const handlePushTest = useCallback(async () => {
+    const targetUserId = userInfo?.sub;
+    if (!targetUserId) {
+      Alert.alert(
+        'Sign in required',
+        'You need to be signed in to run a push self-test (we use your OIDC subject to look up the registered device token).',
+      );
+      return;
+    }
+    if (runningPushTest) return;
+    setRunningPushTest(true);
+    recordDiagnostic({
+      tag: 'PUSH-TEST',
+      source: 'diagnostic-logs',
+      message: `start: requesting self-test push for user ${targetUserId.slice(0, 10)}…`,
+    });
+    void refresh();
+    try {
+      const result = await triggerEmergentSelfTestPush(targetUserId);
+      const fcm = result?.fcm;
+      const emergent = (result as any)?.emergent;
+      const lines: string[] = [];
+      if (fcm && fcm.attempted) {
+        lines.push(
+          `FCM v1: delivered=${fcm.success_count}/${fcm.token_count}`,
+        );
+        if (fcm.errors && fcm.errors.length > 0) {
+          lines.push(`errors=${fcm.errors.slice(0, 2).join(' | ')}`);
+        }
+      } else {
+        lines.push('FCM v1: NOT attempted (no device tokens registered)');
+      }
+      if (emergent) {
+        lines.push(
+          `Emergent relay: status=${emergent.status || '?'}${
+            emergent.body ? ` body=${String(emergent.body).slice(0, 80)}` : ''
+          }`,
+        );
+      }
+      const summary = lines.join(' · ') || JSON.stringify(result).slice(0, 200);
+      recordDiagnostic({
+        tag: 'PUSH-TEST',
+        source: 'diagnostic-logs',
+        message: `result: ${summary}`,
+      });
+      Alert.alert(
+        'Self-test push sent',
+        `${summary}\n\nIf FCM reports >0 delivered, you should see a banner in ~3s. If you don't, the notification channel may be silenced — check Android Settings → Apps → Smilers → Notifications.`,
+      );
+    } catch (errorValue: any) {
+      const msg = errorValue?.message || String(errorValue);
+      recordDiagnostic({
+        tag: 'PUSH-TEST',
+        source: 'diagnostic-logs',
+        message: `fail: ${msg}`,
+      });
+      Alert.alert(
+        'Self-test push failed',
+        `${msg}\n\nIf HTTP 401/403 → EMERGENT_PUSH_KEY not set in deployment.\nIf HTTP 404 → backend not reachable (check EXPO_PUBLIC_BACKEND_URL).`,
+      );
+    } finally {
+      setRunningPushTest(false);
+      void refresh();
+    }
+  }, [refresh, runningPushTest, userInfo?.sub]);
+
   const handleSentryTest = useCallback(() => {
     Alert.alert(
       'Sentry verification',
@@ -263,6 +351,25 @@ export default function DiagnosticLogsScreen() {
         <TouchableOpacity style={styles.toolBtn} onPress={handleRetryUpload}>
           <Feather name="upload-cloud" size={16} color={Colors.white} />
           <Text style={styles.toolText}>Upload</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.toolBtn}
+          onPress={handlePushTest}
+          disabled={runningPushTest}
+        >
+          <Feather
+            name="send"
+            size={16}
+            color={runningPushTest ? '#888' : '#4caf50'}
+          />
+          <Text
+            style={[
+              styles.toolText,
+              { color: runningPushTest ? '#888' : '#4caf50' },
+            ]}
+          >
+            {runningPushTest ? 'Sending…' : 'Test Push'}
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.toolBtn} onPress={handleSentryTest}>
           <Feather name="alert-triangle" size={16} color="#ffb300" />
