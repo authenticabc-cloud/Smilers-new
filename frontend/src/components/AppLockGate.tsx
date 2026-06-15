@@ -14,15 +14,18 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import * as LocalAuthentication from 'expo-local-authentication';
+import * as ScreenCapture from 'expo-screen-capture';
 import {
   APP_LOCK_PIN_KEY,
   APP_LOCK_SETTINGS_KEY,
   DEFAULT_APP_LOCK_SETTINGS,
   readStoredJson,
   readStoredString,
+  removeStoredValue,
   writeStoredJson,
 } from '../lib/settingsStorage';
 import { registerAppLockHandlers } from '../lib/appLockController';
+import { useAuth } from '../providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../theme';
 
 interface AppLockState {
@@ -35,8 +38,19 @@ interface AppLockState {
 }
 
 const PIN_BACKOFF_KEY = 'smilers_app_lock_backoff';
-const MAX_ATTEMPTS = 5;
-const BACKOFF_SECONDS = 30;
+const PIN_ATTEMPTS_KEY = 'smilers_app_lock_attempts';
+
+// iter-217 Escalating PIN lockout. Failed-attempt thresholds map to
+// progressively longer backoffs:
+//   - 1st tier: after 5 wrong PINs → 30-second cooldown
+//   - 2nd tier: after 10 wrong PINs → 5-minute cooldown
+//   - 3rd tier: after 15 wrong PINs → biometric-only / forgot-PIN-only
+//     until the user signs out and resets
+// The thresholds & durations are tuned to discourage brute-force while
+// still being recoverable for a legitimate user who forgot their PIN.
+const LOCKOUT_TIER_1 = { attempts: 5, seconds: 30 };
+const LOCKOUT_TIER_2 = { attempts: 10, seconds: 300 };
+const LOCKOUT_TIER_3 = { attempts: 15 }; // biometric-only / sign-out required
 
 const KEYPAD_ROWS: Array<Array<string | 'back' | 'biometric'>> = [
   ['1', '2', '3'],
@@ -92,10 +106,46 @@ export default function AppLockGate({ children }: AppLockGateProps) {
     autoLockMinutes: 15,
   });
   const [locked, setLocked] = useState(false);
+  const auth = useAuth();
 
   const stateRef = useRef(state);
   stateRef.current = state;
   const backgroundedAtRef = useRef<number | null>(null);
+
+  // iter-217 RECENTS / SCREENSHOT PRIVACY
+  //
+  // While the app is locked, we ask the OS to block screenshots and
+  // screen recording. On Android this also sets `FLAG_SECURE` on the
+  // current activity, which makes the multitask switcher show a blank
+  // tile instead of the chat content — exactly what the user asked for.
+  // On iOS, expo-screen-capture installs a blur overlay on the system
+  // app-switcher snapshot, plus prevents screen recording.
+  //
+  // We only enable this WHILE LOCKED (not always) so power users who
+  // legitimately want to screenshot a conversation can still do so once
+  // the app is unlocked.
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    if (!locked) return;
+    let active = true;
+    (async () => {
+      try {
+        await ScreenCapture.preventScreenCaptureAsync('app-lock-gate');
+      } catch {
+        /* swallow — privacy is best-effort */
+      }
+    })();
+    return () => {
+      active = false;
+      (async () => {
+        try {
+          await ScreenCapture.allowScreenCaptureAsync('app-lock-gate');
+        } catch {
+          /* swallow */
+        }
+      })();
+    };
+  }, [locked]);
 
   const reloadSettings = useCallback(async () => {
     const next = await loadAppLockState();
@@ -168,6 +218,38 @@ export default function AppLockGate({ children }: AppLockGateProps) {
       <LockOverlay
         biometric={state.biometric}
         onUnlock={() => setLocked(false)}
+        onForgotPinSignOut={async () => {
+          // iter-217 Forgot PIN recovery: clear the stored PIN +
+          // attempt counters + backoff, then sign out via Hercules.
+          // After re-login the user can set a fresh PIN.
+          try {
+            await removeStoredValue(APP_LOCK_PIN_KEY);
+          } catch {}
+          try {
+            await writeStoredJson(PIN_BACKOFF_KEY, null);
+          } catch {}
+          try {
+            await writeStoredJson(PIN_ATTEMPTS_KEY, null);
+          } catch {}
+          // Also disable App Lock so the freshly-signed-in session
+          // isn't immediately blocked by the same broken state.
+          try {
+            const stored = await readStoredJson(
+              APP_LOCK_SETTINGS_KEY,
+              DEFAULT_APP_LOCK_SETTINGS,
+            );
+            await writeStoredJson(APP_LOCK_SETTINGS_KEY, {
+              ...(stored || DEFAULT_APP_LOCK_SETTINGS),
+              enabled: false,
+            });
+          } catch {}
+          try {
+            await auth.signOut();
+          } catch {
+            /* swallow — user may be offline; the local clear above is enough */
+          }
+          setLocked(false);
+        }}
       />
     );
   }
@@ -178,9 +260,10 @@ export default function AppLockGate({ children }: AppLockGateProps) {
 interface LockOverlayProps {
   biometric: boolean;
   onUnlock: () => void;
+  onForgotPinSignOut: () => Promise<void>;
 }
 
-function LockOverlay({ biometric, onUnlock }: LockOverlayProps) {
+function LockOverlay({ biometric, onUnlock, onForgotPinSignOut }: LockOverlayProps) {
   const [pin, setPin] = useState('');
   const [attempts, setAttempts] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -189,6 +272,10 @@ function LockOverlay({ biometric, onUnlock }: LockOverlayProps) {
   const [busy, setBusy] = useState(false);
   const [biometricAvailable, setBiometricAvailable] = useState<boolean>(false);
   const [biometricLabel, setBiometricLabel] = useState('Use biometrics');
+  // iter-217: tier-3 lockout. Once we hit `LOCKOUT_TIER_3.attempts` wrong
+  // PINs in a row, the keypad is permanently disabled until the user signs
+  // out or unlocks with biometric (defence against brute-force).
+  const [signOutOnly, setSignOutOnly] = useState(false);
 
   const submittingRef = useRef(false);
 
@@ -199,6 +286,18 @@ function LockOverlay({ biometric, onUnlock }: LockOverlayProps) {
       const stored = await readStoredJson(PIN_BACKOFF_KEY, null);
       if (active && stored && typeof stored.until === 'number' && stored.until > Date.now()) {
         setBackoffUntil(stored.until);
+      }
+      // iter-217: also load the running attempts counter so a relaunch
+      // doesn't reset the user back to 0 fails (defeating brute-force
+      // protection).
+      const attemptsStored = (await readStoredJson(PIN_ATTEMPTS_KEY, null)) as
+        | { count: number }
+        | null;
+      if (active && attemptsStored && typeof attemptsStored.count === 'number') {
+        setAttempts(attemptsStored.count);
+        if (attemptsStored.count >= LOCKOUT_TIER_3.attempts) {
+          setSignOutOnly(true);
+        }
       }
     })();
     return () => {
@@ -305,22 +404,52 @@ function LockOverlay({ biometric, onUnlock }: LockOverlayProps) {
       try {
         const stored = await readStoredString(APP_LOCK_PIN_KEY);
         if (stored && stored === entered) {
+          // SUCCESS — reset all the escalation state so the next session
+          // starts from a clean slate.
           setError(null);
           setAttempts(0);
           await writeStoredJson(PIN_BACKOFF_KEY, null);
+          await writeStoredJson(PIN_ATTEMPTS_KEY, null);
+          setSignOutOnly(false);
           onUnlock();
           return;
         }
         const nextAttempts = attempts + 1;
         setAttempts(nextAttempts);
+        await writeStoredJson(PIN_ATTEMPTS_KEY, { count: nextAttempts });
         setPin('');
-        if (nextAttempts >= MAX_ATTEMPTS) {
-          const until = Date.now() + BACKOFF_SECONDS * 1000;
+
+        // iter-217 ESCALATING LOCKOUT
+        // - Tier 3 (≥15): keypad permanently disabled until sign-out /
+        //   biometric unlock — clearest brute-force defence we have.
+        // - Tier 2 (10): 5-minute cooldown
+        // - Tier 1 (5): 30-second cooldown
+        // Each successful unlock clears the attempts counter so a
+        // legitimate user who occasionally mis-types isn't gradually
+        // locked out forever.
+        if (nextAttempts >= LOCKOUT_TIER_3.attempts) {
+          setSignOutOnly(true);
+          setError(
+            'Too many wrong attempts. Use biometrics or tap "Forgot PIN?" to reset.',
+          );
+        } else if (nextAttempts >= LOCKOUT_TIER_2.attempts) {
+          const until = Date.now() + LOCKOUT_TIER_2.seconds * 1000;
           setBackoffUntil(until);
           await writeStoredJson(PIN_BACKOFF_KEY, { until });
-          setError(`Too many attempts. Try again in ${BACKOFF_SECONDS}s`);
+          setError(
+            `Too many attempts. Try again in ${Math.round(
+              LOCKOUT_TIER_2.seconds / 60,
+            )} minutes.`,
+          );
+        } else if (nextAttempts >= LOCKOUT_TIER_1.attempts) {
+          const until = Date.now() + LOCKOUT_TIER_1.seconds * 1000;
+          setBackoffUntil(until);
+          await writeStoredJson(PIN_BACKOFF_KEY, { until });
+          setError(`Too many attempts. Try again in ${LOCKOUT_TIER_1.seconds}s`);
         } else {
-          setError(`Wrong PIN. ${MAX_ATTEMPTS - nextAttempts} attempt(s) left.`);
+          setError(
+            `Wrong PIN. ${LOCKOUT_TIER_1.attempts - nextAttempts} attempt(s) left.`,
+          );
         }
       } catch (errorValue: any) {
         setError(errorValue?.message || 'Could not verify PIN');
@@ -333,6 +462,8 @@ function LockOverlay({ biometric, onUnlock }: LockOverlayProps) {
 
   const handleKeyPress = useCallback(
     (key: string | 'back' | 'biometric') => {
+      // iter-217: signOutOnly tier — keypad disabled, biometric still allowed.
+      if (signOutOnly && key !== 'biometric') return;
       if (backoffUntil && backoffUntil > Date.now()) return;
       if (key === 'biometric') {
         void tryBiometric();
@@ -357,18 +488,27 @@ function LockOverlay({ biometric, onUnlock }: LockOverlayProps) {
         }
       })();
     },
-    [backoffUntil, pin, submitPin, tryBiometric]
+    [backoffUntil, pin, signOutOnly, submitPin, tryBiometric]
   );
 
-  const isLockedOut = !!(backoffUntil && backoffUntil > Date.now());
+  const isLockedOut = !!(backoffUntil && backoffUntil > Date.now()) || signOutOnly;
 
   const handleForgotPin = useCallback(() => {
     Alert.alert(
       'Forgot PIN?',
-      'For your security, the PIN can only be reset by signing out and signing back in. Open Smilers Settings → Account → Sign out to start over.',
-      [{ text: 'OK' }]
+      'For your security, this will sign you out of Smilers and clear your saved PIN. You can set a new one after signing back in. Your messages stay safely synced via the server.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign Out & Reset',
+          style: 'destructive',
+          onPress: () => {
+            void onForgotPinSignOut();
+          },
+        },
+      ]
     );
-  }, []);
+  }, [onForgotPinSignOut]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="app-lock-overlay">
