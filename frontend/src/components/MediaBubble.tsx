@@ -42,6 +42,8 @@ import { useDecryptedMediaUrl } from '../hooks/useDecryptedMediaUrl';
 import type { E2EEStatus } from '../hooks/useConversationE2EE';
 import { getCachedTranscription, type CachedTranscription, type TranscriptionSegment } from '../lib/triggerTranscription';
 import { SharedContactBubble } from './chat/SharedContactBubble';
+// iter-218 — Safe Browsing gate for links
+import { useUrlSafety } from '../lib/safeBrowsing';
 // iter-125: full-screen photo viewer toolbar helpers
 import {
   saveMessageMediaToGallery,
@@ -449,11 +451,40 @@ function LinkPreviewMessage({ msg, textStyle, isMine }: { msg: any; textStyle?: 
   const subColor = isMine ? 'rgba(246,255,249,0.78)' : Colors.textSecondary;
   const leadText = stripRichTextTags((msg.text || '').replace(url, '').trim() || domain);
 
+  // iter-218 — Safe-Browsing gate. If Google flags this URL we replace
+  // the preview card with a non-tappable warning. The check is async
+  // and cached — first render shows the URL normally (state==='unknown'),
+  // then the verdict applies. We never hide a legitimate message.
+  const safety = useUrlSafety(url);
+  const isMalicious = safety.state === 'malicious';
+
   const onOpen = async () => {
+    if (isMalicious) return; // belt-and-braces — handler is also disabled below
     try {
       await Linking.openURL(url);
     } catch {}
   };
+
+  if (isMalicious) {
+    // iter-218: match the canonical "removed for security reasons" UX —
+    // the WHOLE message is replaced with an italic warning inside the
+    // existing bubble shape, so the user never sees any portion of the
+    // malicious link, the surrounding text it was embedded in, OR the
+    // preview metadata. The bubble keeps its normal time/delivery
+    // indicators so the conversation flow stays intact.
+    return (
+      <Text
+        style={[
+          styles.bubbleText,
+          textStyle,
+          styles.maliciousMessageText,
+        ]}
+        testID={`malicious-link-${msg._id}`}
+      >
+        ⚠️ This message was removed for security reasons
+      </Text>
+    );
+  }
 
   return (
     <TouchableOpacity onPress={onOpen} activeOpacity={0.82} testID={`link-preview-${msg._id}`}>
@@ -1663,6 +1694,14 @@ const styles = StyleSheet.create({
   linkCardPath: { marginTop: 2, fontSize: 11 },
   linkCardActionRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
   linkCardActionText: { fontSize: 11, fontWeight: FontWeight.medium },
+  // iter-218: malicious-link warning rendered as italic in-bubble text
+  // (matches the user's canonical "This message was removed for security
+  // reasons" UX from the screenshot). NO red panel — the bubble keeps
+  // its normal background so the conversation flow stays intact.
+  maliciousMessageText: {
+    fontStyle: 'italic',
+    opacity: 0.9,
+  },
   placeholderIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
   placeholderTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   placeholderSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },

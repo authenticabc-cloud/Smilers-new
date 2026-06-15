@@ -8,7 +8,7 @@ import asyncio
 import re
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 import uuid
 from datetime import datetime, timezone, timedelta
 from emergentintegrations.llm.chat import LlmChat, UserMessage
@@ -1385,6 +1385,235 @@ async def self_test_push(body: dict):
         logger.warning(f"self-test-push: send_push raised: {e}")
 
     return {"status": "accepted", "fcm": fcm_result}
+
+
+# ============================================================================
+# iter-218: DIARY — private "note to self" feature.
+#
+# A purely additive feature backed by MongoDB. No Convex involvement (the
+# web team owns Convex; we don't block on them). Each diary entry is
+# scoped to a single user via their OIDC sub. Supports text + optional
+# attachment URL/type so users can also save voice notes / images by
+# uploading them elsewhere and referencing them here.
+# ============================================================================
+
+
+class DiaryEntryIn(BaseModel):
+    user_id: str  # OIDC sub of the diary owner
+    text: Optional[str] = None
+    attachment_url: Optional[str] = None
+    attachment_type: Optional[str] = None  # 'image' | 'audio' | 'video' | 'file'
+    attachment_name: Optional[str] = None
+    attachment_duration_ms: Optional[int] = None
+    client_id: Optional[str] = None  # optional idempotency token from device
+
+
+class DiaryEntryOut(BaseModel):
+    id: str
+    user_id: str
+    text: Optional[str] = None
+    attachment_url: Optional[str] = None
+    attachment_type: Optional[str] = None
+    attachment_name: Optional[str] = None
+    attachment_duration_ms: Optional[int] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+def _diary_doc_to_out(doc: dict) -> DiaryEntryOut:
+    return DiaryEntryOut(
+        id=str(doc.get("_id", doc.get("id", ""))),
+        user_id=doc.get("user_id", ""),
+        text=doc.get("text"),
+        attachment_url=doc.get("attachment_url"),
+        attachment_type=doc.get("attachment_type"),
+        attachment_name=doc.get("attachment_name"),
+        attachment_duration_ms=doc.get("attachment_duration_ms"),
+        created_at=doc.get("created_at", datetime.utcnow()),
+        updated_at=doc.get("updated_at", doc.get("created_at", datetime.utcnow())),
+    )
+
+
+@api_router.post("/diary", response_model=DiaryEntryOut)
+async def create_diary_entry(payload: DiaryEntryIn):
+    """Append a new diary entry. Requires `user_id` (OIDC sub) and at
+    minimum one of `text` or `attachment_url`."""
+    if not payload.user_id or not payload.user_id.strip():
+        raise HTTPException(status_code=400, detail="user_id required")
+    if not (payload.text and payload.text.strip()) and not (
+        payload.attachment_url and payload.attachment_url.strip()
+    ):
+        raise HTTPException(
+            status_code=400, detail="text or attachment_url required"
+        )
+    now = datetime.utcnow()
+    entry_id = str(uuid.uuid4())
+    doc = {
+        "_id": entry_id,
+        "user_id": payload.user_id.strip(),
+        "text": (payload.text or "").strip() or None,
+        "attachment_url": (payload.attachment_url or "").strip() or None,
+        "attachment_type": payload.attachment_type or None,
+        "attachment_name": payload.attachment_name or None,
+        "attachment_duration_ms": payload.attachment_duration_ms or None,
+        "client_id": payload.client_id or None,
+        "created_at": now,
+        "updated_at": now,
+    }
+    # Idempotency: if client_id provided + already inserted, return existing.
+    if payload.client_id:
+        existing = await db.diary_entries.find_one(
+            {"user_id": doc["user_id"], "client_id": payload.client_id}
+        )
+        if existing:
+            return _diary_doc_to_out(existing)
+    await db.diary_entries.insert_one(doc)
+    return _diary_doc_to_out(doc)
+
+
+@api_router.get("/diary")
+async def list_diary_entries(user_id: str, limit: int = 200):
+    """List diary entries for a user, newest first. Capped at 1000 to
+    avoid runaway responses."""
+    if not user_id or not user_id.strip():
+        raise HTTPException(status_code=400, detail="user_id required")
+    capped = max(1, min(limit, 1000))
+    cursor = (
+        db.diary_entries.find({"user_id": user_id.strip()})
+        .sort("created_at", -1)
+        .limit(capped)
+    )
+    docs = await cursor.to_list(length=capped)
+    return [_diary_doc_to_out(d) for d in docs]
+
+
+@api_router.delete("/diary/{entry_id}")
+async def delete_diary_entry(entry_id: str, user_id: str):
+    """Delete a diary entry. Requires both `entry_id` (path) and
+    `user_id` (query) so users cannot delete other users' entries."""
+    if not user_id or not user_id.strip():
+        raise HTTPException(status_code=400, detail="user_id required")
+    result = await db.diary_entries.delete_one(
+        {"_id": entry_id, "user_id": user_id.strip()}
+    )
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="entry not found")
+    return {"deleted": True, "id": entry_id}
+
+
+# ============================================================================
+# iter-218: SAFE BROWSING — auto-detect malicious links/files.
+#
+# Uses the Google Safe Browsing v4 API (key already in env). The mobile
+# client posts a URL; we return whether Google has it flagged. The
+# client masks the bubble locally if so — no Convex mutation needed.
+# Results are cached client-side, and we also keep a short-lived
+# in-process cache here to avoid hammering Google for repeated checks.
+# ============================================================================
+
+
+class SafeBrowsingCheckRequest(BaseModel):
+    urls: List[str]
+
+
+class SafeBrowsingMatch(BaseModel):
+    url: str
+    threat_type: str
+    platform_type: Optional[str] = None
+
+
+class SafeBrowsingCheckResponse(BaseModel):
+    matches: List[SafeBrowsingMatch] = Field(default_factory=list)
+
+
+# Short-lived (10 min) in-process cache: url → bool flagged.
+_SAFE_BROWSING_CACHE: dict[str, tuple[float, Optional[SafeBrowsingMatch]]] = {}
+_SAFE_BROWSING_CACHE_TTL_SEC = 600
+_SAFE_BROWSING_API_URL = (
+    "https://safebrowsing.googleapis.com/v4/threatMatches:find?key="
+)
+
+
+@api_router.post("/safe-browsing/check", response_model=SafeBrowsingCheckResponse)
+async def safe_browsing_check(payload: SafeBrowsingCheckRequest):
+    """Check up to 100 URLs against Google Safe Browsing. Returns the
+    subset that Google flagged. Empty `matches` ≡ all safe."""
+    api_key = os.environ.get("GOOGLE_SAFE_BROWSING_API_KEY", "").strip()
+    if not api_key:
+        # We never want to *block* delivery when the API key is missing —
+        # just return empty so the client renders the URL normally.
+        return SafeBrowsingCheckResponse(matches=[])
+
+    urls = [u.strip() for u in (payload.urls or []) if u and u.strip()]
+    urls = [u for u in urls if u.startswith(("http://", "https://"))]
+    urls = list(dict.fromkeys(urls))[:100]  # dedupe + cap
+    if not urls:
+        return SafeBrowsingCheckResponse(matches=[])
+
+    # Cache hits short-circuit Google calls.
+    import time
+    now = time.time()
+    cached: List[SafeBrowsingMatch] = []
+    to_check: List[str] = []
+    for url in urls:
+        cache_entry = _SAFE_BROWSING_CACHE.get(url)
+        if cache_entry and now - cache_entry[0] < _SAFE_BROWSING_CACHE_TTL_SEC:
+            if cache_entry[1] is not None:
+                cached.append(cache_entry[1])
+        else:
+            to_check.append(url)
+
+    if not to_check:
+        return SafeBrowsingCheckResponse(matches=cached)
+
+    # Google Safe Browsing v4 threatMatches:find
+    body = {
+        "client": {"clientId": "smilers-mobile", "clientVersion": "2.1.88"},
+        "threatInfo": {
+            "threatTypes": [
+                "MALWARE",
+                "SOCIAL_ENGINEERING",
+                "UNWANTED_SOFTWARE",
+                "POTENTIALLY_HARMFUL_APPLICATION",
+            ],
+            "platformTypes": ["ANY_PLATFORM"],
+            "threatEntryTypes": ["URL"],
+            "threatEntries": [{"url": u} for u in to_check],
+        },
+    }
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            resp = await http.post(
+                _SAFE_BROWSING_API_URL + api_key, json=body
+            )
+            resp.raise_for_status()
+            data = resp.json() or {}
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"safe-browsing: upstream failed: {e}")
+        # Fail open — never block messages if Google is unreachable.
+        return SafeBrowsingCheckResponse(matches=cached)
+
+    new_matches: List[SafeBrowsingMatch] = []
+    matches_raw = data.get("matches", []) or []
+    for m in matches_raw:
+        url = (m.get("threat") or {}).get("url") or ""
+        if not url:
+            continue
+        match = SafeBrowsingMatch(
+            url=url,
+            threat_type=m.get("threatType", "UNKNOWN"),
+            platform_type=m.get("platformType"),
+        )
+        new_matches.append(match)
+        _SAFE_BROWSING_CACHE[url] = (now, match)
+    # Negative cache for non-matched URLs in this batch.
+    matched_urls = {m.url for m in new_matches}
+    for u in to_check:
+        if u not in matched_urls:
+            _SAFE_BROWSING_CACHE[u] = (now, None)
+
+    return SafeBrowsingCheckResponse(matches=cached + new_matches)
 
 
 # Include the router in the main app
