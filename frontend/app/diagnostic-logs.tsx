@@ -130,7 +130,9 @@ export default function DiagnosticLogsScreen() {
           }`,
         )
         .join('\n');
-      const header = `Smilers Diagnostic Log\nSession: ${sessionId || '-'}\nPlatform: ${Platform.OS} ${Platform.Version}\nTotal events: ${events.length}\n----------------------------------------\n`;
+      const backendUrl = (process.env.EXPO_PUBLIC_BACKEND_URL || '(missing)');
+      const webAppUrl = (process.env.EXPO_PUBLIC_WEB_APP_URL || '(missing)');
+      const header = `Smilers Diagnostic Log\nSession: ${sessionId || '-'}\nPlatform: ${Platform.OS} ${Platform.Version}\nBackend URL: ${backendUrl}\nWeb app URL: ${webAppUrl}\nTotal events: ${events.length}\n----------------------------------------\n`;
       const full = header + lines;
       await Clipboard.setStringAsync(full);
       Alert.alert('Copied', 'Diagnostic log copied to clipboard.');
@@ -148,7 +150,9 @@ export default function DiagnosticLogsScreen() {
           }`,
         )
         .join('\n');
-      const header = `Smilers Diagnostic Log\nSession: ${sessionId || '-'}\nPlatform: ${Platform.OS} ${Platform.Version}\nTotal events: ${events.length}\n----------------------------------------\n`;
+      const backendUrl = (process.env.EXPO_PUBLIC_BACKEND_URL || '(missing)');
+      const webAppUrl = (process.env.EXPO_PUBLIC_WEB_APP_URL || '(missing)');
+      const header = `Smilers Diagnostic Log\nSession: ${sessionId || '-'}\nPlatform: ${Platform.OS} ${Platform.Version}\nBackend URL: ${backendUrl}\nWeb app URL: ${webAppUrl}\nTotal events: ${events.length}\n----------------------------------------\n`;
       await Share.share({
         message: header + lines,
         title: 'Smilers Diagnostic Log',
@@ -337,6 +341,11 @@ export default function DiagnosticLogsScreen() {
         </Text>
         <Text style={styles.summarySub}>
           Session: {sessionId ? sessionId.slice(0, 8) + '…' : '—'} · {Platform.OS} {String(Platform.Version)}
+        </Text>
+        {/* iter-222: surface baked-in backend URL so a wrong-URL APK is
+            obvious at a glance — no more guessing why register-push 404s. */}
+        <Text style={[styles.subtitle, { fontSize: 10, marginTop: 2 }]} numberOfLines={1} testID="diag-backend-url">
+          API: {(process.env.EXPO_PUBLIC_BACKEND_URL || '(missing)').replace(/^https?:\/\//, '')}
         </Text>
       </View>
 
