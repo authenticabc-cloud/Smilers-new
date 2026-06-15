@@ -106,3 +106,4 @@ backend/firebase-admin-sdk.json
 .env
 .env.*
 *.env
+backend/downloads/smilers-frontend.zip
