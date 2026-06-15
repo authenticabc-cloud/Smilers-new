@@ -124,3 +124,90 @@ export function describeThreat(threat: ThreatType): string {
       return 'unsafe content';
   }
 }
+
+/**
+ * iter-219 — DANGEROUS-FILE TYPES.
+ *
+ * Google Safe Browsing only flags URLs, not file contents — so a
+ * malicious APK uploaded to our own Convex storage would pass a URL
+ * check trivially. The pragmatic security path is to refuse to render
+ * file types that are essentially never legitimate to receive from a
+ * chat: APKs, EXEs, batch / shell scripts, JARs, etc.
+ *
+ * Photos, videos, audio, PDFs, images, office docs etc. are deliberately
+ * NOT in this list — modern Android sandboxes media decoders and these
+ * file types have legitimate sharing use cases. The list focuses on
+ * EXECUTABLE / installer types.
+ */
+const DANGEROUS_EXTENSIONS = new Set([
+  'apk', // Android installer
+  'exe', // Windows executable
+  'bat', // Windows batch
+  'cmd', // Windows command
+  'com', // Old DOS executable
+  'msi', // Windows installer
+  'scr', // Windows screensaver (often malware)
+  'sh', // Unix shell script
+  'bash', // Unix shell script
+  'zsh', // Unix shell script
+  'vbs', // VBScript
+  'vbe', // VBScript encoded
+  'wsf', // Windows script
+  'wsh', // Windows script host
+  'jar', // Java archive (can be executable)
+  'jse', // JScript encoded
+  'js', // JavaScript file standalone — risky as attachment
+  'lnk', // Windows shortcut (often used to launch hidden payloads)
+  'pif', // Program info file (legacy malware vector)
+  'reg', // Registry script
+  'app', // macOS app bundle
+  'dmg', // macOS disk image (installer)
+  'pkg', // macOS installer
+  'deb', // Debian package
+  'rpm', // Red Hat package
+  'ipa', // iOS app
+  'msix', // Windows app package
+  'appx', // Windows app package
+]);
+
+const DANGEROUS_MIME_TYPES = new Set([
+  'application/vnd.android.package-archive', // APK
+  'application/x-msdownload', // EXE
+  'application/x-msi', // MSI
+  'application/x-bat',
+  'application/x-sh',
+  'application/x-shellscript',
+  'application/x-java-archive',
+  'application/javascript', // standalone JS attachment
+  'application/x-apple-diskimage', // DMG
+]);
+
+export function isDangerousFile(opts: {
+  fileName?: string | null;
+  mimeType?: string | null;
+}): { dangerous: boolean; reason?: 'apk' | 'executable' | 'script' } {
+  const fileName = (opts.fileName || '').trim().toLowerCase();
+  const mime = (opts.mimeType || '').trim().toLowerCase();
+
+  if (mime && DANGEROUS_MIME_TYPES.has(mime)) {
+    if (mime.includes('android')) return { dangerous: true, reason: 'apk' };
+    if (mime.includes('script') || mime.includes('javascript') || mime.includes('sh'))
+      return { dangerous: true, reason: 'script' };
+    return { dangerous: true, reason: 'executable' };
+  }
+
+  // Match against last extension only — `vacation.jpg.exe` correctly
+  // detects `exe`, not `jpg`.
+  const dot = fileName.lastIndexOf('.');
+  if (dot >= 0) {
+    const ext = fileName.slice(dot + 1);
+    if (DANGEROUS_EXTENSIONS.has(ext)) {
+      if (ext === 'apk') return { dangerous: true, reason: 'apk' };
+      if (['sh', 'bash', 'zsh', 'js', 'vbs', 'vbe', 'wsf', 'wsh', 'jse', 'bat', 'cmd'].includes(ext))
+        return { dangerous: true, reason: 'script' };
+      return { dangerous: true, reason: 'executable' };
+    }
+  }
+
+  return { dangerous: false };
+}

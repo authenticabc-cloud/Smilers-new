@@ -43,7 +43,7 @@ import type { E2EEStatus } from '../hooks/useConversationE2EE';
 import { getCachedTranscription, type CachedTranscription, type TranscriptionSegment } from '../lib/triggerTranscription';
 import { SharedContactBubble } from './chat/SharedContactBubble';
 // iter-218 — Safe Browsing gate for links
-import { useUrlSafety } from '../lib/safeBrowsing';
+import { useUrlSafety, isDangerousFile } from '../lib/safeBrowsing';
 // iter-125: full-screen photo viewer toolbar helpers
 import {
   saveMessageMediaToGallery,
@@ -390,6 +390,39 @@ function BubbleBodyInner({ msg, timeStr, textStyle, isMine, e2eeStatus }: { msg:
   if (msg?.type === 'call' || msg?.kind === 'call') {
     return <CallLogMessage msg={msg} isMine={isMine} />;
   }
+
+  // iter-219: DANGEROUS-FILE GATE.
+  //
+  // We replace the file message entirely with the canonical
+  // "removed for security reasons" bubble whenever the attachment is
+  // an executable / installer / script type (APK, EXE, BAT, SH, JS,
+  // JAR, …). Google Safe Browsing only flags URLs, not file content,
+  // so a malicious APK sitting in our own Convex storage would pass a
+  // URL check trivially — the only safe default is to refuse to render
+  // file types that are essentially never legitimate as a chat
+  // attachment. Photos, videos, audio and documents are intentionally
+  // NOT covered here — they're rendered normally.
+  if (msg?.type === 'file' || msg?.type === 'document') {
+    const danger = isDangerousFile({
+      fileName: msg?.fileName,
+      mimeType: msg?.mimeType,
+    });
+    if (danger.dangerous) {
+      return (
+        <Text
+          style={[
+            styles.bubbleText,
+            textStyle,
+            styles.maliciousMessageText,
+          ]}
+          testID={`dangerous-file-${msg._id}`}
+        >
+          ⚠️ This message was removed for security reasons
+        </Text>
+      );
+    }
+  }
+
   switch (msg.type) {
     case 'image':
       return <ImageMessage msg={msg} timeStr={timeStr} textStyle={textStyle} e2eeStatus={e2eeStatus} />;
