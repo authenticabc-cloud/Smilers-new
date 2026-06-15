@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Modal, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -15,6 +15,11 @@ import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/de
 import { readCacheMeta, writeCache } from '../../src/lib/offlineCache';
 import OfflineBanner from '../../src/components/OfflineBanner';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
+// iter-220: pull-to-refresh now forces a Convex socket reconnect — the
+// single most effective recovery when the React Native WebSocket has
+// silently died (the "ghost connection" pattern called out by Emergent
+// support). Wired to the existing manual escape hatch from v2.1.83.
+import { forceConvexReconnect } from '../../src/providers/useConvexAutoReconnect';
 
 function relTime(iso?: string) {
   if (!iso) return '';
@@ -58,6 +63,25 @@ export default function ChatsScreen() {
   // mounted screen never flickers an empty state while the first
   // query is on the wire.
   const [authSettleElapsed, setAuthSettleElapsed] = useState(false);
+  // iter-220: pull-to-refresh now triggers a real Convex socket
+  // reconnect. The `refreshing` flag stays true for ~2s so the user
+  // gets a visible "Reconnecting…" indicator from the native
+  // RefreshControl spinner — one-tap recovery from the "ghost
+  // connection" pattern that Emergent support flagged.
+  const [reconnecting, setReconnecting] = useState(false);
+  const handlePullToReconnect = useCallback(async () => {
+    if (reconnecting) return;
+    setReconnecting(true);
+    try {
+      await forceConvexReconnect('chats-pull-to-refresh');
+    } catch {
+      /* never let pull-to-refresh crash the app */
+    }
+    // Keep the spinner visible long enough for the user to see SOMETHING
+    // happened — even if the reconnect completes instantly. 1.8s is the
+    // sweet spot where it feels responsive but visible.
+    setTimeout(() => setReconnecting(false), 1800);
+  }, [reconnecting]);
   useEffect(() => {
     setAuthSettleElapsed(false);
     const t = setTimeout(() => setAuthSettleElapsed(true), 1500);
@@ -268,7 +292,16 @@ export default function ChatsScreen() {
             </View>
           ) : null
         }
-        refreshControl={<RefreshControl refreshing={false} onRefresh={() => {}} tintColor={Colors.primary} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={reconnecting}
+            onRefresh={handlePullToReconnect}
+            tintColor={Colors.primary}
+            colors={[Colors.primary]}
+            title={reconnecting ? 'Reconnecting…' : ''}
+            titleColor={Colors.primary}
+          />
+        }
       />
 
       <SosButton onPress={() => router.push('/emergency' as any)} />
