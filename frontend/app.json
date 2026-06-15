@@ -146,8 +146,6 @@
         "BLUETOOTH_CONNECT",
         "BLUETOOTH_SCAN",
         "BLUETOOTH_ADVERTISE",
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION",
         "USE_FULL_SCREEN_INTENT"
       ]
     },

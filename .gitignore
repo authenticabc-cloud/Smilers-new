@@ -103,7 +103,4 @@ google-service-account.json
 # Firebase Admin SDK service account (iter-129)
 backend/firebase-admin-sdk.json
 **/firebase-admin-sdk*.json
-.env
-.env.*
-*.env
 backend/downloads/smilers-frontend.zip
