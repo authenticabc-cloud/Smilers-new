@@ -144,6 +144,19 @@ export default function DiaryScreen() {
   );
 
   // Cloud write mutations (resolved lazily — if undefined, we skip).
+  //
+  // iter-223 RETRY-STORM GUARD: prior to this fix, `useMutation` with an
+  // undefined function reference would still return a callable that, when
+  // invoked, kept retrying on the backend ("function not found" error)
+  // every second forever — corrupting the Convex client's sync state
+  // and freezing every other query on "Loading…" with the "Base version
+  // mismatch" fatal error. The backend now exposes `diary.appendEntry`
+  // so the immediate symptom is gone, but we ALSO defensively gate
+  // every cloud-write call on the function actually existing — so a
+  // future missing function can never repeat this disaster.
+  const appendEntryAvailable = Boolean((api as any).diary?.appendEntry);
+  const deleteEntryAvailable = Boolean((api as any).diary?.deleteEntry);
+  const clearDiaryAvailable = Boolean((api as any).diary?.clearDiary);
   const appendEntryCloud = useMutation((api as any).diary?.appendEntry);
   const deleteEntryCloud = useMutation((api as any).diary?.deleteEntry);
   const clearDiaryCloud = useMutation((api as any).diary?.clearDiary);
@@ -195,6 +208,12 @@ export default function DiaryScreen() {
     if (localFlushedRef.current) return;
     if (!cloudReady) return;
     if (!appendEntryCloud) return;
+    // iter-223 guard: never queue a mutation to a backend function that
+    // doesn't exist — that triggers Convex's per-second retry storm.
+    if (!appendEntryAvailable) {
+      localFlushedRef.current = true;
+      return;
+    }
     if (!myUserId) return;
     if (localEntries.length === 0) return;
 
@@ -265,8 +284,9 @@ export default function DiaryScreen() {
     const text = draft.trim();
     if (!text || !myUserId) return;
     setDraft('');
-    // Try cloud first; fall back to local.
-    if (cloudReady && typeof appendEntryCloud === 'function') {
+    // Try cloud first; fall back to local. iter-223: existence guard
+    // — never enqueue a mutation to a non-existent backend function.
+    if (cloudReady && appendEntryAvailable && typeof appendEntryCloud === 'function') {
       try {
         await (appendEntryCloud as any)({
           kind: 'text',
@@ -295,7 +315,7 @@ export default function DiaryScreen() {
     if (!myUserId) return;
     // Cloud delete (if the entry is cloud-resident).
     const isCloudEntry = cloudEntries.some((e) => e._id === entryId);
-    if (isCloudEntry && typeof deleteEntryCloud === 'function') {
+    if (isCloudEntry && deleteEntryAvailable && typeof deleteEntryCloud === 'function') {
       try {
         await (deleteEntryCloud as any)({ entryId });
       } catch (errorValue: any) {
@@ -324,7 +344,7 @@ export default function DiaryScreen() {
           style: 'destructive',
           onPress: async () => {
             if (!myUserId) return;
-            if (cloudReady && typeof clearDiaryCloud === 'function') {
+            if (cloudReady && clearDiaryAvailable && typeof clearDiaryCloud === 'function') {
               try {
                 await (clearDiaryCloud as any)({});
               } catch (errorValue: any) {
