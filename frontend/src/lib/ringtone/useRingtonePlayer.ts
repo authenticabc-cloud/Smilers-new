@@ -15,6 +15,13 @@ const RINGTONE_PREFS_KEY = 'smilers_ringtone_prefs';
 // Phone-ring style vibration pattern: short pause, long pulse, short pause, long pulse...
 const RING_VIBRATION_PATTERN = [0, 1000, 500, 1000, 500];
 
+// iter-216 safety net: if `active` stays true for longer than a typical
+// missed-call window, we force-stop the ringer regardless. This protects
+// the user from a phantom ring that survives the caller hanging up — the
+// Convex subscription that controls `active` may stall, but this timer
+// is local-only and cannot stall.
+const MAX_RING_DURATION_MS = 60_000;
+
 interface RingPrefs {
   ringtone: RingId;
   notificationSound: RingId;
@@ -36,8 +43,16 @@ const DEFAULT_PREFS: RingPrefs = {
  *
  * When `active` is true:
  *  - Loads the user's selected ringtone (from local prefs / Convex profile)
- *  - Plays it in loop
+ *  - Plays it in loop AT THE SYSTEM RINGER VOLUME (no longer hardcoded to 1.0
+ *    — iter-216 — so the device volume rocker actually controls how loud
+ *    it rings).
+ *  - HONOURS silent / vibrate device modes via `playsInSilentMode: false`
+ *    (iter-216) — when the user has their phone in silent or vibrate-only
+ *    mode the sound is suppressed by the OS, while the separate Vibration
+ *    API call below keeps haptics working in vibrate mode.
  *  - Vibrates the device in a phone-call cadence (unless user disabled vibrate)
+ *  - Auto-stops at 60s as a safety net against a phantom ring outliving
+ *    the caller hanging up (iter-216).
  *
  * Stops both immediately when `active` flips to false or the hook unmounts.
  * Safe on web (no-ops). Uses `expo-audio` (expo-av was deprecated in SDK 54).
@@ -50,6 +65,7 @@ export function useRingtonePlayer(active: boolean, options?: UseRingtonePlayerOp
     if (Platform.OS === 'web') return;
 
     let cancelled = false;
+    let maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
 
     const start = async () => {
       if (isPlayingRef.current) return;
@@ -63,12 +79,14 @@ export function useRingtonePlayer(active: boolean, options?: UseRingtonePlayerOp
         const shouldVibrate = options?.vibrate ?? (prefs.vibrate !== false);
         const isSilent = ringSource === null;
 
-        // Configure audio mode so ringtone plays through speaker / ringer channel.
-        // expo-audio API: playsInSilentMode / shouldPlayInBackground / shouldRouteThroughEarpiece
-        // (replaces expo-av's playsInSilentModeIOS / staysActiveInBackground / playThroughEarpieceAndroid).
+        // iter-216 SILENT MODE RESPECT: `playsInSilentMode: false` lets the OS
+        // suppress audio when the user has flipped the silent switch (iOS) or
+        // chosen the silent/vibrate ringer mode (Android). The separate
+        // Vibration.vibrate() call below still fires, so vibrate-only mode
+        // still vibrates — exactly the behaviour the user requested.
         try {
           await setAudioModeAsync({
-            playsInSilentMode: true,
+            playsInSilentMode: false,
             allowsRecording: false,
             shouldPlayInBackground: true,
             interruptionMode: 'duckOthers',
@@ -91,9 +109,12 @@ export function useRingtonePlayer(active: boolean, options?: UseRingtonePlayerOp
             try {
               player.loop = true;
             } catch {}
-            try {
-              player.volume = 1.0;
-            } catch {}
+            // iter-216 RINGER VOLUME RESPECT: we no longer hard-set
+            // player.volume = 1.0. Leaving it at the default means the system
+            // ringer volume (the volume rocker, the device "Sound" slider)
+            // controls how loud the ringtone is — matching the user's
+            // expectation that "lowering ring volume on device should affect
+            // the app's ringing too".
             try {
               player.play();
             } catch (playError: any) {
@@ -131,12 +152,22 @@ export function useRingtonePlayer(active: boolean, options?: UseRingtonePlayerOp
 
     if (active) {
       void start();
+      // iter-216 safety net: cap the ring at 60s. If the caller hangs up
+      // and the Convex subscription stalls (so `active` doesn't flip to
+      // false), this still kills the ringer.
+      maxDurationTimer = setTimeout(() => {
+        if (!cancelled) {
+          console.log('[ringtone] max duration 60s hit — auto-stopping');
+          void stop();
+        }
+      }, MAX_RING_DURATION_MS);
     } else {
       void stop();
     }
 
     return () => {
       cancelled = true;
+      if (maxDurationTimer) clearTimeout(maxDurationTimer);
       void stop();
     };
   }, [active, options?.vibrate]);

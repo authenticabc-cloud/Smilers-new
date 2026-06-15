@@ -138,60 +138,98 @@ export function useConvexAutoReconnect(client: ConvexReactClient) {
     };
 
     const evaluateAndAct = (trigger: string) => {
-      const state = safeConnectionState();
-      if (!state) return;
+      try {
+        const state = safeConnectionState();
+        if (!state) return;
 
-      // 1. Socket disconnected → SOFT reconnect (idempotent).
-      //    Convex's own backoff will also try, this just shortens the wait.
-      if (state.hasEverConnected && !state.isWebSocketConnected) {
-        const ok = softReconnect(client);
-        try {
-          sentry.addBreadcrumb({
-            category: 'convex',
-            type: 'info',
-            level: 'info',
-            message: 'convex-auto-reconnect:soft',
-            data: {
-              trigger,
-              ok,
-              connectionRetries: state.connectionRetries,
-            },
-          });
-        } catch {}
-        // eslint-disable-next-line no-console
-        console.log(`[convex-auto-reconnect] soft trigger=${trigger} ok=${ok}`);
-        return;
-      }
-
-      // 2. Socket "ready" but stale inflight → HARD reconnect (rate-limited).
-      const age = getInflightAgeMs(state);
-      if (age !== null && age > STALE_INFLIGHT_THRESHOLD_MS) {
-        const now = Date.now();
-        if (now - lastHardRestartAtRef.current < MIN_HARD_RESTART_INTERVAL_MS) {
-          return; // Recently restarted; back off so we don't thrash.
-        }
-        lastHardRestartAtRef.current = now;
-        void hardReconnect(client).then((ok) => {
+        // 1. Socket disconnected → SOFT reconnect (idempotent).
+        //    Convex's own backoff will also try, this just shortens the wait.
+        if (state.hasEverConnected && !state.isWebSocketConnected) {
+          const ok = softReconnect(client);
           try {
             sentry.addBreadcrumb({
               category: 'convex',
               type: 'info',
-              level: 'warning',
-              message: 'convex-auto-reconnect:hard',
+              level: 'info',
+              message: 'convex-auto-reconnect:soft',
               data: {
                 trigger,
                 ok,
-                ageSeconds: Math.round(age / 1000),
+                connectionRetries: state.connectionRetries,
               },
             });
           } catch {}
           // eslint-disable-next-line no-console
-          console.log(
-            `[convex-auto-reconnect] hard trigger=${trigger} ageSeconds=${Math.round(
-              age / 1000,
-            )} ok=${ok}`,
-          );
-        });
+          console.log(`[convex-auto-reconnect] soft trigger=${trigger} ok=${ok}`);
+          return;
+        }
+
+        // 2. Socket "ready" but stale inflight → HARD reconnect (rate-limited).
+        //    iter-216 SAFETY: the heartbeat path now ONLY does soft
+        //    reconnects (above) — the heavy `stop()+tryRestart()` path runs
+        //    only when triggered by:
+        //      - AppState foreground transition (user just brought app back)
+        //      - Explicit user action (Reconnect button / chat retry)
+        //      - The chat screen's own 5/12/20s timers
+        //    This avoids the v2.1.80 idle-crash mode where the heartbeat
+        //    would race with Convex's internal backoff and tear down a
+        //    socket that was in the middle of reconnecting itself. We
+        //    still detect the stale state below — it just yields to the
+        //    foreground/manual path instead of forcing it.
+        const age = getInflightAgeMs(state);
+        if (age !== null && age > STALE_INFLIGHT_THRESHOLD_MS) {
+          if (trigger === 'heartbeat') {
+            // Heartbeat sees stale state — log it for diagnostics but DON'T
+            // force a hard restart; we wait for foreground/manual.
+            try {
+              sentry.addBreadcrumb({
+                category: 'convex',
+                type: 'info',
+                level: 'info',
+                message: 'convex-auto-reconnect:stale-noted',
+                data: { trigger, ageSeconds: Math.round(age / 1000) },
+              });
+            } catch {}
+            // Soft kick — cheap, idempotent, and on the off chance Convex
+            // happens to be in the disconnected backoff state this fires
+            // an immediate reconnect.
+            softReconnect(client);
+            return;
+          }
+          const now = Date.now();
+          if (now - lastHardRestartAtRef.current < MIN_HARD_RESTART_INTERVAL_MS) {
+            return;
+          }
+          lastHardRestartAtRef.current = now;
+          void hardReconnect(client).then((ok) => {
+            try {
+              sentry.addBreadcrumb({
+                category: 'convex',
+                type: 'info',
+                level: 'warning',
+                message: 'convex-auto-reconnect:hard',
+                data: {
+                  trigger,
+                  ok,
+                  ageSeconds: Math.round(age / 1000),
+                },
+              });
+            } catch {}
+            // eslint-disable-next-line no-console
+            console.log(
+              `[convex-auto-reconnect] hard trigger=${trigger} ageSeconds=${Math.round(
+                age / 1000,
+              )} ok=${ok}`,
+            );
+          });
+        }
+      } catch (errorValue: any) {
+        // Belt-and-braces — never let a heartbeat tick crash the app.
+        try {
+          sentry.captureException(errorValue, {
+            tags: { module: 'convex-auto-reconnect', path: 'evaluateAndAct' },
+          });
+        } catch {}
       }
     };
 
