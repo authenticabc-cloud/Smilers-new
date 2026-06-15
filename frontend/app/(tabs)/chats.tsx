@@ -20,6 +20,9 @@ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src
 // silently died (the "ghost connection" pattern called out by Emergent
 // support). Wired to the existing manual escape hatch from v2.1.83.
 import { forceConvexReconnect } from '../../src/providers/useConvexAutoReconnect';
+// iter-221: connection-status banner + foreground-triggered auto-refresh.
+import ConnectionStatusBanner from '../../src/components/ConnectionStatusBanner';
+import { AppState } from 'react-native';
 
 function relTime(iso?: string) {
   if (!iso) return '';
@@ -82,6 +85,28 @@ export default function ChatsScreen() {
     // sweet spot where it feels responsive but visible.
     setTimeout(() => setReconnecting(false), 1800);
   }, [reconnecting]);
+
+  // iter-221 D — auto pull-to-refresh on FOREGROUND.
+  //
+  // When the user brings the app back from background, the OS may have
+  // killed the Convex WebSocket silently. useConvexAutoReconnect
+  // already fires a soft reconnect on AppState 'active' — here we ALSO
+  // surface the same visible "Reconnecting…" spinner the user gets
+  // from a manual pull, so they have immediate visual feedback that
+  // the chat list is being refreshed and they don't need to pull
+  // themselves.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') {
+        void handlePullToReconnect();
+      }
+    });
+    return () => {
+      try {
+        sub.remove();
+      } catch {}
+    };
+  }, [handlePullToReconnect]);
   useEffect(() => {
     setAuthSettleElapsed(false);
     const t = setTimeout(() => setAuthSettleElapsed(true), 1500);
@@ -169,6 +194,11 @@ export default function ChatsScreen() {
       />
 
       <OfflineBanner visible={showOfflineBanner} ts={cachedTs} />
+      {/* iter-221 C — visible "Reconnecting…" banner when Convex WebSocket
+          stays disconnected >5s. Sits at the top of the chat list so the
+          user gets immediate visual confirmation of why their data isn't
+          updating and a one-tap manual Retry button. */}
+      <ConnectionStatusBanner />
 
       <Modal
         visible={showMenu}
