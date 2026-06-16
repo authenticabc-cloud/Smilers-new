@@ -13,6 +13,15 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
+# Twilio Programmable Video — Phase A.1
+# Used to mint short-lived JWT access tokens server-side and to create
+# rooms via REST. Credentials live in `.env` (TWILIO_*) and NEVER reach
+# the client.
+from twilio.jwt.access_token import AccessToken
+from twilio.jwt.access_token.grants import VideoGrant
+from twilio.rest import Client as TwilioRestClient
+from twilio.base.exceptions import TwilioRestException
+
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -87,6 +96,8 @@ async def health_check():
         "/api/notify-event",
         "/api/diagnostic-logs",
         "/api/safe-browsing/check",
+        "/api/twilio/video-token",
+        "/api/twilio/initiate-call",
     }
     present = set()
     try:
@@ -107,6 +118,244 @@ async def health_check():
         # Echo the server's own clock so client-side drift is visible.
         "server_time": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# ============================================================
+# Twilio Programmable Video — Phase A.1
+# ============================================================
+# Replaces the legacy react-native-webrtc + Convex signaling stack
+# with Twilio's managed SFU + global TURN/NTS. Clients receive a
+# short-lived JWT (10 min) bound to their identity + room. Backend
+# uses the API Key SID/Secret pair (NOT the master Auth Token) so
+# the credentials can be rotated independently.
+# ============================================================
+
+_TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
+_TWILIO_API_KEY_SID = os.environ.get("TWILIO_API_KEY_SID", "")
+_TWILIO_API_KEY_SECRET = os.environ.get("TWILIO_API_KEY_SECRET", "")
+# Media region only (where Twilio's SFU runs for this room). We
+# deliberately do NOT use TWILIO_REGION env var because the Twilio
+# Python SDK auto-prepends that to all REST URLs, which breaks the
+# Video REST API (it has no regional subdomain).
+_TWILIO_MEDIA_REGION = os.environ.get("TWILIO_MEDIA_REGION", "ie1")
+_TWILIO_VIDEO_ROOM_TYPE = os.environ.get("TWILIO_VIDEO_ROOM_TYPE", "group")
+# Token TTL — keep short so a stolen token expires fast.
+_TWILIO_TOKEN_TTL_SECONDS = 600  # 10 minutes
+
+# Lazy-init the REST client only when first needed so server boot does
+# not depend on Twilio being reachable.
+_twilio_rest: Optional["TwilioRestClient"] = None
+
+
+def _get_twilio_rest() -> Optional["TwilioRestClient"]:
+    global _twilio_rest
+    if not (_TWILIO_ACCOUNT_SID and _TWILIO_API_KEY_SID and _TWILIO_API_KEY_SECRET):
+        return None
+    if _twilio_rest is None:
+        # Authenticate REST calls with the API Key pair (not the master
+        # Auth Token) — same credentials used to sign access tokens.
+        _twilio_rest = TwilioRestClient(
+            _TWILIO_API_KEY_SID, _TWILIO_API_KEY_SECRET, _TWILIO_ACCOUNT_SID
+        )
+    return _twilio_rest
+
+
+class TwilioTokenRequest(BaseModel):
+    """Client requests a JWT for a specific Twilio Video room."""
+    identity: str = Field(..., min_length=1, max_length=120, description="Stable user ID (e.g., OIDC sub or Convex user _id)")
+    room_name: str = Field(..., min_length=1, max_length=128, description="Twilio room name — typically created via initiate-call")
+
+
+class TwilioTokenResponse(BaseModel):
+    token: str
+    identity: str
+    room_name: str
+    ttl_seconds: int
+    region: str
+    server_time: str
+
+
+@api_router.post("/twilio/video-token", response_model=TwilioTokenResponse)
+async def twilio_video_token(payload: TwilioTokenRequest):
+    """
+    Mint a short-lived (10 min) Twilio Programmable Video JWT bound to
+    `identity` + `room_name`. The token is the ONLY credential the
+    mobile client ever sees — `API_KEY_SECRET` stays server-side.
+
+    Note: We deliberately do NOT verify Smilers-side auth here yet
+    because the existing call signaling layer is Convex-based and the
+    OIDC bearer flows through the mobile app's API helper. Add an
+    auth dependency in Phase A.3 once `TwilioCallSession` is wired in
+    and we know the auth shape.
+    """
+    if not (_TWILIO_ACCOUNT_SID and _TWILIO_API_KEY_SID and _TWILIO_API_KEY_SECRET):
+        raise HTTPException(
+            status_code=503,
+            detail="Twilio not configured: TWILIO_ACCOUNT_SID / TWILIO_API_KEY_SID / TWILIO_API_KEY_SECRET missing in backend env.",
+        )
+
+    try:
+        token = AccessToken(
+            _TWILIO_ACCOUNT_SID,
+            _TWILIO_API_KEY_SID,
+            _TWILIO_API_KEY_SECRET,
+            identity=payload.identity,
+            ttl=_TWILIO_TOKEN_TTL_SECONDS,
+            region=_TWILIO_MEDIA_REGION,
+        )
+        # Scope the grant to ONE room — token is useless for other rooms.
+        token.add_grant(VideoGrant(room=payload.room_name))
+        jwt_str = token.to_jwt()
+        # twilio>=8 returns str; older versions returned bytes. Normalise.
+        if isinstance(jwt_str, (bytes, bytearray)):
+            jwt_str = jwt_str.decode("utf-8")
+    except Exception as exc:
+        logger.exception("twilio-token mint failed")
+        raise HTTPException(status_code=500, detail=f"Token mint failed: {exc}")
+
+    return TwilioTokenResponse(
+        token=jwt_str,
+        identity=payload.identity,
+        room_name=payload.room_name,
+        ttl_seconds=_TWILIO_TOKEN_TTL_SECONDS,
+        region=_TWILIO_MEDIA_REGION,
+        server_time=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+class TwilioInitiateCallRequest(BaseModel):
+    """Caller initiates a Twilio Video call to one or more callees."""
+    caller_identity: str = Field(..., min_length=1, max_length=120)
+    callee_identities: List[str] = Field(default_factory=list, description="Stable user IDs of all invitees")
+    is_video: bool = True
+    conversation_id: Optional[str] = Field(None, description="Convex conversation _id — used for room naming + push routing")
+    room_name: Optional[str] = Field(None, description="Optional explicit room name; otherwise generated")
+
+
+class TwilioInitiateCallResponse(BaseModel):
+    room_name: str
+    room_sid: str
+    room_status: str
+    media_region: Optional[str]
+    caller_identity: str
+    callee_identities: List[str]
+    # Token for the caller — saves a round trip; callees fetch their own.
+    caller_token: str
+    server_time: str
+
+
+def _derive_room_name(caller: str, callees: List[str], conversation_id: Optional[str]) -> str:
+    """
+    Deterministic room name:
+      - If a conversation_id is provided, reuse it (1-on-1 / group chat tied to a Convex conversation).
+      - Otherwise sort caller+callees and hash for a stable 1-on-1 name.
+      - Multi-callee with no conversation_id → uuid (fresh group call).
+    """
+    if conversation_id:
+        return f"smilers_conv_{conversation_id}"
+    if len(callees) == 1:
+        parts = sorted([caller, callees[0]])
+        return f"smilers_{parts[0]}_{parts[1]}"
+    return f"smilers_group_{uuid.uuid4().hex[:16]}"
+
+
+@api_router.post("/twilio/initiate-call", response_model=TwilioInitiateCallResponse)
+async def twilio_initiate_call(payload: TwilioInitiateCallRequest):
+    """
+    Create (or fetch) a Twilio Video room for this call + mint the
+    caller's JWT in one shot. The mobile client will then POST a
+    `call.invite` message via Convex (or via the existing push pipeline
+    in Phase A.3) carrying `room_name` so callees can join.
+
+    Phase A.1 scope: room creation + caller token only. FCM push to
+    callees is wired in Phase A.3 alongside the `TwilioCallSession`
+    rollout so we don't double-send notifications during migration.
+    """
+    rest = _get_twilio_rest()
+    if rest is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Twilio not configured: missing TWILIO_* env vars.",
+        )
+    if not payload.callee_identities:
+        raise HTTPException(status_code=400, detail="callee_identities must contain at least one identity.")
+
+    room_name = payload.room_name or _derive_room_name(
+        payload.caller_identity, payload.callee_identities, payload.conversation_id
+    )
+
+    # Idempotent room creation: if a room with this unique_name already
+    # exists AND is still 'in-progress', reuse it. Otherwise create new.
+    room = None
+    try:
+        # Twilio uniqueness is on (unique_name + in-progress) — a completed
+        # room with the same unique_name does NOT block a new one.
+        existing = rest.video.v1.rooms.list(unique_name=room_name, status="in-progress", limit=1)
+        if existing:
+            room = existing[0]
+            logger.info(f"twilio-initiate-call reusing in-progress room sid={room.sid} name={room_name}")
+        else:
+            room = rest.video.v1.rooms.create(
+                unique_name=room_name,
+                type=_TWILIO_VIDEO_ROOM_TYPE,
+                # Don't auto-record — Phase A.4 will start recording explicitly.
+                record_participants_on_connect=False,
+                # Pin media region to keep RTT low for our target user base.
+                media_region=_TWILIO_MEDIA_REGION,
+            )
+            logger.info(f"twilio-initiate-call created room sid={room.sid} name={room_name}")
+    except TwilioRestException as exc:
+        logger.exception("twilio-initiate-call REST failed")
+        raise HTTPException(status_code=502, detail=f"Twilio room create failed: {exc.msg}")
+
+    # Mint the caller's JWT immediately so the client can join without
+    # an extra round-trip.
+    try:
+        caller_token_obj = AccessToken(
+            _TWILIO_ACCOUNT_SID,
+            _TWILIO_API_KEY_SID,
+            _TWILIO_API_KEY_SECRET,
+            identity=payload.caller_identity,
+            ttl=_TWILIO_TOKEN_TTL_SECONDS,
+            region=_TWILIO_MEDIA_REGION,
+        )
+        caller_token_obj.add_grant(VideoGrant(room=room_name))
+        caller_jwt = caller_token_obj.to_jwt()
+        if isinstance(caller_jwt, (bytes, bytearray)):
+            caller_jwt = caller_jwt.decode("utf-8")
+    except Exception as exc:
+        logger.exception("twilio-initiate-call token mint failed")
+        raise HTTPException(status_code=500, detail=f"Caller token mint failed: {exc}")
+
+    # Persist the call record so we can correlate Twilio SIDs with our
+    # own call history later. Best-effort — failures here don't block
+    # the call from starting.
+    try:
+        await db.twilio_calls.insert_one(
+            {
+                "room_sid": room.sid,
+                "room_name": room_name,
+                "caller_identity": payload.caller_identity,
+                "callee_identities": payload.callee_identities,
+                "conversation_id": payload.conversation_id,
+                "is_video": payload.is_video,
+                "created_at": datetime.now(timezone.utc),
+                "status": room.status,
+            }
+        )
+    except Exception:
+        logger.warning("twilio-initiate-call: persisting call record to MongoDB failed (non-fatal)")
+
+    return TwilioInitiateCallResponse(
+        room_name=room_name,
+        room_sid=room.sid,
+        room_status=room.status,
+        media_region=getattr(room, "media_region", None) or _TWILIO_MEDIA_REGION,
+        caller_identity=payload.caller_identity,
+        callee_identities=payload.callee_identities,
+        caller_token=caller_jwt,
+        server_time=datetime.now(timezone.utc).isoformat(),
+    )
 
 
 @api_router.get("/download/frontend-zip")
