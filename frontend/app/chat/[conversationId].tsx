@@ -89,6 +89,7 @@ import { DeleteMessageSheet } from '../../src/components/chat/DeleteMessageSheet
 import { DisappearingSheet, DISAPPEARING_OPTIONS } from '../../src/components/chat/DisappearingSheet';
 import { ForwardPickerSheet } from '../../src/components/chat/ForwardPickerSheet';
 import { TemplatePickerSheet } from '../../src/components/chat/TemplatePickerSheet';
+import { startCall } from '../../src/lib/twilio/startCall';
 
 const EMPTY_MESSAGES_PAGE = { page: [] as any[] };
 const EMPTY_FORWARD_CONVERSATIONS: any[] = [];
@@ -2481,14 +2482,40 @@ export default function ChatScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             testID="call-btn"
-            onPress={() => router.push(`/call/${conversationId}?type=voice&displayName=${encodeURIComponent(title)}` as any)}
+            onPress={() => {
+              const calleeId = String(
+                (hydratedConversation?.otherUser as any)?.userId || '',
+              );
+              startCall({
+                router,
+                callerIdentity: String(me?._id || ''),
+                callerDisplayName: String((me as any)?.name || (me as any)?.displayName || ''),
+                calleeIdentities: calleeId ? [calleeId] : [],
+                conversationId: String(conversationId || ''),
+                isVideo: false,
+                displayName: title,
+              });
+            }}
             style={styles.headerIconButton}
           >
             <Ionicons name="call-outline" size={20} color={Colors.white} />
           </TouchableOpacity>
           <TouchableOpacity
             testID="video-btn"
-            onPress={() => router.push(`/call/${conversationId}?type=video&displayName=${encodeURIComponent(title)}` as any)}
+            onPress={() => {
+              const calleeId = String(
+                (hydratedConversation?.otherUser as any)?.userId || '',
+              );
+              startCall({
+                router,
+                callerIdentity: String(me?._id || ''),
+                callerDisplayName: String((me as any)?.name || (me as any)?.displayName || ''),
+                calleeIdentities: calleeId ? [calleeId] : [],
+                conversationId: String(conversationId || ''),
+                isVideo: true,
+                displayName: title,
+              });
+            }}
             style={styles.headerIconButton}
           >
             <Ionicons name="videocam-outline" size={21} color={Colors.white} />
