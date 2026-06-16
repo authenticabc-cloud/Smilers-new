@@ -129,6 +129,21 @@ export default function TwilioCallScreen() {
     host.session?.setSpeakerOn(next);
   };
 
+  const handleScreenShare = () => {
+    // Phase A.5: iOS requires a ReplayKit Broadcast Extension target
+    // (separate Xcode work). Block on iOS with an explanatory alert
+    // until that lands. Android works out of the box via MediaProjection.
+    if (Platform.OS === 'ios') {
+      Alert.alert(
+        'Coming soon on iOS',
+        'Full-device screen sharing on iOS requires a Broadcast Upload Extension that ships in a later build. Available on Android now.',
+      );
+      return;
+    }
+    const next = host.screenShareState !== 'on';
+    host.session?.setScreenShareEnabled(next);
+  };
+
   const handleHangup = () => {
     try {
       host.session?.leave();
@@ -236,6 +251,12 @@ export default function TwilioCallScreen() {
         ) : (
           <ControlBtn icon={speakerOn ? 'volume-2' : 'volume'} label="Speaker" onPress={handleSpeaker} active={speakerOn} />
         )}
+        <ControlBtn
+          icon="monitor"
+          label={host.screenShareState === 'on' ? 'Stop share' : 'Share'}
+          onPress={handleScreenShare}
+          active={host.screenShareState === 'on'}
+        />
         <Pressable onPress={handleHangup} style={[styles.controlBtn, styles.hangupBtn]}>
           <Feather name="phone-off" size={24} color="#fff" />
           <Text style={styles.hangupLabel}>End</Text>
