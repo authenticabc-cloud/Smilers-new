@@ -224,7 +224,7 @@
           "android": {
             "minSdkVersion": 24,
             "enableProguardInReleaseBuilds": true,
-            "extraProguardRules": "# react-native-webrtc \u2014 keep all native classes from being stripped by R8 in release builds.\n# Without these rules the org.webrtc.* classes are stripped \u2192 instant native crash on require().\n-keep class org.webrtc.** { *; }\n-keep interface org.webrtc.** { *; }\n-dontwarn org.webrtc.**\n# React Native bridge module for WebRTC\n-keep class com.oney.WebRTCModule.** { *; }\n-keep interface com.oney.WebRTCModule.** { *; }\n-dontwarn com.oney.WebRTCModule.**\n# React Native core modules that WebRTC depends on\n-keep class com.facebook.react.modules.** { *; }\n-keep class com.facebook.jni.** { *; }\n# Keep all JNI native methods\n-keepclasseswithmembernames class * { native <methods>; }"
+            "extraProguardRules": "# react-native-webrtc — keep all native classes from being stripped by R8 in release builds.\n# Without these rules the org.webrtc.* classes are stripped → instant native crash on require().\n-keep class org.webrtc.** { *; }\n-keep interface org.webrtc.** { *; }\n-dontwarn org.webrtc.**\n# React Native bridge module for WebRTC\n-keep class com.oney.WebRTCModule.** { *; }\n-keep interface com.oney.WebRTCModule.** { *; }\n-dontwarn com.oney.WebRTCModule.**\n# React Native core modules that WebRTC depends on\n-keep class com.facebook.react.modules.** { *; }\n-keep class com.facebook.jni.** { *; }\n# Keep all JNI native methods\n-keepclasseswithmembernames class * { native <methods>; }"
           }
         }
       ],
@@ -256,6 +256,13 @@
             "application/*"
           ],
           "disableExperimental": true
+        }
+      ],
+      [
+        "@twilio/video-react-native-sdk",
+        {
+          "cameraPermission": "Smilers needs your camera for video calls",
+          "microphonePermission": "Smilers needs your microphone for voice and video calls"
         }
       ]
     ],
