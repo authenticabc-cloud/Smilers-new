@@ -375,13 +375,20 @@ async def twilio_initiate_call(payload: TwilioInitiateCallRequest):
             "twilio_is_video": "1" if payload.is_video else "0",
             "twilio_caller_identity": payload.caller_identity,
             "displayName": display_name,
-            # Deeplink fallback — if push tap routing happens via
-            # action_url (older client builds), this still lands them
-            # on the new Twilio screen.
+            # Deeplink fallback — note the path starts with `/call/`
+            # so the backend channel classifier routes this through
+            # the high-priority calls channel (long ringtone + bypass
+            # DnD). The mobile tap-handler checks `twilio_room_name`
+            # first so routing still lands on /twilio-call, not the
+            # legacy call screen.
             "action_url": (
-                f"/twilio-call?room={room_name}&isCaller=0&isVideo="
+                f"/call/twilio-{room_name}?room={room_name}&isCaller=0&isVideo="
                 f"{'1' if payload.is_video else '0'}&title={display_name}"
             ),
+            # iter-A4b: extra hints so the classifier picks the call
+            # channel even if `type` or `action_url` are stripped in
+            # transit by an intermediate proxy.
+            "subtext": "Incoming call",
         }
         push_stats = await send_push(
             recipients=payload.callee_identities,
