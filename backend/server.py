@@ -64,6 +64,51 @@ async def root():
     return {"message": "Hello World"}
 
 
+@api_router.get("/__health")
+async def health_check():
+    """
+    iter-D1: Forensic health probe used by the mobile client at boot
+    to verify it is talking to the right backend AND that critical
+    routes still exist.
+
+    The mobile client logs the response (or 404/timeout) as a `[HEALTH]`
+    diagnostic — so when a user reports "register-push 404", one grep on
+    `[DIAG][HEALTH]` in supervisor logs tells us instantly whether the
+    APK reached our backend at all and whether the routes it expects are
+    present at the moment of failure.
+
+    Intentionally lightweight: no DB call, no auth, sub-millisecond.
+    Returns a list of critical route paths so a stale deployment (where
+    a route was dropped) is detectable from the client side.
+    """
+    # Enumerate registered API routes so client can confirm criticals exist.
+    critical = {
+        "/api/register-push",
+        "/api/notify-event",
+        "/api/diagnostic-logs",
+        "/api/safe-browsing/check",
+    }
+    present = set()
+    try:
+        for r in app.routes:
+            path = getattr(r, "path", None)
+            if path in critical:
+                present.add(path)
+    except Exception:
+        # Never let route introspection failure break the probe.
+        pass
+    return {
+        "status": "ok",
+        "service": "smilers-backend",
+        # Reflect the version baked into the deployed pod for forensics.
+        "version": os.environ.get("APP_VERSION", "unknown"),
+        "critical_routes_present": sorted(present),
+        "critical_routes_missing": sorted(critical - present),
+        # Echo the server's own clock so client-side drift is visible.
+        "server_time": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @api_router.get("/download/frontend-zip")
 async def download_frontend_zip():
     """Serve the frontend source zip (created for the user's local EAS build

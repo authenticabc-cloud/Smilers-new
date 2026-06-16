@@ -350,3 +350,117 @@ export function installGlobalDiagnostics(): void {
     message: 'global handler installed',
   });
 }
+
+/**
+ * iter-D1: Record a one-shot BOOT diagnostic capturing exactly which
+ * backend URL was burned into this APK at build time + app/build
+ * identifiers. The next time a `/api/register-push` 404 surfaces, one
+ * grep on `[DIAG][BOOT][api]` in supervisor logs will tell us
+ * instantly whether the device is on a stale URL (preview vs prod)
+ * or the production backend lost a route.
+ *
+ * Safe to call multiple times — only the first call per session is
+ * recorded so we don't flood the diagnostic ring buffer.
+ */
+let bootRecorded = false;
+export function recordBootDiagnostic(): void {
+  if (bootRecorded) return;
+  bootRecorded = true;
+  try {
+    const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL || '(missing)';
+    const webAppUrl = process.env.EXPO_PUBLIC_WEB_APP_URL || '(missing)';
+    const convexUrl = process.env.EXPO_PUBLIC_CONVEX_URL || '(missing)';
+    const meta = getDeviceMeta();
+    // Extract just the hostname so supervisor-log greps are clean.
+    let backendHost = backendUrl;
+    try {
+      backendHost = new URL(backendUrl).hostname;
+    } catch {}
+    const versionCode =
+      (Constants?.expoConfig?.android?.versionCode as number | undefined) ??
+      (Constants?.expoConfig?.ios?.buildNumber as string | number | undefined) ??
+      '?';
+    recordDiagnostic({
+      tag: 'BOOT',
+      source: 'api',
+      message:
+        `backend=${backendUrl} host=${backendHost} ` +
+        `webapp=${webAppUrl} convex=${convexUrl} ` +
+        `app=${meta.appVersion || '?'}/${versionCode} ` +
+        `plat=${meta.platform}/${meta.platformVersion || '?'} ` +
+        `device=${meta.device || '?'}`,
+    });
+  } catch {}
+}
+
+/**
+ * iter-D1: Fire a one-shot GET against `/api/__health` on the backend
+ * the APK was built against. Records a `[HEALTH]` diagnostic with the
+ * outcome so we can definitively answer, after any future 404 incident:
+ *
+ *   - "Did the device even reach our backend?"        → HEALTH ok / UNREACHABLE
+ *   - "Did the backend have register-push at boot?"   → critical_routes_missing
+ *   - "Is the deployment serving a *different* app?"  → critical_routes_present
+ *
+ * Never throws. Safe to call once per app launch — no rate limiting
+ * needed since the endpoint is sub-millisecond and unauthenticated.
+ */
+export async function probeBackendHealth(): Promise<void> {
+  const base = (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/$/, '');
+  if (!base) {
+    recordDiagnostic({
+      tag: 'HEALTH',
+      source: 'probe',
+      message: 'NO_BACKEND_URL — EXPO_PUBLIC_BACKEND_URL is empty in this build',
+    });
+    return;
+  }
+  const url = `${base}/api/__health`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const t0 = Date.now();
+    const resp = await fetch(url, { method: 'GET', signal: controller.signal });
+    const ms = Date.now() - t0;
+    if (!resp.ok) {
+      // 404 here is the smoking gun for "wrong backend"
+      let bodyHead = '';
+      try {
+        const text = await resp.text();
+        bodyHead = text.slice(0, 160);
+      } catch {}
+      recordDiagnostic({
+        tag: 'HEALTH',
+        source: 'probe',
+        message: `HTTP_${resp.status} ${ms}ms url=${url} body=${bodyHead}`,
+      });
+      return;
+    }
+    let json: any = null;
+    try {
+      json = await resp.json();
+    } catch {}
+    const missing = (json?.critical_routes_missing || []) as string[];
+    const present = (json?.critical_routes_present || []) as string[];
+    const tag = missing.length > 0 ? 'ROUTES_MISSING' : 'ok';
+    recordDiagnostic({
+      tag: 'HEALTH',
+      source: 'probe',
+      message:
+        `${tag} ${ms}ms version=${json?.version || '?'} ` +
+        `present=${present.length}/${present.length + missing.length} ` +
+        `missing=[${missing.join(',')}] ` +
+        `server_time=${json?.server_time || '?'}`,
+    });
+  } catch (errorValue: any) {
+    // Network/timeout — backend is unreachable from THIS device on THIS URL.
+    const msg = (errorValue && (errorValue.message || String(errorValue))) || 'unknown';
+    recordDiagnostic({
+      tag: 'HEALTH',
+      source: 'probe',
+      message: `UNREACHABLE url=${url} err=${msg}`,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}

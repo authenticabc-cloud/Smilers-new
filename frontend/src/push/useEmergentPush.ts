@@ -166,9 +166,28 @@ async function postRegisterPush(opts: {
     });
     if (!resp.ok) {
       let detail = '';
+      let bodyHead = '';
       try {
-        const json = await resp.json();
-        detail = (json && (json.detail || json.message)) || '';
+        const text = await resp.text();
+        bodyHead = text.slice(0, 200);
+        try {
+          const json = JSON.parse(text);
+          detail = (json && (json.detail || json.message)) || '';
+        } catch {}
+      } catch {}
+      // iter-D1: forensic logging — capture the EXACT URL hit, the
+      // exact backend URL env var at this moment, and the response
+      // body head. Without this, every 404 looks identical and we
+      // cannot tell stale-APK from production-route-drop.
+      try {
+        recordDiagnostic({
+          tag: 'NOTIFY',
+          source: 'register-push/fail',
+          message:
+            `HTTP_${resp.status} url=${url} ` +
+            `env_backend=${process.env.EXPO_PUBLIC_BACKEND_URL || '(missing)'} ` +
+            `body=${bodyHead}`,
+        });
       } catch {}
       throw new Error(
         `register-push HTTP ${resp.status}${detail ? `: ${detail}` : ''}`,

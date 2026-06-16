@@ -39,6 +39,7 @@ import {
   flushDiagnostics,
   sendDiagnosticHeartbeat,
   recordDiagnostic,
+  probeBackendHealth,
 } from '../src/lib/diagnostics';
 import { triggerEmergentSelfTestPush } from '../src/push/useEmergentPush';
 import { useAuth } from '../src/providers/AuthProvider';
@@ -91,6 +92,7 @@ function colorForTag(tag: string): string {
   if (tag === 'SCRN') return '#4caf50';
   if (tag === 'CALL') return '#ff9800';
   if (tag === 'HB' || tag === 'BOOT') return '#9c88ff';
+  if (tag === 'HEALTH') return '#4dd0e1';
   if (tag === 'CONSOLE') return '#bdbdbd';
   return '#90a4ae';
 }
@@ -347,6 +349,32 @@ export default function DiagnosticLogsScreen() {
         <Text style={[styles.subtitle, { fontSize: 10, marginTop: 2 }]} numberOfLines={1} testID="diag-backend-url">
           API: {(process.env.EXPO_PUBLIC_BACKEND_URL || '(missing)').replace(/^https?:\/\//, '')}
         </Text>
+        {/* iter-D1: surface the latest HEALTH probe result so you can
+            instantly tell whether THIS device can reach OUR backend
+            and whether critical routes exist right now. */}
+        {(() => {
+          const latestBoot = [...events].reverse().find(
+            (ev) => ev.tag === 'BOOT' && ev.source === 'api',
+          );
+          const latestHealth = [...events].reverse().find(
+            (ev) => ev.tag === 'HEALTH',
+          );
+          if (!latestBoot && !latestHealth) return null;
+          return (
+            <View style={{ marginTop: 6, gap: 2 }}>
+              {latestBoot ? (
+                <Text style={[styles.subtitle, { fontSize: 10, color: '#9c88ff' }]} numberOfLines={2}>
+                  BOOT @ {fmtTs(latestBoot.ts)} → {latestBoot.message}
+                </Text>
+              ) : null}
+              {latestHealth ? (
+                <Text style={[styles.subtitle, { fontSize: 10, color: '#4dd0e1' }]} numberOfLines={2}>
+                  HEALTH @ {fmtTs(latestHealth.ts)} → {latestHealth.message}
+                </Text>
+              ) : null}
+            </View>
+          );
+        })()}
       </View>
 
       <View style={styles.toolbar}>
@@ -361,6 +389,20 @@ export default function DiagnosticLogsScreen() {
         <TouchableOpacity style={styles.toolBtn} onPress={handleRetryUpload}>
           <Feather name="upload-cloud" size={16} color={Colors.white} />
           <Text style={styles.toolText}>Upload</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.toolBtn}
+          onPress={async () => {
+            await probeBackendHealth();
+            await refresh();
+            Alert.alert(
+              'Backend probe',
+              'Re-checked /api/__health. See the HEALTH line at the top — it shows whether this device reached our backend and which routes were present.',
+            );
+          }}
+        >
+          <Feather name="activity" size={16} color="#4dd0e1" />
+          <Text style={[styles.toolText, { color: '#4dd0e1' }]}>Re-probe</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.toolBtn}

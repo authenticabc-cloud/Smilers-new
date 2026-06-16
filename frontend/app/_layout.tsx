@@ -30,6 +30,8 @@ import {
   flushDiagnostics,
   sendDiagnosticHeartbeat,
   recordDiagnostic,
+  recordBootDiagnostic,
+  probeBackendHealth,
 } from '../src/lib/diagnostics';
 import { Colors } from '../src/theme';
 import { DeviceContactProvider } from '../src/lib/deviceContactIndex';
@@ -113,6 +115,22 @@ if (SENTRY_DSN) {
 // completely invisible to us.
 installGlobalDiagnostics();
 recordDiagnostic({ tag: 'BOOT', source: '_layout', message: 'root layout module evaluated' });
+
+// iter-D1: One-shot BOOT fingerprint — captures the EXACT backend URL,
+// app version, versionCode, platform burned into THIS apk. If a
+// `/api/register-push` 404 ever surfaces again, one grep on
+// `[DIAG][BOOT][api]` tells us if the device is talking to the right
+// backend at all.
+recordBootDiagnostic();
+
+// iter-D1: One-shot health probe against `/api/__health` on the backend
+// the APK was built against. Fire-and-forget — records whether the
+// device can reach OUR backend AND whether critical routes
+// (register-push, notify-event, diagnostic-logs) exist at that moment.
+// This is the definitive "right backend / right routes" signal.
+try {
+  void probeBackendHealth();
+} catch {}
 
 // ⚡ Fire a heartbeat ping IMMEDIATELY at module-evaluation time. This
 // does NOT wait for React to mount, AsyncStorage writes to finish, or
