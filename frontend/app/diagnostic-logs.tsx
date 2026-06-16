@@ -406,6 +406,41 @@ export default function DiagnosticLogsScreen() {
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.toolBtn}
+          onPress={async () => {
+            // Phase A.3 — manual Twilio Video call test launcher.
+            // Creates a real Twilio room via the backend, then routes
+            // to the new /twilio-call screen with caller params.
+            try {
+              const meId = `tester_${Date.now().toString(36)}`;
+              const { initiateTwilioCall } = await import('../src/lib/twilio/twilioApi');
+              const res = await initiateTwilioCall({
+                callerIdentity: meId,
+                calleeIdentities: [`peer_${meId}`],
+                isVideo: true,
+                conversationId: null,
+                roomName: null,
+              });
+              router.push({
+                pathname: '/twilio-call',
+                params: {
+                  room: res.roomName,
+                  identity: meId,
+                  isVideo: '1',
+                  isCaller: '1',
+                  token: res.token,
+                  title: 'Twilio Test Call',
+                },
+              });
+            } catch (err: any) {
+              Alert.alert('Twilio test failed', err?.message || String(err));
+            }
+          }}
+        >
+          <Feather name="video" size={16} color="#ffb74d" />
+          <Text style={[styles.toolText, { color: '#ffb74d' }]}>Twilio Test</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.toolBtn}
           onPress={handlePushTest}
           disabled={runningPushTest}
         >

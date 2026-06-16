@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form, Request
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -226,10 +226,12 @@ async def twilio_video_token(payload: TwilioTokenRequest):
 class TwilioInitiateCallRequest(BaseModel):
     """Caller initiates a Twilio Video call to one or more callees."""
     caller_identity: str = Field(..., min_length=1, max_length=120)
+    caller_display_name: Optional[str] = Field(None, max_length=120, description="Shown in the incoming-call notification")
     callee_identities: List[str] = Field(default_factory=list, description="Stable user IDs of all invitees")
     is_video: bool = True
     conversation_id: Optional[str] = Field(None, description="Convex conversation _id — used for room naming + push routing")
     room_name: Optional[str] = Field(None, description="Optional explicit room name; otherwise generated")
+    record: bool = Field(False, description="If true, Twilio records all participants from connect")
 
 
 class TwilioInitiateCallResponse(BaseModel):
@@ -241,6 +243,8 @@ class TwilioInitiateCallResponse(BaseModel):
     callee_identities: List[str]
     # Token for the caller — saves a round trip; callees fetch their own.
     caller_token: str
+    # iter-A4: push delivery stats so we know if callees were rung.
+    push_stats: dict
     server_time: str
 
 
@@ -298,8 +302,11 @@ async def twilio_initiate_call(payload: TwilioInitiateCallRequest):
             room = rest.video.v1.rooms.create(
                 unique_name=room_name,
                 type=_TWILIO_VIDEO_ROOM_TYPE,
-                # Don't auto-record — Phase A.4 will start recording explicitly.
-                record_participants_on_connect=False,
+                # iter-A4: caller can opt in to cloud recording. When
+                # enabled, Twilio records each participant's audio + video
+                # tracks. Compositions are fetched separately via
+                # /api/twilio/recordings.
+                record_participants_on_connect=payload.record,
                 # Pin media region to keep RTT low for our target user base.
                 media_region=_TWILIO_MEDIA_REGION,
             )
@@ -339,12 +346,55 @@ async def twilio_initiate_call(payload: TwilioInitiateCallRequest):
                 "callee_identities": payload.callee_identities,
                 "conversation_id": payload.conversation_id,
                 "is_video": payload.is_video,
+                "record": payload.record,
                 "created_at": datetime.now(timezone.utc),
                 "status": room.status,
             }
         )
     except Exception:
         logger.warning("twilio-initiate-call: persisting call record to MongoDB failed (non-fatal)")
+
+    # iter-A4: ring the callees via the existing push pipeline. The
+    # payload includes `twilio_room_name` so the mobile tap-handler
+    # routes to /twilio-call instead of the legacy /call screen.
+    push_stats: dict = {"token_count": 0, "success_count": 0, "error_count": 0, "errors": [], "pruned_count": 0}
+    display_name = payload.caller_display_name or payload.caller_identity
+    try:
+        push_data = {
+            "title": display_name,
+            "message": ("Incoming video call" if payload.is_video else "Incoming call"),
+            "type": "call",
+            "callId": room.sid,
+            # Mirrors the legacy /call/<id> deeplink shape so existing
+            # taps in the absence of twilio_room_name fall back gracefully.
+            "conversationId": payload.conversation_id or room_name,
+            # The twilio_* fields below are how the mobile client knows
+            # to use the new Twilio path instead of the legacy stack.
+            "twilio_room_name": room_name,
+            "twilio_room_sid": room.sid,
+            "twilio_is_video": "1" if payload.is_video else "0",
+            "twilio_caller_identity": payload.caller_identity,
+            "displayName": display_name,
+            # Deeplink fallback — if push tap routing happens via
+            # action_url (older client builds), this still lands them
+            # on the new Twilio screen.
+            "action_url": (
+                f"/twilio-call?room={room_name}&isCaller=0&isVideo="
+                f"{'1' if payload.is_video else '0'}&title={display_name}"
+            ),
+        }
+        push_stats = await send_push(
+            recipients=payload.callee_identities,
+            data=push_data,
+            idempotency_key=f"twilio-call:{room.sid}",
+        )
+        logger.info(
+            f"twilio-initiate-call pushed to {len(payload.callee_identities)} callees: "
+            f"tokens={push_stats.get('token_count')} ok={push_stats.get('success_count')} "
+            f"err={push_stats.get('error_count')}"
+        )
+    except Exception as exc:
+        logger.exception(f"twilio-initiate-call: push to callees failed (non-fatal): {exc}")
 
     return TwilioInitiateCallResponse(
         room_name=room_name,
@@ -354,8 +404,79 @@ async def twilio_initiate_call(payload: TwilioInitiateCallRequest):
         caller_identity=payload.caller_identity,
         callee_identities=payload.callee_identities,
         caller_token=caller_jwt,
+        push_stats=push_stats,
         server_time=datetime.now(timezone.utc).isoformat(),
     )
+
+
+# ============================================================
+# Twilio Recording (Phase A.4)
+# ============================================================
+
+@api_router.get("/twilio/recordings")
+async def twilio_list_recordings(room_sid: Optional[str] = None, limit: int = 50):
+    """
+    List Twilio recordings, optionally filtered by room SID. Used by the
+    mobile "My Recordings" screen to enumerate post-call recordings.
+    Recordings are produced automatically when a room was created with
+    record=True in /api/twilio/initiate-call.
+    """
+    rest = _get_twilio_rest()
+    if rest is None:
+        raise HTTPException(status_code=503, detail="Twilio not configured")
+    safe_limit = max(1, min(limit, 100))
+    try:
+        if room_sid:
+            recs = rest.video.v1.recordings.list(grouping_sid=[room_sid], limit=safe_limit)
+        else:
+            recs = rest.video.v1.recordings.list(limit=safe_limit)
+        items = [
+            {
+                "sid": r.sid,
+                "room_sid": getattr(r, "grouping_sids", {}).get("room_sid"),
+                "participant_sid": getattr(r, "grouping_sids", {}).get("participant_sid"),
+                "type": r.type,  # audio / video / data
+                "status": r.status,  # processing / completed / failed
+                "duration": r.duration,
+                "size": r.size,
+                "container_format": r.container_format,
+                "codec": r.codec,
+                "date_created": r.date_created.isoformat() if r.date_created else None,
+            }
+            for r in recs
+        ]
+        return {"items": items, "count": len(items)}
+    except TwilioRestException as exc:
+        raise HTTPException(status_code=502, detail=f"Twilio list failed: {exc.msg}")
+
+
+@api_router.post("/twilio/status-callback")
+async def twilio_status_callback(request: Request):
+    """
+    Webhook receiver for Twilio room/recording lifecycle events.
+    Twilio sends form-urlencoded POSTs here when configured via the
+    `status_callback` URL on the Room. Updates our twilio_calls record
+    so call history reflects actual outcomes.
+    """
+    try:
+        form = await request.form()
+        data = {k: form.get(k) for k in form.keys()}
+        event = data.get("StatusCallbackEvent") or data.get("RoomStatus") or "unknown"
+        room_sid = data.get("RoomSid") or data.get("Sid")
+        logger.info(f"twilio-status-callback event={event} room_sid={room_sid}")
+        if room_sid:
+            update: dict = {"last_event": event, "last_event_at": datetime.now(timezone.utc)}
+            if event in ("room-ended", "completed"):
+                update["status"] = "completed"
+                update["ended_at"] = datetime.now(timezone.utc)
+            try:
+                await db.twilio_calls.update_one({"room_sid": room_sid}, {"$set": update})
+            except Exception:
+                pass
+        return {"ok": True}
+    except Exception as exc:
+        logger.warning(f"twilio-status-callback parse failed: {exc}")
+        return {"ok": False}
 
 
 @api_router.get("/download/frontend-zip")

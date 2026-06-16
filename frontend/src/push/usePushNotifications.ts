@@ -876,6 +876,26 @@ export function usePushNotifications() {
             void cancelIncomingCallNotifeeWake(callId);
           } catch {}
         }
+        // Phase A.4: incoming Twilio call → route to the new
+        // /twilio-call screen with isCaller=0. Falls back to the
+        // legacy /call/<id> path only when no `twilio_room_name` is
+        // present (i.e., the caller is still on the old WebRTC stack).
+        const twilioRoom = toNonEmptyString((payload as any).twilio_room_name);
+        if (twilioRoom) {
+          const twilioIsVideo = String((payload as any).twilio_is_video ?? '1') === '1' ? '1' : '0';
+          const twilioCallerIdentity = toNonEmptyString((payload as any).twilio_caller_identity) || '';
+          router.push({
+            pathname: '/twilio-call',
+            params: {
+              room: twilioRoom,
+              identity: twilioCallerIdentity ? `${twilioCallerIdentity}_callee` : (conversationId || twilioRoom),
+              isVideo: twilioIsVideo,
+              isCaller: '0',
+              title: displayName || 'Incoming call',
+            },
+          } as any);
+          return;
+        }
         router.push(
           displayName
             ? (`/call/${conversationId}?displayName=${encodeURIComponent(displayName)}` as any)
