@@ -28,6 +28,7 @@ import { useQuery } from 'convex/react';
 
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+import { startCall } from '../src/lib/twilio/startCall';
 import { useAuth } from '../src/providers/AuthProvider';
 import { readCacheMeta, writeCache } from '../src/lib/offlineCache';
 import OfflineBanner from '../src/components/OfflineBanner';
@@ -167,10 +168,23 @@ export default function CallsScreen() {
   const callBack = useCallback(
     (entry: CallHistoryEntry) => {
       if (!entry.conversationId) return;
-      const type = entry.callType === 'video' ? 'video' : 'voice';
-      router.push(`/call/${entry.conversationId}?type=${type}` as any);
+      const isVideo = entry.callType === 'video';
+      // A.6b: redial via the unified call router so Twilio handles
+      // the call when EXPO_PUBLIC_USE_TWILIO=1. The call-history
+      // entry's userId is the other party — that's the callee for
+      // the redial.
+      const calleeId = String((entry as any).otherUserId || (entry as any).userId || '');
+      startCall({
+        router,
+        callerIdentity: String((me as any)?._id || ''),
+        callerDisplayName: String((me as any)?.name || (me as any)?.displayName || ''),
+        calleeIdentities: calleeId ? [calleeId] : [],
+        conversationId: String(entry.conversationId),
+        isVideo,
+        displayName: String((entry as any).displayName || (entry as any).name || 'Call'),
+      });
     },
-    [router],
+    [router, me],
   );
 
   if (!isAuthenticated) {

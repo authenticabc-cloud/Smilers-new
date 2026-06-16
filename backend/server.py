@@ -1214,7 +1214,14 @@ async def _recent_call_push_to_user(token_user_id: str) -> bool:
     caller's device (recipient keyed by Convex id) — different idempotency
     keys and different action_urls, so the generic dedupe can't catch the
     pair. Collapse them here: at most ONE call push per recipient (token
-    owner) per 25 seconds.
+    owner) per 8 seconds.
+
+    iter-A6b: window reduced from 25s → 8s. The original 25s window was
+    suppressing legitimate caller retries (e.g. callee rejected, caller
+    tapped again) — the user's phone would never ring on the second
+    attempt. 8s is enough to catch the dual-trigger duplicate (Convex +
+    caller device fire within ~1s of each other) while letting genuine
+    user-initiated retries through.
     """
     key = f"callpush:{token_user_id}"
     now = datetime.now(timezone.utc)
@@ -1224,7 +1231,7 @@ async def _recent_call_push_to_user(token_user_id: str) -> bool:
             ts = existing["ts"]
             if ts.tzinfo is None:
                 ts = ts.replace(tzinfo=timezone.utc)
-            if (now - ts).total_seconds() < 25:
+            if (now - ts).total_seconds() < 8:
                 return True
         await db.push_dedupe.update_one(
             {"k": key}, {"$set": {"k": key, "ts": now}}, upsert=True
