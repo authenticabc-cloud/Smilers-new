@@ -52,6 +52,9 @@ export type TwilioConnectionState =
   | 'disconnected'
   | 'failed';
 
+/** Screen-sharing state — separate from the call connection state. */
+export type ScreenShareState = 'off' | 'starting' | 'on' | 'stopping' | 'unsupported';
+
 export interface TwilioCallSessionOptions {
   /** Stable user ID (OIDC sub / Convex user _id). Mirrors the JWT identity. */
   identity: string;
@@ -68,6 +71,7 @@ export interface TwilioCallSessionOptions {
   onStateChange?: (state: TwilioConnectionState, detail?: string) => void;
   onParticipantConnected?: (participantSid: string, identity: string) => void;
   onParticipantDisconnected?: (participantSid: string, identity: string) => void;
+  onScreenShareChange?: (next: ScreenShareState) => void;
   onError?: (err: Error) => void;
 }
 
@@ -197,14 +201,33 @@ export class TwilioCallSession {
   }
 
   /**
-   * Phase A.5 hook — start/stop screen sharing. iOS requires a
-   * ReplayKit broadcast extension (config-plugin work). For now this
-   * is a thin pass-through that only works where the SDK supports it.
+   * Phase A.5 — start/stop screen sharing.
+   *   - Android: the Twilio SDK uses MediaProjection internally. Permissions
+   *     and FOREGROUND_SERVICE_MEDIA_PROJECTION are declared in app.json.
+   *     OS shows the standard "Start now" / "Cancel" system prompt.
+   *   - iOS: full-device sharing requires a ReplayKit Broadcast Upload
+   *     Extension (separate Xcode target). The existing
+   *     `plugins/withIosBroadcastExtension.js` config plugin is a stub
+   *     — full implementation needs a native engineer. Until then, this
+   *     method emits an 'unsupported' state event so the UI can show
+   *     a friendly message.
    */
   setScreenShareEnabled(enabled: boolean): void {
     try {
+      // The host React component reads Platform.OS and emits
+      // 'unsupported' on iOS; here we just forward the toggle.
       this.ref?.toggleScreenSharing?.(enabled);
-      this.log('screen-share', `enabled=${enabled}`);
+      this.log('screen-share-toggle', `requested=${enabled}`);
+    } catch (err: any) {
+      this.log('screen-share-error', err?.message || String(err));
+    }
+  }
+
+  /** Wired by the host: SDK fired onScreenShareChanged. */
+  markScreenShareState(next: ScreenShareState): void {
+    this.log('screen-share-state', next);
+    try {
+      this.opts.onScreenShareChange?.(next);
     } catch {}
   }
 

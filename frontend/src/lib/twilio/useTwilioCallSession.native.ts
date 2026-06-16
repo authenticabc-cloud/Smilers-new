@@ -38,6 +38,7 @@ export interface TwilioCallHostState {
   state: TwilioConnectionState;
   participants: TwilioParticipant[];
   videoElement: React.ReactElement | null;
+  screenShareState: ScreenShareState;
   /** Render the local self-view. null on web. */
   renderLocalView: (style?: any, enabled?: boolean) => React.ReactElement | null;
   /** Render a remote participant's video. null if SDK unavailable. */
@@ -45,6 +46,8 @@ export interface TwilioCallHostState {
     participant: TwilioParticipant,
     style?: any,
   ) => React.ReactElement | null;
+  /** Render the local screen-share preview when active. */
+  renderScreenShareView: (enabled: boolean, style?: any) => React.ReactElement | null;
   isSupported: boolean;
   error: string | null;
 }
@@ -68,6 +71,7 @@ export function useTwilioCallSession(args: UseTwilioCallSessionArgs): TwilioCall
   const [state, setState] = useState<TwilioConnectionState>('idle');
   const [participants, setParticipants] = useState<TwilioParticipant[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [screenShareState, setScreenShareState] = useState<ScreenShareState>('off');
 
   // Build the session ONCE per call (changing identity/room mid-call
   // makes no sense — caller should unmount + remount the screen).
@@ -92,6 +96,7 @@ export function useTwilioCallSession(args: UseTwilioCallSessionArgs): TwilioCall
         setParticipants((prev) => prev.filter((p) => p.sid !== sid));
       },
       onError: (err) => setError(err.message),
+      onScreenShareChange: (next) => setScreenShareState(next),
     });
     sessionRef.current = s;
     return s;
@@ -189,6 +194,17 @@ export function useTwilioCallSession(args: UseTwilioCallSessionArgs): TwilioCall
     );
   }, []);
 
+  // Phase A.5 — local screen-share lifecycle. Twilio fires
+  // onScreenShareChanged with screenShareEnabled true/false. We map
+  // those to the session state machine.
+  const handleScreenShareChanged = useCallback(
+    (evt: { screenShareEnabled?: boolean }) => {
+      const next: ScreenShareState = evt?.screenShareEnabled ? 'on' : 'off';
+      session.markScreenShareState(next);
+    },
+    [session],
+  );
+
   // Build the host element ONCE — it's stable across renders so React
   // doesn't unmount and remount the Twilio component (which would drop
   // the call).
@@ -208,6 +224,7 @@ export function useTwilioCallSession(args: UseTwilioCallSessionArgs): TwilioCall
         onRoomParticipantDidDisconnect: handleParticipantDisconnected,
         onParticipantAddedVideoTrack: handleParticipantAddedVideoTrack,
         onParticipantRemovedVideoTrack: handleParticipantRemovedVideoTrack,
+        onScreenShareChanged: handleScreenShareChanged,
       }),
     // session is referentially stable per call lifecycle
     // eslint-disable-next-line react-hooks/exhaustive-deps
