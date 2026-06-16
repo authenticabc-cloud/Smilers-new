@@ -255,6 +255,41 @@ export async function shareMessage(args: {
 }
 
 /**
+ * Materialize an already-decrypted media URI (passed in by the renderer —
+ * e.g. the chat ImageViewer's E2EE-decrypted `src`) into a local file://
+ * path that MediaLibrary can save. This is the fix for "saved file won't
+ * open": E2EE chats serve AES-GCM CIPHERTEXT at the storage URL, so
+ * re-downloading that URL and saving it produces an unreadable file. The
+ * renderer already holds the decrypted bytes — save THOSE instead.
+ *
+ *   - `file://` URIs (decrypted audio/video cache files, or local picks) → as-is.
+ *   - `data:` URIs (E2EE images render as base64 data URIs) → decode to a cache file.
+ *   - `https://` / `content://` → return null so the caller downloads normally
+ *     (plaintext / non-encrypted media).
+ */
+async function materializeDecryptedUri(localUri: string, info: MediaInfo): Promise<string | null> {
+  if (!localUri) return null;
+  if (localUri.startsWith('file://')) return localUri;
+  if (localUri.startsWith('data:')) {
+    const commaIdx = localUri.indexOf(',');
+    if (commaIdx < 0) return null;
+    const base64 = localUri.slice(commaIdx + 1);
+    const fs: any = LegacyFileSystem || FileSystem;
+    const cacheDir =
+      fs?.cacheDirectory || fs?.documentDirectory || (FileSystem as any).cacheDirectory;
+    if (!cacheDir) return null;
+    const fileName = safeFileName(info, '.jpg');
+    const target = `${cacheDir}${fileName}`;
+    try {
+      await fs.deleteAsync(target, { idempotent: true });
+    } catch {}
+    await fs.writeAsStringAsync(target, base64, { encoding: 'base64' });
+    return target;
+  }
+  return null; // remote URL — let downloadToCache handle it
+}
+
+/**
  * Save a message's media (photo, video, etc.) to the device's gallery.
  * Requests permission first, returns `true` if saved, `false` if the
  * user denied permission OR the message has no media.
@@ -262,8 +297,14 @@ export async function shareMessage(args: {
 export async function saveMessageMediaToGallery(args: {
   client: ConvexReactClient;
   message: any;
+  /**
+   * Already-decrypted local URI from the renderer (E2EE `data:`/`file://`).
+   * When present it is saved DIRECTLY so E2EE media doesn't get saved as
+   * unreadable ciphertext. Falls back to downloading when absent/remote.
+   */
+  localUri?: string | null;
 }): Promise<boolean> {
-  const { client, message } = args;
+  const { client, message, localUri } = args;
   if (!message) return false;
 
   let info: MediaInfo | null = null;
@@ -273,7 +314,18 @@ export async function saveMessageMediaToGallery(args: {
     Alert.alert('Download failed', errorValue?.message || 'Could not fetch media URL');
     return false;
   }
-  if (!info || !info.url) {
+  // Synthesize a minimal info from the message when the backend gives us
+  // no URL but the renderer already handed us decrypted bytes.
+  if ((!info || !info.url) && localUri) {
+    info = {
+      url: info?.url || null,
+      type: message.kind || message.type || 'image',
+      fileName: message.fileName,
+      mimeType: message.mimeType,
+      fileSize: message.fileSize,
+    };
+  }
+  if (!info || (!info.url && !localUri)) {
     Alert.alert('Nothing to save', 'This message has no media to save.');
     return false;
   }
@@ -296,11 +348,26 @@ export async function saveMessageMediaToGallery(args: {
   if (status !== 'granted') return false;
 
   let cacheUri: string | null = null;
-  try {
-    cacheUri = await downloadToCache(info);
-  } catch (errorValue: any) {
-    Alert.alert('Download failed', errorValue?.message || 'Unknown error');
-    return false;
+  // Prefer the already-decrypted URI when the renderer provided it — this
+  // is the fix for E2EE "Couldn't open file" (storage URL = ciphertext).
+  if (localUri) {
+    try {
+      cacheUri = await materializeDecryptedUri(localUri, info);
+    } catch {
+      cacheUri = null;
+    }
+  }
+  if (!cacheUri) {
+    if (!info.url) {
+      Alert.alert('Download failed', 'Could not prepare the file.');
+      return false;
+    }
+    try {
+      cacheUri = await downloadToCache(info);
+    } catch (errorValue: any) {
+      Alert.alert('Download failed', errorValue?.message || 'Unknown error');
+      return false;
+    }
   }
   if (!cacheUri) {
     Alert.alert('Download failed', 'Could not prepare the file.');

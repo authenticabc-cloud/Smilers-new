@@ -12,6 +12,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   StyleSheet,
   Text,
@@ -21,7 +22,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useQuery } from 'convex/react';
+import { useQuery, useConvex } from 'convex/react';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
+import * as MediaLibrary from 'expo-media-library';
+import * as Sharing from 'expo-sharing';
 import { api } from '../src/convexApi';
 import { useAuth } from '../src/providers/AuthProvider';
 import Header from '../src/components/Header';
@@ -70,6 +74,111 @@ export default function MyRecordingsScreen() {
     callType: string;
     outcome: string;
   }>(null);
+
+  const convex = useConvex();
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const handleDownload = async (item: any) => {
+    const url = String(item?.url || '');
+    if (!url) {
+      Alert.alert('Not ready', 'This recording is still processing.');
+      return;
+    }
+    const isVideo = item?.callType === 'video';
+    setBusyId(`dl-${item._id || item.callId}`);
+    try {
+      const fs: any = LegacyFileSystem;
+      const cacheDir = fs?.cacheDirectory || fs?.documentDirectory;
+      const ext = isVideo ? 'mp4' : 'm4a';
+      const target = `${cacheDir}smilers_recording_${Date.now()}.${ext}`;
+      const res = await fs.downloadAsync(url, target);
+      const uri = res?.uri || target;
+      if (res?.status && res.status >= 400) {
+        throw new Error(`Download failed (HTTP ${res.status}).`);
+      }
+      // Video → save straight to the gallery. Audio isn't a gallery type,
+      // so route it through the share sheet (Save to Files / share).
+      if (isVideo) {
+        const perm = await MediaLibrary.getPermissionsAsync();
+        let status = perm.status;
+        if (status !== 'granted' && perm.canAskAgain !== false) {
+          status = (await MediaLibrary.requestPermissionsAsync()).status;
+        }
+        if (status === 'granted') {
+          await (MediaLibrary as any).saveToLibraryAsync(uri);
+          Alert.alert('Saved', 'Recording saved to your gallery.');
+          return;
+        }
+      }
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, {
+          mimeType: isVideo ? 'video/mp4' : 'audio/m4a',
+          dialogTitle: 'Save or share recording',
+        });
+      } else {
+        Alert.alert('Downloaded', 'Recording saved to the app cache.');
+      }
+    } catch (errorValue: any) {
+      Alert.alert('Download failed', errorValue?.message || 'Could not download this recording.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // Backend delete mutation name is not confirmed in this repo, so try the
+  // most likely canonical names + arg shapes. Reactive listMyRecordings
+  // removes the row automatically on success.
+  const deleteOnBackend = async (item: any): Promise<void> => {
+    const id = item?._id || item?.callId;
+    const fnNames = ['deleteRecording', 'removeRecording', 'remove', 'delete'];
+    const argVariants = [{ recordingId: id }, { id }, { callId: item?.callId || id }];
+    let lastErr: any = null;
+    for (const fn of fnNames) {
+      for (const argv of argVariants) {
+        try {
+          await convex.mutation((api as any).callRecording[fn], argv as any);
+          return;
+        } catch (e: any) {
+          lastErr = e;
+          const msg = String(e?.message || e);
+          // Unknown function → stop trying this name, move to the next.
+          if (/Could ?not ?find|FunctionNotFound|does not exist|No function/i.test(msg)) break;
+          // Bad args → try the next arg shape for the same function.
+          if (/Argument|Validator|validation|Expected/i.test(msg)) continue;
+          // Any other error (e.g. auth) → surface immediately.
+          throw e;
+        }
+      }
+    }
+    throw lastErr || new Error('No delete function available on the backend.');
+  };
+
+  const handleDelete = (item: any) => {
+    Alert.alert(
+      'Delete recording?',
+      'This permanently removes the recording. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setBusyId(`del-${item._id || item.callId}`);
+            try {
+              await deleteOnBackend(item);
+            } catch (errorValue: any) {
+              Alert.alert(
+                'Couldn’t delete',
+                'Deleting recordings isn’t available yet on the server. We’ve logged it for the backend team.',
+              );
+            } finally {
+              setBusyId(null);
+            }
+          },
+        },
+      ],
+    );
+  };
 
   const rows = useMemo(() => {
     if (!Array.isArray(data)) return [];
@@ -158,11 +267,43 @@ export default function MyRecordingsScreen() {
                     <Text style={styles.rowSubtitle} numberOfLines={1}>{subtitle}</Text>
                   ) : null}
                 </View>
-                <MaterialCommunityIcons
-                  name={playable ? 'play-circle' : 'progress-clock'}
-                  size={28}
-                  color={playable ? Colors.primary : Colors.textSecondary}
-                />
+                <View style={styles.rowActions}>
+                  <TouchableOpacity
+                    onPress={() => handleDownload(item)}
+                    disabled={!playable || busyId === `dl-${item._id || item.callId}`}
+                    style={styles.actionBtn}
+                    hitSlop={8}
+                    testID={`recording-download-${item._id || item.callId}`}
+                  >
+                    {busyId === `dl-${item._id || item.callId}` ? (
+                      <ActivityIndicator size="small" color={Colors.primary} />
+                    ) : (
+                      <MaterialCommunityIcons
+                        name="download"
+                        size={22}
+                        color={playable ? Colors.primary : Colors.textSecondary}
+                      />
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => handleDelete(item)}
+                    disabled={busyId === `del-${item._id || item.callId}`}
+                    style={styles.actionBtn}
+                    hitSlop={8}
+                    testID={`recording-delete-${item._id || item.callId}`}
+                  >
+                    {busyId === `del-${item._id || item.callId}` ? (
+                      <ActivityIndicator size="small" color={Colors.danger} />
+                    ) : (
+                      <MaterialCommunityIcons name="trash-can-outline" size={22} color={Colors.danger} />
+                    )}
+                  </TouchableOpacity>
+                  <MaterialCommunityIcons
+                    name={playable ? 'play-circle' : 'progress-clock'}
+                    size={28}
+                    color={playable ? Colors.primary : Colors.textSecondary}
+                  />
+                </View>
               </TouchableOpacity>
             );
           }}
@@ -236,4 +377,15 @@ const styles = StyleSheet.create({
   },
   rowTitle: { fontSize: 15, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   rowSubtitle: { fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
+  rowActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  actionBtn: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });

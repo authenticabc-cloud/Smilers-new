@@ -150,6 +150,10 @@ export default function ChatScreen() {
   const [emojiPickerMode, setEmojiPickerMode] = useState<'compose' | 'react'>('compose');
   const [reactionTargetMsg, setReactionTargetMsg] = useState<any | null>(null);
   const [showAttachSheet, setShowAttachSheet] = useState(false);
+  // iter-212: staged photo awaiting an explicit Send tap (fixes "no send
+  // button after attaching a photo"). Gallery picks land here so the user
+  // can add a caption and send, instead of the photo firing immediately.
+  const [pendingImage, setPendingImage] = useState<{ uri: string; mimeType: string } | null>(null);
   const [showShareContacts, setShowShareContacts] = useState(false);
   const [showScheduleSheet, setShowScheduleSheet] = useState(false);
   const [showCameraModal, setShowCameraModal] = useState(false);
@@ -920,6 +924,19 @@ export default function ChatScreen() {
   }, []);
 
   const handleSend = async () => {
+    // iter-212: a staged photo takes priority — send it (using the current
+    // composer text as the caption) when the user taps Send. This is the
+    // fix for "no send button after attaching a photo": the attach now
+    // stages the image and the Send button drives the upload.
+    if (pendingImage) {
+      if (sending || uploading) return;
+      const staged = pendingImage;
+      setPendingImage(null);
+      const ok = await sendImageFromUri(staged.uri, staged.mimeType);
+      if (!ok) setPendingImage(staged); // restore so the user can retry
+      return;
+    }
+
     const value = text.trim();
     if (!value || !conversationId || !isConversationAvailable || sending) return;
 
@@ -1310,8 +1327,8 @@ export default function ChatScreen() {
   );
 
   const sendImageFromUri = useCallback(
-    async (uri: string, mimeType?: string) => {
-      if (!conversationId || !isConversationAvailable) return;
+    async (uri: string, mimeType?: string): Promise<boolean> => {
+      if (!conversationId || !isConversationAvailable) return false;
 
       setUploading(true);
       const caption = text.trim();
@@ -1333,8 +1350,10 @@ export default function ChatScreen() {
         setReplyTo(null);
         resetComposerFormatting();
         await refetchMessages();
+        return true;
       } catch (errorValue: any) {
         Alert.alert('Upload failed', errorValue?.message || 'Unable to send image right now.');
+        return false;
       } finally {
         setUploading(false);
       }
@@ -1356,8 +1375,10 @@ export default function ChatScreen() {
 
     if (result.canceled || !result.assets?.[0]?.uri) return;
     const asset = result.assets[0];
-    await sendImageFromUri(asset.uri, asset.mimeType || 'image/jpeg');
-  }, [sendImageFromUri]);
+    // iter-212: stage the photo for an explicit Send (with optional
+    // caption) instead of firing it off immediately.
+    setPendingImage({ uri: asset.uri, mimeType: asset.mimeType || 'image/jpeg' });
+  }, []);
 
   const takePhoto = useCallback(() => {
     // Open the in-app camera modal (mirrors web app's <CameraCapture>).
@@ -2877,6 +2898,23 @@ export default function ChatScreen() {
             </View>
           ) : null}
 
+          {pendingImage && !uploading ? (
+            <View style={styles.pendingImageBar} testID="pending-image-preview">
+              <Image source={{ uri: pendingImage.uri }} style={styles.pendingImageThumb} />
+              <Text style={styles.pendingImageHint} numberOfLines={1}>
+                Add a caption (optional), then tap send
+              </Text>
+              <TouchableOpacity
+                onPress={() => setPendingImage(null)}
+                hitSlop={10}
+                style={styles.pendingImageRemove}
+                testID="pending-image-remove"
+              >
+                <Feather name="x" size={18} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
           {showComposerFormatting ? (
             <View style={styles.composerToolsWrap} testID="composer-tools-wrap">
               {showColorPicker ? (
@@ -2978,17 +3016,19 @@ export default function ChatScreen() {
                 onBlur={() => setComposerFocused(false)}
                 testID="message-input"
               />
-              {text.trim().length > 0 ? (
+              {text.trim().length > 0 || pendingImage ? (
                 <>
-                  <TouchableOpacity
-                    style={styles.scheduleBtn}
-                    onPress={() => setShowScheduleSheet(true)}
-                    disabled={!isConversationAvailable || uploading || sending}
-                    testID="schedule-message-btn"
-                    accessibilityLabel="Schedule message"
-                  >
-                    <Feather name="clock" size={18} color={Colors.textSecondary} />
-                  </TouchableOpacity>
+                  {text.trim().length > 0 && !pendingImage ? (
+                    <TouchableOpacity
+                      style={styles.scheduleBtn}
+                      onPress={() => setShowScheduleSheet(true)}
+                      disabled={!isConversationAvailable || uploading || sending}
+                      testID="schedule-message-btn"
+                      accessibilityLabel="Schedule message"
+                    >
+                      <Feather name="clock" size={18} color={Colors.textSecondary} />
+                    </TouchableOpacity>
+                  ) : null}
                   <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={!isConversationAvailable || uploading} testID="send-btn">
                     <Feather name="send" size={20} color={Colors.white} />
                   </TouchableOpacity>
@@ -3544,6 +3584,36 @@ const styles = StyleSheet.create({
     borderTopColor: Colors.border,
   },
   uploadText: { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium },
+  pendingImageBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginHorizontal: Spacing.sm,
+    marginBottom: 6,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 12,
+  },
+  pendingImageThumb: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    backgroundColor: Colors.border,
+  },
+  pendingImageHint: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+  },
+  pendingImageRemove: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   composerToolsWrap: {
     backgroundColor: '#F1E7D6',
     borderTopWidth: 1,

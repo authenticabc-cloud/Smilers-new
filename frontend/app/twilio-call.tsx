@@ -39,7 +39,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { fetchTwilioToken } from '../src/lib/twilio/twilioApi';
+import { fetchTwilioToken, endTwilioCall } from '../src/lib/twilio/twilioApi';
 import { useTwilioCallSession } from '../src/lib/twilio/useTwilioCallSession';
 import { recordDiagnostic } from '../src/lib/diagnostics';
 import { Colors } from '../src/theme';
@@ -148,6 +148,11 @@ export default function TwilioCallScreen() {
     try {
       host.session?.leave();
     } finally {
+      // Force-complete the Twilio room so the call ends for EVERYONE.
+      // Twilio does not auto-disconnect the remaining participant when
+      // one side leaves, so without this the other phone keeps ringing /
+      // stays connected. Fire-and-forget + idempotent on the backend.
+      endTwilioCall(roomName).catch(() => {});
       recordDiagnostic({
         tag: 'TWILIO-CALL',
         source: 'screen',

@@ -453,3 +453,47 @@ ZIP regenerated 22:45 WITH EXPO_PUBLIC_BACKEND_URL=https://app-migration-75.emer
 TESTS: 41/41 pytest; tsc/eslint clean on touched files.
 ARCHITECTURE NOTE: production topology = APK (deployed URL) + Convex→deployed + deployed FastAPI w/ FCM. Preview pod = dev only.
 NEXT: user EAS CLI build from zip → install both phones → test killed-app ring/messages, screen share (server fixed), languages save, scheduled names, referral in invite. If FCM success but still nothing visible: check Samsung Settings→Apps→Smilers→Notifications categories.
+
+
+---
+
+## iter-212 — Pre-Play-Store P0 bug fixes (4 surgical, no scope creep)
+
+Fixed in this fork per user's explicit priority list:
+
+1. **Chat photo "no send button"** (P0) — gallery picks no longer auto-send.
+   They now stage into a preview bar above the composer (thumbnail + remove X +
+   "Add a caption, then tap send"); the **Send** button appears even with empty
+   text and drives the upload (caption = composer text). On failure the staged
+   image is restored for retry. Camera capture keeps its own in-modal preview/send.
+   Files: `app/chat/[conversationId].tsx` (`pendingImage` state, `pickPhoto`,
+   `handleSend`, `sendImageFromUri` now returns boolean, composer preview UI).
+
+2. **Twilio call doesn't end on the other side** — added backend
+   `POST /api/twilio/end-call` → completes the room
+   (`rest.video.v1.rooms(sid).update(status="completed")`), resolving unique_name
+   → sid, idempotent on already-completed/404. Wired into `handleHangup`
+   (twilio-call.tsx) AND the push **decline** branch (usePushNotifications.ts) so
+   both "caller hangs up" and "callee declines" force-end the room.
+   Curl-verified: 400 w/o room, 200 idempotent for nonexistent room.
+
+3. **Image download "Couldn't open file"** — root cause: E2EE chats serve
+   AES-GCM CIPHERTEXT at the storage URL; the download helper re-fetched that and
+   saved unreadable bytes. Fix: `saveMessageMediaToGallery` now accepts a
+   `localUri` (the renderer's already-decrypted `data:`/`file://` src) and saves
+   THAT (data: → decoded to cache file). ImageViewer passes its decrypted `uri`.
+   Files: `src/lib/messageMedia.ts`, `src/components/MediaBubble.tsx`.
+
+4. **My Recordings missing download/delete** — added Download (video → gallery
+   via MediaLibrary; audio → share sheet) + Delete (confirm dialog) icons per row.
+   Delete probes likely Convex mutation names (see
+   `WEB_AGENT_REQUESTS_iter212_recordings_delete.md`) with graceful fallback.
+   File: `app/my-recordings.tsx`.
+
+**Verification status:** #2 backend curl-verified. #1/#3/#4 compile clean
+(babel-transform OK) but need a **native build + authenticated device** for full
+2-phone / E2EE / gallery verification (OIDC Google login blocks automated e2e).
+Deferred (per user): ringtone-as-message-tone + missing `[FCM]` diagnostic events
+on receiver (needs separate investigation); screen-share remote tile + screen
+wake (freelance native engineer).
+

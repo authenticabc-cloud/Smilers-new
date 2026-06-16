@@ -457,6 +457,99 @@ async def twilio_list_recordings(room_sid: Optional[str] = None, limit: int = 50
         raise HTTPException(status_code=502, detail=f"Twilio list failed: {exc.msg}")
 
 
+class TwilioEndCallRequest(BaseModel):
+    """Force-complete a Twilio Video room so the call ends for everyone."""
+    room_name: Optional[str] = Field(None, max_length=128)
+    room_sid: Optional[str] = Field(None, max_length=64)
+
+
+class TwilioEndCallResponse(BaseModel):
+    room_sid: Optional[str]
+    room_name: Optional[str]
+    status: str
+    already_completed: bool
+    server_time: str
+
+
+@api_router.post("/twilio/end-call", response_model=TwilioEndCallResponse)
+async def twilio_end_call(payload: TwilioEndCallRequest):
+    """
+    Force-complete a Twilio Video room so the call ends for ALL
+    participants. Twilio does NOT auto-disconnect remaining participants
+    when one leaves — so without this, the other side keeps ringing or
+    stays connected after the first party hangs up / declines.
+
+    Idempotent: completing an already-completed (or non-existent) room is
+    treated as success so the client never sees a spurious error on
+    hangup races (both sides may call this near-simultaneously).
+    """
+    rest = _get_twilio_rest()
+    if rest is None:
+        raise HTTPException(status_code=503, detail="Twilio not configured")
+    if not (payload.room_sid or payload.room_name):
+        raise HTTPException(status_code=400, detail="room_sid or room_name required")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    target_sid = payload.room_sid
+
+    # Resolve unique_name → SID for the in-progress room when no SID given.
+    if not target_sid and payload.room_name:
+        try:
+            existing = rest.video.v1.rooms.list(
+                unique_name=payload.room_name, status="in-progress", limit=1
+            )
+            if existing:
+                target_sid = existing[0].sid
+        except TwilioRestException as exc:
+            logger.warning(f"twilio-end-call lookup failed: {exc.msg}")
+
+    if not target_sid:
+        # No in-progress room to complete — already ended or never started.
+        return TwilioEndCallResponse(
+            room_sid=None,
+            room_name=payload.room_name,
+            status="completed",
+            already_completed=True,
+            server_time=now_iso,
+        )
+
+    try:
+        room = rest.video.v1.rooms(target_sid).update(status="completed")
+        new_status = room.status
+    except TwilioRestException as exc:
+        msg = (exc.msg or "").lower()
+        # Already completed / not found → idempotent success.
+        if "completed" in msg or getattr(exc, "status", None) == 404 or getattr(exc, "code", None) == 20404:
+            return TwilioEndCallResponse(
+                room_sid=target_sid,
+                room_name=payload.room_name,
+                status="completed",
+                already_completed=True,
+                server_time=now_iso,
+            )
+        logger.exception("twilio-end-call failed")
+        raise HTTPException(status_code=502, detail=f"Twilio end-call failed: {exc.msg}")
+
+    # Best-effort: mark our own call record completed.
+    try:
+        await db.twilio_calls.update_one(
+            {"room_sid": target_sid},
+            {"$set": {"status": "completed", "ended_at": datetime.now(timezone.utc)}},
+        )
+    except Exception:
+        pass
+
+    logger.info(f"twilio-end-call completed room_sid={target_sid} status={new_status}")
+    return TwilioEndCallResponse(
+        room_sid=target_sid,
+        room_name=payload.room_name,
+        status=new_status,
+        already_completed=False,
+        server_time=now_iso,
+    )
+
+
+
 @api_router.post("/twilio/status-callback")
 async def twilio_status_callback(request: Request):
     """

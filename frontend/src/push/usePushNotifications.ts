@@ -848,17 +848,31 @@ export function usePushNotifications() {
         return;
       }
 
-      if (type === 'call' && action === 'decline' && callId) {
-        try {
-          await declineCall({ callId });
-        } catch (e) {
-          console.warn('[push] Decline failed', e);
+      if (type === 'call' && action === 'decline') {
+        // Twilio incoming-call decline → complete the room so the CALLER
+        // stops ringing/waiting. Works even when the legacy Convex callId
+        // is absent on the Twilio push payload.
+        const declineTwilioRoom = toNonEmptyString((payload as any).twilio_room_name);
+        if (declineTwilioRoom) {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const { endTwilioCall } = require('../lib/twilio/twilioApi');
+            void endTwilioCall(declineTwilioRoom);
+          } catch {}
+        }
+        // Legacy Convex call decline.
+        if (callId) {
+          try {
+            await declineCall({ callId });
+          } catch (e) {
+            console.warn('[push] Decline failed', e);
+          }
         }
         // iter-211: ALSO cancel the Notifee wake-screen ring (no-op if absent).
         try {
           // eslint-disable-next-line @typescript-eslint/no-var-requires
           const { cancelIncomingCallNotifeeWake } = require('./notifeeCallWake');
-          void cancelIncomingCallNotifeeWake(callId);
+          void cancelIncomingCallNotifeeWake(callId || declineTwilioRoom || '');
         } catch {}
         await Notifications.dismissNotificationAsync(id);
         return;

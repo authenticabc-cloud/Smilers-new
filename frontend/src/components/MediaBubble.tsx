@@ -605,12 +605,12 @@ function ImageViewer({
     if (busyAction) return;
     setBusyAction('download');
     try {
-      const ok = await saveMessageMediaToGallery({ client: convex as any, message: msg });
+      const ok = await saveMessageMediaToGallery({ client: convex as any, message: msg, localUri: uri });
       if (ok) Alert.alert('Saved', 'Photo saved to your gallery.');
     } finally {
       setBusyAction(null);
     }
-  }, [busyAction, convex, msg]);
+  }, [busyAction, convex, msg, uri]);
 
   const handleShare = useCallback(async () => {
     if (busyAction) return;

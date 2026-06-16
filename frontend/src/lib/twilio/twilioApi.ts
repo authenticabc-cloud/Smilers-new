@@ -141,6 +141,36 @@ export async function initiateTwilioCall(args: {
 }
 
 /**
+ * POST /api/twilio/end-call — force-complete a Twilio room so the call
+ * ends for EVERYONE. Twilio does not auto-disconnect the remaining
+ * participant when one side leaves, so the other phone would keep
+ * ringing / stay connected without this. Fire-and-forget + idempotent
+ * (both sides may call it on a hangup race) — never throws.
+ */
+export async function endTwilioCall(roomName: string, roomSid?: string | null): Promise<void> {
+  if (!BACKEND_URL || !roomName) return;
+  const t0 = Date.now();
+  try {
+    const resp = await fetch(`${BACKEND_URL}/api/twilio/end-call`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ room_name: roomName, room_sid: roomSid ?? null }),
+    });
+    recordDiagnostic({
+      tag: 'TWILIO-CALL',
+      source: 'endTwilioCall',
+      message: `room=${roomName} http=${resp.status} ${Date.now() - t0}ms`,
+    });
+  } catch (errorValue: any) {
+    recordDiagnostic({
+      tag: 'TWILIO-CALL',
+      source: 'endTwilioCall',
+      message: `error room=${roomName} ${errorValue?.message || errorValue}`,
+    });
+  }
+}
+
+/**
  * Feature flag. Reads `EXPO_PUBLIC_USE_TWILIO` at build time. The legacy
  * `react-native-webrtc` stack continues to handle calls when this
  * returns false — Twilio is opt-in until Phase A.3 fully validates.
