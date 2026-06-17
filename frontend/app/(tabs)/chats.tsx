@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Modal, Pressable } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Modal, Pressable, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Swipeable, RectButton } from 'react-native-gesture-handler';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useQuery } from 'convex/react';
+import { useQuery, useConvex } from 'convex/react';
 import Header from '../../src/components/Header';
 import Avatar from '../../src/components/Avatar';
 import FabStack from '../../src/components/FabStack';
@@ -44,6 +45,12 @@ export default function ChatsScreen() {
   const me = useQuery(api.users.getCurrentUser, {});
   const contacts = useQuery(api.contacts.getContacts, {});
   const conversations = useQuery(api.conversations.listConversations);
+  // iter-213: archived chats sync against the shared Convex backend
+  // (api.archives.*). The main list does NOT exclude archived rows and
+  // carries no isArchived flag, so we fetch the archived id set and
+  // filter client-side — exactly how the web app does it.
+  const convex = useConvex();
+  const archivedIds = useQuery((api as any).archives.getArchivedIds, {}) as string[] | undefined;
 
   // iter 160 (offline persistence): hydrate the conversation list from
   // AsyncStorage on cold launch so users see their last-known chats
@@ -143,6 +150,29 @@ export default function ChatsScreen() {
   const liveList: any[] | null = Array.isArray(conversations) ? conversations : null;
   const list: any[] = liveList ?? cachedList ?? [];
   const showOfflineBanner = !liveList && Array.isArray(cachedList) && cachedList.length > 0;
+
+  // iter-213: archived chats — filter them out of the main list and keep
+  // a count for the "Archived" pinned row (shown only when count > 0).
+  const archivedSet = useMemo(
+    () => new Set((archivedIds || []).map((id: any) => String(id))),
+    [archivedIds],
+  );
+  const visibleList = useMemo(
+    () => list.filter((c: any) => !archivedSet.has(String(c?._id))),
+    [list, archivedSet],
+  );
+  const archivedCount = archivedIds?.length ?? 0;
+
+  const handleArchive = useCallback(
+    async (conversationId: string) => {
+      try {
+        await convex.mutation((api as any).archives.archiveConversation, { conversationId });
+      } catch (e: any) {
+        Alert.alert('Could not archive', e?.message || 'Please try again.');
+      }
+    },
+    [convex],
+  );
 
   const handleMenuPress = (route: string) => {
     setShowMenu(false);
@@ -244,7 +274,7 @@ export default function ChatsScreen() {
       </Modal>
 
       <FlatList
-        data={list}
+        data={visibleList}
         keyExtractor={(item: any) => item._id}
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
@@ -301,15 +331,38 @@ export default function ChatsScreen() {
               onPress={() => router.push('/chat-once' as any)}
               testID="chat-once"
             />
+            {/* iter-213: "Archived" row — shown only when there's at least
+                one archived chat (matches the web app). Sits directly
+                below Chat Once. */}
+            {archivedCount > 0 ? (
+              <TouchableOpacity
+                onPress={() => router.push('/archived' as any)}
+                style={styles.row}
+                activeOpacity={0.7}
+                testID="chat-archived"
+              >
+                <View style={[styles.pinnedIcon, styles.archivedIcon]}>
+                  <Feather name="archive" size={22} color={Colors.textSecondary} />
+                </View>
+                <View style={styles.rowMiddle}>
+                  <Text style={styles.rowTitle}>Archived</Text>
+                  <Text style={styles.rowSubtitle} numberOfLines={1}>
+                    {archivedCount} {archivedCount === 1 ? 'chat' : 'chats'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ) : null}
           </>
         }
         renderItem={({ item }) => (
-          <ConversationRow
-            item={item}
-            currentUserId={me?._id}
-            contacts={contacts}
-            onPress={() => router.push(`/chat/${item._id}` as any)}
-          />
+          <SwipeToArchive onArchive={() => handleArchive(item._id)}>
+            <ConversationRow
+              item={item}
+              currentUserId={me?._id}
+              contacts={contacts}
+              onPress={() => router.push(`/chat/${item._id}` as any)}
+            />
+          </SwipeToArchive>
         )}
         ListEmptyComponent={
           !loading ? (
@@ -432,9 +485,51 @@ function ConversationRow({ item, currentUserId, contacts, onPress }: { item: any
   );
 }
 
+function SwipeToArchive({ onArchive, children }: { onArchive: () => void; children: React.ReactNode }) {
+  const ref = React.useRef<Swipeable>(null);
+  const renderRightActions = () => (
+    <RectButton
+      style={styles.swipeArchiveAction}
+      onPress={() => {
+        ref.current?.close();
+        onArchive();
+      }}
+    >
+      <Feather name="archive" size={22} color={Colors.white} />
+      <Text style={styles.swipeArchiveText}>Archive</Text>
+    </RectButton>
+  );
+  return (
+    <Swipeable
+      ref={ref}
+      friction={2}
+      rightThreshold={48}
+      overshootRight={false}
+      renderRightActions={renderRightActions}
+    >
+      {children}
+    </Swipeable>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   listContent: { paddingBottom: 180 },
+  archivedIcon: {
+    backgroundColor: Colors.borderLight,
+  },
+  swipeArchiveAction: {
+    backgroundColor: Colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 92,
+    gap: 4,
+  },
+  swipeArchiveText: {
+    color: Colors.white,
+    fontSize: FontSize.xs,
+    fontWeight: FontWeight.semibold,
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

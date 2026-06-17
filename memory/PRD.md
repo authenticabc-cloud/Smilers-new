@@ -497,3 +497,31 @@ Deferred (per user): ringtone-as-message-tone + missing `[FCM]` diagnostic event
 on receiver (needs separate investigation); screen-share remote tile + screen
 wake (freelance native engineer).
 
+
+---
+
+## iter-213 — Recording delete pinned + Archived Chats sync (native ↔ web)
+
+**Recording delete** pinned to the confirmed canonical mutation
+`api.callRecording.deleteRecording({ recordingId })` (fallback probing removed) —
+`app/my-recordings.tsx`.
+
+**Archived Chats sync** against the shared Convex backend (`api.archives.*`,
+confirmed by web team):
+- Read: `archives.getArchivedIds({})` (id set, used to filter main list) +
+  `archives.listArchived({})` (full rows for the Archived screen).
+- Write: `archives.archiveConversation({ conversationId })` /
+  `archives.unarchiveConversation({ conversationId })` — both void + idempotent.
+- `app/(tabs)/chats.tsx`: filter archived out of the main list (listConversations
+  does NOT exclude them — matches web client-side filtering); **swipe-left**
+  reveals an Archive button (react-native-gesture-handler `Swipeable`); an
+  **"Archived · N chats"** pinned row sits directly below Chat Once and is shown
+  ONLY when count > 0 (matches web).
+- `app/archived.tsx`: now uses the real `archives.listArchived`, adds a per-row
+  **Unarchive** button (`archive-arrow-up-outline`), updated empty-state copy.
+- Per-user scope; no auto-unarchive on new message (matches web). State syncs
+  reactively across web/mobile via Convex.
+
+Verified: all changed files babel-transform clean; app bundles + renders Sign In
+(smoke). Authenticated archive flow needs a real device (OIDC Google blocks
+automated e2e). Contract Q&A: `WEB_AGENT_REQUESTS_iter213_archived_chats_sync.md`.

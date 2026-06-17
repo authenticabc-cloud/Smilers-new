@@ -1,8 +1,9 @@
 import React from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { Ionicons, Feather } from '@expo/vector-icons';
+import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useConvex } from 'convex/react';
 import Avatar from '../src/components/Avatar';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
@@ -24,33 +25,27 @@ function relTime(iso?: string) {
 
 export default function ArchivedScreen() {
   const router = useRouter();
-  // iter-115: switched from raw useQuery to useSafeConvexQuery. The raw
-  // hook throws a SYNCHRONOUS error during render when the backend
-  // endpoint is missing (CouldNotFindFunction), which crashed the entire
-  // app ("Smilers has stopped") the moment the user tapped Archived
-  // Chats. The safe variant degrades to an empty list + empty-state UI
-  // when the backend doesn't expose `conversations.listArchived` yet.
-  //
-  // Also probe two endpoint name variants so a backend rename doesn't
-  // dead-end us:
-  //   1. `conversations.listArchived`  (preferred / mobile-spec)
-  //   2. `conversations.getArchived`   (web-app legacy name)
-  const primaryArchived = useSafeConvexQuery<any[] | null>(
-    (api as any).conversations?.listArchived,
+  const convex = useConvex();
+  // iter-213: confirmed backend contract — api.archives.listArchived({})
+  // returns archived conversations shaped like listConversations. Kept on
+  // useSafeConvexQuery so a transient backend hiccup degrades to the empty
+  // state instead of crashing the screen.
+  const archivedQuery = useSafeConvexQuery<any[] | null>(
+    (api as any).archives?.listArchived,
     {},
     null,
     true,
   );
-  const legacyArchived = useSafeConvexQuery<any[] | null>(
-    (api as any).conversations?.getArchived,
-    {},
-    null,
-    primaryArchived.data === null,
-  );
+  const loading = archivedQuery.loading;
+  const list: any[] = Array.isArray(archivedQuery.data) ? archivedQuery.data : [];
 
-  const archived = primaryArchived.data ?? legacyArchived.data;
-  const loading = primaryArchived.loading && legacyArchived.loading;
-  const list: any[] = Array.isArray(archived) ? archived : [];
+  const handleUnarchive = async (conversationId: string) => {
+    try {
+      await convex.mutation((api as any).archives.unarchiveConversation, { conversationId });
+    } catch (e: any) {
+      Alert.alert('Could not unarchive', e?.message || 'Please try again.');
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -73,7 +68,7 @@ export default function ArchivedScreen() {
           </View>
           <Text style={styles.emptyTitle}>No archived chats</Text>
           <Text style={styles.emptySubtitle}>
-            Long-press a chat from your Chats list and choose Archive to hide it here. Archived chats stay encrypted and accessible.
+            Swipe left on a chat in your Chats list to archive it. Archived chats stay encrypted and accessible here.
           </Text>
         </View>
       ) : (
@@ -82,21 +77,33 @@ export default function ArchivedScreen() {
           keyExtractor={(item: any) => String(item._id ?? Math.random())}
           contentContainerStyle={{ paddingVertical: Spacing.sm }}
           renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.row}
-              onPress={() => router.push(`/chat/${item._id}` as any)}
-            >
-              <Avatar name={item.name || item.otherUserName || '?'} size={48} />
-              <View style={styles.rowText}>
-                <Text style={styles.rowName} numberOfLines={1}>
-                  {item.name || item.otherUserName || 'Chat'}
-                </Text>
-                <Text style={styles.rowSubtitle} numberOfLines={1}>
-                  {item.lastMessageText || 'No messages yet'}
-                </Text>
-              </View>
-              <Text style={styles.rowTime}>{relTime(item.lastMessageTime)}</Text>
-            </TouchableOpacity>
+            <View style={styles.row}>
+              <TouchableOpacity
+                style={styles.rowMain}
+                onPress={() => router.push(`/chat/${item._id}` as any)}
+                activeOpacity={0.7}
+              >
+                <Avatar name={item.name || item.otherUserName || '?'} size={48} />
+                <View style={styles.rowText}>
+                  <Text style={styles.rowName} numberOfLines={1}>
+                    {item.name || item.otherUserName || 'Chat'}
+                  </Text>
+                  <Text style={styles.rowSubtitle} numberOfLines={1}>
+                    {item.lastMessageText || 'No messages yet'}
+                  </Text>
+                </View>
+                <Text style={styles.rowTime}>{relTime(item.lastMessageTime)}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.unarchiveBtn}
+                onPress={() => handleUnarchive(item._id)}
+                hitSlop={8}
+                testID={`unarchive-${item._id}`}
+                accessibilityLabel="Unarchive chat"
+              >
+                <MaterialCommunityIcons name="archive-arrow-up-outline" size={22} color={Colors.primary} />
+              </TouchableOpacity>
+            </View>
           )}
         />
       )}
@@ -146,6 +153,19 @@ const styles = StyleSheet.create({
     borderBottomColor: 'rgba(0,0,0,0.06)',
   },
   rowText: { flex: 1 },
+  rowMain: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  unarchiveBtn: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: Spacing.sm,
+  },
   rowName: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   rowSubtitle: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
   rowTime: { fontSize: FontSize.xs, color: Colors.textMuted },
