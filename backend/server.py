@@ -1482,11 +1482,19 @@ async def send_push(
                         # device that was offline doesn't get a ghost ring
                         # minutes after the caller hung up.
                         ttl_seconds=45 if is_call_push else None,
-                        # iter-217: calls go DATA-ONLY on Android so the
-                        # device renders the notifee full-screen ring
-                        # (ringtone + Answer/Decline) instead of the OS
-                        # auto-displaying a plain message-tone notification.
-                        android_data_only=is_call_push,
+                        # iter-218 — Issue 1: calls now carry a NOTIFICATION
+                        # block routed to the device's custom CALLS channel
+                        # (call_channel_id, resolved above). A FORCE-KILLED
+                        # phone can't run JS, so the data-only notifee ring
+                        # never fired and Android played the default/message
+                        # tone. Sending a real notification on the calls
+                        # channel makes a killed device RING with the user's
+                        # chosen ringtone via the OS. The data payload is still
+                        # included so a LIVE app renders the full-screen
+                        # Answer/Decline ring; the mobile background task
+                        # suppresses its own notifee when the OS already
+                        # displayed this notification (prevents a double ring).
+                        android_data_only=False,
                     )
                     for t in tokens
                 ]
