@@ -156,6 +156,7 @@
     },
     "plugins": [
       "expo-router",
+      "./plugins/withCallWakeScreen.js",
       [
         "expo-splash-screen",
         {

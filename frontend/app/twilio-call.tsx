@@ -36,6 +36,7 @@ import {
   View,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useKeepAwake } from 'expo-keep-awake';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -45,6 +46,10 @@ import { recordDiagnostic } from '../src/lib/diagnostics';
 import { Colors } from '../src/theme';
 
 export default function TwilioCallScreen() {
+  // iter-222: keep the screen ON for the entire call so it never dims/sleeps
+  // mid-conversation (paired with the native showWhenLocked/turnScreenOn
+  // wake-on-incoming via the withCallWakeScreen config plugin).
+  useKeepAwake();
   const params = useLocalSearchParams<{
     room?: string;
     identity?: string;
