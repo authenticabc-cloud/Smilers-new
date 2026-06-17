@@ -33,6 +33,7 @@ import EmojiPickerSheet from '../../src/components/EmojiPickerSheet';
 import GiphyPicker, { GiphyAsset } from '../../src/components/GiphyPicker';
 import MediaBubble from '../../src/components/MediaBubble';
 import { LiveLocationRequestBanner } from '../../src/components/LiveLocationRequestBanner';
+import { LiveLocationSharingPill } from '../../src/components/LiveLocationSharingPill';
 import PollComposer from '../../src/components/PollComposer';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery, useSafeConvexSubscription } from '../../src/hooks/useSafeConvexQuery';
@@ -2717,6 +2718,7 @@ export default function ChatScreen() {
         {isConversationAvailable ? (
           <View style={styles.locationRequestBannerWrap}>
             <LiveLocationRequestBanner conversationId={String(conversationId || '')} />
+            <LiveLocationSharingPill conversationId={String(conversationId || '')} />
           </View>
         ) : null}
         {conversationLoading || messagesLoading ? (
