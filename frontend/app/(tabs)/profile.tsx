@@ -100,6 +100,11 @@ export default function ProfileScreen() {
     ? avatarUriRaw
     : undefined;
 
+  // iter-221: phone-number section (web parity). Web shows the verified
+  // number above YOUR NAME.
+  const phone = safeString((me as any)?.phoneE164 ?? (me as any)?.phone, '');
+  const phoneVerified = Boolean((me as any)?.phoneVerified);
+
   const openEditor = useCallback(
     (field: EditableField) => {
       setEditingField(field);
@@ -263,6 +268,36 @@ export default function ProfileScreen() {
           </View>
         </View>
 
+        {phone ? (
+          <Section
+            label="PHONE NUMBER"
+            icon={<Feather name="phone" size={14} color={Colors.primary} />}
+          >
+            <View style={styles.phoneRow}>
+              <Text style={styles.phoneNumber} numberOfLines={1} testID="profile-phone">
+                {phone}
+              </Text>
+              {phoneVerified ? (
+                <View style={styles.verifiedPill} testID="profile-phone-verified">
+                  <MaterialCommunityIcons name="shield-check" size={13} color="#15803D" />
+                  <Text style={styles.verifiedText}>Verified</Text>
+                </View>
+              ) : null}
+              <View style={styles.flexSpacer} />
+              <TouchableOpacity
+                onPress={() => router.push('/phone-verify' as any)}
+                hitSlop={8}
+                testID="profile-phone-edit"
+              >
+                <Feather name="edit-2" size={16} color={Colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.phoneHelper}>
+              Your phone number is how friends find and recognize you on Smilers.
+            </Text>
+          </Section>
+        ) : null}
+
         <Section label="YOUR NAME">
           <Row value={name} onEdit={() => openEditor('name')} testID="profile-name" />
         </Section>
@@ -290,9 +325,8 @@ export default function ProfileScreen() {
             testID="premium-btn"
             activeOpacity={0.85}
           >
-            <MaterialCommunityIcons name="crown" size={20} color="#3D2A00" />
+            <MaterialCommunityIcons name="crown" size={20} color={Colors.primaryDark} />
             <Text style={styles.premiumBtnText}>Premium</Text>
-            <Ionicons name="chevron-forward" size={18} color="#3D2A00" />
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -520,23 +554,25 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.base,
     gap: 10,
   },
-  // iter-142: button colors aligned with the web app's profile.
-  //   • Premium: solid gold (Colors.primary), no border (web has none).
-  //   • Starred + Settings: brighter `#FDE7A8` (slightly more saturated
-  //     than primaryLight #FEF3C7) so the buttons read clearly yellow
-  //     on Android — previously they appeared grey-cream on-device.
+  // iter-221: cards restyled to MATCH THE WEB APP (user-provided screenshots):
+  //   • Premium: pale gold fill + subtle gold border, gold crown + gold text,
+  //     no chevron (flat — web has no shadow/arrow).
+  //   • Starred + Settings: near-white subtle fill + hairline border, gold
+  //     icon + dark text. (Native previously used a deep/solid yellow.)
   linkBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.md,
-    backgroundColor: '#FDE7A8',
+    backgroundColor: '#FAF7EC',
+    borderWidth: 1,
+    borderColor: '#ECE7D8',
     paddingHorizontal: Spacing.base,
     paddingVertical: 16,
     borderRadius: Radius.lg,
   },
   linkText: {
     fontSize: FontSize.lg,
-    fontWeight: FontWeight.bold,
+    fontWeight: FontWeight.semibold,
     color: Colors.textPrimary,
     letterSpacing: 0.2,
   },
@@ -544,18 +580,43 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.md,
-    backgroundColor: Colors.primary,
+    backgroundColor: '#FBF1CD',
+    borderWidth: 1,
+    borderColor: '#EAD68C',
     paddingHorizontal: Spacing.base,
     paddingVertical: 16,
     borderRadius: Radius.lg,
-    ...Shadow.sm,
   },
   premiumBtnText: {
     flex: 1,
     fontSize: FontSize.lg,
     fontWeight: FontWeight.bold,
-    color: '#3D2A00',
+    color: Colors.primaryDark,
     letterSpacing: 0.2,
+  },
+  // iter-221: phone-number section (web parity).
+  phoneRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  flexSpacer: { flex: 1 },
+  phoneNumber: {
+    fontSize: FontSize.lg,
+    color: Colors.textPrimary,
+    fontWeight: FontWeight.regular,
+    flexShrink: 1,
+  },
+  verifiedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: Radius.pill,
+  },
+  verifiedText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: '#15803D' },
+  phoneHelper: {
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    marginTop: Spacing.sm,
   },
 
   /* Edit-field modal */

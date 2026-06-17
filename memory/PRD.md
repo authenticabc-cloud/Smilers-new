@@ -1,5 +1,12 @@
 # Smilers Mobile App — PRD
 
+## iter-221 (Feb 2026): Profile screen — match web app (phone section + card styling)
+User compared native vs web Profile (screenshots). Changes in `app/(tabs)/profile.tsx`:
+- **Added PHONE NUMBER section** above YOUR NAME (web parity): phone icon + "PHONE NUMBER" label, the number (`me.phoneE164 ?? me.phone`) + green **Verified** pill (`me.phoneVerified`, shield-check) + edit pencil (→ `/phone-verify`), and helper text "Your phone number is how friends find and recognize you on Smilers." Shown only when a phone exists.
+- **Restyled cards to the web's soft look** (native previously used deep solid yellow): Premium = pale gold fill `#FBF1CD` + gold border `#EAD68C` + gold crown/text (`primaryDark`), chevron removed; Starred Messages + Settings & Privacy = near-white `#FAF7EC` fill + hairline border `#ECE7D8` + gold icon + dark semibold text.
+- Verified: eslint 0 errors (only a pre-existing unused-`useEffect` warning), bundles clean. Visual check is OIDC-gated → **device/authed retest**. Note: phone fields are `phoneE164`/`phone` + `phoneVerified` on `getCurrentUser`; if they're named differently on the live Convex backend the number/Verified pill won't show until matched.
+
+
 ## iter-220 (Feb 2026): In-conversation search — highlight + ▲/▼ navigation (web parity)
 User wants: search a word → results in Chats & Messages → tap → enter conversation with ALL matches highlighted + up/down buttons that jump match-to-match (skip non-matches, wrap-around, scroll-to-centre). Screenshots showed the web design ("Results for 'Thanks' · 1 of 9" bar + yellow highlight; Search screen Chats/Messages tabs).
 **Part 1 — in-conversation highlight + nav (CORE, self-contained, done):**
