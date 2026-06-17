@@ -553,3 +553,19 @@ DECISION: do NOT blind-edit the fragile push delivery path (regression risk =
 exactly what burned us in iter-202). Trio deferred to a device-in-hand session
 where each change is immediately testable against the WAKE/[FCM] diagnostic
 stream. Items #5 (recordings), #6 (photo download), #2 (call-end) already fixed.
+
+---
+
+## iter-215 — Multi-photo album send with per-image captions (chat composer)
+
+Extended the staged image-preview (iter-212) to N photos:
+- `pickPhoto` now uses `allowsMultipleSelection` (limit 10); picks stage into
+  `pendingImages[]` (each `{uri, mimeType, caption}`); first inherits any typed text.
+- Preview shows a horizontal **thumbnail strip** (active highlighted, per-thumb
+  remove ×, blue dot = has caption). Tap a thumb to select; the composer input
+  edits THAT image's caption (`setActiveCaption`); placeholder → "Add a caption…".
+- `handleSend` uploads each image with its own caption sequentially; failures are
+  restored to the strip for retry. Single-photo behaviour is unchanged (length 1).
+- `sendImageFromUri` gained an optional `captionOverride`. Added `ScrollView` import.
+- Verified: babel-transform clean, app bundles + renders Sign-In (smoke). Needs
+  device verification (authenticated chat behind OIDC). No backend changes.

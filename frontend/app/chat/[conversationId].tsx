@@ -8,6 +8,7 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -153,7 +154,21 @@ export default function ChatScreen() {
   // iter-212: staged photo awaiting an explicit Send tap (fixes "no send
   // button after attaching a photo"). Gallery picks land here so the user
   // can add a caption and send, instead of the photo firing immediately.
-  const [pendingImage, setPendingImage] = useState<{ uri: string; mimeType: string } | null>(null);
+  // iter-215: multi-photo album send with per-image captions. Gallery
+  // picks stage here; each image carries its own caption, and the
+  // composer input edits the ACTIVE image's caption while any image is
+  // staged. (Single-photo behaviour is unchanged — it's just length 1.)
+  const [pendingImages, setPendingImages] = useState<{ uri: string; mimeType: string; caption: string }[]>([]);
+  const [activeImageIndex, setActiveImageIndex] = useState(0);
+  const setActiveCaption = useCallback(
+    (caption: string) =>
+      setPendingImages((prev) => prev.map((im, i) => (i === activeImageIndex ? { ...im, caption } : im))),
+    [activeImageIndex],
+  );
+  const removePendingImage = useCallback((index: number) => {
+    setPendingImages((prev) => prev.filter((_, i) => i !== index));
+    setActiveImageIndex((cur) => (index < cur ? cur - 1 : cur === index ? Math.max(0, cur - 1) : cur));
+  }, []);
   const [showShareContacts, setShowShareContacts] = useState(false);
   const [showScheduleSheet, setShowScheduleSheet] = useState(false);
   const [showCameraModal, setShowCameraModal] = useState(false);
@@ -924,16 +939,27 @@ export default function ChatScreen() {
   }, []);
 
   const handleSend = async () => {
-    // iter-212: a staged photo takes priority — send it (using the current
-    // composer text as the caption) when the user taps Send. This is the
-    // fix for "no send button after attaching a photo": the attach now
-    // stages the image and the Send button drives the upload.
-    if (pendingImage) {
+    // iter-215: staged photos (1..N) take priority — send each with its
+    // own caption when the user taps Send. The active image's caption is
+    // whatever is currently in the composer input.
+    if (pendingImages.length > 0) {
       if (sending || uploading) return;
-      const staged = pendingImage;
-      setPendingImage(null);
-      const ok = await sendImageFromUri(staged.uri, staged.mimeType);
-      if (!ok) setPendingImage(staged); // restore so the user can retry
+      // Captions already live on each item (the composer edits the active
+      // item's caption directly via setActiveCaption), so send as-is.
+      const album = pendingImages;
+      setPendingImages([]);
+      setText('');
+      resetComposerFormatting();
+      const failed: typeof album = [];
+      for (const im of album) {
+        const ok = await sendImageFromUri(im.uri, im.mimeType, im.caption);
+        if (!ok) failed.push(im);
+      }
+      if (failed.length > 0) {
+        // Restore the ones that didn't send so the user can retry.
+        setPendingImages(failed);
+        setActiveImageIndex(0);
+      }
       return;
     }
 
@@ -1327,11 +1353,11 @@ export default function ChatScreen() {
   );
 
   const sendImageFromUri = useCallback(
-    async (uri: string, mimeType?: string): Promise<boolean> => {
+    async (uri: string, mimeType?: string, captionOverride?: string): Promise<boolean> => {
       if (!conversationId || !isConversationAvailable) return false;
 
       setUploading(true);
-      const caption = text.trim();
+      const caption = (captionOverride ?? text).trim();
       const formattedCaption = caption
         ? applyDraftFormatting(caption, { bold: draftBold, color: draftColor })
         : '';
@@ -1346,9 +1372,13 @@ export default function ChatScreen() {
           storageId,
           ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
         });
-        setText('');
+        // Single-image path clears the composer here; the multi-image
+        // album path (captionOverride provided) clears once in handleSend.
+        if (captionOverride === undefined) {
+          setText('');
+          resetComposerFormatting();
+        }
         setReplyTo(null);
-        resetComposerFormatting();
         await refetchMessages();
         return true;
       } catch (errorValue: any) {
@@ -1371,14 +1401,27 @@ export default function ChatScreen() {
     // iter-164 data-friendly tuning: route through centralized chat defaults
     // (quality 0.7, exif stripped, no base64) — cuts typical photo from
     // 5–10 MB to ~250–600 KB on cellular.
-    const result = await ImagePicker.launchImageLibraryAsync(IMAGE_PICKER_OPTIONS_CHAT);
+    const result = await ImagePicker.launchImageLibraryAsync({
+      ...IMAGE_PICKER_OPTIONS_CHAT,
+      allowsMultipleSelection: true,
+      selectionLimit: 10,
+    });
 
-    if (result.canceled || !result.assets?.[0]?.uri) return;
-    const asset = result.assets[0];
-    // iter-212: stage the photo for an explicit Send (with optional
-    // caption) instead of firing it off immediately.
-    setPendingImage({ uri: asset.uri, mimeType: asset.mimeType || 'image/jpeg' });
-  }, []);
+    if (result.canceled || !result.assets?.length) return;
+    // iter-215: stage one or many photos for an explicit Send. Each gets
+    // its own caption; the first inherits any text already typed.
+    const picked = result.assets
+      .filter((a) => !!a?.uri)
+      .map((a) => ({ uri: a.uri, mimeType: a.mimeType || 'image/jpeg', caption: '' }));
+    if (picked.length === 0) return;
+    if (pendingImages.length === 0) {
+      picked[0].caption = text;
+      setPendingImages(picked);
+      setActiveImageIndex(0);
+    } else {
+      setPendingImages([...pendingImages, ...picked]);
+    }
+  }, [pendingImages, text]);
 
   const takePhoto = useCallback(() => {
     // Open the in-app camera modal (mirrors web app's <CameraCapture>).
@@ -2898,20 +2941,40 @@ export default function ChatScreen() {
             </View>
           ) : null}
 
-          {pendingImage && !uploading ? (
-            <View style={styles.pendingImageBar} testID="pending-image-preview">
-              <Image source={{ uri: pendingImage.uri }} style={styles.pendingImageThumb} />
-              <Text style={styles.pendingImageHint} numberOfLines={1}>
-                Add a caption (optional), then tap send
-              </Text>
-              <TouchableOpacity
-                onPress={() => setPendingImage(null)}
-                hitSlop={10}
-                style={styles.pendingImageRemove}
-                testID="pending-image-remove"
+          {pendingImages.length > 0 && !uploading ? (
+            <View style={styles.pendingImagesBar} testID="pending-image-preview">
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.pendingImagesStrip}
+                keyboardShouldPersistTaps="handled"
               >
-                <Feather name="x" size={18} color={Colors.textSecondary} />
-              </TouchableOpacity>
+                {pendingImages.map((im, index) => (
+                  <TouchableOpacity
+                    key={`${im.uri}-${index}`}
+                    activeOpacity={0.8}
+                    onPress={() => setActiveImageIndex(index)}
+                    style={[styles.pendingThumbWrap, index === activeImageIndex ? styles.pendingThumbActive : null]}
+                    testID={`pending-image-${index}`}
+                  >
+                    <Image source={{ uri: im.uri }} style={styles.pendingImageThumb} />
+                    {im.caption?.trim() ? <View style={styles.pendingThumbCaptionDot} /> : null}
+                    <TouchableOpacity
+                      onPress={() => removePendingImage(index)}
+                      hitSlop={8}
+                      style={styles.pendingThumbRemove}
+                      testID={`pending-image-remove-${index}`}
+                    >
+                      <Feather name="x" size={12} color={Colors.white} />
+                    </TouchableOpacity>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+              <Text style={styles.pendingImageHint} numberOfLines={1}>
+                {pendingImages.length === 1
+                  ? 'Add a caption (optional), then tap send'
+                  : `${pendingImages.length} photos · tap a photo to caption it, then send`}
+              </Text>
             </View>
           ) : null}
 
@@ -3001,9 +3064,9 @@ export default function ChatScreen() {
             <>
               <TextInput
                 ref={messageInputRef}
-                value={text}
-                onChangeText={handleTyping}
-                placeholder="Type your message…"
+                value={pendingImages.length > 0 ? (pendingImages[activeImageIndex]?.caption ?? '') : text}
+                onChangeText={pendingImages.length > 0 ? setActiveCaption : handleTyping}
+                placeholder={pendingImages.length > 0 ? 'Add a caption…' : 'Type your message…'}
                 placeholderTextColor={Colors.textMuted}
                 style={[
                   styles.input,
@@ -3016,9 +3079,9 @@ export default function ChatScreen() {
                 onBlur={() => setComposerFocused(false)}
                 testID="message-input"
               />
-              {text.trim().length > 0 || pendingImage ? (
+              {text.trim().length > 0 || pendingImages.length > 0 ? (
                 <>
-                  {text.trim().length > 0 && !pendingImage ? (
+                  {text.trim().length > 0 && pendingImages.length === 0 ? (
                     <TouchableOpacity
                       style={styles.scheduleBtn}
                       onPress={() => setShowScheduleSheet(true)}
@@ -3613,6 +3676,55 @@ const styles = StyleSheet.create({
     height: 32,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  pendingImagesBar: {
+    marginHorizontal: Spacing.sm,
+    marginBottom: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 12,
+  },
+  pendingImagesStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingRight: 4,
+    paddingTop: 4,
+  },
+  pendingThumbWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  pendingThumbActive: {
+    borderColor: Colors.primary,
+  },
+  pendingThumbRemove: {
+    position: 'absolute',
+    top: -7,
+    right: -7,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pendingThumbCaptionDot: {
+    position: 'absolute',
+    bottom: 3,
+    right: 3,
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: Colors.primary,
+    borderWidth: 1,
+    borderColor: Colors.white,
   },
   composerToolsWrap: {
     backgroundColor: '#F1E7D6',
