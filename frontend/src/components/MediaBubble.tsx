@@ -139,6 +139,12 @@ interface BubbleProps {
   // `multiSelected` drives the checkmark overlay visual.
   onPress?: () => void;
   multiSelected?: boolean;
+  // In-conversation search (iter-220). When `searchTerm` is set, every
+  // occurrence inside this bubble's text is highlighted. `isActiveSearchMatch`
+  // marks the message the up/down navigator is currently focused on (brighter
+  // highlight + a subtle outline so it stands out among the other matches).
+  searchTerm?: string | null;
+  isActiveSearchMatch?: boolean;
 }
 
 export default function MediaBubble({
@@ -152,6 +158,8 @@ export default function MediaBubble({
   onToggleReaction,
   onPress,
   multiSelected,
+  searchTerm,
+  isActiveSearchMatch,
 }: BubbleProps) {
   const time = msg._creationTime ? new Date(msg._creationTime) : new Date();
   const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -301,6 +309,7 @@ export default function MediaBubble({
           // Multi-select visual feedback (iter-99): green ring + light
           // tint when this bubble is in the selection set.
           multiSelected ? styles.bubbleMultiSelected : null,
+          isActiveSearchMatch ? styles.bubbleActiveSearchMatch : null,
         ]}
         testID={`message-bubble-${msg._id}`}
       >
@@ -331,7 +340,7 @@ export default function MediaBubble({
           </View>
         ) : null}
 
-        <BubbleBody msg={msg} timeStr={timeStr} textStyle={[bubbleTextStyle, { color: messageTextColor }]} isMine={isMine} e2eeStatus={e2eeStatus || null} />
+        <BubbleBody msg={msg} timeStr={timeStr} textStyle={[bubbleTextStyle, { color: messageTextColor }]} isMine={isMine} e2eeStatus={e2eeStatus || null} searchTerm={searchTerm} isActiveSearchMatch={isActiveSearchMatch} />
 
         <View style={styles.bubbleMeta}>
           {msg.starred ? <Feather name="star" size={11} color={Colors.tickYellow} style={styles.starIcon} /> : null}
@@ -374,15 +383,15 @@ export default function MediaBubble({
   );
 }
 
-function BubbleBody({ msg, timeStr, textStyle, isMine, e2eeStatus }: { msg: any; timeStr: string; textStyle?: any; isMine: boolean; e2eeStatus: E2EEStatus | null }) {
+function BubbleBody({ msg, timeStr, textStyle, isMine, e2eeStatus, searchTerm, isActiveSearchMatch }: { msg: any; timeStr: string; textStyle?: any; isMine: boolean; e2eeStatus: E2EEStatus | null; searchTerm?: string | null; isActiveSearchMatch?: boolean }) {
   return (
     <BubbleErrorBoundary fallbackLabel="Message couldn't load">
-      <BubbleBodyInner msg={msg} timeStr={timeStr} textStyle={textStyle} isMine={isMine} e2eeStatus={e2eeStatus} />
+      <BubbleBodyInner msg={msg} timeStr={timeStr} textStyle={textStyle} isMine={isMine} e2eeStatus={e2eeStatus} searchTerm={searchTerm} isActiveSearchMatch={isActiveSearchMatch} />
     </BubbleErrorBoundary>
   );
 }
 
-function BubbleBodyInner({ msg, timeStr, textStyle, isMine, e2eeStatus }: { msg: any; timeStr: string; textStyle?: any; isMine: boolean; e2eeStatus: E2EEStatus | null }) {
+function BubbleBodyInner({ msg, timeStr, textStyle, isMine, e2eeStatus, searchTerm, isActiveSearchMatch }: { msg: any; timeStr: string; textStyle?: any; isMine: boolean; e2eeStatus: E2EEStatus | null; searchTerm?: string | null; isActiveSearchMatch?: boolean }) {
   // iter-134: Call logs in chat. Backend may surface call history as
   // virtual messages with either `type: 'call'` or `kind: 'call'`,
   // so we detect both. The CallLogMessage component is purely
@@ -452,25 +461,76 @@ function BubbleBodyInner({ msg, timeStr, textStyle, isMine, e2eeStatus }: { msg:
       if (extractFirstUrl(msg.text || '')) {
         return <LinkPreviewMessage msg={msg} textStyle={textStyle} isMine={isMine} />;
       }
-      return <RichMessageText text={msg.text || ''} textStyle={textStyle} />;
+      return <RichMessageText text={msg.text || ''} textStyle={textStyle} highlightTerm={searchTerm} highlightActive={isActiveSearchMatch} />;
   }
 }
 
-function RichMessageText({ text, textStyle, numberOfLines }: { text: string; textStyle?: any; numberOfLines?: number }) {
+/**
+ * Split `text` into segments around every case-insensitive occurrence of
+ * `term`, flagging which pieces are matches. Used to wrap matched words in a
+ * highlight <Text> for in-conversation search.
+ */
+function splitByTerm(text: string, term: string): { text: string; match: boolean }[] {
+  if (!term) return [{ text, match: false }];
+  const lowerText = text.toLowerCase();
+  const lowerTerm = term.toLowerCase();
+  const out: { text: string; match: boolean }[] = [];
+  let from = 0;
+  let idx = lowerText.indexOf(lowerTerm, from);
+  while (idx !== -1) {
+    if (idx > from) out.push({ text: text.slice(from, idx), match: false });
+    out.push({ text: text.slice(idx, idx + term.length), match: true });
+    from = idx + term.length;
+    idx = lowerText.indexOf(lowerTerm, from);
+  }
+  if (from < text.length) out.push({ text: text.slice(from), match: false });
+  return out;
+}
+
+function RichMessageText({
+  text,
+  textStyle,
+  numberOfLines,
+  highlightTerm,
+  highlightActive,
+}: {
+  text: string;
+  textStyle?: any;
+  numberOfLines?: number;
+  highlightTerm?: string | null;
+  highlightActive?: boolean;
+}) {
   const segments = useMemo(() => parseRichTextSegments(text), [text]);
+  const term = (highlightTerm || '').trim();
+  const matchStyle = highlightActive ? styles.searchHighlightActive : styles.searchHighlight;
   return (
     <Text style={[styles.bubbleText, textStyle]} numberOfLines={numberOfLines}>
-      {segments.map((segment, index) => (
-        <Text
-          key={`${index}-${segment.text}`}
-          style={[
-            segment.bold ? styles.richTextBold : null,
-            segment.color ? { color: segment.color } : null,
-          ]}
-        >
-          {segment.text}
-        </Text>
-      ))}
+      {segments.map((segment, index) => {
+        const segStyle = [
+          segment.bold ? styles.richTextBold : null,
+          segment.color ? { color: segment.color } : null,
+        ];
+        if (!term) {
+          return (
+            <Text key={`${index}-${segment.text}`} style={segStyle}>
+              {segment.text}
+            </Text>
+          );
+        }
+        return (
+          <Text key={`${index}-${segment.text}`} style={segStyle}>
+            {splitByTerm(segment.text, term).map((part, partIndex) =>
+              part.match ? (
+                <Text key={partIndex} style={matchStyle}>
+                  {part.text}
+                </Text>
+              ) : (
+                part.text
+              ),
+            )}
+          </Text>
+        );
+      })}
     </Text>
   );
 }
@@ -1904,6 +1964,13 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   richTextBold: { fontWeight: FontWeight.bold },
+  // In-conversation search highlight (iter-220). Every occurrence of the
+  // search term gets a yellow marker; the message the up/down navigator is
+  // currently focused on uses the brighter `Active` variant + a bubble outline
+  // so it stands out among the other matches.
+  searchHighlight: { backgroundColor: '#FDE68A', color: '#1A1A1A' },
+  searchHighlightActive: { backgroundColor: '#FACC15', color: '#1A1A1A', fontWeight: FontWeight.bold },
+  bubbleActiveSearchMatch: { borderWidth: 2, borderColor: '#F59E0B' },
   deletedBubble: { opacity: 0.55 },
   // bubbleMultiSelected — visual feedback when this bubble is in the
   // multi-select forwarding set (iter-99). Light green tint + a

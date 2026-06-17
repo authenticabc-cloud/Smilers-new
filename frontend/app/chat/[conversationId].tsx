@@ -115,7 +115,11 @@ export default function ChatScreen() {
   const router = useRouter();
   const convex = useConvex();
   const insets = useSafeAreaInsets();
-  const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
+  const { conversationId, q: initialSearchQ, mid: initialSearchMid } = useLocalSearchParams<{
+    conversationId: string;
+    q?: string;
+    mid?: string;
+  }>();
   const { isAuthenticated } = useAuth();
   // iter-134 security hardening: chats contain end-to-end-encrypted
   // messages, voice notes, and media. Block screenshots/screen recording
@@ -144,6 +148,12 @@ export default function ChatScreen() {
   // mode and works for every conversation. When non-null the search
   // bar is visible and the message list gets client-side filtered.
   const [chatSearchQuery, setChatSearchQuery] = useState<string | null>(null);
+  // iter-220 in-conversation search highlight + up/down navigation.
+  // `searchActivePos` is the index into the matched-message list the ▲/▼
+  // navigator is focused on. Unlike the old filter behaviour, the full
+  // message list stays visible; matches are highlighted in place.
+  const [searchActivePos, setSearchActivePos] = useState(0);
+  const searchInitTermRef = useRef<string | null>(null);
   const [selectedMsg, setSelectedMsg] = useState<any | null>(null);
   // Tri-state delete-mode sheet: when set, prompts WhatsApp-style "Delete for me /
   // for receiver / for everyone" (sent) or "Delete for me / ask sender" (received).
@@ -592,17 +602,12 @@ export default function ChatScreen() {
   // conversation's TTL. Matches both the message text AND attachment
   // filenames (case-insensitive substring). When the query is empty
   // OR null we return visibleMessages unchanged — zero overhead.
-  const searchFilteredMessages = useMemo(() => {
-    const q = (chatSearchQuery || '').trim().toLowerCase();
-    if (!q) return visibleMessages;
-    return visibleMessages.filter((message: any) => {
-      const text: string =
-        (typeof message?.text === 'string' ? message.text : '') ||
-        (typeof message?.fileName === 'string' ? message.fileName : '');
-      if (!text) return false;
-      return text.toLowerCase().includes(q);
-    });
-  }, [visibleMessages, chatSearchQuery]);
+  // iter-220: in-conversation search no longer FILTERS the list (old
+  // iter-109 behaviour). The full timeline stays visible and matches are
+  // highlighted in place with ▲/▼ navigation (see searchMatchPositions
+  // below). This memo is now a passthrough kept to avoid renaming the
+  // downstream displayMessages/timeline pipeline.
+  const searchFilteredMessages = visibleMessages;
 
   const preferredLanguage = typeof me?.preferredLanguage === 'string' ? me.preferredLanguage : '';
   const preferredLanguageLabel = getLanguageByCode(preferredLanguage)?.name || preferredLanguage;
@@ -745,6 +750,94 @@ export default function ChatScreen() {
     displayMessages.forEach((message) => map.set(message._id, message));
     return map;
   }, [displayMessages]);
+
+  // ── iter-220: in-conversation search (highlight + ▲/▼ navigation) ──────
+  // `searchTermNorm` is the active find term; `searchMatchPositions` are the
+  // TIMELINE indices of every non-deleted text message that contains it,
+  // ordered oldest→newest. `searchActivePos` indexes into that list.
+  const searchTermNorm = (chatSearchQuery || '').trim();
+  const searchMatchPositions = useMemo(() => {
+    const term = searchTermNorm.toLowerCase();
+    if (!term) return [] as number[];
+    const positions: number[] = [];
+    timeline.forEach((item: any, idx: number) => {
+      if (item?.__kind === 'call') return;
+      if (item?.deletedAt) return;
+      const t = typeof item?.text === 'string' ? item.text.toLowerCase() : '';
+      if (t && t.includes(term)) positions.push(idx);
+    });
+    return positions;
+  }, [timeline, searchTermNorm]);
+
+  const clampedActivePos =
+    searchMatchPositions.length > 0
+      ? Math.min(searchActivePos, searchMatchPositions.length - 1)
+      : 0;
+  const activeMatchTimelineIdx =
+    searchMatchPositions.length > 0 ? searchMatchPositions[clampedActivePos] : -1;
+
+  // Open the search bar pre-filled when arriving from the global Search
+  // screen (it passes `?q=<term>&mid=<messageId>`).
+  useEffect(() => {
+    if (typeof initialSearchQ === 'string' && initialSearchQ.trim()) {
+      setChatSearchQuery(initialSearchQ);
+    }
+    // run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Pick the initial focused match ONCE per search term: the tapped message
+  // (`mid`) if present & it matches, otherwise the most-recent match.
+  useEffect(() => {
+    if (!searchTermNorm) {
+      searchInitTermRef.current = null;
+      return;
+    }
+    if (searchMatchPositions.length === 0) return;
+    if (searchInitTermRef.current === searchTermNorm) return;
+    searchInitTermRef.current = searchTermNorm;
+    let pos = searchMatchPositions.length - 1;
+    if (initialSearchMid) {
+      const midIdx = timeline.findIndex(
+        (it: any) => String(it?._id) === String(initialSearchMid),
+      );
+      const found = searchMatchPositions.indexOf(midIdx);
+      if (found >= 0) pos = found;
+    }
+    setSearchActivePos(pos);
+  }, [searchTermNorm, searchMatchPositions, initialSearchMid, timeline]);
+
+  // Scroll the focused match to the centre of the viewport.
+  useEffect(() => {
+    if (activeMatchTimelineIdx < 0) return;
+    const t = setTimeout(() => {
+      try {
+        listRef.current?.scrollToIndex({
+          index: activeMatchTimelineIdx,
+          animated: true,
+          viewPosition: 0.5,
+        });
+      } catch {}
+    }, 140);
+    return () => clearTimeout(t);
+  }, [activeMatchTimelineIdx]);
+
+  const goPrevMatch = useCallback(() => {
+    setSearchActivePos((p) => {
+      const n = searchMatchPositions.length;
+      if (n === 0) return 0;
+      return (p - 1 + n) % n;
+    });
+  }, [searchMatchPositions.length]);
+
+  const goNextMatch = useCallback(() => {
+    setSearchActivePos((p) => {
+      const n = searchMatchPositions.length;
+      if (n === 0) return 0;
+      return (p + 1) % n;
+    });
+  }, [searchMatchPositions.length]);
+
 
   // iter-164 auto-delete for malicious links/files.
   //
@@ -2651,27 +2744,61 @@ export default function ChatScreen() {
           message list by case-insensitive substring match. Kept as a
           general-purpose feature even after Diary was decoupled. */}
       {chatSearchQuery !== null ? (
-        <View style={styles.searchBar} testID="chat-search-bar">
-          <Feather name="search" size={16} color={Colors.textMuted} />
-          <TextInput
-            style={styles.searchInput}
-            value={chatSearchQuery}
-            onChangeText={setChatSearchQuery}
-            placeholder="Search messages…"
-            placeholderTextColor={Colors.textMuted}
-            autoFocus
-            returnKeyType="search"
-            testID="chat-search-input"
-          />
-          {chatSearchQuery.length > 0 ? (
-            <TouchableOpacity
-              onPress={() => setChatSearchQuery('')}
-              hitSlop={8}
-              testID="chat-search-clear"
-            >
-              <Feather name="x-circle" size={16} color={Colors.textMuted} />
-            </TouchableOpacity>
-          ) : null}
+        <View style={styles.searchNavBar} testID="chat-search-bar">
+          <Feather name="search" size={18} color={Colors.primary} />
+          <View style={styles.searchNavTextWrap}>
+            <TextInput
+              style={styles.searchNavInput}
+              value={chatSearchQuery}
+              onChangeText={setChatSearchQuery}
+              placeholder="Search in conversation…"
+              placeholderTextColor={Colors.textMuted}
+              autoFocus={!initialSearchQ}
+              returnKeyType="search"
+              testID="chat-search-input"
+            />
+            {searchTermNorm.length > 0 ? (
+              <Text style={styles.searchNavCount} testID="chat-search-count">
+                {searchMatchPositions.length > 0
+                  ? `${clampedActivePos + 1} of ${searchMatchPositions.length}`
+                  : 'No results'}
+              </Text>
+            ) : null}
+          </View>
+          <TouchableOpacity
+            onPress={goPrevMatch}
+            disabled={searchMatchPositions.length === 0}
+            style={styles.searchNavBtn}
+            hitSlop={6}
+            testID="chat-search-prev"
+          >
+            <Feather
+              name="chevron-up"
+              size={22}
+              color={searchMatchPositions.length === 0 ? Colors.textMuted : Colors.textPrimary}
+            />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={goNextMatch}
+            disabled={searchMatchPositions.length === 0}
+            style={styles.searchNavBtn}
+            hitSlop={6}
+            testID="chat-search-next"
+          >
+            <Feather
+              name="chevron-down"
+              size={22}
+              color={searchMatchPositions.length === 0 ? Colors.textMuted : Colors.textPrimary}
+            />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setChatSearchQuery(null)}
+            style={styles.searchNavBtn}
+            hitSlop={6}
+            testID="chat-search-close"
+          >
+            <Feather name="x" size={22} color={Colors.textPrimary} />
+          </TouchableOpacity>
         </View>
       ) : null}
 
@@ -2873,6 +3000,8 @@ export default function ChatScreen() {
                       }}
                       onPress={multiSelectIds ? () => onToggleMultiSelect(String(item._id)) : undefined}
                       multiSelected={multiSelectIds ? multiSelectIds.includes(String(item._id)) : undefined}
+                      searchTerm={searchTermNorm || null}
+                      isActiveSearchMatch={activeMatchTimelineIdx >= 0 && index === activeMatchTimelineIdx}
                       onToggleReaction={
                         viewerSuspension || multiSelectIds
                           ? () => {}
@@ -2883,7 +3012,30 @@ export default function ChatScreen() {
                 </>
               );
             }}
-            onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
+            onContentSizeChange={() => {
+              // Don't yank to the bottom while the user is navigating search
+              // matches (iter-220) — the search effect controls scrolling then.
+              if (chatSearchQuery === null) listRef.current?.scrollToEnd({ animated: false });
+            }}
+            onScrollToIndexFailed={(info) => {
+              // No getItemLayout → far-off indices can fail. Approximate by
+              // offset, then retry centering the match shortly after.
+              try {
+                listRef.current?.scrollToOffset({
+                  offset: (info.averageItemLength || 80) * info.index,
+                  animated: false,
+                });
+              } catch {}
+              setTimeout(() => {
+                try {
+                  listRef.current?.scrollToIndex({
+                    index: info.index,
+                    animated: true,
+                    viewPosition: 0.5,
+                  });
+                } catch {}
+              }, 220);
+            }}
             ListEmptyComponent={
               <View style={styles.empty}>
                 <Text style={styles.emptyText}>Say hello with a smile 😊</Text>
@@ -3535,6 +3687,36 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
+  },
+  // iter-220 in-conversation search highlight + ▲/▼ navigation bar.
+  searchNavBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: Colors.white,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  searchNavTextWrap: { flex: 1 },
+  searchNavInput: {
+    fontSize: FontSize.base,
+    color: Colors.textPrimary,
+    paddingVertical: 0,
+  },
+  searchNavCount: {
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+    marginTop: 1,
+  },
+  searchNavBtn: {
+    width: 34,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 17,
+    backgroundColor: Colors.background,
   },
   searchInput: {
     flex: 1,

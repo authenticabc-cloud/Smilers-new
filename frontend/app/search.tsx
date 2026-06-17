@@ -18,7 +18,7 @@ import { useDebouncedValue } from '../src/hooks/useDebouncedValue';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
-type SearchTab = 'chats' | 'people';
+type SearchTab = 'chats' | 'messages' | 'people';
 
 export default function SearchScreen() {
   const router = useRouter();
@@ -30,6 +30,16 @@ export default function SearchScreen() {
   const { data: conversations } = useSafeConvexQuery<any[]>(api.conversations.listConversations, {}, []);
   const { data: users } = useSafeConvexQuery<any[]>(
     api.users.searchUsers,
+    debouncedQuery.length >= 2 ? { query: debouncedQuery } : {},
+    [],
+    debouncedQuery.length >= 2
+  );
+  // iter-220: message-content search (web parity — Chats / Messages tabs).
+  // Reuses the web-canonical `api.search.searchMessages`. Tapping a result
+  // opens the conversation carrying `?q=<term>&mid=<messageId>` so the chat
+  // screen highlights matches and jumps to the tapped message.
+  const { data: messageHits } = useSafeConvexQuery<any[]>(
+    (api as any).search.searchMessages,
     debouncedQuery.length >= 2 ? { query: debouncedQuery } : {},
     [],
     debouncedQuery.length >= 2
@@ -46,9 +56,16 @@ export default function SearchScreen() {
     });
   }, [conversations, debouncedQuery]);
 
+  const messageResults = useMemo(() => (Array.isArray(messageHits) ? messageHits : []), [messageHits]);
   const userResults = useMemo(() => (Array.isArray(users) ? users : []), [users]);
-  const showingConversations = tab === 'chats';
-  const activeResults = showingConversations ? conversationResults : userResults;
+
+  const activeResults = tab === 'chats' ? conversationResults : tab === 'messages' ? messageResults : userResults;
+
+  const openConversationWithSearch = (conversationId: string, messageId?: string) => {
+    const params = new URLSearchParams({ q: debouncedQuery });
+    if (messageId) params.set('mid', String(messageId));
+    router.push(`/chat/${conversationId}?${params.toString()}` as any);
+  };
 
   const openDirect = async (userId: string) => {
     try {
@@ -87,8 +104,14 @@ export default function SearchScreen() {
       </View>
 
       <View style={styles.segmentWrap} testID="search-segments">
-        <SegmentButton label="Chats" active={showingConversations} onPress={() => setTab('chats')} testID="search-tab-chats" />
-        <SegmentButton label="People" active={!showingConversations} onPress={() => setTab('people')} testID="search-tab-people" />
+        <SegmentButton label="Chats" active={tab === 'chats'} onPress={() => setTab('chats')} testID="search-tab-chats" />
+        <SegmentButton
+          label={messageResults.length > 0 ? `Messages (${messageResults.length})` : 'Messages'}
+          active={tab === 'messages'}
+          onPress={() => setTab('messages')}
+          testID="search-tab-messages"
+        />
+        <SegmentButton label="People" active={tab === 'people'} onPress={() => setTab('people')} testID="search-tab-people" />
       </View>
 
       <FlatList
@@ -97,11 +120,23 @@ export default function SearchScreen() {
         contentContainerStyle={styles.listContent}
         keyboardShouldPersistTaps="handled"
         renderItem={({ item, index }) =>
-          showingConversations ? (
+          tab === 'chats' ? (
             <ConversationResultRow
               item={item}
               index={index}
-              onPress={() => router.push(`/chat/${item._id}` as any)}
+              onPress={() => openConversationWithSearch(String(item._id))}
+            />
+          ) : tab === 'messages' ? (
+            <MessageResultRow
+              item={item}
+              index={index}
+              term={debouncedQuery}
+              onPress={() =>
+                openConversationWithSearch(
+                  String(item?.conversationId || item?.conversation?._id || ''),
+                  String(item?._id || item?.messageId || ''),
+                )
+              }
             />
           ) : (
             <UserResultRow
@@ -114,19 +149,25 @@ export default function SearchScreen() {
         }
         ListHeaderComponent={
           <Text style={styles.sectionLabel} testID="search-results-label">
-            {showingConversations ? 'Chats' : 'People'}
+            {tab === 'chats' ? 'Chats' : tab === 'messages' ? 'Messages' : 'People'}
           </Text>
         }
         ListEmptyComponent={
           <View style={styles.empty} testID="search-empty-state">
             <Ionicons name="search-outline" size={34} color={Colors.textMuted} />
-            <Text style={styles.emptyTitle}>{debouncedQuery ? 'No results found' : `Start typing to search ${showingConversations ? 'chats' : 'people'}`}</Text>
+            <Text style={styles.emptyTitle}>
+              {debouncedQuery
+                ? 'No results found'
+                : `Start typing to search ${tab === 'people' ? 'people' : tab === 'messages' ? 'messages' : 'chats'}`}
+            </Text>
             <Text style={styles.emptySub}>
               {debouncedQuery
                 ? 'Try a different name, email, or keyword.'
-                : showingConversations
-                  ? 'We will search your existing conversations.'
-                  : 'Type at least 2 characters to search people.'}
+                : tab === 'people'
+                  ? 'Type at least 2 characters to search people.'
+                  : tab === 'messages'
+                    ? 'Find any word inside your conversations.'
+                    : 'We will search your existing conversations.'}
             </Text>
           </View>
         }
@@ -168,6 +209,61 @@ function ConversationResultRow({ item, index, onPress }: { item: any; index: num
       <View style={styles.rowMid}>
         <Text style={styles.rowTitle} numberOfLines={1}>{name}</Text>
         <Text style={styles.rowSub} numberOfLines={1}>{subtitle}</Text>
+      </View>
+      <Feather name="chevron-right" size={20} color={Colors.textMuted} />
+    </TouchableOpacity>
+  );
+}
+
+function MessageResultRow({
+  item,
+  index,
+  term,
+  onPress,
+}: {
+  item: any;
+  index: number;
+  term: string;
+  onPress: () => void;
+}) {
+  const name =
+    item?.conversationName ||
+    item?.conversation?.name ||
+    item?.name ||
+    item?.otherUserName ||
+    item?.senderName ||
+    'Conversation';
+  const snippet = String(item?.text || item?.snippet || item?.body || item?.lastMessageText || '');
+  const lower = snippet.toLowerCase();
+  const t = term.trim().toLowerCase();
+  const matchAt = t ? lower.indexOf(t) : -1;
+  // Build a highlighted snippet centred on the first match.
+  let before = snippet;
+  let hit = '';
+  let after = '';
+  if (matchAt >= 0) {
+    const start = Math.max(0, matchAt - 24);
+    before = (start > 0 ? '…' : '') + snippet.slice(start, matchAt);
+    hit = snippet.slice(matchAt, matchAt + term.length);
+    after = snippet.slice(matchAt + term.length);
+  }
+
+  return (
+    <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.7} testID={`search-message-result-${index}`}>
+      <Avatar name={name} uri={item?.photoUrl || item?.avatarUrl} size={48} />
+      <View style={styles.rowMid}>
+        <Text style={styles.rowTitle} numberOfLines={1}>{name}</Text>
+        <Text style={styles.rowSub} numberOfLines={1}>
+          {matchAt >= 0 ? (
+            <>
+              {before}
+              <Text style={styles.snippetHighlight}>{hit}</Text>
+              {after}
+            </>
+          ) : (
+            snippet || 'Open message'
+          )}
+        </Text>
       </View>
       <Feather name="chevron-right" size={20} color={Colors.textMuted} />
     </TouchableOpacity>
@@ -249,6 +345,7 @@ const styles = StyleSheet.create({
   rowMid: { flex: 1 },
   rowTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   rowSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
+  snippetHighlight: { backgroundColor: '#FDE68A', color: '#1A1A1A', fontWeight: FontWeight.semibold },
   messageBtn: {
     width: 44,
     height: 44,
