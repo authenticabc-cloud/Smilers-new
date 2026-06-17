@@ -101,8 +101,9 @@ export default function ProfileScreen() {
     : undefined;
 
   // iter-221: phone-number section (web parity). Web shows the verified
-  // number above YOUR NAME.
-  const phone = safeString((me as any)?.phoneE164 ?? (me as any)?.phone, '');
+  // number above YOUR NAME. Prefer the human-friendly `phone` display value
+  // and fall back to canonical `phoneE164` (per web backend guidance).
+  const phone = safeString((me as any)?.phone ?? (me as any)?.phoneE164, '');
   const phoneVerified = Boolean((me as any)?.phoneVerified);
 
   const openEditor = useCallback(
