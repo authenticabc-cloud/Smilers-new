@@ -125,32 +125,13 @@ export default function MyRecordingsScreen() {
     }
   };
 
-  // Backend delete mutation name is not confirmed in this repo, so try the
-  // most likely canonical names + arg shapes. Reactive listMyRecordings
-  // removes the row automatically on success.
+  // Canonical mutation confirmed by the web team (iter-212):
+  //   api.callRecording.deleteRecording({ recordingId })  → { ok: true }
+  // Ownership is enforced server-side; idempotent. The reactive
+  // listMyRecordings query removes the row automatically on success.
   const deleteOnBackend = async (item: any): Promise<void> => {
-    const id = item?._id || item?.callId;
-    const fnNames = ['deleteRecording', 'removeRecording', 'remove', 'delete'];
-    const argVariants = [{ recordingId: id }, { id }, { callId: item?.callId || id }];
-    let lastErr: any = null;
-    for (const fn of fnNames) {
-      for (const argv of argVariants) {
-        try {
-          await convex.mutation((api as any).callRecording[fn], argv as any);
-          return;
-        } catch (e: any) {
-          lastErr = e;
-          const msg = String(e?.message || e);
-          // Unknown function → stop trying this name, move to the next.
-          if (/Could ?not ?find|FunctionNotFound|does not exist|No function/i.test(msg)) break;
-          // Bad args → try the next arg shape for the same function.
-          if (/Argument|Validator|validation|Expected/i.test(msg)) continue;
-          // Any other error (e.g. auth) → surface immediately.
-          throw e;
-        }
-      }
-    }
-    throw lastErr || new Error('No delete function available on the backend.');
+    const recordingId = item?._id;
+    await convex.mutation((api as any).callRecording.deleteRecording, { recordingId });
   };
 
   const handleDelete = (item: any) => {
