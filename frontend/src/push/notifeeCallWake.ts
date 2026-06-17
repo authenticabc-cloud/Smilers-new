@@ -212,7 +212,14 @@ export async function presentIncomingCallNotifeeWake(payload: IncomingCallPayloa
         // loopSound rings the channel's ringtone until handled.
         fullScreenAction: { id: 'answer', launchActivity: 'default' },
         pressAction: { id: 'answer', launchActivity: 'default' },
-        ongoing: true,
+        // iter-218 — Issue 2: NOT `ongoing`. An ongoing notification is
+        // not removed by `timeoutAfter` on many Android builds, so when the
+        // missed-call follow-up fired the original incoming ring lingered
+        // beside it (the exact "both notifications show" bug). Non-ongoing
+        // still rings full-screen (fullScreenAction + loopSound + MAX
+        // heads-up) but lets the OS auto-dismiss it at `timeoutAfter`, and
+        // our Answer/Decline handlers cancel it explicitly anyway.
+        ongoing: false,
         autoCancel: false,
         loopSound: true,
         // Auto-stops the ring (and shows the missed-call follow-up) if

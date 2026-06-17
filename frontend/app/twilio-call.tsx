@@ -130,6 +130,68 @@ export default function TwilioCallScreen() {
     }
   }, [host.state, closeScreen, roomName]);
 
+  // iter-218 — Issue 3: end the call automatically when the OTHER side
+  // leaves. Twilio does NOT disconnect the remaining participant when one
+  // party hangs up/declines, so the local room state stays 'connected'
+  // (alone) and the screen never auto-closed. We track whether a remote
+  // participant ever joined; once they ALL leave again, we treat it as the
+  // call having ended and tear down our side too (leave + complete room +
+  // close), so the receiver/caller is never stranded on a dead screen.
+  const hadRemoteRef = useRef(false);
+  useEffect(() => {
+    const remoteCount = host.participants?.length || 0;
+    if (remoteCount > 0) {
+      hadRemoteRef.current = true;
+      return;
+    }
+    if (
+      hadRemoteRef.current &&
+      remoteCount === 0 &&
+      !navigatedRef.current &&
+      (host.state === 'connected' || host.state === 'reconnecting')
+    ) {
+      recordDiagnostic({
+        tag: 'TWILIO-CALL',
+        source: 'screen',
+        message: `remote-left auto-end room=${roomName}`,
+      });
+      const t = setTimeout(() => {
+        try {
+          host.session?.leave();
+        } catch {}
+        endTwilioCall(roomName).catch(() => {});
+        closeScreen();
+      }, 800);
+      return () => clearTimeout(t);
+    }
+  }, [host.participants, host.state, host.session, roomName, closeScreen]);
+
+  // iter-218 — Issue 3 (caller side): if the callee never answers, end the
+  // call as "no answer" after the ring window instead of leaving the caller
+  // stranded on "Waiting for others to join…" until they manually tap End.
+  // The ring window matches the callee's notifee RING_TIMEOUT (35s).
+  useEffect(() => {
+    if (!isCaller) return;
+    if (host.state !== 'connecting' && host.state !== 'connected') return;
+    if ((host.participants?.length || 0) > 0) return; // answered → not a no-answer
+    const RING_TIMEOUT_MS = 35000;
+    const t = setTimeout(() => {
+      if ((host.participants?.length || 0) === 0 && !navigatedRef.current) {
+        recordDiagnostic({
+          tag: 'TWILIO-CALL',
+          source: 'screen',
+          message: `caller no-answer ring-timeout room=${roomName}`,
+        });
+        try {
+          host.session?.leave();
+        } catch {}
+        endTwilioCall(roomName).catch(() => {});
+        closeScreen();
+      }
+    }, RING_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [isCaller, host.state, host.participants, host.session, roomName, closeScreen]);
+
   useEffect(() => {
     if (host.session && host.state === 'connected') {
       // Apply initial speaker preference once we're in the room.
