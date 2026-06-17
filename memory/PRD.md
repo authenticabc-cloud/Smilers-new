@@ -569,3 +569,29 @@ Extended the staged image-preview (iter-212) to N photos:
 - `sendImageFromUri` gained an optional `captionOverride`. Added `ScrollView` import.
 - Verified: babel-transform clean, app bundles + renders Sign-In (smoke). Needs
   device verification (authenticated chat behind OIDC). No backend changes.
+
+---
+
+## iter-216 — Post-test fixes: receiver call-screen, archived UX, schedule edit
+
+1. **Call lingered on receiver screen** (`app/twilio-call.tsx`): the receiver was
+   never navigated away when the room ended remotely. Added a guarded auto-close
+   effect — once the session reaches a terminal state ('disconnected'/'failed')
+   AFTER having been active, the screen pops. `handleHangup` now uses the same
+   guarded `closeScreen` (no double-nav).
+2. **Archived UX** (`app/(tabs)/chats.tsx`, `app/archived.tsx`):
+   - Full left-swipe now AUTO-archives (web parity) via `onSwipeableOpen` — no
+     tap needed (the action button was also hidden behind the right-edge floating
+     quick-action buttons).
+   - Archived rows showed "Chat" instead of the contact name. New `ArchivedRow`
+     component resolves the name the same way the main list does (device address
+     book → saved contact → Smilers name) + avatar photo.
+3. **Schedule edit missing Yearly** (`app/scheduled.tsx`): extended `Repeat` to
+   include `hourly` + `yearly` (parity with the create sheet's frequencies);
+   updated REPEAT_LABEL/REPEAT_OPTIONS and the draft→repeat passthrough. Also
+   fixes blank labels for existing hourly/yearly schedules in the list.
+
+Verified: all four touched files babel-transform clean; app bundles + renders
+Sign-In (smoke). Needs device verification (authenticated flows behind OIDC).
+Backend `repeat: 'yearly'/'hourly'` assumed supported by Convex (web edit already
+offers Yearly → shared backend).

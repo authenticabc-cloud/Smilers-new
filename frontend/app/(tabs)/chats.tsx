@@ -506,6 +506,15 @@ function SwipeToArchive({ onArchive, children }: { onArchive: () => void; childr
       rightThreshold={48}
       overshootRight={false}
       renderRightActions={renderRightActions}
+      // iter-216: match the web app — a full left-swipe auto-archives,
+      // no tap needed (the action button was also getting hidden behind
+      // the floating quick-action buttons on the right edge).
+      onSwipeableOpen={(direction) => {
+        if (direction === 'right') {
+          ref.current?.close();
+          onArchive();
+        }
+      }}
     >
       {children}
     </Swipeable>

@@ -25,7 +25,7 @@
  * wire this in as the default call path when EXPO_PUBLIC_USE_TWILIO=1.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -99,6 +99,37 @@ export default function TwilioCallScreen() {
   const [videoOn, setVideoOn] = useState(isVideo);
   const [speakerOn, setSpeakerOn] = useState(isVideo); // default speaker on for video
 
+  // iter-216: auto-close the call screen when the call ends remotely.
+  // Once the room is completed (caller hung up / callee declined →
+  // /api/twilio/end-call), Twilio disconnects us — but nothing was
+  // navigating the receiver away, so they were stranded on a dead
+  // "Connecting…"/call view. When our session reaches a terminal state
+  // AFTER having been active, leave the screen. Guarded so an initial
+  // 'failed' (e.g. web stub) never triggers it.
+  const navigatedRef = useRef(false);
+  const wasActiveRef = useRef(false);
+  const closeScreen = useCallback(() => {
+    if (navigatedRef.current) return;
+    navigatedRef.current = true;
+    if (router.canGoBack()) router.back();
+    else router.replace('/');
+  }, [router]);
+
+  useEffect(() => {
+    if (host.state === 'connecting' || host.state === 'connected' || host.state === 'reconnecting') {
+      wasActiveRef.current = true;
+    }
+    if ((host.state === 'disconnected' || host.state === 'failed') && wasActiveRef.current) {
+      recordDiagnostic({
+        tag: 'TWILIO-CALL',
+        source: 'screen',
+        message: `auto-close room=${roomName} state=${host.state}`,
+      });
+      const t = setTimeout(closeScreen, 700);
+      return () => clearTimeout(t);
+    }
+  }, [host.state, closeScreen, roomName]);
+
   useEffect(() => {
     if (host.session && host.state === 'connected') {
       // Apply initial speaker preference once we're in the room.
@@ -158,9 +189,9 @@ export default function TwilioCallScreen() {
         source: 'screen',
         message: `hangup room=${roomName} final_state=${host.state}`,
       });
-      // Go back to wherever launched the call.
-      if (router.canGoBack()) router.back();
-      else router.replace('/');
+      // Go back to wherever launched the call (guarded against the
+      // auto-close effect also firing on the resulting 'disconnected').
+      closeScreen();
     }
   };
 

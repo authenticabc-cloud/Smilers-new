@@ -29,7 +29,7 @@ import { readStoredJson, writeStoredJson } from '../src/lib/settingsStorage';
 import { errorToMessage } from '../src/lib/safeString';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/theme';
 
-type Repeat = 'once' | 'daily' | 'weekly' | 'monthly';
+type Repeat = 'once' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'yearly';
 interface Schedule {
   _id: string;
   recipient: string;
@@ -40,8 +40,8 @@ interface Schedule {
   active: boolean;
 }
 
-const REPEAT_LABEL: Record<Repeat, string> = { once: 'Once', daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
-const REPEAT_OPTIONS: Repeat[] = ['once', 'daily', 'weekly', 'monthly'];
+const REPEAT_LABEL: Record<Repeat, string> = { once: 'Once', hourly: 'Hourly', daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', yearly: 'Yearly' };
+const REPEAT_OPTIONS: Repeat[] = ['once', 'hourly', 'daily', 'weekly', 'monthly', 'yearly'];
 
 function pad2(n: number) { return n.toString().padStart(2, '0'); }
 function todayYMD() { const d = new Date(); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
@@ -162,11 +162,9 @@ export default function ScheduledScreen() {
         // draft's frequency exactly like the chat composer does.
         const draftRepeat: Repeat = !draft.recurring
           ? 'once'
-          : draft.frequency === 'daily' || draft.frequency === 'hourly'
-            ? 'daily'
-            : draft.frequency === 'weekly'
-              ? 'weekly'
-              : 'monthly';
+          : (['hourly', 'daily', 'weekly', 'monthly', 'yearly'].includes(String(draft.frequency))
+              ? (draft.frequency as Repeat)
+              : 'monthly');
         const args = {
           recipient: String(draft.recipient || 'Conversation').slice(0, 200),
           message: String(draft.message || '').slice(0, 5000),

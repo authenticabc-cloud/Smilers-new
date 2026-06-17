@@ -3,10 +3,16 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert } from 'react
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useConvex } from 'convex/react';
+import { useConvex, useQuery } from 'convex/react';
 import Avatar from '../src/components/Avatar';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+import {
+  findSavedContactDisplayName,
+  getConversationDisplayName,
+  getResolvedConversationDisplayName,
+} from '../src/lib/displayName';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../src/lib/deviceContactIndex';
 import { Colors, FontSize, FontWeight, Spacing, Radius } from '../src/theme';
 
 function relTime(iso?: string) {
@@ -26,6 +32,8 @@ function relTime(iso?: string) {
 export default function ArchivedScreen() {
   const router = useRouter();
   const convex = useConvex();
+  const me = useQuery(api.users.getCurrentUser, {});
+  const contacts = useQuery(api.contacts.getContacts, {}) as any[] | undefined;
   // iter-213: confirmed backend contract — api.archives.listArchived({})
   // returns archived conversations shaped like listConversations. Kept on
   // useSafeConvexQuery so a transient backend hiccup degrades to the empty
@@ -77,37 +85,86 @@ export default function ArchivedScreen() {
           keyExtractor={(item: any) => String(item._id ?? Math.random())}
           contentContainerStyle={{ paddingVertical: Spacing.sm }}
           renderItem={({ item }) => (
-            <View style={styles.row}>
-              <TouchableOpacity
-                style={styles.rowMain}
-                onPress={() => router.push(`/chat/${item._id}` as any)}
-                activeOpacity={0.7}
-              >
-                <Avatar name={item.name || item.otherUserName || '?'} size={48} />
-                <View style={styles.rowText}>
-                  <Text style={styles.rowName} numberOfLines={1}>
-                    {item.name || item.otherUserName || 'Chat'}
-                  </Text>
-                  <Text style={styles.rowSubtitle} numberOfLines={1}>
-                    {item.lastMessageText || 'No messages yet'}
-                  </Text>
-                </View>
-                <Text style={styles.rowTime}>{relTime(item.lastMessageTime)}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.unarchiveBtn}
-                onPress={() => handleUnarchive(item._id)}
-                hitSlop={8}
-                testID={`unarchive-${item._id}`}
-                accessibilityLabel="Unarchive chat"
-              >
-                <MaterialCommunityIcons name="archive-arrow-up-outline" size={22} color={Colors.primary} />
-              </TouchableOpacity>
-            </View>
+            <ArchivedRow
+              item={item}
+              currentUserId={me?._id}
+              contacts={contacts}
+              onOpen={() => router.push(`/chat/${item._id}` as any)}
+              onUnarchive={() => handleUnarchive(item._id)}
+            />
           )}
         />
       )}
     </SafeAreaView>
+  );
+}
+
+function ArchivedRow({
+  item,
+  currentUserId,
+  contacts,
+  onOpen,
+  onUnarchive,
+}: {
+  item: any;
+  currentUserId?: string;
+  contacts?: any[];
+  onOpen: () => void;
+  onUnarchive: () => void;
+}) {
+  // iter-216: resolve the display name the SAME way the main chats list
+  // does (device address book → saved contact → Smilers name), instead of
+  // showing the bare "Chat" fallback. Fixes archived rows showing "Chat".
+  const deviceIndex = useDeviceContactIndex();
+  const deviceName = getResolvedConversationDisplayName(item, currentUserId, deviceIndex, lookupDeviceContactName, '');
+  const savedContactName = deviceName || findSavedContactDisplayName(contacts, item, currentUserId);
+  const name = savedContactName || getConversationDisplayName(item, currentUserId, 'Smilers user');
+
+  const otherUserPhoto =
+    item?.avatar ||
+    item?.avatarUrl ||
+    item?.photo ||
+    item?.profilePicture ||
+    item?.otherUser?.profilePicture ||
+    item?.otherUser?.avatar ||
+    item?.otherParticipant?.profilePicture ||
+    item?.otherParticipant?.avatar;
+  const contactRecord = (contacts || []).find((c: any) => {
+    const ids = [c?.userId, c?.user?._id, c?._id, c?.contactUserId].filter(Boolean);
+    return (
+      (item?.otherUserId && ids.includes(item.otherUserId)) ||
+      (item?.otherParticipant?._id && ids.includes(item.otherParticipant._id))
+    );
+  });
+  const photoUri: string | undefined =
+    otherUserPhoto ||
+    contactRecord?.profilePicture ||
+    contactRecord?.user?.profilePicture ||
+    contactRecord?.avatar ||
+    contactRecord?.user?.avatar;
+
+  return (
+    <View style={styles.row}>
+      <TouchableOpacity style={styles.rowMain} onPress={onOpen} activeOpacity={0.7}>
+        <Avatar name={name} size={48} uri={photoUri} />
+        <View style={styles.rowText}>
+          <Text style={styles.rowName} numberOfLines={1}>{name}</Text>
+          <Text style={styles.rowSubtitle} numberOfLines={1}>
+            {item.lastMessageText || 'No messages yet'}
+          </Text>
+        </View>
+        <Text style={styles.rowTime}>{relTime(item.lastMessageTime)}</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={styles.unarchiveBtn}
+        onPress={onUnarchive}
+        hitSlop={8}
+        testID={`unarchive-${item._id}`}
+        accessibilityLabel="Unarchive chat"
+      >
+        <MaterialCommunityIcons name="archive-arrow-up-outline" size={22} color={Colors.primary} />
+      </TouchableOpacity>
+    </View>
   );
 }
 
