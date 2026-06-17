@@ -32,6 +32,7 @@ import { SharedContactBubble } from '../../src/components/chat/SharedContactBubb
 import EmojiPickerSheet from '../../src/components/EmojiPickerSheet';
 import GiphyPicker, { GiphyAsset } from '../../src/components/GiphyPicker';
 import MediaBubble from '../../src/components/MediaBubble';
+import { LiveLocationRequestBanner } from '../../src/components/LiveLocationRequestBanner';
 import PollComposer from '../../src/components/PollComposer';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery, useSafeConvexSubscription } from '../../src/hooks/useSafeConvexQuery';
@@ -2712,6 +2713,12 @@ export default function ChatScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={0}
       >
+        {/* Incoming live-location request for this chat — tap to confirm. */}
+        {isConversationAvailable ? (
+          <View style={styles.locationRequestBannerWrap}>
+            <LiveLocationRequestBanner conversationId={String(conversationId || '')} />
+          </View>
+        ) : null}
         {conversationLoading || messagesLoading ? (
           fallbackReady && conversation === undefined ? (
             // Pending past the threshold — surface an actionable
@@ -3580,6 +3587,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingTop: 12,
     paddingBottom: 20,
+  },
+  locationRequestBannerWrap: {
+    paddingHorizontal: 12,
+    paddingTop: 10,
   },
   dayChipWrap: {
     alignItems: 'center',

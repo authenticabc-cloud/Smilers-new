@@ -10,6 +10,7 @@ import Avatar from '../../src/components/Avatar';
 import FabStack from '../../src/components/FabStack';
 import SosButton from '../../src/components/SosButton';
 import { LoginApprovalBanner } from '../../src/components/LoginApprovalBanner';
+import { LiveLocationRequestBanner } from '../../src/components/LiveLocationRequestBanner';
 import { api } from '../../src/convexApi';
 import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName } from '../../src/lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
@@ -281,6 +282,8 @@ export default function ChatsScreen() {
           <>
             {/* iter-186: pending desktop login approvals (contract §5.5) */}
             <LoginApprovalBanner />
+            {/* Incoming live-location requests — tap to confirm & share. */}
+            <LiveLocationRequestBanner />
             <PinnedRow
               iconBg={Colors.aiBadge}
               iconBgDark={Colors.aiBadgeDark}
