@@ -525,3 +525,31 @@ confirmed by web team):
 Verified: all changed files babel-transform clean; app bundles + renders Sign In
 (smoke). Authenticated archive flow needs a real device (OIDC Google blocks
 automated e2e). Contract Q&A: `WEB_AGENT_REQUESTS_iter213_archived_chats_sync.md`.
+
+---
+
+## iter-214 — Call-notification trio (#1 ringtone, #3 missed-call, #4 persistence) ROOT-CAUSE (no code change)
+
+Full end-to-end trace done. Findings:
+- Channel-routing code is CORRECT by inspection: Twilio call push has
+  `type:"call"` → `_resolve_android_channel` returns the device's versioned
+  call channel (`calls-v4-<sound>`, default `smilers_never_cry`) → passed to
+  `fcm_send_v1` as `android_channel_id`. Call channels carry a RING sound, not
+  the message tone.
+- The call FCM carries a `notification` block (title/body) AND data. On a
+  KILLED app, Android AUTO-DISPLAYS the notification itself → the rich
+  `notifeeCallWake` path (ringtone loop + Answer/Decline + ongoing + missed-call
+  transform) NEVER runs (matches previous agent's "no [FCM]/WAKE events on
+  receiver"). So #1/#3/#4 share ONE cause: the OS renders the call, not notifee.
+- Proper fix = send call pushes DATA-ONLY + render via a reliable killed-app
+  background handler (notifee/@react-native-firebase). That is the EXACT path
+  that catastrophically regressed in iter-202 (all push died). It cannot be
+  verified in the cloud env (killed-app FCM needs a real device build).
+- The residual "message tone" is runtime/data (which channel actually rendered /
+  what `call_channel_id` the device registered) — needs ONE device diagnostic to
+  pin; not statically visible.
+
+DECISION: do NOT blind-edit the fragile push delivery path (regression risk =
+exactly what burned us in iter-202). Trio deferred to a device-in-hand session
+where each change is immediately testable against the WAKE/[FCM] diagnostic
+stream. Items #5 (recordings), #6 (photo download), #2 (call-end) already fixed.
