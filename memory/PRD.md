@@ -1,5 +1,9 @@
 # Smilers Mobile App — PRD
 
+## iter-218c (Feb 2026): On-device "Call Diagnostics" screen (enhancement)
+New `app/call-diagnostics.tsx` (route `/call-diagnostics`, linked from Settings under "Diagnostic Logs"). Reads the local AsyncStorage diagnostic ring buffer via new exports `getStoredDiagnostics()` / `clearStoredDiagnostics()` in `src/lib/diagnostics.ts`. Shows recent call/push events newest-first with tag pills, source, timestamp; filter chips Calls / Push / All; Refresh, Copy-to-clipboard (expo-clipboard), and Clear. Lets the user/support pinpoint ring / answer-decline / auto-drop (`[TWILIO-CALL]`, `[WAKE]`) issues during the next device test without server-log digging. Verified on web: lint+tsc clean, list renders (6 boot/health events), filter switching + copy work. NOTE: Metro runs in CI mode (reloads disabled) — adding a NEW route file requires `sudo supervisorctl restart expo` for expo-router to register it.
+
+
 ## iter-218 (Feb 2026): Device-test fixes — Twilio auto-drop, missed-call lingering, killed-app ringtone
 User device-tested iter-217 and reported 3 issues. Fixes:
 - **Issue 3 (Twilio call doesn't auto-drop on the other side)** — ROOT CAUSE: Twilio does not disconnect the remaining participant when one leaves, and there was no caller-side ring timeout, so the local room stayed `connected` (alone) and the screen never closed. FIX in `app/twilio-call.tsx`: (a) remote-left auto-end — once a remote participant joined and then all leave, tear down our side (leave + `/api/twilio/end-call` + close); (b) caller no-answer ring-timeout (~35s) → auto-end instead of stranding the caller on "Waiting for others to join…". Client-side, lint-clean.

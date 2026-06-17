@@ -84,6 +84,22 @@ async function writeStoredEvents(events: DiagnosticEvent[]): Promise<void> {
 }
 
 /**
+ * Read the locally-stored diagnostic ring buffer (newest last). Exposed so
+ * the on-device Call Diagnostics screen can render the last
+ * [TWILIO-CALL]/[WAKE]/call events without a network round-trip.
+ */
+export async function getStoredDiagnostics(): Promise<DiagnosticEvent[]> {
+  return readStoredEvents();
+}
+
+/** Clear the locally-stored diagnostic ring buffer. */
+export async function clearStoredDiagnostics(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(STORAGE_KEY);
+  } catch {}
+}
+
+/**
  * Record a diagnostic event. Persists to AsyncStorage so it survives a
  * crash. Writes are queued + serialized to avoid AsyncStorage races.
  *
