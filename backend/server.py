@@ -995,6 +995,7 @@ async def fcm_send_v1(
     data: dict[str, str] | None = None,
     android_channel_id: str = "default",
     ttl_seconds: int | None = None,
+    android_data_only: bool = False,
 ) -> tuple[bool, str | None]:
     """
     Send a push notification directly via Firebase Cloud Messaging v1 API
@@ -1019,7 +1020,17 @@ async def fcm_send_v1(
             safe_data[str(k)] = str(v)
         msg = fcm_messaging.Message(
             token=device_token,
-            notification=fcm_messaging.Notification(title=title, body=message),
+            # iter-217: CALL pushes are sent DATA-ONLY on Android (no
+            # top-level `notification`, no AndroidNotification) so Android
+            # does NOT auto-display a system notification. Instead the
+            # device's background task renders the rich notifee full-screen
+            # incoming-call UI (looping ringtone + Answer/Decline + ongoing
+            # + missed-call). Messages keep the notification block so they
+            # display normally even when the JS app isn't running. iOS keeps
+            # its APNS alert in both cases.
+            notification=(
+                None if android_data_only else fcm_messaging.Notification(title=title, body=message)
+            ),
             data=safe_data,
             android=fcm_messaging.AndroidConfig(
                 priority="high",
@@ -1027,13 +1038,17 @@ async def fcm_send_v1(
                 # delivery window doesn't produce a ghost ring minutes
                 # later when the device comes back online.
                 **({"ttl": timedelta(seconds=ttl_seconds)} if ttl_seconds else {}),
-                notification=fcm_messaging.AndroidNotification(
-                    channel_id=android_channel_id,
-                    sound="default",
-                    default_vibrate_timings=True,
-                    default_light_settings=True,
-                    visibility="public",
-                    priority="high",
+                notification=(
+                    None
+                    if android_data_only
+                    else fcm_messaging.AndroidNotification(
+                        channel_id=android_channel_id,
+                        sound="default",
+                        default_vibrate_timings=True,
+                        default_light_settings=True,
+                        visibility="public",
+                        priority="high",
+                    )
                 ),
             ),
             apns=fcm_messaging.APNSConfig(
@@ -1414,6 +1429,22 @@ async def send_push(
                     probe_channel = _resolve_android_channel({**data, "title": title}, None)
                     routing["type"] = "call" if probe_channel.startswith("calls") else "message"
                 fcm_data.update(routing)
+                # iter-217: forward the call-routing fields the mobile
+                # notifee handler needs directly (Answer → /twilio-call,
+                # Decline → /api/twilio/end-call). _derive_push_routing only
+                # emits type/conversationId/callId, so carry the twilio_*
+                # hints + callId/displayName through explicitly.
+                for _k in (
+                    "twilio_room_name",
+                    "twilio_room_sid",
+                    "twilio_is_video",
+                    "callId",
+                    "conversationId",
+                    "displayName",
+                ):
+                    _v = data.get(_k)
+                    if _v is not None and _k not in fcm_data:
+                        fcm_data[_k] = str(_v)
                 is_call_push = routing.get("type") == "call"
 
                 # iter-199: collapse Convex-trigger + caller-device call
@@ -1451,6 +1482,11 @@ async def send_push(
                         # device that was offline doesn't get a ghost ring
                         # minutes after the caller hung up.
                         ttl_seconds=45 if is_call_push else None,
+                        # iter-217: calls go DATA-ONLY on Android so the
+                        # device renders the notifee full-screen ring
+                        # (ringtone + Answer/Decline) instead of the OS
+                        # auto-displaying a plain message-tone notification.
+                        android_data_only=is_call_push,
                     )
                     for t in tokens
                 ]

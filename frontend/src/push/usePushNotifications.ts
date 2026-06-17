@@ -262,6 +262,71 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
     return;
   }
 
+  // iter-217: CALLS now render via the rich notifee full-screen UI
+  // (looping ringtone + Answer/Decline + ongoing + missed-call). Call
+  // pushes are sent DATA-ONLY on Android, so Android does NOT auto-display
+  // anything and we always reach here. We must NOT also schedule the plain
+  // expo notification (that was the message-tone banner that auto-collapsed
+  // with no actions). The notifee path is primary; the expo sticky is a
+  // fallback ONLY when the native notifee module is unavailable.
+  if (type === 'call') {
+    backgroundNotificationKeys.add(notificationKey);
+    trimBackgroundNotificationCache();
+
+    const callId = toNonEmptyString(payload.callId) || notificationKey;
+    const callerName =
+      getDisplayNameFromPayload(payload) || toNonEmptyString(payload.title) || 'Smilers user';
+    const callerId = toNonEmptyString(payload.callerId) || callId;
+    const isVideo =
+      toNonEmptyString(payload.twilio_is_video) === '1' ||
+      toNonEmptyString(payload.callType) === 'video';
+    const callType: 'voice' | 'video' = isVideo ? 'video' : 'voice';
+    const conversationId = toNonEmptyString(payload.conversationId) || '';
+    const twilioRoom = toNonEmptyString(payload.twilio_room_name) || '';
+    const actionUrl = toNonEmptyString(payload.action_url) || '';
+
+    let notifeeOk = false;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { presentIncomingCallNotifeeWake } = require('./notifeeCallWake');
+      await presentIncomingCallNotifeeWake({
+        callId,
+        callerId,
+        callerName,
+        callType,
+        conversationId,
+        twilioRoom,
+        actionUrl,
+        isVideo,
+      });
+      notifeeOk = true;
+    } catch (errorValue: any) {
+      console.warn('[push] notifee call wake failed, falling back to expo notif:', errorValue?.message);
+    }
+
+    if (!notifeeOk) {
+      // Fallback so the call still rings on a build without notifee.
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: toNonEmptyString(payload.title) || 'Incoming call',
+          body: callerName,
+          data: payload,
+          sound: resolveCallChannelSound(toNonEmptyString(payload.sound) || 'ringtone'),
+          categoryIdentifier: CALL_CATEGORY,
+          sticky: true,
+          autoDismiss: false,
+          priority: Notifications.AndroidNotificationPriority.MAX,
+          vibrate: [0, 600, 300, 600, 300, 600],
+          interruptionLevel: 'timeSensitive',
+        },
+        trigger: Platform.OS === 'android' ? { channelId: CALLS_CHANNEL } : null,
+      });
+    }
+    return;
+  }
+
+  // MESSAGE path (unchanged): skip if the OS already displayed the push
+  // (notification block present), otherwise schedule the local banner.
   if (!shouldScheduleLocalNotification(taskObject)) {
     return;
   }
@@ -269,71 +334,23 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
   backgroundNotificationKeys.add(notificationKey);
   trimBackgroundNotificationCache();
 
-  const title =
-    toNonEmptyString(payload.title) ||
-    (type === 'call' ? 'Incoming call' : 'New message');
+  const title = toNonEmptyString(payload.title) || 'New message';
   const body =
-    getDisplayNameFromPayload(payload) ||
-    (type === 'call' ? 'Smilers caller' : 'Open Smilers to view the message');
+    getDisplayNameFromPayload(payload) || 'Open Smilers to view the message';
 
   await Notifications.scheduleNotificationAsync({
     content: {
       title,
       body,
       data: payload,
-      sound: type === 'call' ? resolveCallChannelSound(toNonEmptyString(payload.sound) || 'ringtone') : resolveMessageChannelSound('smilers_notification'),
-      categoryIdentifier: type === 'call' ? CALL_CATEGORY : undefined,
-      sticky: type === 'call',
-      autoDismiss: type !== 'call',
-      priority: type === 'call' ? Notifications.AndroidNotificationPriority.MAX : Notifications.AndroidNotificationPriority.HIGH,
-      vibrate: type === 'call' ? [0, 600, 300, 600, 300, 600] : [0, 250, 250, 250],
-      interruptionLevel: type === 'call' ? 'timeSensitive' : 'active',
+      sound: resolveMessageChannelSound('smilers_notification'),
+      autoDismiss: true,
+      priority: Notifications.AndroidNotificationPriority.HIGH,
+      vibrate: [0, 250, 250, 250],
+      interruptionLevel: 'active',
     },
-    trigger: Platform.OS === 'android' ? { channelId: type === 'call' ? CALLS_CHANNEL : MESSAGES_CHANNEL } : null,
+    trigger: Platform.OS === 'android' ? { channelId: MESSAGES_CHANNEL } : null,
   });
-
-  // iter-175 Path B Phase 2 — ADDITIVE wake-screen bridge.
-  //
-  // After the existing notification has been scheduled (unchanged from
-  // iter-127), we ALSO fire the full-screen-intent / CallKeep UI for
-  // `type === 'call'` payloads. This wakes the screen on Android even
-  // when locked, and shows the native CallKit UI on iOS (when VoIP
-  // push cert is provisioned). If the native modules aren't loaded
-  // (e.g. older build), this is a silent no-op — the existing banner
-  // path is what the user has always had.
-  //
-  // iter-211 SWITCH: we previously used `callWakeScreen` which combined
-  // Notifee + CallKeep. CallKeep's ConnectionService cannibalized the
-  // FCM message channel (iter-202) so it stayed disabled. We now use
-  // the Notifee-ONLY path `notifeeCallWake` — same full-screen-intent
-  // ring + lockscreen UI, ZERO CallKeep dependency, so it can never
-  // cannibalize FCM. The old `callWakeScreen` remains imported for
-  // backwards-compat (no-op when WAKE_SCREEN_ENABLED=false).
-  //
-  // Note: we lazy-require the module so a missing native binding can
-  // NEVER throw inside the background task and break the message path.
-  if (type === 'call') {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { presentIncomingCallNotifeeWake } = require('./notifeeCallWake');
-      const callId = toNonEmptyString(payload.callId) || notificationKey;
-      const callerName = getDisplayNameFromPayload(payload) || 'Smilers user';
-      const callerId = toNonEmptyString(payload.callerId) || callId;
-      const callType = toNonEmptyString(payload.callType) === 'video' ? 'video' : 'voice';
-      const conversationId = toNonEmptyString(payload.conversationId) || '';
-      if (callId) {
-        await presentIncomingCallNotifeeWake({
-          callId,
-          callerId,
-          callerName,
-          callType,
-          conversationId,
-        });
-      }
-    } catch (errorValue: any) {
-      console.warn('[push] presentIncomingCallNotifeeWake bridge failed:', errorValue?.message);
-    }
-  }
 }
 
 if (Platform.OS !== 'web' && !runtimeScope.__smilersNotificationTaskDefined) {
@@ -996,13 +1013,19 @@ export function usePushNotifications() {
           // eslint-disable-next-line @typescript-eslint/no-var-requires
           const { presentIncomingCallNotifeeWake } = require('./notifeeCallWake');
           const callId = toNonEmptyString(payload.callId) || toNonEmptyString(payload.messageId);
+          const isVideo =
+            toNonEmptyString(payload.twilio_is_video) === '1' ||
+            toNonEmptyString(payload.callType) === 'video';
           if (callId) {
             void presentIncomingCallNotifeeWake({
               callId,
               callerId: toNonEmptyString(payload.callerId) || callId,
               callerName: getDisplayNameFromPayload(payload) || 'Smilers user',
-              callType: toNonEmptyString(payload.callType) === 'video' ? 'video' : 'voice',
+              callType: isVideo ? 'video' : 'voice',
               conversationId: conversationId || '',
+              twilioRoom: toNonEmptyString(payload.twilio_room_name) || '',
+              actionUrl: toNonEmptyString(payload.action_url) || '',
+              isVideo,
             });
           }
         } catch (errorValue: any) {
