@@ -86,3 +86,5 @@ ring — Android platform limit. Swiped-away/backgrounded apps ring fine.
 - iter-223e: Nudge banner is now tappable — toggles the Device list to show ONLY on-Smilers contacts (deviceListData filter), with active styling, dynamic label (ON SMILERS vs INVITE TO SMILERS), and auto-reset when count hits 0.
 
 - iter-224: (1) Profile photo tap → full-screen viewer + "Save to gallery" download (profile.tsx). (2) Phone-identity asymmetry diagnosed as backend data (self-exclusion + un-backfilled phoneLast10/verification). Mobile now special-cases OWN number → "This is your own Smilers number" (usePhoneMessageActions). See PHONE_IDENTITY_ASYMMETRY_iter224.md.
+
+- iter-225: (1) Photo/video status create fails with CONVEX statuses:create Server Error — diagnosed as BACKEND uncaught exception (mobile sends documented shape; text works). Report: STATUS_CREATE_MEDIA_SERVER_ERROR_iter225.md. (2) Removed the yellow web-parity mute FAB from user/[userId].tsx (kept native voice mic).

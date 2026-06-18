@@ -130,7 +130,6 @@ export default function UserProfileScreen() {
 
   // --- UI state -----------------------------------------------------------
   const [mediaTab, setMediaTab] = useState<MediaTab>('photos');
-  const [muted, setMuted] = useState(false);
   const [previewUri, setPreviewUri] = useState<string | null>(null);
 
   // --- Derived ------------------------------------------------------------
@@ -453,20 +452,6 @@ export default function UserProfileScreen() {
           defaultEmail={user?.email || ''}
         />
       ) : null}
-
-      {/* Floating mute FAB */}
-      <TouchableOpacity
-        style={[styles.muteFab, { bottom: Math.max(insets.bottom, 24) + 28 }]}
-        onPress={() => setMuted((current) => !current)}
-        activeOpacity={0.85}
-        testID="user-profile-mute-fab"
-      >
-        <Feather
-          name={muted ? 'mic' : 'mic-off'}
-          size={20}
-          color={muted ? Colors.textSecondary : Colors.primary}
-        />
-      </TouchableOpacity>
 
       {/* Image preview modal */}
       <Modal
@@ -958,23 +943,6 @@ const styles = StyleSheet.create({
     fontSize: FontSize.base,
     color: Colors.danger,
     fontWeight: FontWeight.semibold,
-  },
-
-  // Mute FAB
-  muteFab: {
-    position: 'absolute',
-    right: 20,
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: Colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.18,
-    shadowRadius: 8,
-    elevation: 6,
   },
 
   // Image preview
