@@ -94,3 +94,5 @@ ring — Android platform limit. Swiped-away/backgrounded apps ring fine.
 - iter-226b: Other-user profile photo viewer (tap to enlarge + policy-gated Save) in user/[userId].tsx; shared savePhotoToGallery helper; new photo-privacy settings screen + row; PHOTO_SAVE_POLICY_BACKEND_SPEC.md. Bumped notifee call channel to MAX importance (versioned id v2) for better screen-wake/full-screen-intent.
 
 - iter-227: Backend shipped photoSavePolicy + server-computed canSavePhoto. Viewer now prefers user.canSavePhoto (boolean) when present, client logic as fallback.
+
+- iter-228: Screen-share remote tile fix. (a) Native hook useTwilioCallSession.native.ts was MISSING renderLocalView/renderParticipantView/renderScreenShareView/screenShareState in its return — implemented + returned them (TwilioVideoParticipantView trackIdentifier={videoTrackSid}, scaleType fit). (b) twilio-call.tsx now renders the remote tile whenever p.videoTrackSid exists (not gated on isVideo) so a shared screen shows even on voice calls.

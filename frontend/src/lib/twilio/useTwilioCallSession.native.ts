@@ -16,13 +16,14 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { TwilioVideo, TwilioVideoLocalView, TwilioVideoParticipantView } from '@twilio/video-react-native-sdk';
+import { TwilioVideo, TwilioVideoLocalView, TwilioVideoParticipantView, TwilioVideoScreenShareView } from '@twilio/video-react-native-sdk';
 import { StyleSheet } from 'react-native';
 
 import {
   TwilioCallSession,
   type TwilioConnectionState,
   type TwilioVideoRef,
+  type ScreenShareState,
 } from './TwilioCallSession';
 
 export interface TwilioParticipant {
@@ -205,6 +206,35 @@ export function useTwilioCallSession(args: UseTwilioCallSessionArgs): TwilioCall
     [session],
   );
 
+  // iter-228: render helpers. These were declared in the interface but never
+  // implemented/returned, so `host.renderParticipantView` / `renderLocalView`
+  // were `undefined` — the remote tile (and a shared screen) never rendered.
+  // `scaleType: 'fit'` ensures a shared screen is shown in full (no crop);
+  // it letterboxes a camera tile, which is acceptable.
+  const renderLocalView = useCallback(
+    (style?: any, enabled: boolean = true) =>
+      React.createElement(TwilioVideoLocalView, { enabled, scaleType: 'fit', style }),
+    [],
+  );
+
+  const renderParticipantView = useCallback(
+    (participant: TwilioParticipant, style?: any) => {
+      if (!participant?.videoTrackSid) return null;
+      return React.createElement(TwilioVideoParticipantView, {
+        style,
+        scaleType: 'fit',
+        trackIdentifier: { videoTrackSid: participant.videoTrackSid },
+      });
+    },
+    [],
+  );
+
+  const renderScreenShareView = useCallback(
+    (enabled: boolean, style?: any) =>
+      enabled ? React.createElement(TwilioVideoScreenShareView, { scaleType: 'fit', style }) : null,
+    [],
+  );
+
   // Build the host element ONCE — it's stable across renders so React
   // doesn't unmount and remount the Twilio component (which would drop
   // the call).
@@ -236,6 +266,10 @@ export function useTwilioCallSession(args: UseTwilioCallSessionArgs): TwilioCall
     state,
     participants,
     videoElement,
+    screenShareState,
+    renderLocalView,
+    renderParticipantView,
+    renderScreenShareView,
     isSupported: true,
     error,
   };

@@ -308,7 +308,11 @@ export default function TwilioCallScreen() {
           </View>
         ) : (
           host.participants.map((p) => {
-            const remote = isVideo && p.videoTrackSid
+            // iter-228: render the remote video tile whenever the participant
+            // has a video track — this includes a SHARED SCREEN even during a
+            // voice call (previously gated on `isVideo`, so a screen share on a
+            // voice call never appeared on the receiver).
+            const remote = p.videoTrackSid
               ? host.renderParticipantView(p, styles.remoteVideo)
               : null;
             return remote ? (
