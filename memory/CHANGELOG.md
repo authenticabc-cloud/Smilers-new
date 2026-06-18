@@ -49,3 +49,16 @@ Fixes:
 Tradeoff (user-approved): apps FORCE-STOPPED from Settings can't run JS so won't
 ring — Android platform limit. Swiped-away/backgrounded apps ring fine.
 ⚠️ Verifiable ONLY on a real Android device build (not Expo Go / cloud).
+
+## iter-222 — Share-contact picker + clickable phone numbers
+1. ShareContactsDialog: (a) import no longer AUTO-SELECTS 20 device contacts
+   (caused "Next · 20" + "Limit reached" when picking the searched contact);
+   starts with none selected. (b) Search box now filters the DEVICE list too
+   (previously only Smilers contacts), and device+Smilers are merged into ONE
+   virtualized FlatList (was thousands of un-virtualized header rows).
+2. Phone numbers in message text are now tappable (MediaBubble RichMessageText
+   + new src/lib/usePhoneMessageActions.ts): tap → if on Smilers, offer
+   "Message" (opens/creates direct chat via getOrCreateDirect); else offer
+   "Invite" via native share sheet pre-filled with the user's referral code
+   (buildInviteMessage). Regex ignores timestamps/short numbers (>=7 digits).
+⚠️ Behind Google OIDC login — verify on device/build (testing agent can't auth).

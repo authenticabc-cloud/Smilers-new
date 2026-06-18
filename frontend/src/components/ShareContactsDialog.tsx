@@ -138,10 +138,12 @@ export default function ShareContactsDialog({ visible, onClose, presetRecipientI
         return true;
       });
       setDeviceContacts(deduped);
-      // Auto-select all imports up to the remaining cap.
-      const remaining = Math.max(0, MAX_TOTAL_CONTACTS - selectedContactIds.size);
-      const autoSelected = new Set(deduped.slice(0, remaining).map((d) => d.id));
-      setSelectedDeviceIds(autoSelected);
+      // iter-222: do NOT auto-select imported contacts. Auto-selecting the
+      // first 20 confused users ("Next · 20" with nothing intentionally
+      // picked) AND immediately hit the 20 cap, so tapping the contact they
+      // actually searched for raised "Limit reached". Start with none
+      // selected — the user taps exactly who they want to share.
+      setSelectedDeviceIds(new Set());
     } catch (errorValue: any) {
       Alert.alert('Import failed', errorValue?.message || 'Could not load device contacts.');
     } finally {
@@ -160,6 +162,46 @@ export default function ShareContactsDialog({ visible, onClose, presetRecipientI
       return name.includes(q) || phone.includes(q);
     });
   }, [contacts, contactSearch]);
+
+  // iter-222: the search box must ALSO filter the device-imported list —
+  // previously only the Smilers contacts were filtered, so typing a name
+  // left the (often thousands of) device rows untouched and the user had
+  // to scroll manually to find them.
+  const filteredDeviceContacts = useMemo(() => {
+    const q = contactSearch.trim().toLowerCase();
+    if (!q) return deviceContacts;
+    return deviceContacts.filter((d) => {
+      const name = String(d.name || '').toLowerCase();
+      const phone = String(d.phone || '').toLowerCase();
+      return name.includes(q) || phone.includes(q);
+    });
+  }, [deviceContacts, contactSearch]);
+
+  // iter-222: single virtualized list (FROM DEVICE + SAVED ON SMILERS)
+  // instead of rendering all device rows inside ListHeaderComponent — the
+  // old approach rendered thousands of un-virtualized rows, which was slow
+  // and made search feel unresponsive.
+  type ContactRow =
+    | { kind: 'section'; key: string; label: string }
+    | { kind: 'device'; key: string; contact: DeviceContact }
+    | { kind: 'smilers'; key: string; contact: any };
+
+  const contactListData = useMemo<ContactRow[]>(() => {
+    const rows: ContactRow[] = [];
+    if (filteredDeviceContacts.length > 0) {
+      rows.push({ kind: 'section', key: 'sec-device', label: 'FROM DEVICE' });
+      filteredDeviceContacts.forEach((d) => rows.push({ kind: 'device', key: d.id, contact: d }));
+    }
+    if (filteredForContacts.length > 0) {
+      if (deviceContacts.length > 0) {
+        rows.push({ kind: 'section', key: 'sec-smilers', label: 'SAVED ON SMILERS' });
+      }
+      filteredForContacts.forEach((c) =>
+        rows.push({ kind: 'smilers', key: String(c._id), contact: c }),
+      );
+    }
+    return rows;
+  }, [filteredDeviceContacts, filteredForContacts, deviceContacts.length]);
 
   // Recipients step — exclude the contacts being shared from the recipient list.
   const filteredForRecipients = useMemo(() => {
@@ -394,56 +436,58 @@ export default function ShareContactsDialog({ visible, onClose, presetRecipientI
                 />
               </View>
               <FlatList
-                data={filteredForContacts}
-                keyExtractor={(it: any) => String(it._id)}
-                renderItem={({ item }) =>
-                  renderContactRow({
-                    item,
-                    selected: selectedContactIds.has(String(item._id)),
-                    onPress: () => toggleContact(String(item._id)),
-                  })
-                }
-                contentContainerStyle={styles.listContent}
-                ListHeaderComponent={
-                  deviceContacts.length > 0 ? (
-                    <View>
-                      <Text style={styles.sectionLabel}>FROM DEVICE</Text>
-                      {deviceContacts.map((d) => (
-                        <TouchableOpacity
-                          key={d.id}
-                          style={styles.row}
-                          onPress={() => toggleDeviceContact(d.id)}
-                          testID={`sc-dev-row-${d.id}`}
+                data={contactListData}
+                keyExtractor={(it) => it.key}
+                renderItem={({ item }) => {
+                  if (item.kind === 'section') {
+                    return <Text style={styles.sectionLabel}>{item.label}</Text>;
+                  }
+                  if (item.kind === 'device') {
+                    const d = item.contact;
+                    return (
+                      <TouchableOpacity
+                        style={styles.row}
+                        onPress={() => toggleDeviceContact(d.id)}
+                        testID={`sc-dev-row-${d.id}`}
+                      >
+                        <View style={[styles.avatar, styles.avatarFallback]}>
+                          <Text style={styles.avatarText}>
+                            {(d.name || d.phone || '?').slice(0, 1).toUpperCase()}
+                          </Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.rowTitle} numberOfLines={1}>
+                            {d.name || d.phone}
+                          </Text>
+                          {d.name ? (
+                            <Text style={styles.rowSubtitle} numberOfLines={1}>{d.phone}</Text>
+                          ) : null}
+                        </View>
+                        <View
+                          style={[styles.checkbox, selectedDeviceIds.has(d.id) ? styles.checkboxOn : null]}
                         >
-                          <View style={[styles.avatar, styles.avatarFallback]}>
-                            <Text style={styles.avatarText}>
-                              {(d.name || d.phone || '?').slice(0, 1).toUpperCase()}
-                            </Text>
-                          </View>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.rowTitle} numberOfLines={1}>
-                              {d.name || d.phone}
-                            </Text>
-                            {d.name ? (
-                              <Text style={styles.rowSubtitle} numberOfLines={1}>{d.phone}</Text>
-                            ) : null}
-                          </View>
-                          <View
-                            style={[styles.checkbox, selectedDeviceIds.has(d.id) ? styles.checkboxOn : null]}
-                          >
-                            {selectedDeviceIds.has(d.id) ? (
-                              <MaterialCommunityIcons name="check" size={14} color="#FFFFFF" />
-                            ) : null}
-                          </View>
-                        </TouchableOpacity>
-                      ))}
-                      <Text style={styles.sectionLabel}>SAVED ON SMILERS</Text>
-                    </View>
-                  ) : null
-                }
+                          {selectedDeviceIds.has(d.id) ? (
+                            <MaterialCommunityIcons name="check" size={14} color="#FFFFFF" />
+                          ) : null}
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  }
+                  return renderContactRow({
+                    item: item.contact,
+                    selected: selectedContactIds.has(String(item.contact._id)),
+                    onPress: () => toggleContact(String(item.contact._id)),
+                  });
+                }}
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={styles.listContent}
                 ListEmptyComponent={
                   <Text style={styles.emptyText}>
-                    {Array.isArray(contacts) ? 'No contacts to share.' : 'Loading\u2026'}
+                    {Array.isArray(contacts)
+                      ? contactSearch.trim()
+                        ? 'No contacts match your search.'
+                        : 'No contacts to share.'
+                      : 'Loading\u2026'}
                   </Text>
                 }
               />

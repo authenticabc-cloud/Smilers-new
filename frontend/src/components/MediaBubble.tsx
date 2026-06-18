@@ -50,6 +50,7 @@ import {
   shareMessage,
   setMessageImageAsProfilePhoto,
 } from '../lib/messageMedia';
+import { usePhoneMessageActions, findPhoneMatches } from '../lib/usePhoneMessageActions';
 
 // Module-level "currently playing" audio singleton — guarantees only one
 // voice message plays at a time. Uses expo-audio's AudioPlayer (expo-av
@@ -461,7 +462,7 @@ function BubbleBodyInner({ msg, timeStr, textStyle, isMine, e2eeStatus, searchTe
       if (extractFirstUrl(msg.text || '')) {
         return <LinkPreviewMessage msg={msg} textStyle={textStyle} isMine={isMine} />;
       }
-      return <RichMessageText text={msg.text || ''} textStyle={textStyle} highlightTerm={searchTerm} highlightActive={isActiveSearchMatch} />;
+      return <RichMessageText text={msg.text || ''} textStyle={textStyle} highlightTerm={searchTerm} highlightActive={isActiveSearchMatch} enablePhoneLinks />;
   }
 }
 
@@ -487,22 +488,48 @@ function splitByTerm(text: string, term: string): { text: string; match: boolean
   return out;
 }
 
+/** Render a plain string with optional search-term highlighting. Returns an
+ *  array of strings / <Text> nodes suitable as children of a <Text>. */
+function renderHighlighted(
+  text: string,
+  term: string,
+  matchStyle: any,
+  keyPrefix: string,
+): React.ReactNode[] {
+  if (!term) return [text];
+  return splitByTerm(text, term).map((part, partIndex) =>
+    part.match ? (
+      <Text key={`${keyPrefix}-h${partIndex}`} style={matchStyle}>
+        {part.text}
+      </Text>
+    ) : (
+      part.text
+    ),
+  );
+}
+
 function RichMessageText({
   text,
   textStyle,
   numberOfLines,
   highlightTerm,
   highlightActive,
+  enablePhoneLinks,
 }: {
   text: string;
   textStyle?: any;
   numberOfLines?: number;
   highlightTerm?: string | null;
   highlightActive?: boolean;
+  /** When true, phone numbers in the text become tappable (Message/Invite). */
+  enablePhoneLinks?: boolean;
 }) {
   const segments = useMemo(() => parseRichTextSegments(text), [text]);
   const term = (highlightTerm || '').trim();
   const matchStyle = highlightActive ? styles.searchHighlightActive : styles.searchHighlight;
+  // Hooks are always called (cheap context reads) so we can conditionally
+  // enable phone-number actions without breaking the rules of hooks.
+  const { onPhonePress } = usePhoneMessageActions();
   return (
     <Text style={[styles.bubbleText, textStyle]} numberOfLines={numberOfLines}>
       {segments.map((segment, index) => {
@@ -510,24 +537,56 @@ function RichMessageText({
           segment.bold ? styles.richTextBold : null,
           segment.color ? { color: segment.color } : null,
         ];
-        if (!term) {
+        const phoneMatches = enablePhoneLinks ? findPhoneMatches(segment.text) : [];
+        if (phoneMatches.length === 0) {
+          if (!term) {
+            return (
+              <Text key={`${index}-${segment.text}`} style={segStyle}>
+                {segment.text}
+              </Text>
+            );
+          }
           return (
             <Text key={`${index}-${segment.text}`} style={segStyle}>
-              {segment.text}
+              {renderHighlighted(segment.text, term, matchStyle, `${index}`)}
             </Text>
+          );
+        }
+        // Split the segment around phone matches; non-phone slices still
+        // get search highlighting, phone slices become tappable links.
+        const children: React.ReactNode[] = [];
+        let cursor = 0;
+        phoneMatches.forEach((pm, pmIndex) => {
+          if (pm.start > cursor) {
+            children.push(
+              ...renderHighlighted(
+                segment.text.slice(cursor, pm.start),
+                term,
+                matchStyle,
+                `${index}-pre${pmIndex}`,
+              ),
+            );
+          }
+          children.push(
+            <Text
+              key={`${index}-phone${pmIndex}`}
+              style={styles.phoneLink}
+              onPress={() => onPhonePress(pm.text.trim())}
+              suppressHighlighting
+            >
+              {pm.text}
+            </Text>,
+          );
+          cursor = pm.end;
+        });
+        if (cursor < segment.text.length) {
+          children.push(
+            ...renderHighlighted(segment.text.slice(cursor), term, matchStyle, `${index}-tail`),
           );
         }
         return (
           <Text key={`${index}-${segment.text}`} style={segStyle}>
-            {splitByTerm(segment.text, term).map((part, partIndex) =>
-              part.match ? (
-                <Text key={partIndex} style={matchStyle}>
-                  {part.text}
-                </Text>
-              ) : (
-                part.text
-              ),
-            )}
+            {children}
           </Text>
         );
       })}
@@ -1970,6 +2029,7 @@ const styles = StyleSheet.create({
   // so it stands out among the other matches.
   searchHighlight: { backgroundColor: '#FDE68A', color: '#1A1A1A' },
   searchHighlightActive: { backgroundColor: '#FACC15', color: '#1A1A1A', fontWeight: FontWeight.bold },
+  phoneLink: { textDecorationLine: 'underline', fontWeight: FontWeight.bold },
   bubbleActiveSearchMatch: { borderWidth: 2, borderColor: '#F59E0B' },
   deletedBubble: { opacity: 0.55 },
   // bubbleMultiSelected — visual feedback when this bubble is in the
