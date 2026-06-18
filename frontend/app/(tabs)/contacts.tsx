@@ -19,8 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { buildInviteUrl, buildInviteMessage } from '../../src/lib/inviteLink';
 import { useRouter } from 'expo-router';
-import { useMutation, useQuery } from 'convex/react';
-import { useConvex } from 'convex/react';
+import { useMutation, useQuery, useConvex } from 'convex/react';
 import * as Contacts from 'expo-contacts';
 import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js';
 import Header from '../../src/components/Header';
@@ -444,6 +443,18 @@ export default function ContactsScreen() {
   // "INVITE TO SMILERS (N)" header — only contacts not yet on Smilers).
   const deviceCount = deviceFiltered.length;
 
+  // iter-223: how many of the shown device contacts are already on Smilers
+  // (resolved via the batch lookup) — drives the top-of-tab nudge banner.
+  const onSmilersCount = useMemo(() => {
+    if (registeredByDigits.size === 0) return 0;
+    let n = 0;
+    for (const c of deviceFiltered) {
+      const d = (c.phone || '').replace(/\D+/g, '').slice(-10);
+      if (d && registeredByDigits.has(d)) n += 1;
+    }
+    return n;
+  }, [deviceFiltered, registeredByDigits]);
+
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="contacts-screen">
       <Header
@@ -690,6 +701,18 @@ export default function ContactsScreen() {
                 </View>
                 <Feather name="chevron-right" size={20} color={Colors.textMuted} />
               </TouchableOpacity>
+              {onSmilersCount > 0 ? (
+                <View style={styles.onSmilersBanner} testID="device-on-smilers-banner">
+                  <View style={styles.onSmilersIcon}>
+                    <Feather name="smile" size={18} color={Colors.primary} />
+                  </View>
+                  <Text style={styles.onSmilersText}>
+                    {onSmilersCount === 1
+                      ? '1 of your contacts is already on Smilers — say hi!'
+                      : `${onSmilersCount} of your contacts are already on Smilers — say hi!`}
+                  </Text>
+                </View>
+              ) : null}
               {devicePerm === 'granted' ? (
                 <Text style={styles.sectionLabel}>
                   INVITE TO SMILERS ({searchTerm ? deviceFiltered.length : deviceFiltered.length})
@@ -999,6 +1022,25 @@ const styles = StyleSheet.create({
     borderRadius: Radius.pill,
   },
   messageBtnText: { color: Colors.white, fontWeight: FontWeight.bold, fontSize: FontSize.sm },
+  onSmilersBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: Colors.primaryLight,
+    borderRadius: Radius.md,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 10,
+  },
+  onSmilersIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: Colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  onSmilersText: { flex: 1, color: Colors.textPrimary, fontWeight: FontWeight.medium, fontSize: FontSize.sm },
 
   acceptBtn: { backgroundColor: Colors.primary, paddingHorizontal: 14, paddingVertical: 8, borderRadius: Radius.pill },
   acceptText: { color: Colors.headerBg, fontSize: FontSize.sm, fontWeight: FontWeight.bold },
