@@ -45,9 +45,12 @@ phoneE164**, so a reverse lookup by number fails.
 ## What the mobile app already does (no backend needed for these)
 - Resolves a tapped number against the **signed-in user's own contact list**
   (`api.contacts.getContacts`) first, so people already in your contacts show
-  "Message" immediately. The backend items above are needed for the GLOBAL case
-  (numbers that are on Smilers but not yet your contact) and for the batch
-  Device-Contacts classification.
+  "Message" immediately.
+- The **batch wiring is already shipped and dormant** in the app:
+  `src/lib/phoneLookup.ts → lookupUsersByPhones()` is feature-detected against
+  `api.users.getByPhones`. The Device-Contacts tab already calls it and will
+  render "Message" for matched numbers the moment the backend deploys the
+  query — **no further mobile release is required** once §3 lands.
 
 ## Acceptance test (once backend is done)
 1. `users.getByPhone({ phoneE164: "+393888793266" })` returns that account.

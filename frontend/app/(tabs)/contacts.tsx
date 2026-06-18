@@ -20,10 +20,12 @@ import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { buildInviteUrl, buildInviteMessage } from '../../src/lib/inviteLink';
 import { useRouter } from 'expo-router';
 import { useMutation, useQuery } from 'convex/react';
+import { useConvex } from 'convex/react';
 import * as Contacts from 'expo-contacts';
 import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js';
 import Header from '../../src/components/Header';
 import { api } from '../../src/convexApi';
+import { lookupUsersByPhones } from '../../src/lib/phoneLookup';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { getDisplayInitials, getDisplayNameFromUser, getResolvedDisplayName } from '../../src/lib/displayName';
 import { useDeviceContactIndex, useDeviceContactRefresh, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
@@ -110,8 +112,16 @@ function normalizePhoneE164(
 
 export default function ContactsScreen() {
   const router = useRouter();
+  const convex = useConvex();
   const deviceIndex = useDeviceContactIndex();
   const refreshDeviceIndex = useDeviceContactRefresh();
+  // iter-223: which device contacts are ALREADY on Smilers (registered but not
+  // yet your contact). Populated via the batch `users.getByPhones` lookup —
+  // dormant until the backend ships that query, then auto-activates so those
+  // rows show "Message" instead of "Invite". Keyed by last-10-digits.
+  const [registeredByDigits, setRegisteredByDigits] = useState<
+    Map<string, { userId: string; name?: string }>
+  >(new Map());
   const [tab, setTab] = useState<TabKey>('my');
   const [search, setSearch] = useState('');
   const [showAddSheet, setShowAddSheet] = useState(false);
@@ -311,6 +321,35 @@ export default function ContactsScreen() {
       );
     });
   }, [deviceContacts, list, myDefaultCountry, searchTerm]);
+
+  // iter-223: batch-classify which device contacts are already on Smilers
+  // (registered but not yet your contact) via `users.getByPhones`. Dormant
+  // until the backend ships that query (lookupUsersByPhones returns empty),
+  // then those rows render "Message" instead of "Invite". Runs once per
+  // loaded device-contact set, not on every keystroke.
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    if (deviceContacts.length === 0) {
+      setRegisteredByDigits(new Map());
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const phones = deviceContacts.map((c) => c.phone).filter(Boolean) as string[];
+      const found = await lookupUsersByPhones(convex, phones);
+      if (cancelled || found.size === 0) return;
+      const byDigits = new Map<string, { userId: string; name?: string }>();
+      found.forEach((v, e164) => {
+        const digits = e164.replace(/\D+/g, '').slice(-10);
+        if (digits) byDigits.set(digits, { userId: v._id, name: v.displayName });
+      });
+      if (!cancelled) setRegisteredByDigits(byDigits);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [deviceContacts, convex]);
+
 
   // ── Actions ──────────────────────────────────────
   const openChat = async (userId: string) => {
@@ -660,26 +699,42 @@ export default function ContactsScreen() {
               ) : null}
             </>
           }
-          renderItem={({ item }) => (
-            <View style={styles.row} testID={`device-contact-${item.id}`}>
-              <ContactAvatar name={item.name} online={false} />
-              <View style={styles.rowMid}>
-                <Text style={styles.rowName} numberOfLines={1}>
-                  {item.name}
-                </Text>
-                <Text style={styles.rowSub} numberOfLines={1}>
-                  {item.phone || item.email || 'No contact info'}
-                </Text>
+          renderItem={({ item }) => {
+            // iter-223: if this device number is already on Smilers (resolved
+            // via the batch lookup), offer "Message"; otherwise "Invite".
+            const digits = (item.phone || '').replace(/\D+/g, '').slice(-10);
+            const registered = digits ? registeredByDigits.get(digits) : undefined;
+            return (
+              <View style={styles.row} testID={`device-contact-${item.id}`}>
+                <ContactAvatar name={item.name} online={false} />
+                <View style={styles.rowMid}>
+                  <Text style={styles.rowName} numberOfLines={1}>
+                    {item.name}
+                  </Text>
+                  <Text style={styles.rowSub} numberOfLines={1}>
+                    {registered ? 'On Smilers' : item.phone || item.email || 'No contact info'}
+                  </Text>
+                </View>
+                {registered ? (
+                  <TouchableOpacity
+                    style={styles.messageBtn}
+                    onPress={() => openChat(registered.userId)}
+                    testID={`message-${item.id}`}
+                  >
+                    <Text style={styles.messageBtnText}>Message</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.inviteBtn}
+                    onPress={() => onInviteDevice(item)}
+                    testID={`invite-${item.id}`}
+                  >
+                    <Text style={styles.inviteText}>Invite</Text>
+                  </TouchableOpacity>
+                )}
               </View>
-              <TouchableOpacity
-                style={styles.inviteBtn}
-                onPress={() => onInviteDevice(item)}
-                testID={`invite-${item.id}`}
-              >
-                <Text style={styles.inviteText}>Invite</Text>
-              </TouchableOpacity>
-            </View>
-          )}
+            );
+          }}
           ListEmptyComponent={
             devicePerm === 'web' ? (
               <View style={styles.empty}>
@@ -939,6 +994,13 @@ const styles = StyleSheet.create({
     borderRadius: Radius.pill,
   },
   inviteText: { color: Colors.headerBg, fontWeight: FontWeight.bold, fontSize: FontSize.sm },
+  messageBtn: {
+    backgroundColor: Colors.headerBg,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: Radius.pill,
+  },
+  messageBtnText: { color: Colors.white, fontWeight: FontWeight.bold, fontSize: FontSize.sm },
 
   acceptBtn: { backgroundColor: Colors.primary, paddingHorizontal: 14, paddingVertical: 8, borderRadius: Radius.pill },
   acceptText: { color: Colors.headerBg, fontSize: FontSize.sm, fontWeight: FontWeight.bold },

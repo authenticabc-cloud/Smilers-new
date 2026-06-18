@@ -86,6 +86,57 @@ export async function lookupUserByPhone(
 }
 
 /**
+ * Batch reverse-lookup: given many phone numbers, return ONLY those that map
+ * to a Smilers account. Powers the Device-Contacts tab so it can show
+ * "Message" for registered numbers and "Invite" for the rest in one shot.
+ *
+ * FEATURE-FLAGGED BY DETECTION: if the backend hasn't shipped
+ * `users.getByPhones` yet, `(api as any).users?.getByPhones` is undefined and
+ * this resolves to an EMPTY map — so callers transparently fall back to the
+ * old invite-only behaviour. The moment the Convex backend deploys the query
+ * (see /app/PHONE_IDENTITY_BACKEND_SPEC.md) this lights up automatically.
+ *
+ * Returns a Map keyed by E.164 → { _id, displayName }.
+ */
+export async function lookupUsersByPhones(
+  convex: any,
+  phones: Array<string | null | undefined>,
+): Promise<Map<string, PhoneLookupResult>> {
+  const out = new Map<string, PhoneLookupResult>();
+  const fn = (api as any).users?.getByPhones;
+  if (!fn || !convex || !Array.isArray(phones) || phones.length === 0) return out;
+
+  // Normalise + dedupe to valid E.164, cap the total so a huge address book
+  // can't fire dozens of queries.
+  const normalized = Array.from(
+    new Set(phones.map((p) => toE164(String(p || ''))).filter((v): v is string => !!v)),
+  ).slice(0, 1000);
+  if (normalized.length === 0) return out;
+
+  const CHUNK = 200;
+  for (let i = 0; i < normalized.length; i += CHUNK) {
+    const batch = normalized.slice(i, i + CHUNK);
+    try {
+      const res: any = await convex.query(fn, { phoneE164List: batch });
+      if (Array.isArray(res)) {
+        for (const r of res) {
+          if (r && r._id && typeof r.phoneE164 === 'string') {
+            out.set(r.phoneE164, {
+              _id: String(r._id),
+              displayName: typeof r.displayName === 'string' ? r.displayName : undefined,
+              avatarUrl: typeof r.avatarUrl === 'string' ? r.avatarUrl : undefined,
+            });
+          }
+        }
+      }
+    } catch {
+      /* ignore a failed chunk — others may still resolve */
+    }
+  }
+  return out;
+}
+
+/**
  * Range-scan Smilers users by phone-number prefix. Prefix must start with
  * `+`; we'll fix obvious mistakes (missing `+`) before sending. The server
  * caps the response at 50 — `limit` is just a hint.

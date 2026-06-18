@@ -76,3 +76,5 @@ ring — Android platform limit. Swiped-away/backgrounded apps ring fine.
    users.getByPhone, so known contacts show "Message" not "Invite".
    ⚠️ Global case (numbers on Smilers but not your contact) + Device-Contacts tab
    classification need backend work — see /app/PHONE_IDENTITY_BACKEND_SPEC.md.
+
+- iter-223b: Batch getByPhones wiring added (feature-detected, dormant until backend ships). phoneLookup.lookupUsersByPhones + Device-Contacts tab classifies registered numbers → "Message" vs "Invite".
