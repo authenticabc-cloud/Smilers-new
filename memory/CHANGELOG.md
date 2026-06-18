@@ -31,3 +31,21 @@ on twilio-call.tsx. Real wake behaviour is build-time/native → confirm on the 
   ⚠️ The bundled `.env` has THIS container's PREVIEW values — `EXPO_PUBLIC_BACKEND_URL`
   (= preview tunnel) MUST be set to the production backend before a store build; verify
   `EXPO_PUBLIC_CONVEX_URL` / `EXPO_PUBLIC_OIDC_AUTHORITY` are the production Hercules ones.
+
+## iter-221 — Killed/background-app incoming-call ring fixed (Issues 6/7/8)
+Root cause: iter-218 sent call pushes WITH an Android notification block
+(`android_data_only=False`). The OS then showed a plain, button-less banner AND
+the JS background task bailed (`shouldScheduleLocalNotification` saw a title), so
+the rich notifee Answer/Decline ring NEVER fired and a wrong/message tone played.
+Fixes:
+  1. backend/server.py `send_push`: calls are DATA-ONLY again
+     (`android_data_only=is_call_push`). Messages keep their notification block.
+  2. usePushNotifications.ts call branch: removed the `shouldScheduleLocalNotification`
+     guard — calls are now always rendered by notifee (idempotent via stable
+     `call-wake-<callId>` id + backgroundNotificationKeys dedupe).
+  3. notifeeCallWake.ts: the wake-screen ring channel is now VERSIONED by the
+     user's selected ringtone (`incoming-call-wake-<sound>`) instead of hardcoded
+     'ringtone', so the chosen tone actually plays.
+Tradeoff (user-approved): apps FORCE-STOPPED from Settings can't run JS so won't
+ring — Android platform limit. Swiped-away/backgrounded apps ring fine.
+⚠️ Verifiable ONLY on a real Android device build (not Expo Go / cloud).

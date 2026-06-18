@@ -270,16 +270,14 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
   // with no actions). The notifee path is primary; the expo sticky is a
   // fallback ONLY when the native notifee module is unavailable.
   if (type === 'call') {
-    // iter-218 — Issue 1: when the backend sends the call push WITH a
-    // notification block (so a force-killed device rings via the OS on the
-    // custom calls channel), Android already displayed it. Firing the
-    // notifee ring here too would DOUBLE-ring in the background. Only render
-    // the rich notifee full-screen when the push was DATA-ONLY (no title/
-    // body → OS displayed nothing). `shouldScheduleLocalNotification`
-    // returns false when a notification block IS present.
-    if (!shouldScheduleLocalNotification(taskObject)) {
-      return;
-    }
+    // iter-221 — Issue 6/7/8: call pushes are DATA-ONLY again, so Android
+    // displays NOTHING by itself and this notifee path is the SOLE renderer
+    // of the incoming-call ring. We must NOT gate it behind
+    // `shouldScheduleLocalNotification` — the FCM `data` still carries a
+    // `title`/`message` for routing, which made that helper return false and
+    // (wrongly) bail, so the ring never fired and the wrong tone played.
+    // Re-displaying is idempotent: the notifee notification id is the stable
+    // `call-wake-<callId>`, and `backgroundNotificationKeys` dedupes repeats.
     backgroundNotificationKeys.add(notificationKey);
     trimBackgroundNotificationCache();
 

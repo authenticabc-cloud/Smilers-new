@@ -1482,19 +1482,22 @@ async def send_push(
                         # device that was offline doesn't get a ghost ring
                         # minutes after the caller hung up.
                         ttl_seconds=45 if is_call_push else None,
-                        # iter-218 — Issue 1: calls now carry a NOTIFICATION
-                        # block routed to the device's custom CALLS channel
-                        # (call_channel_id, resolved above). A FORCE-KILLED
-                        # phone can't run JS, so the data-only notifee ring
-                        # never fired and Android played the default/message
-                        # tone. Sending a real notification on the calls
-                        # channel makes a killed device RING with the user's
-                        # chosen ringtone via the OS. The data payload is still
-                        # included so a LIVE app renders the full-screen
-                        # Answer/Decline ring; the mobile background task
-                        # suppresses its own notifee when the OS already
-                        # displayed this notification (prevents a double ring).
-                        android_data_only=False,
+                        # iter-221 — Issue 6/7/8 (recurring): CALL pushes are
+                        # sent DATA-ONLY again so the OS does NOT auto-display a
+                        # plain, button-less notification. A data-only high-
+                        # priority FCM message wakes the device's background
+                        # task (for backgrounded/swiped-away apps), which renders
+                        # the rich notifee full-screen incoming-call UI: looping
+                        # custom RINGTONE + Answer/Decline + auto-dismissing
+                        # missed-call follow-up. The iter-218 notification-block
+                        # approach broke this — Android showed a plain banner
+                        # (no Answer/Decline) AND the background task bailed out
+                        # because a notification block was present, so the ring
+                        # never fired and the wrong tone played. Messages still
+                        # carry a notification block so they display normally.
+                        # NOTE: apps force-stopped from Settings can't run JS, so
+                        # those won't ring — an accepted Android platform limit.
+                        android_data_only=is_call_push,
                     )
                     for t in tokens
                 ]

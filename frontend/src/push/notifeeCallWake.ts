@@ -26,13 +26,20 @@
 
 import { Platform } from 'react-native';
 import { recordDiagnostic } from '../lib/diagnostics';
+import { readRingtonePrefs, resolveCallChannelSound } from './notificationChannels';
 
-const CHANNEL_ID = 'incoming-call-wake-v1';
 const MISSED_CHANNEL_ID = 'missed-calls-v1';
 // Ring auto-stops + the missed-call follow-up appears after this long.
 const RING_TIMEOUT_MS = 35000;
 
-let channelCreated = false;
+// iter-221: the wake-screen ring channel is now VERSIONED by the user's
+// selected ringtone. Android notification channels are immutable after
+// creation, so the chosen tone is baked into the channel id
+// (`incoming-call-wake-<sound>`). When the user picks a new ringtone a
+// fresh channel is created and the ring plays the new tone — previously
+// this channel hardcoded `sound: 'ringtone'`, so the chosen tone never
+// played and a wrong/“message” tone was heard.
+const createdCallChannels = new Set<string>();
 let missedChannelCreated = false;
 let nativeCache: any | null = null;
 let eventsRegistered = false;
@@ -113,29 +120,39 @@ function buildCallRoute(data: any): string {
   return String(data?.action_url || '/');
 }
 
-async function ensureCallChannel(): Promise<boolean> {
-  if (channelCreated) return true;
-  if (Platform.OS !== 'android') return false;
+async function ensureCallChannel(): Promise<string | null> {
+  if (Platform.OS !== 'android') return null;
   const native = loadNative();
-  if (!native) return false;
+  if (!native) return null;
+  // Resolve the user's selected ringtone → bundled res/raw sound basename.
+  let sound: string | undefined;
+  try {
+    const prefs = await readRingtonePrefs();
+    sound = resolveCallChannelSound(prefs?.ringtone);
+  } catch {
+    sound = 'smilers_never_cry';
+  }
+  const channelId = `incoming-call-wake-${sound || 'silent'}`;
+  if (createdCallChannels.has(channelId)) return channelId;
   try {
     await native.notifee.createChannel({
-      id: CHANNEL_ID,
+      id: channelId,
       name: 'Incoming calls (wake-screen)',
       description: 'Rings and wakes the screen for incoming Smilers calls.',
       importance: native.AndroidImportance.HIGH,
-      sound: 'ringtone',
+      // Play the user's chosen ringtone (undefined => silent channel).
+      sound,
       vibration: true,
       vibrationPattern: [0, 600, 300, 600, 300, 600],
       bypassDnd: false,
       visibility: native.AndroidVisibility.PUBLIC,
     });
-    channelCreated = true;
-    safeRecord(`channel-created: ${CHANNEL_ID}`);
-    return true;
+    createdCallChannels.add(channelId);
+    safeRecord(`channel-created: ${channelId} sound=${sound || 'silent'}`);
+    return channelId;
   } catch (errorValue: any) {
     safeRecord(`channel-create-failed: ${errorValue?.message || errorValue}`);
-    return false;
+    return null;
   }
 }
 
@@ -177,8 +194,8 @@ export async function presentIncomingCallNotifeeWake(payload: IncomingCallPayloa
   // Make sure the notifee event handlers are live (idempotent).
   registerNotifeeCallEventHandlers();
 
-  const ok = await ensureCallChannel();
-  if (!ok) return;
+  const callChannelId = await ensureCallChannel();
+  if (!callChannelId) return;
   await ensureMissedChannel();
 
   try {
@@ -203,7 +220,7 @@ export async function presentIncomingCallNotifeeWake(payload: IncomingCallPayloa
       body: `${callerName} is calling…`,
       data,
       android: {
-        channelId: CHANNEL_ID,
+        channelId: callChannelId,
         importance: native.AndroidImportance.HIGH,
         visibility: native.AndroidVisibility.PUBLIC,
         category: native.AndroidCategory.CALL,
