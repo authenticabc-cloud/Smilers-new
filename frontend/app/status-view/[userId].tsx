@@ -424,21 +424,28 @@ function StoryContent({
   videoPlayerRef: React.MutableRefObject<VideoPlayer | null>;
   onVideoEnd: () => void;
 }) {
-  // iter-135: only run the Convex files.getUrl query when we actually
-  // need a URL (i.e. the story has a storageId and no inlined fileUrl).
-  // The previous implementation conditionally passed 'skip', which is
-  // correct, but on Android we additionally guard against malformed
-  // storageId values causing the Convex action to throw — that bubbled
-  // up as an unhandled native exception ("Smilers has stopped").
+  // iter-226: the status keeps "loading" because it relied on
+  // `api.files.getUrl`, which is NOT reliable on this Convex deployment
+  // (it throws "[CONVEX Q(files:getUrl)] Server Error" → the query never
+  // resolves → infinite spinner). Like messages, the backend auto-resolves a
+  // story's storageId to a signed URL surfaced on the object — read THAT
+  // directly first. Only fall back to files.getUrl if no URL field exists.
+  const directUrl =
+    (typeof story?.mediaUrl === 'string' && story.mediaUrl.length > 0 && story.mediaUrl) ||
+    (typeof story?.fileUrl === 'string' && story.fileUrl.length > 0 && story.fileUrl) ||
+    (typeof story?.url === 'string' && story.url.length > 0 && story.url) ||
+    (typeof story?.imageUrl === 'string' && story.imageUrl.length > 0 && story.imageUrl) ||
+    (typeof story?.videoUrl === 'string' && story.videoUrl.length > 0 && story.videoUrl) ||
+    null;
   const safeStorageId =
-    typeof story?.storageId === 'string' && story.storageId.length > 0
+    !directUrl && typeof story?.storageId === 'string' && story.storageId.length > 0
       ? story.storageId
       : null;
   const url = useQuery(
     api.files.getUrl,
-    story?.fileUrl ? 'skip' : safeStorageId ? { storageId: safeStorageId } : 'skip',
+    safeStorageId ? { storageId: safeStorageId } : 'skip',
   ) as string | null | undefined;
-  const src = story?.fileUrl || url;
+  const src = directUrl || url;
 
   if (story.type === 'text') {
     return (
