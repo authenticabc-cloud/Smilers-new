@@ -62,3 +62,17 @@ ring — Android platform limit. Swiped-away/backgrounded apps ring fine.
    "Invite" via native share sheet pre-filled with the user's referral code
    (buildInviteMessage). Regex ignores timestamps/short numbers (>=7 digits).
 ⚠️ Behind Google OIDC login — verify on device/build (testing agent can't auth).
+
+## iter-223 — Media auto-download, device names everywhere, phone-identity (mobile side)
+1. Media Auto-Download: new Settings screen (app/media-auto-download.tsx) with
+   per-type toggles (Photos/Videos/Audio/Documents, all OFF by default), backed
+   by src/lib/mediaAutoDownload.ts (AsyncStorage prefs + saved-id dedupe). The
+   useAutoDownloadMedia hook is wired into Image/Video/Voice/File bubbles to
+   silently save INCOMING media (gallery for media, SmilersDownloads/ for docs).
+2. Device names: ShareContactsDialog now resolves the device address-book name
+   (lookupDeviceContactName) instead of the Google display name.
+3. Phone-identity (mobile): usePhoneMessageActions checks the user's OWN Smilers
+   contacts (api.contacts.getContacts) by last-10-digits BEFORE the backend
+   users.getByPhone, so known contacts show "Message" not "Invite".
+   ⚠️ Global case (numbers on Smilers but not your contact) + Device-Contacts tab
+   classification need backend work — see /app/PHONE_IDENTITY_BACKEND_SPEC.md.

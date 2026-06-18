@@ -14,10 +14,10 @@
  * a live subscription, so this hook stays cheap when mounted inside every
  * message bubble.
  */
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { Alert, Share } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useConvex, useMutation } from 'convex/react';
+import { useConvex, useMutation, useQuery } from 'convex/react';
 import { api } from '../convexApi';
 import { lookupUserByPhone } from './phoneLookup';
 import { buildInviteMessage } from './inviteLink';
@@ -60,44 +60,76 @@ export function usePhoneMessageActions() {
   const convex = useConvex();
   const getOrCreateDirect = useMutation(api.conversations.getOrCreateDirect);
 
+  // iter-223: resolve numbers against the user's OWN Smilers contacts first,
+  // so people already in your contacts correctly show "Message" even when the
+  // backend reverse-lookup (users.getByPhone) can't match them. Keyed by the
+  // last 10 digits to survive country-code/formatting differences.
+  const contacts = useQuery(api.contacts.getContacts, {}) as any[] | undefined;
+  const contactByDigits = useMemo(() => {
+    const map = new Map<string, { userId: string; name: string }>();
+    if (!Array.isArray(contacts)) return map;
+    for (const c of contacts) {
+      const userId = String(
+        c?.userId || c?.user?._id || c?.user?.userId || c?._id || c?.id || '',
+      );
+      if (!userId) continue;
+      const raw = String(c?.phoneE164 || c?.phone || '');
+      const digits = raw.replace(/\D+/g, '');
+      if (digits.length < 7) continue;
+      const key = digits.slice(-10);
+      if (!map.has(key)) map.set(key, { userId, name: c?.name || raw });
+    }
+    return map;
+  }, [contacts]);
+
+  const openChatWith = useCallback(
+    async (userId: string) => {
+      try {
+        const result: any = await getOrCreateDirect({ otherUserId: userId as any });
+        const id = result?._id || result?.conversationId || result?.id || result;
+        if (typeof id === 'string' && id.length > 0) {
+          router.push(`/chat/${encodeURIComponent(id)}` as any);
+        }
+      } catch {
+        Alert.alert('Could not open chat', 'Please try again.');
+      }
+    },
+    [getOrCreateDirect, router],
+  );
+
   const onPhonePress = useCallback(
     async (rawNumber: string) => {
       const number = String(rawNumber || '').trim();
       if (!number) return;
+
+      // 1) Local contacts match — instant, works regardless of backend.
+      const digits = number.replace(/\D+/g, '');
+      const localHit = digits.length >= 7 ? contactByDigits.get(digits.slice(-10)) : undefined;
+      if (localHit) {
+        Alert.alert(localHit.name || number, 'This number is on Smilers.', [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Message', onPress: () => openChatWith(localHit.userId) },
+        ]);
+        return;
+      }
+
+      // 2) Backend reverse lookup for non-contacts.
       let match: any = null;
       try {
         match = await lookupUserByPhone(convex, number);
       } catch {
         match = null;
       }
-
       if (match && match._id) {
         const name = match.displayName || number;
-        Alert.alert(
-          name,
-          'This number is on Smilers.',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Message',
-              onPress: async () => {
-                try {
-                  const result: any = await getOrCreateDirect({ otherUserId: match._id as any });
-                  const id = result?._id || result?.conversationId || result?.id || result;
-                  if (typeof id === 'string' && id.length > 0) {
-                    router.push(`/chat/${encodeURIComponent(id)}` as any);
-                  }
-                } catch {
-                  Alert.alert('Could not open chat', 'Please try again.');
-                }
-              },
-            },
-          ],
-        );
+        Alert.alert(name, 'This number is on Smilers.', [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Message', onPress: () => openChatWith(String(match._id)) },
+        ]);
         return;
       }
 
-      // Not on Smilers → invite with the user's referral code.
+      // 3) Not on Smilers → invite with the user's referral code.
       let referralCode: string | null = null;
       try {
         const profile: any = await convex.query((api as any).earnings.getMyProfile, {});
@@ -135,7 +167,7 @@ export function usePhoneMessageActions() {
         ],
       );
     },
-    [convex, getOrCreateDirect, router],
+    [convex, contactByDigits, openChatWith],
   );
 
   return { onPhonePress };

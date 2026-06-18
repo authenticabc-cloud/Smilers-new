@@ -32,6 +32,7 @@ import { useMutation, useQuery } from 'convex/react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Contacts from 'expo-contacts';
 import { api } from '../convexApi';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../lib/deviceContactIndex';
 import { Colors } from '../theme';
 
 type Step = 'pick-contacts' | 'pick-recipients' | 'sending';
@@ -56,6 +57,10 @@ interface Props {
 export default function ShareContactsDialog({ visible, onClose, presetRecipientId }: Props) {
   const contacts = useQuery(api.contacts.getContacts, {}) as any[] | undefined;
   const shareContacts = useMutation(api.shareContacts.shareContacts);
+  // iter-223: device address-book name takes priority over the Smilers
+  // (Google account) display name for shown contacts — matches the rest of
+  // the app. Only the user's own Profile shows their Google name.
+  const deviceIndex = useDeviceContactIndex();
 
   const [step, setStep] = useState<Step>('pick-contacts');
   const [includeName, setIncludeName] = useState(true);
@@ -317,8 +322,10 @@ export default function ShareContactsDialog({ visible, onClose, presetRecipientI
 
   const renderContactRow = useCallback(
     ({ item, selected, onPress }: { item: any; selected: boolean; onPress: () => void }) => {
-      const title = item?.name || item?.phone || 'Contact';
       const phone = item?.phone || item?.phoneE164 || '';
+      // Device address-book name wins over the Smilers/Google display name.
+      const deviceName = lookupDeviceContactName(deviceIndex, phone) || '';
+      const title = deviceName || item?.name || phone || 'Contact';
       const initial = String(title).slice(0, 1).toUpperCase();
       return (
         <TouchableOpacity style={styles.row} onPress={onPress} testID={`sc-row-${item?._id}`}>
@@ -331,7 +338,7 @@ export default function ShareContactsDialog({ visible, onClose, presetRecipientI
           )}
           <View style={{ flex: 1 }}>
             <Text style={styles.rowTitle} numberOfLines={1}>{title}</Text>
-            {item?.name && phone ? (
+            {phone && title !== phone ? (
               <Text style={styles.rowSubtitle} numberOfLines={1}>{phone}</Text>
             ) : null}
           </View>
@@ -343,7 +350,7 @@ export default function ShareContactsDialog({ visible, onClose, presetRecipientI
         </TouchableOpacity>
       );
     },
-    []
+    [deviceIndex]
   );
 
   return (

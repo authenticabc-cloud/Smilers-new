@@ -51,6 +51,7 @@ import {
   setMessageImageAsProfilePhoto,
 } from '../lib/messageMedia';
 import { usePhoneMessageActions, findPhoneMatches } from '../lib/usePhoneMessageActions';
+import { useAutoDownloadMedia } from '../lib/mediaAutoDownload';
 
 // Module-level "currently playing" audio singleton — guarantees only one
 // voice message plays at a time. Uses expo-audio's AudioPlayer (expo-av
@@ -435,12 +436,12 @@ function BubbleBodyInner({ msg, timeStr, textStyle, isMine, e2eeStatus, searchTe
 
   switch (msg.type) {
     case 'image':
-      return <ImageMessage msg={msg} timeStr={timeStr} textStyle={textStyle} e2eeStatus={e2eeStatus} />;
+      return <ImageMessage msg={msg} timeStr={timeStr} textStyle={textStyle} e2eeStatus={e2eeStatus} isMine={isMine} />;
     case 'video':
-      return <VideoMessage msg={msg} timeStr={timeStr} textStyle={textStyle} e2eeStatus={e2eeStatus} />;
+      return <VideoMessage msg={msg} timeStr={timeStr} textStyle={textStyle} e2eeStatus={e2eeStatus} isMine={isMine} />;
     case 'voice':
     case 'audio':
-      return <VoiceMessage msg={msg} e2eeStatus={e2eeStatus} />;
+      return <VoiceMessage msg={msg} e2eeStatus={e2eeStatus} isMine={isMine} />;
     case 'poll':
       return <PollMessage msg={msg} />;
     case 'file':
@@ -654,9 +655,10 @@ function LinkPreviewMessage({ msg, textStyle, isMine }: { msg: any; textStyle?: 
   );
 }
 
-function ImageMessage({ msg, timeStr, textStyle, e2eeStatus }: { msg: any; timeStr: string; textStyle?: any; e2eeStatus: E2EEStatus | null }) {
+function ImageMessage({ msg, timeStr, textStyle, e2eeStatus, isMine }: { msg: any; timeStr: string; textStyle?: any; e2eeStatus: E2EEStatus | null; isMine: boolean }) {
   const [open, setOpen] = useState(false);
   const { url: src, loading, error } = useDecryptedMediaUrl(msg, e2eeStatus);
+  useAutoDownloadMedia({ msg, isMine, src, mediaType: 'image' });
 
   if (!src) {
     return (
@@ -848,13 +850,16 @@ function VideoMessage({
   timeStr,
   textStyle,
   e2eeStatus,
+  isMine,
 }: {
   msg: any;
   timeStr: string;
   textStyle?: any;
   e2eeStatus: E2EEStatus | null;
+  isMine: boolean;
 }) {
   const { url: src, loading, error } = useDecryptedMediaUrl(msg, e2eeStatus);
+  useAutoDownloadMedia({ msg, isMine, src, mediaType: 'video' });
   // expo-video: useVideoPlayer creates the player and the setup callback runs
   // once. We start PAUSED (videos in chat don't auto-play; user taps Play).
   const player = useVideoPlayer(
@@ -1153,9 +1158,10 @@ function VideoViewer({
   );
 }
 
-function VoiceMessage({ msg, e2eeStatus }: { msg: any; e2eeStatus: E2EEStatus | null }) {
+function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EEStatus | null; isMine: boolean }) {
   const totalSec = getMessageDurationSec(msg);
   const { url: src, error: srcError } = useDecryptedMediaUrl(msg, e2eeStatus);
+  useAutoDownloadMedia({ msg, isMine, src, mediaType: msg?.type === 'audio' ? 'audio' : 'voice' });
 
   // expo-audio: AudioPlayer instance for THIS voice bubble's playback.
   const playerRef = useRef<AudioPlayer | null>(null);
@@ -1470,6 +1476,7 @@ function PollMessage({ msg }: { msg: any }) {
 
 function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e2eeStatus: E2EEStatus | null }) {
   const { url: src, error: srcError } = useDecryptedMediaUrl(msg, e2eeStatus);
+  useAutoDownloadMedia({ msg, isMine, src, mediaType: 'document' });
 
   // iter-179: APKs are allowed (WhatsApp-style policy) but received ones
   // carry an explicit caution so less tech-savvy users don't sideload
