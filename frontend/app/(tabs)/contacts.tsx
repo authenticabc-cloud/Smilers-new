@@ -455,6 +455,21 @@ export default function ContactsScreen() {
     return n;
   }, [deviceFiltered, registeredByDigits]);
 
+  // iter-223: tapping the nudge banner filters the Device list to ONLY the
+  // contacts already on Smilers, so the user can message them in one tap.
+  const [onSmilersOnly, setOnSmilersOnly] = useState(false);
+  const deviceListData = useMemo(() => {
+    if (!onSmilersOnly) return deviceFiltered;
+    return deviceFiltered.filter((c) => {
+      const d = (c.phone || '').replace(/\D+/g, '').slice(-10);
+      return d && registeredByDigits.has(d);
+    });
+  }, [onSmilersOnly, deviceFiltered, registeredByDigits]);
+  // Don't get stuck in an empty filtered state (e.g. after a search).
+  useEffect(() => {
+    if (onSmilersOnly && onSmilersCount === 0) setOnSmilersOnly(false);
+  }, [onSmilersOnly, onSmilersCount]);
+
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="contacts-screen">
       <Header
@@ -673,7 +688,7 @@ export default function ContactsScreen() {
       ) : (
         // ── DEVICE CONTACTS TAB ─────────────────────
         <FlatList
-          data={deviceFiltered}
+          data={deviceListData}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           ListHeaderComponent={
@@ -702,20 +717,34 @@ export default function ContactsScreen() {
                 <Feather name="chevron-right" size={20} color={Colors.textMuted} />
               </TouchableOpacity>
               {onSmilersCount > 0 ? (
-                <View style={styles.onSmilersBanner} testID="device-on-smilers-banner">
+                <TouchableOpacity
+                  style={[styles.onSmilersBanner, onSmilersOnly ? styles.onSmilersBannerActive : null]}
+                  onPress={() => setOnSmilersOnly((v) => !v)}
+                  activeOpacity={0.8}
+                  testID="device-on-smilers-banner"
+                >
                   <View style={styles.onSmilersIcon}>
                     <Feather name="smile" size={18} color={Colors.primary} />
                   </View>
                   <Text style={styles.onSmilersText}>
-                    {onSmilersCount === 1
-                      ? '1 of your contacts is already on Smilers — say hi!'
-                      : `${onSmilersCount} of your contacts are already on Smilers — say hi!`}
+                    {onSmilersOnly
+                      ? `Showing ${onSmilersCount} on Smilers · Tap to show all`
+                      : onSmilersCount === 1
+                        ? '1 of your contacts is already on Smilers — tap to message'
+                        : `${onSmilersCount} of your contacts are already on Smilers — tap to message`}
                   </Text>
-                </View>
+                  <Feather
+                    name={onSmilersOnly ? 'x' : 'chevron-right'}
+                    size={18}
+                    color={Colors.textMuted}
+                  />
+                </TouchableOpacity>
               ) : null}
               {devicePerm === 'granted' ? (
                 <Text style={styles.sectionLabel}>
-                  INVITE TO SMILERS ({searchTerm ? deviceFiltered.length : deviceFiltered.length})
+                  {onSmilersOnly
+                    ? `ON SMILERS (${onSmilersCount})`
+                    : `INVITE TO SMILERS (${deviceFiltered.length})`}
                 </Text>
               ) : null}
             </>
@@ -1031,6 +1060,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
     marginBottom: 10,
+  },
+  onSmilersBannerActive: {
+    borderWidth: 1,
+    borderColor: Colors.primary,
   },
   onSmilersIcon: {
     width: 34,

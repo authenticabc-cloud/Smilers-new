@@ -82,3 +82,5 @@ ring — Android platform limit. Swiped-away/backgrounded apps ring fine.
 - iter-223c: Reconciled mobile wiring to the REAL deployed backend API. lookupUsersByPhones now calls api.users.lookupByPhones({phones}) parsing {input,onSmilers,userId,...}, keyed by last-10 digits. Device-Contacts tab + chat number-tap fallback both use it (last-10 match, more accurate than exact getByPhone). Spec doc marked RESOLVED.
 
 - iter-223d: Added "X of your contacts are already on Smilers" nudge banner atop Device-Contacts tab (onSmilersCount from batch lookup; shown only when >0).
+
+- iter-223e: Nudge banner is now tappable — toggles the Device list to show ONLY on-Smilers contacts (deviceListData filter), with active styling, dynamic label (ON SMILERS vs INVITE TO SMILERS), and auto-reset when count hits 0.
