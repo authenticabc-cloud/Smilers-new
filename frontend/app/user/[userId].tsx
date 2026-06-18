@@ -149,8 +149,13 @@ export default function UserProfileScreen() {
     (typeof user?.photoSavePolicy === 'string' && user.photoSavePolicy) ||
     (typeof user?.photoPrivacy === 'string' && user.photoPrivacy) ||
     'everyone';
+  // iter-227: the backend now returns a server-computed `canSavePhoto` that
+  // already accounts for the policy + contact relationship — trust it when
+  // present; otherwise fall back to the client-side derivation.
   const canSavePhoto =
-    photoSavePolicy === 'everyone' || (photoSavePolicy === 'contacts' && isContact !== false);
+    typeof user?.canSavePhoto === 'boolean'
+      ? user.canSavePhoto
+      : photoSavePolicy === 'everyone' || (photoSavePolicy === 'contacts' && isContact !== false);
 
   const saveAvatarPhoto = async () => {
     if (!avatarUri || savingPhoto) return;
