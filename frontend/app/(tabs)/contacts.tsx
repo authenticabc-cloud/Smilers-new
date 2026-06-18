@@ -338,11 +338,9 @@ export default function ContactsScreen() {
       const phones = deviceContacts.map((c) => c.phone).filter(Boolean) as string[];
       const found = await lookupUsersByPhones(convex, phones);
       if (cancelled || found.size === 0) return;
+      // `found` is already keyed by last-10-digits.
       const byDigits = new Map<string, { userId: string; name?: string }>();
-      found.forEach((v, e164) => {
-        const digits = e164.replace(/\D+/g, '').slice(-10);
-        if (digits) byDigits.set(digits, { userId: v._id, name: v.displayName });
-      });
+      found.forEach((v, digits) => byDigits.set(digits, { userId: v.userId, name: v.displayName }));
       if (!cancelled) setRegisteredByDigits(byDigits);
     })();
     return () => {

@@ -85,47 +85,70 @@ export async function lookupUserByPhone(
   }
 }
 
+export interface BatchPhoneMatch {
+  userId: string;
+  displayName?: string;
+  avatarUrl?: string;
+}
+
+/** Last 10 digits of a phone number — the backend's country-code-agnostic key. */
+function last10Digits(value: string | null | undefined): string {
+  return String(value || '').replace(/\D+/g, '').slice(-10);
+}
+
 /**
  * Batch reverse-lookup: given many phone numbers, return ONLY those that map
- * to a Smilers account. Powers the Device-Contacts tab so it can show
- * "Message" for registered numbers and "Invite" for the rest in one shot.
+ * to a (verified) Smilers account. Powers the Device-Contacts tab so it can
+ * show "Message" for registered numbers and "Invite" for the rest in one shot.
  *
- * FEATURE-FLAGGED BY DETECTION: if the backend hasn't shipped
- * `users.getByPhones` yet, `(api as any).users?.getByPhones` is undefined and
- * this resolves to an EMPTY map — so callers transparently fall back to the
- * old invite-only behaviour. The moment the Convex backend deploys the query
- * (see /app/PHONE_IDENTITY_BACKEND_SPEC.md) this lights up automatically.
+ * Backend: `api.users.lookupByPhones({ phones })` returns one row per input
+ * `{ input, onSmilers, userId, displayName, avatarUrl }`, matching by the
+ * last-10-digits so contacts saved WITHOUT a country code still resolve
+ * (see docs/WEB_AGENT_ANSWERS_iter222_phone_identity.md).
  *
- * Returns a Map keyed by E.164 → { _id, displayName }.
+ * FEATURE-FLAGGED BY DETECTION: if the backend hasn't shipped the query yet,
+ * `(api as any).users?.lookupByPhones` is undefined and this resolves to an
+ * EMPTY map, so callers transparently fall back to invite-only behaviour.
+ *
+ * Returns a Map keyed by LAST-10-DIGITS → { userId, displayName, avatarUrl }.
  */
 export async function lookupUsersByPhones(
   convex: any,
   phones: Array<string | null | undefined>,
-): Promise<Map<string, PhoneLookupResult>> {
-  const out = new Map<string, PhoneLookupResult>();
-  const fn = (api as any).users?.getByPhones;
+): Promise<Map<string, BatchPhoneMatch>> {
+  const out = new Map<string, BatchPhoneMatch>();
+  const fn = (api as any).users?.lookupByPhones;
   if (!fn || !convex || !Array.isArray(phones) || phones.length === 0) return out;
 
-  // Normalise + dedupe to valid E.164, cap the total so a huge address book
-  // can't fire dozens of queries.
-  const normalized = Array.from(
-    new Set(phones.map((p) => toE164(String(p || ''))).filter((v): v is string => !!v)),
-  ).slice(0, 1000);
-  if (normalized.length === 0) return out;
+  // Dedupe by last-10 (keep a representative raw string per key), drop numbers
+  // with too few digits, and cap so a huge address book can't fire dozens of
+  // queries.
+  const byKey = new Map<string, string>();
+  for (const p of phones) {
+    const raw = String(p || '').trim();
+    const key = last10Digits(raw);
+    if (key.length < 7) continue;
+    if (!byKey.has(key)) byKey.set(key, raw);
+  }
+  const unique = Array.from(byKey.values()).slice(0, 1000);
+  if (unique.length === 0) return out;
 
   const CHUNK = 200;
-  for (let i = 0; i < normalized.length; i += CHUNK) {
-    const batch = normalized.slice(i, i + CHUNK);
+  for (let i = 0; i < unique.length; i += CHUNK) {
+    const batch = unique.slice(i, i + CHUNK);
     try {
-      const res: any = await convex.query(fn, { phoneE164List: batch });
+      const res: any = await convex.query(fn, { phones: batch });
       if (Array.isArray(res)) {
         for (const r of res) {
-          if (r && r._id && typeof r.phoneE164 === 'string') {
-            out.set(r.phoneE164, {
-              _id: String(r._id),
-              displayName: typeof r.displayName === 'string' ? r.displayName : undefined,
-              avatarUrl: typeof r.avatarUrl === 'string' ? r.avatarUrl : undefined,
-            });
+          if (r && r.onSmilers && r.userId) {
+            const key = last10Digits(r.input);
+            if (key.length >= 7) {
+              out.set(key, {
+                userId: String(r.userId),
+                displayName: typeof r.displayName === 'string' ? r.displayName : undefined,
+                avatarUrl: typeof r.avatarUrl === 'string' ? r.avatarUrl : undefined,
+              });
+            }
           }
         }
       }

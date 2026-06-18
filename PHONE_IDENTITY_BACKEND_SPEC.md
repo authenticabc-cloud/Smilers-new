@@ -1,5 +1,13 @@
 # Phone-as-Identity — Convex Backend Spec (for the web/Convex team)
 
+> ✅ **RESOLVED (iter-223c):** The Convex team shipped this. The deployed query is
+> **`api.users.lookupByPhones({ phones: string[] })`** → one row per input
+> `{ input, onSmilers, userId, displayName, avatarUrl }`, matching by an indexed
+> `phoneLast10` field (country-code-agnostic). The mobile app is wired to it in
+> `src/lib/phoneLookup.ts → lookupUsersByPhones()` (keys results by last-10
+> digits). Reminder: run `internal.users.backfillPhoneE164({})` once so existing
+> accounts become matchable. The original requirement is kept below for history.
+
 **Context:** The mobile app (this repo) only *consumes* the Convex backend
 (`aware-newt-456.convex.cloud`). It cannot create/modify Convex functions or the
 users table. The behaviours below MUST be implemented on the Convex/web side for

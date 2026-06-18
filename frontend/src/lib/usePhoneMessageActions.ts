@@ -19,7 +19,7 @@ import { Alert, Share } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useConvex, useMutation, useQuery } from 'convex/react';
 import { api } from '../convexApi';
-import { lookupUserByPhone } from './phoneLookup';
+import { lookupUsersByPhones } from './phoneLookup';
 import { buildInviteMessage } from './inviteLink';
 
 /** Find phone-number-like substrings. Matches an optional leading + then a
@@ -113,18 +113,20 @@ export function usePhoneMessageActions() {
         return;
       }
 
-      // 2) Backend reverse lookup for non-contacts.
-      let match: any = null;
+      // 2) Backend batch lookup (last-10-digits match) for non-contacts.
+      let serverMatch: { userId: string; displayName?: string } | null = null;
       try {
-        match = await lookupUserByPhone(convex, number);
+        const found = await lookupUsersByPhones(convex, [number]);
+        const hit = digits.length >= 7 ? found.get(digits.slice(-10)) : undefined;
+        if (hit) serverMatch = { userId: hit.userId, displayName: hit.displayName };
       } catch {
-        match = null;
+        serverMatch = null;
       }
-      if (match && match._id) {
-        const name = match.displayName || number;
-        Alert.alert(name, 'This number is on Smilers.', [
+      if (serverMatch) {
+        const sm = serverMatch;
+        Alert.alert(sm.displayName || number, 'This number is on Smilers.', [
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Message', onPress: () => openChatWith(String(match._id)) },
+          { text: 'Message', onPress: () => openChatWith(sm.userId) },
         ]);
         return;
       }

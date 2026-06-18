@@ -78,3 +78,5 @@ ring — Android platform limit. Swiped-away/backgrounded apps ring fine.
    classification need backend work — see /app/PHONE_IDENTITY_BACKEND_SPEC.md.
 
 - iter-223b: Batch getByPhones wiring added (feature-detected, dormant until backend ships). phoneLookup.lookupUsersByPhones + Device-Contacts tab classifies registered numbers → "Message" vs "Invite".
+
+- iter-223c: Reconciled mobile wiring to the REAL deployed backend API. lookupUsersByPhones now calls api.users.lookupByPhones({phones}) parsing {input,onSmilers,userId,...}, keyed by last-10 digits. Device-Contacts tab + chat number-tap fallback both use it (last-10 match, more accurate than exact getByPhone). Spec doc marked RESOLVED.
