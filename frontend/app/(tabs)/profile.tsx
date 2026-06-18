@@ -3,7 +3,9 @@ import {
   ActionSheetIOS,
   ActivityIndicator,
   Alert,
+  Image,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -18,6 +20,8 @@ import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useConvex, useMutation, useQuery } from 'convex/react';
 import * as ImagePicker from 'expo-image-picker';
+import * as MediaLibrary from 'expo-media-library';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 import Header from '../../src/components/Header';
 import Avatar from '../../src/components/Avatar';
 import SosButton from '../../src/components/SosButton';
@@ -80,6 +84,9 @@ export default function ProfileScreen() {
   const [editingField, setEditingField] = useState<EditableField | null>(null);
   const [editValue, setEditValue] = useState('');
   const [saving, setSaving] = useState(false);
+  // iter-224: tap profile photo → full-screen viewer with download.
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [savingPhoto, setSavingPhoto] = useState(false);
 
   const name = safeString(me?.name ?? userInfo?.name, 'Smilers');
   const email = safeString(me?.email ?? userInfo?.email, '');
@@ -246,13 +253,63 @@ export default function ProfileScreen() {
     }
   }, [pickFromCamera, pickFromLibrary, uploading]);
 
+  // iter-224: save the (full-size) profile photo to the device gallery.
+  const saveProfilePhoto = useCallback(async () => {
+    if (!avatarUri || savingPhoto) return;
+    try {
+      setSavingPhoto(true);
+      let perm = await MediaLibrary.getPermissionsAsync();
+      if (perm.status !== 'granted' && perm.canAskAgain) {
+        perm = await MediaLibrary.requestPermissionsAsync();
+      }
+      if (perm.status !== 'granted') {
+        Alert.alert(
+          'Photo access needed',
+          'Allow photo access to save the picture to your gallery.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() },
+          ],
+        );
+        return;
+      }
+      let localUri = avatarUri;
+      if (!avatarUri.startsWith('file://')) {
+        const fs: any = LegacyFileSystem;
+        const target = `${fs.cacheDirectory}smilers_profile_${Date.now()}.jpg`;
+        if (avatarUri.startsWith('data:')) {
+          const comma = avatarUri.indexOf(',');
+          await fs.writeAsStringAsync(target, avatarUri.slice(comma + 1), { encoding: 'base64' });
+        } else {
+          const res = await fs.downloadAsync(avatarUri, target);
+          if (res?.status && res.status >= 400) throw new Error('download failed');
+        }
+        localUri = target;
+      }
+      await MediaLibrary.saveToLibraryAsync(localUri);
+      Alert.alert('Saved', 'Profile picture saved to your gallery.');
+    } catch {
+      Alert.alert('Could not save', 'Something went wrong saving the picture. Please try again.');
+    } finally {
+      setSavingPhoto(false);
+    }
+  }, [avatarUri, savingPhoto]);
+
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="profile-screen">
       <Header title="Profile" variant="dark" />
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.avatarSection}>
           <View style={styles.avatarWrap}>
-            <Avatar name={name} size={120} uri={avatarUri} />
+            <TouchableOpacity
+              activeOpacity={avatarUri ? 0.85 : 1}
+              onPress={() => {
+                if (avatarUri) setViewerOpen(true);
+              }}
+              testID="profile-avatar-open"
+            >
+              <Avatar name={name} size={120} uri={avatarUri} />
+            </TouchableOpacity>
             <TouchableOpacity
               style={styles.cameraBadge}
               onPress={onPressCameraBadge}
@@ -268,6 +325,44 @@ export default function ProfileScreen() {
             </TouchableOpacity>
           </View>
         </View>
+
+        {/* iter-224: full-screen profile-photo viewer with download */}
+        <Modal
+          visible={viewerOpen}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setViewerOpen(false)}
+        >
+          <View style={styles.viewerBackdrop}>
+            <TouchableOpacity
+              style={styles.viewerClose}
+              onPress={() => setViewerOpen(false)}
+              hitSlop={12}
+              testID="profile-viewer-close"
+            >
+              <Feather name="x" size={26} color={Colors.white} />
+            </TouchableOpacity>
+            {avatarUri ? (
+              <Image source={{ uri: avatarUri }} style={styles.viewerImage} resizeMode="contain" />
+            ) : null}
+            <TouchableOpacity
+              style={styles.viewerDownload}
+              onPress={saveProfilePhoto}
+              activeOpacity={0.85}
+              disabled={savingPhoto}
+              testID="profile-viewer-download"
+            >
+              {savingPhoto ? (
+                <ActivityIndicator size="small" color={Colors.white} />
+              ) : (
+                <Feather name="download" size={20} color={Colors.white} />
+              )}
+              <Text style={styles.viewerDownloadText}>
+                {savingPhoto ? 'Saving…' : 'Save to gallery'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </Modal>
 
         {phone ? (
           <Section
@@ -500,6 +595,32 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.background,
   },
   avatarWrap: { position: 'relative' },
+  viewerBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.95)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  viewerClose: {
+    position: 'absolute',
+    top: 48,
+    left: 20,
+    zIndex: 2,
+    padding: 6,
+  },
+  viewerImage: { width: '100%', height: '70%' },
+  viewerDownload: {
+    position: 'absolute',
+    bottom: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    paddingHorizontal: 22,
+    paddingVertical: 12,
+    borderRadius: Radius.pill,
+  },
+  viewerDownloadText: { color: Colors.white, fontWeight: FontWeight.bold, fontSize: FontSize.base },
   cameraBadge: {
     position: 'absolute',
     right: 0,

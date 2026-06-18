@@ -82,6 +82,16 @@ export function usePhoneMessageActions() {
     return map;
   }, [contacts]);
 
+  // iter-224: detect the user's OWN number so tapping it shows a clear
+  // "this is you" message instead of a confusing "invite" (the backend
+  // reverse-lookup excludes the caller, so self never resolves as a match).
+  const me = useQuery(api.users.getCurrentUser, {}) as any;
+  const ownLast10 = useMemo(() => {
+    const raw = String(me?.phoneE164 || me?.phone || '');
+    const d = raw.replace(/\D+/g, '');
+    return d.length >= 7 ? d.slice(-10) : '';
+  }, [me]);
+
   const openChatWith = useCallback(
     async (userId: string) => {
       try {
@@ -102,8 +112,15 @@ export function usePhoneMessageActions() {
       const number = String(rawNumber || '').trim();
       if (!number) return;
 
-      // 1) Local contacts match — instant, works regardless of backend.
+      // 0) Your own number — the backend lookup excludes the caller, so make
+      //    this explicit instead of prompting to "invite" yourself.
       const digits = number.replace(/\D+/g, '');
+      if (ownLast10 && digits.length >= 7 && digits.slice(-10) === ownLast10) {
+        Alert.alert('Your number', 'This is your own Smilers number.');
+        return;
+      }
+
+      // 1) Local contacts match — instant, works regardless of backend.
       const localHit = digits.length >= 7 ? contactByDigits.get(digits.slice(-10)) : undefined;
       if (localHit) {
         Alert.alert(localHit.name || number, 'This number is on Smilers.', [

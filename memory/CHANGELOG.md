@@ -84,3 +84,5 @@ ring — Android platform limit. Swiped-away/backgrounded apps ring fine.
 - iter-223d: Added "X of your contacts are already on Smilers" nudge banner atop Device-Contacts tab (onSmilersCount from batch lookup; shown only when >0).
 
 - iter-223e: Nudge banner is now tappable — toggles the Device list to show ONLY on-Smilers contacts (deviceListData filter), with active styling, dynamic label (ON SMILERS vs INVITE TO SMILERS), and auto-reset when count hits 0.
+
+- iter-224: (1) Profile photo tap → full-screen viewer + "Save to gallery" download (profile.tsx). (2) Phone-identity asymmetry diagnosed as backend data (self-exclusion + un-backfilled phoneLast10/verification). Mobile now special-cases OWN number → "This is your own Smilers number" (usePhoneMessageActions). See PHONE_IDENTITY_ASYMMETRY_iter224.md.
