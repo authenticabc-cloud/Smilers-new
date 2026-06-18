@@ -90,3 +90,5 @@ ring — Android platform limit. Swiped-away/backgrounded apps ring fine.
 - iter-225: (1) Photo/video status create fails with CONVEX statuses:create Server Error — diagnosed as BACKEND uncaught exception (mobile sends documented shape; text works). Report: STATUS_CREATE_MEDIA_SERVER_ERROR_iter225.md. (2) Removed the yellow web-parity mute FAB from user/[userId].tsx (kept native voice mic).
 
 - iter-226: (1) Status media stuck loading — viewer relied on broken api.files.getUrl. Now reads backend-resolved mediaUrl/fileUrl/url/imageUrl/videoUrl first, files.getUrl only as last resort (status-view/[userId].tsx). (2) Call/push logs: calls:endCall Server Error = BACKEND bug; emergentPush register Aborted; signals skipped (session not ready). KEY: device on v2.1.93 — iter-221 ringtone/wake changes need a fresh build. See CALL_PUSH_PIPELINE_iter226.md.
+
+- iter-226b: Other-user profile photo viewer (tap to enlarge + policy-gated Save) in user/[userId].tsx; shared savePhotoToGallery helper; new photo-privacy settings screen + row; PHOTO_SAVE_POLICY_BACKEND_SPEC.md. Bumped notifee call channel to MAX importance (versioned id v2) for better screen-wake/full-screen-intent.

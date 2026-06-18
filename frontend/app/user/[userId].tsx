@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Dimensions,
   Image,
@@ -18,6 +19,7 @@ import { useMutation, useQuery } from 'convex/react';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../../src/providers/AuthProvider';
+import { savePhotoToGallery } from '../../src/lib/savePhotoToGallery';
 import SaveContactDialog from '../../src/components/SaveContactDialog';
 import {
   getDisplayInitials,
@@ -131,12 +133,37 @@ export default function UserProfileScreen() {
   // --- UI state -----------------------------------------------------------
   const [mediaTab, setMediaTab] = useState<MediaTab>('photos');
   const [previewUri, setPreviewUri] = useState<string | null>(null);
+  // iter-226: tap the profile photo → enlarge; save respects the owner's policy.
+  const [avatarViewerOpen, setAvatarViewerOpen] = useState(false);
+  const [savingPhoto, setSavingPhoto] = useState(false);
 
   // --- Derived ------------------------------------------------------------
   const displayName = getDisplayNameFromUser(user, 'Smilers user');
   const initials = getDisplayInitials(displayName);
   const avatarUri: string | null =
     user?.avatar || user?.avatarUrl || user?.photoURL || null;
+  // iter-226: who may save this user's profile photo. Backend-controlled
+  // (default 'everyone' until the backend returns the field). 'contacts' allows
+  // saving only when we're their contact; 'nobody' hides the Save button.
+  const photoSavePolicy: string =
+    (typeof user?.photoSavePolicy === 'string' && user.photoSavePolicy) ||
+    (typeof user?.photoPrivacy === 'string' && user.photoPrivacy) ||
+    'everyone';
+  const canSavePhoto =
+    photoSavePolicy === 'everyone' || (photoSavePolicy === 'contacts' && isContact !== false);
+
+  const saveAvatarPhoto = async () => {
+    if (!avatarUri || savingPhoto) return;
+    try {
+      setSavingPhoto(true);
+      const ok = await savePhotoToGallery(avatarUri);
+      if (ok) Alert.alert('Saved', `${displayName}'s photo was saved to your gallery.`);
+    } catch {
+      Alert.alert('Could not save', 'Something went wrong. Please try again.');
+    } finally {
+      setSavingPhoto(false);
+    }
+  };
   const aboutText =
     (typeof user?.about === 'string' && user.about) ||
     (typeof user?.bio === 'string' && user.bio) ||
@@ -262,17 +289,25 @@ export default function UserProfileScreen() {
 
         {/* Floating avatar overlapping the brown/cream boundary */}
         <View style={styles.avatarWrap} testID="user-profile-avatar-wrap">
-          <View style={styles.avatarRing}>
-            {avatarUri ? (
-              <Image
-                source={{ uri: avatarUri }}
-                style={styles.avatarImage}
-                resizeMode="cover"
-              />
-            ) : (
-              <Text style={styles.avatarInitial}>{initials}</Text>
-            )}
-          </View>
+          <TouchableOpacity
+            activeOpacity={avatarUri ? 0.85 : 1}
+            onPress={() => {
+              if (avatarUri) setAvatarViewerOpen(true);
+            }}
+            testID="user-profile-avatar-open"
+          >
+            <View style={styles.avatarRing}>
+              {avatarUri ? (
+                <Image
+                  source={{ uri: avatarUri }}
+                  style={styles.avatarImage}
+                  resizeMode="cover"
+                />
+              ) : (
+                <Text style={styles.avatarInitial}>{initials}</Text>
+              )}
+            </View>
+          </TouchableOpacity>
         </View>
 
         {/* Name + last seen */}
@@ -452,6 +487,49 @@ export default function UserProfileScreen() {
           defaultEmail={user?.email || ''}
         />
       ) : null}
+
+      {/* iter-226: profile-photo viewer (enlarge + policy-gated save) */}
+      <Modal
+        visible={avatarViewerOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAvatarViewerOpen(false)}
+      >
+        <View style={styles.previewBackdrop}>
+          {avatarUri ? (
+            <Image source={{ uri: avatarUri }} style={styles.previewImage} resizeMode="contain" />
+          ) : null}
+          <TouchableOpacity
+            style={[styles.previewClose, { top: insets.top + 12 }]}
+            onPress={() => setAvatarViewerOpen(false)}
+            hitSlop={12}
+            testID="user-avatar-viewer-close"
+          >
+            <Feather name="x" size={26} color={Colors.white} />
+          </TouchableOpacity>
+          {canSavePhoto ? (
+            <TouchableOpacity
+              style={[styles.avatarSaveBtn, { bottom: Math.max(insets.bottom, 16) + 24 }]}
+              onPress={saveAvatarPhoto}
+              activeOpacity={0.85}
+              disabled={savingPhoto}
+              testID="user-avatar-viewer-download"
+            >
+              {savingPhoto ? (
+                <ActivityIndicator size="small" color={Colors.white} />
+              ) : (
+                <Feather name="download" size={20} color={Colors.white} />
+              )}
+              <Text style={styles.avatarSaveText}>{savingPhoto ? 'Saving…' : 'Save to gallery'}</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={[styles.avatarSaveBtn, styles.avatarSaveDisabled, { bottom: Math.max(insets.bottom, 16) + 24 }]}>
+              <Feather name="lock" size={16} color={Colors.white} />
+              <Text style={styles.avatarSaveText}>Saving disabled by {displayName}</Text>
+            </View>
+          )}
+        </View>
+      </Modal>
 
       {/* Image preview modal */}
       <Modal
@@ -960,6 +1038,19 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
     borderRadius: 24,
   },
+  avatarSaveBtn: {
+    position: 'absolute',
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    paddingHorizontal: 22,
+    paddingVertical: 12,
+    borderRadius: Radius.pill,
+  },
+  avatarSaveDisabled: { backgroundColor: 'rgba(255,255,255,0.10)' },
+  avatarSaveText: { color: Colors.white, fontWeight: FontWeight.bold, fontSize: FontSize.base },
 
   // Fallback
   fallbackWrap: {

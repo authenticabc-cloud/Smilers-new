@@ -51,6 +51,7 @@ const ITEMS: Row[] = [
   { key: 'quick-replies', route: '/templates', title: 'Quick Replies', sub: 'Create and manage message templates', icon: 'message-text-outline', lib: 'mc' },
   { key: 'chat-appearance', route: '/chat-appearance', title: 'Chat Appearance', sub: 'Wallpapers and bubble themes', icon: 'brush-outline', lib: 'ion' },
   { key: 'media-auto-download', route: '/media-auto-download', title: 'Media Auto-Download', sub: 'Auto-save photos, videos, audio & docs to your device', icon: 'cloud-download-outline', lib: 'ion' },
+  { key: 'photo-privacy', route: '/photo-privacy', title: 'Profile Photo Privacy', sub: 'Choose who can save your profile photo', icon: 'lock-closed-outline', lib: 'ion' },
   { key: 'languages', route: '/languages', title: 'Languages', sub: 'Select languages to skip translation', icon: 'globe-outline', lib: 'ion' },
   { key: 'ringtones', route: '/ringtones', title: 'Ringtones', sub: 'Choose your incoming call ringtone', icon: 'musical-notes-outline', lib: 'ion' },
   { key: 'backup', route: '/backup', title: 'Backup & Storage', sub: 'Auto backup and frequency settings', icon: 'server-outline', lib: 'ion' },

@@ -132,14 +132,14 @@ async function ensureCallChannel(): Promise<string | null> {
   } catch {
     sound = 'smilers_never_cry';
   }
-  const channelId = `incoming-call-wake-${sound || 'silent'}`;
+  const channelId = `incoming-call-wake-v2-${sound || 'silent'}`;
   if (createdCallChannels.has(channelId)) return channelId;
   try {
     await native.notifee.createChannel({
       id: channelId,
       name: 'Incoming calls (wake-screen)',
       description: 'Rings and wakes the screen for incoming Smilers calls.',
-      importance: native.AndroidImportance.HIGH,
+      importance: native.AndroidImportance.MAX,
       // Play the user's chosen ringtone (undefined => silent channel).
       sound,
       vibration: true,
