@@ -45,6 +45,8 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useKeepAwake } from 'expo-keep-awake';
 import * as Haptics from 'expo-haptics';
+import * as ExpoCamera from 'expo-camera';
+import { Linking } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery } from 'convex/react';
@@ -97,6 +99,62 @@ export default function TwilioCallScreen() {
 
   const [token, setToken] = useState<string | null>(params.token ? String(params.token) : null);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  // iter-236: Twilio's native connect() does NOT request runtime mic/camera
+  // permission (unlike react-native-webrtc's getUserMedia). Without RECORD_AUDIO
+  // granted, the Android SDK can't create the local audio track and the room
+  // connection hangs in "connecting" forever. So we MUST request mic (+ camera
+  // for video) BEFORE enabling connect. Default true on web (no native SDK).
+  const [permsReady, setPermsReady] = useState(Platform.OS === 'web');
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const mic = await ExpoCamera.requestMicrophonePermissionsAsync();
+        let camGranted = true;
+        if (isVideo) {
+          const cam = await ExpoCamera.requestCameraPermissionsAsync();
+          camGranted = cam.granted;
+        }
+        recordDiagnostic({
+          tag: 'TWILIO-CALL',
+          source: isCaller ? 'caller' : 'callee',
+          message: `perms mic=${mic.granted} cam=${isVideo ? camGranted : 'n/a'} canAskAgain=${mic.canAskAgain}`,
+        });
+        if (cancelled) return;
+        if (mic.granted && camGranted) {
+          setPermsReady(true);
+          return;
+        }
+        // Denied — cannot place a call without the microphone. Per the
+        // permission contract, surface an Open Settings path instead of
+        // dead-ending on a silent "connecting" spinner.
+        Alert.alert(
+          'Permission required',
+          isVideo
+            ? 'Camera and microphone access are needed to make video calls.'
+            : 'Microphone access is needed to make calls.',
+          [
+            { text: 'Cancel', style: 'cancel', onPress: () => router.back() },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() },
+          ],
+        );
+      } catch (err: any) {
+        // If the permission module itself throws, don't hard-block the call —
+        // let connect() proceed (the OS may already have granted access).
+        recordDiagnostic({
+          tag: 'TWILIO-CALL',
+          source: isCaller ? 'caller' : 'callee',
+          message: `perms-error ${err?.message || err}`,
+        });
+        if (!cancelled) setPermsReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isVideo, isCaller, router]);
 
   // Callee path: fetch own token. Caller path skips this (token already
   // provided by initiate-call).
@@ -115,7 +173,7 @@ export default function TwilioCallScreen() {
     };
   }, [token, roomName, identity]);
 
-  const enabled = Boolean(token && roomName && identity);
+  const enabled = Boolean(token && roomName && identity && permsReady);
   // Stable wrapper so the call session never rebuilds; the real handler is
   // (re)assigned every render below with fresh closures.
   const dataHandlerRef = useRef<(message: string) => void>(() => {});
