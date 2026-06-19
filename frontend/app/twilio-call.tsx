@@ -34,10 +34,12 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  Vibration,
   View,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useKeepAwake } from 'expo-keep-awake';
+import * as Haptics from 'expo-haptics';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -124,6 +126,23 @@ export default function TwilioCallScreen() {
   useEffect(() => {
     if (awaitingUpgrade && remoteHasVideo) setAwaitingUpgrade(false);
   }, [awaitingUpgrade, remoteHasVideo]);
+
+  // Alert the callee with vibration + haptics the moment an upgrade request
+  // arrives, so they notice even if they aren't looking at the screen.
+  useEffect(() => {
+    if (!incomingUpgrade) return;
+    try {
+      Vibration.vibrate([0, 350, 200, 350]);
+    } catch {}
+    if (Platform.OS !== 'web') {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+    }
+    return () => {
+      try {
+        Vibration.cancel();
+      } catch {}
+    };
+  }, [incomingUpgrade]);
 
   const enableLocalCamera = useCallback(async () => {
     setVideoOn(true);
