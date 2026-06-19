@@ -171,13 +171,16 @@ export async function endTwilioCall(roomName: string, roomSid?: string | null): 
 }
 
 /**
- * Feature flag. Reads `EXPO_PUBLIC_USE_TWILIO` at build time. The legacy
- * `react-native-webrtc` stack continues to handle calls when this
- * returns false — Twilio is opt-in until Phase A.3 fully validates.
+ * Feature flag. Twilio is now the DEFAULT call engine — it is used unless
+ * `EXPO_PUBLIC_USE_TWILIO` is explicitly set to a falsy value ("0"/"false"/
+ * "no"). This guards against the env var being absent in a production build
+ * (which previously made calls silently fall back to the legacy WebRTC
+ * stack). The legacy stack only runs when Twilio is explicitly disabled.
  */
 export function isTwilioEnabled(): boolean {
-  const raw = (process.env.EXPO_PUBLIC_USE_TWILIO || '').toLowerCase();
-  return raw === '1' || raw === 'true' || raw === 'yes';
+  const raw = (process.env.EXPO_PUBLIC_USE_TWILIO ?? '').toLowerCase().trim();
+  if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false;
+  return true;
 }
 
 export interface CallRosterEntry {

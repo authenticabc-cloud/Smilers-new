@@ -20,6 +20,7 @@ import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { savePhotoToGallery } from '../../src/lib/savePhotoToGallery';
+import { startCall } from '../../src/lib/twilio/startCall';
 import SaveContactDialog from '../../src/components/SaveContactDialog';
 import {
   getDisplayInitials,
@@ -52,6 +53,13 @@ export default function UserProfileScreen() {
     typeof conversationId === 'string' && conversationId.length > 5;
 
   const getOrCreateDirect = useMutation(api.conversations.getOrCreateDirect);
+  // My own identity — required to route calls through Twilio (iter-234).
+  const { data: me } = useSafeConvexQuery<any | null>(
+    api.users.getCurrentUser,
+    {},
+    null,
+    isAuthenticated,
+  );
 
   // --- Data ---------------------------------------------------------------
   const { data: user } = useSafeConvexQuery<any | null>(
@@ -209,18 +217,25 @@ export default function UserProfileScreen() {
   };
 
   const openCall = (type: 'voice' | 'video') => {
-    if (hasValidConversationId) {
-      router.push(
-        `/call/${conversationId}?type=${type}&displayName=${encodeURIComponent(
-          displayName,
-        )}` as any,
+    if (!hasValidConversationId) {
+      Alert.alert(
+        'Start a chat first',
+        'Open a conversation with this contact before placing a call.',
       );
       return;
     }
-    Alert.alert(
-      'Start a chat first',
-      'Open a conversation with this contact before placing a call.',
-    );
+    // iter-234: route through Twilio (was navigating straight to the legacy
+    // WebRTC /call screen, which bypassed Twilio entirely — the reason the
+    // newer call features never appeared when calling from a profile).
+    startCall({
+      router,
+      callerIdentity: String((me as any)?._id || ''),
+      callerDisplayName: getDisplayNameFromUser(me, ''),
+      calleeIdentities: userId ? [String(userId)] : [],
+      conversationId: String(conversationId),
+      isVideo: type === 'video',
+      displayName,
+    });
   };
 
   const handleBlock = () => {
