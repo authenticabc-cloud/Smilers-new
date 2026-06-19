@@ -78,6 +78,8 @@ export default function TwilioCallScreen() {
     isCaller?: string;
     token?: string;
     title?: string;
+    autoShare?: string;
+    startMuted?: string;
   }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -87,6 +89,10 @@ export default function TwilioCallScreen() {
   const isVideo = String(params.isVideo || '1') === '1';
   const isCaller = String(params.isCaller || '0') === '1';
   const title = String(params.title || roomName);
+  // Screen-share session: the sharer auto-starts the screen broadcast on
+  // connect (and optionally starts muted when sharing without narration).
+  const autoShare = String(params.autoShare || '0') === '1';
+  const startMuted = String(params.startMuted || '0') === '1';
   const region = process.env.EXPO_PUBLIC_TWILIO_REGION || 'ie1';
 
   const [token, setToken] = useState<string | null>(params.token ? String(params.token) : null);
@@ -499,6 +505,22 @@ export default function TwilioCallScreen() {
 
   // Release the audio session when leaving the call screen.
   useEffect(() => () => InCallAudio.stop(), []);
+
+  // Screen-share session (iter-234): once connected, auto-start the screen
+  // broadcast (Android) and optionally start muted. Runs once.
+  const autoShareDoneRef = useRef(false);
+  useEffect(() => {
+    if (host.state !== 'connected' || autoShareDoneRef.current) return;
+    autoShareDoneRef.current = true;
+    if (startMuted) {
+      setMuted(true);
+      host.session?.setMuted(true);
+    }
+    if (autoShare && Platform.OS !== 'ios' && host.screenShareState !== 'on') {
+      host.session?.setScreenShareEnabled(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [host.state]);
 
   // Auto-switch to Bluetooth when a headset connects mid-call; fall back to
   // speaker (video) / earpiece (voice) when it disconnects — mirrors the

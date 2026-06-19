@@ -43,6 +43,10 @@ export interface StartCallArgs {
   displayName: string;
   /** Pass true to enable cloud recording (default: false). */
   record?: boolean;
+  /** Screen-share session: auto-start screen broadcast once connected. */
+  autoShare?: boolean;
+  /** Start with the microphone muted (used for screen-share without narration). */
+  startMuted?: boolean;
 }
 
 export async function startCall(args: StartCallArgs): Promise<void> {
@@ -92,6 +96,8 @@ export async function startCall(args: StartCallArgs): Promise<void> {
         isCaller: '1',
         token: result.token,
         title: displayName,
+        autoShare: args.autoShare ? '1' : '0',
+        startMuted: args.startMuted ? '1' : '0',
       },
     } as any);
   } catch (err: any) {

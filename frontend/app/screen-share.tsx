@@ -26,10 +26,10 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useMutation } from 'convex/react';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../src/providers/AuthProvider';
+import { startCall } from '../src/lib/twilio/startCall';
 import { getDisplayNameFromUser, getDisplayInitials } from '../src/lib/displayName';
 import { useDeviceContactIndex, resolveDeviceContactNameFromUser } from '../src/lib/deviceContactIndex';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
@@ -78,8 +78,12 @@ export default function ScreenShareSenderScreen() {
     isAuthenticated,
   );
 
-  const requestMutation = useMutation((api as any).screenSharing?.requestScreenShare);
-  const getOrCreateDirect = useMutation((api as any).conversations.getOrCreateDirect);
+  const { data: me } = useSafeConvexQuery<any>(
+    (api as any).users.getCurrentUser,
+    {},
+    null,
+    isAuthenticated,
+  );
 
   // iter-188: prefer the name saved in the user's own phone address book
   // over the Convex profile name (which is the Google-account name or a
@@ -114,81 +118,30 @@ export default function ScreenShareSenderScreen() {
       Alert.alert('Pick a recipient', 'Choose someone to share your screen with.');
       return;
     }
-    setSubmitting(true);
-    let shareId: string | null = null;
-    let backendShipped = false;
-    // ⚠️ MUST be declared in the outer scope of handleStart — the historical
-    // bug had this `const` declared inside the `try` block, so the success-path
-    // route on line ~166 hit a silent ReferenceError, `setSubmitting(false)`
-    // never ran, and the sender's "Start sharing" button spun forever.
-    let conversationId: string | null = null;
-    try {
-      // The Convex `screenSharing.requestScreenShare` mutation requires a
-      // conversationId, so first resolve / create a direct conversation with
-      // the picked recipient. Audio inclusion is signalled via WebRTC later.
-      const conv: any = await getOrCreateDirect({ otherUserId: selectedId });
-      conversationId = typeof conv === 'string' ? conv : conv?._id || conv?.conversationId || conv?.id || null;
-      if (!conversationId) throw new Error('Could not open a conversation with that contact.');
-
-      const result: any = await (requestMutation as any)({ conversationId });
-      shareId =
-        String(result?.sessionId || result?.shareId || result?._id || result?.id || conversationId);
-      backendShipped = !!shareId;
-    } catch (errorValue: any) {
-      const message = String(errorValue?.message || errorValue || '');
-      const isMissingFunction =
-        message.includes('CouldNotFindFunction') ||
-        message.toLowerCase().includes('not found') ||
-        message.toLowerCase().includes('no function');
-      if (!isMissingFunction) {
-        Alert.alert(
-          'Could not send request',
-          `The backend rejected the request: ${message.slice(0, 100)}`,
-        );
-        setSubmitting(false);
-        return;
-      }
-      // Missing backend → fall through with a local placeholder shareId.
-    }
-
-    if (!backendShipped) {
-      Alert.alert(
-        'Screen share backend not deployed yet',
-        'The Convex `screenSharing.requestScreenShare` mutation hasn\u2019t been shipped on your backend yet. The mobile UI is fully wired — once the web team ships the contract, this flow will deliver the request to the recipient in realtime.\n\nWould you like to preview the active broadcast mode anyway?',
-        [
-          { text: 'Cancel', style: 'cancel', onPress: () => setSubmitting(false) },
-          {
-            text: 'Preview',
-            onPress: () => {
-              setSubmitting(false);
-              // Use a local placeholder id so the call screen still mounts;
-              // the WebRTC peer connection will simply have no peer.
-              const placeholder = `localshare_${Date.now()}`;
-              router.replace(
-                `/call/${placeholder}?type=screen&screenOnly=1&audio=${includeAudio ? 1 : 0}` as any,
-              );
-            },
-          },
-        ],
-      );
+    const myId = String((me as any)?._id || '');
+    if (!myId) {
+      Alert.alert('Please wait', 'Still loading your account — try again in a moment.');
       return;
     }
-
-    // Backend shipped — route into the call screen in screen-only mode.
-    // Pass the real `conversationId` separately as `convId` so the call
-    // screen's `getConversation` query doesn't try to look up a record
-    // by the screen-share session id (which would Server-Error).
-    // Pass the recipient's user id as `peerUserId` — required by the
-    // backend's `screenSharing.sendSignal({ sessionId, toUserId, ... })`
-    // for WebRTC offer/answer/ICE routing.
-    // Always reset the spinner here — even if router.replace throws we
-    // don't want the button stuck spinning.
-    const convQuery = conversationId ? `&convId=${conversationId}` : '';
-    const peerQuery = selectedId ? `&peerUserId=${selectedId}` : '';
+    setSubmitting(true);
     try {
-      router.replace(
-        `/call/${shareId}?type=screen&screenOnly=1&audio=${includeAudio ? 1 : 0}${convQuery}${peerQuery}` as any,
-      );
+      // iter-234: screen-sharing now runs on Twilio (same engine as calls) —
+      // no more broken Convex `screenSharing.sendSignal`. We open a Twilio
+      // room and auto-start the screen broadcast; the recipient is rung via
+      // the normal call push and sees the screen as soon as they answer.
+      await startCall({
+        router,
+        callerIdentity: myId,
+        callerDisplayName: getDisplayNameFromUser(me, 'Smilers user'),
+        calleeIdentities: [selectedId],
+        conversationId: `share-${myId.slice(-6)}-${Date.now()}`,
+        isVideo: false,
+        displayName: selected?.displayName
+          ? `Screen share · ${selected.displayName}`
+          : 'Screen share',
+        autoShare: true,
+        startMuted: !includeAudio,
+      });
     } finally {
       setSubmitting(false);
     }
@@ -226,8 +179,8 @@ export default function ScreenShareSenderScreen() {
           <Feather name="info" size={18} color={Colors.primary} />
         </View>
         <Text style={styles.infoText}>
-          The recipient will receive a request to accept. Your screen starts
-          broadcasting only after they accept.
+          The recipient gets an incoming call. Once they answer, your screen
+          starts broadcasting to them over a secure Twilio connection.
         </Text>
       </View>
 
@@ -337,7 +290,7 @@ export default function ScreenShareSenderScreen() {
           ) : (
             <>
               <MaterialCommunityIcons name="monitor-share" size={20} color="#3D2A00" />
-              <Text style={styles.startBtnText}>Send Share Request</Text>
+              <Text style={styles.startBtnText}>Start Screen Share</Text>
             </>
           )}
         </TouchableOpacity>
