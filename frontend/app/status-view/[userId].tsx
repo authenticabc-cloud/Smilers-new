@@ -424,12 +424,19 @@ function StoryContent({
   videoPlayerRef: React.MutableRefObject<VideoPlayer | null>;
   onVideoEnd: () => void;
 }) {
-  // iter-226: the status keeps "loading" because it relied on
-  // `api.files.getUrl`, which is NOT reliable on this Convex deployment
-  // (it throws "[CONVEX Q(files:getUrl)] Server Error" → the query never
-  // resolves → infinite spinner). Like messages, the backend auto-resolves a
-  // story's storageId to a signed URL surfaced on the object — read THAT
-  // directly first. Only fall back to files.getUrl if no URL field exists.
+  // iter-235: the status kept "loading" forever for photo/video. Root cause:
+  // unlike `messages.list` (which resolves a message's storageId → signed
+  // `mediaUrl` server-side), the status read queries return only the raw
+  // `storageId`. The viewer then fell back to `api.files.getUrl`, which is
+  // BROKEN on this Convex deployment ("Server Error") → the query never
+  // resolves → infinite spinner.
+  //
+  // Fix: (1) read any server-resolved URL field directly first; (2) if only a
+  // storageId is present, resolve it via the SAME resolvers the voice /
+  // transcription pipeline uses successfully here — `messages.getStorageUrl`
+  // then `storage.getUrl` — and only use the unreliable `files.getUrl` as a
+  // last resort; (3) never spin forever — once every resolver has settled
+  // without a URL, show a retry state instead of an endless spinner.
   const directUrl =
     (typeof story?.mediaUrl === 'string' && story.mediaUrl.length > 0 && story.mediaUrl) ||
     (typeof story?.fileUrl === 'string' && story.fileUrl.length > 0 && story.fileUrl) ||
@@ -441,11 +448,41 @@ function StoryContent({
     !directUrl && typeof story?.storageId === 'string' && story.storageId.length > 0
       ? story.storageId
       : null;
-  const url = useQuery(
-    api.files.getUrl,
-    safeStorageId ? { storageId: safeStorageId } : 'skip',
-  ) as string | null | undefined;
-  const src = directUrl || url;
+
+  const viaMessages = useSafeConvexQuery<string | null>(
+    (api as any).messages?.getStorageUrl,
+    safeStorageId ? { storageId: safeStorageId } : {},
+    null,
+    !!safeStorageId,
+  );
+  const viaStorage = useSafeConvexQuery<string | null>(
+    (api as any).storage?.getUrl,
+    safeStorageId ? { storageId: safeStorageId } : {},
+    null,
+    !!safeStorageId && !viaMessages.data && !viaMessages.loading,
+  );
+  const viaFiles = useSafeConvexQuery<string | null>(
+    (api as any).files?.getUrl,
+    safeStorageId ? { storageId: safeStorageId } : {},
+    null,
+    !!safeStorageId &&
+      !viaMessages.data &&
+      !viaMessages.loading &&
+      !viaStorage.data &&
+      !viaStorage.loading,
+  );
+  const resolvedStorageUrl = viaMessages.data || viaStorage.data || viaFiles.data || null;
+  const stillResolving =
+    !!safeStorageId &&
+    !resolvedStorageUrl &&
+    (viaMessages.loading || viaStorage.loading || viaFiles.loading);
+  const src = directUrl || resolvedStorageUrl;
+
+  const retryResolve = useCallback(() => {
+    viaMessages.refetch();
+    viaStorage.refetch();
+    viaFiles.refetch();
+  }, [viaMessages, viaStorage, viaFiles]);
 
   if (story.type === 'text') {
     return (
@@ -456,9 +493,21 @@ function StoryContent({
   }
 
   if (!src) {
+    if (stillResolving) {
+      return (
+        <View style={styles.mediaBody}>
+          <ActivityIndicator color="#FFFFFF" size="large" />
+        </View>
+      );
+    }
     return (
       <View style={styles.mediaBody}>
-        <ActivityIndicator color="#FFFFFF" size="large" />
+        <Ionicons name="cloud-offline-outline" size={44} color="rgba(255,255,255,0.6)" />
+        <Text style={styles.mediaErrorText}>Couldn&apos;t load this media</Text>
+        <TouchableOpacity onPress={retryResolve} style={styles.mediaRetryBtn} testID="story-media-retry">
+          <Feather name="refresh-cw" size={16} color="#FFFFFF" />
+          <Text style={styles.mediaRetryText}>Retry</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -633,6 +682,22 @@ const styles = StyleSheet.create({
   textContent: { fontSize: 32, fontWeight: FontWeight.bold, textAlign: 'center', lineHeight: 40 },
   mediaBody: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   mediaImage: { width: '100%', height: '100%' },
+  mediaErrorText: {
+    color: 'rgba(255,255,255,0.75)',
+    fontSize: FontSize.base,
+    marginTop: 12,
+  },
+  mediaRetryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderRadius: Radius.pill,
+  },
+  mediaRetryText: { color: '#FFFFFF', fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
   tapZones: {
     position: 'absolute',
     left: 0,
