@@ -417,6 +417,183 @@ async def twilio_initiate_call(payload: TwilioInitiateCallRequest):
 
 
 # ============================================================
+# Twilio Multiparty — add participant + privacy-aware roster
+# ============================================================
+
+class TwilioAddParticipantRequest(BaseModel):
+    """
+    Invite an additional participant into an ONGOING Twilio room.
+
+    Twilio Group Rooms mix all participants server-side, so "adding" is
+    simply ringing the new person into the same room. The adder also
+    decides — per a regulatory requirement — whether the new participant's
+    phone number is visible to the OTHER participants (`hide_number`).
+    """
+    room_name: str = Field(..., min_length=1, max_length=128)
+    adder_identity: str = Field(..., min_length=1, max_length=120)
+    adder_display_name: Optional[str] = Field(None, max_length=120)
+    callee_identity: str = Field(..., min_length=1, max_length=120)
+    callee_display_name: Optional[str] = Field(None, max_length=120)
+    callee_phone: Optional[str] = Field(None, max_length=40)
+    hide_number: bool = Field(False, description="If true, other participants do NOT see the callee's phone number")
+    is_video: bool = True
+    conversation_id: Optional[str] = Field(None, max_length=128)
+
+
+@api_router.post("/twilio/add-participant")
+async def twilio_add_participant(payload: TwilioAddParticipantRequest):
+    """
+    Ring a new participant into an existing room + persist their roster
+    entry (with the adder's number-visibility choice). The callee receives
+    the same call push as a fresh invite, but pointed at the live room so
+    Twilio's SFU connects them to everyone already in the call.
+    """
+    rest = _get_twilio_rest()
+    if rest is None:
+        raise HTTPException(status_code=503, detail="Twilio not configured")
+
+    room_name = payload.room_name
+    room_sid: Optional[str] = None
+    try:
+        existing = rest.video.v1.rooms.list(unique_name=room_name, status="in-progress", limit=1)
+        if existing:
+            room_sid = existing[0].sid
+    except TwilioRestException:
+        logger.warning("twilio-add-participant: room lookup failed (non-fatal)")
+
+    # Persist roster entry (privacy-aware). Upsert so re-adding updates it.
+    try:
+        await db.twilio_call_participants.update_one(
+            {"room_name": room_name, "identity": payload.callee_identity},
+            {
+                "$set": {
+                    "room_name": room_name,
+                    "identity": payload.callee_identity,
+                    "display_name": payload.callee_display_name,
+                    "phone_number": payload.callee_phone,
+                    "hide_number": bool(payload.hide_number),
+                    "added_by": payload.adder_identity,
+                    "updated_at": datetime.now(timezone.utc),
+                },
+                "$setOnInsert": {"created_at": datetime.now(timezone.utc)},
+            },
+            upsert=True,
+        )
+    except Exception:
+        logger.warning("twilio-add-participant: persisting roster entry failed (non-fatal)")
+
+    # Ring the new participant into the live room.
+    push_stats: dict = {"token_count": 0, "success_count": 0, "error_count": 0, "errors": [], "pruned_count": 0}
+    display_name = payload.adder_display_name or payload.adder_identity
+    try:
+        push_data = {
+            "title": display_name,
+            "message": ("Adding you to a video call" if payload.is_video else "Adding you to a call"),
+            "type": "call",
+            "callId": room_sid or room_name,
+            "conversationId": payload.conversation_id or room_name,
+            "twilio_room_name": room_name,
+            "twilio_room_sid": room_sid or "",
+            "twilio_is_video": "1" if payload.is_video else "0",
+            "twilio_caller_identity": payload.adder_identity,
+            "displayName": display_name,
+            "action_url": (
+                f"/call/twilio-{room_name}?room={room_name}&isCaller=0&isVideo="
+                f"{'1' if payload.is_video else '0'}&title={display_name}"
+            ),
+            "subtext": "Incoming call",
+        }
+        push_stats = await send_push(
+            recipients=[payload.callee_identity],
+            data=push_data,
+            idempotency_key=f"twilio-add:{room_name}:{payload.callee_identity}",
+        )
+    except Exception as exc:
+        logger.exception(f"twilio-add-participant: push failed (non-fatal): {exc}")
+
+    return {
+        "ok": True,
+        "room_name": room_name,
+        "room_sid": room_sid,
+        "push_stats": push_stats,
+        "server_time": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@api_router.get("/twilio/call-participants")
+async def twilio_call_participants(room_name: str, viewer: str = ""):
+    """
+    Return the privacy-aware roster for a room. A participant's phone
+    number is returned ONLY when either the participant did not opt to
+    hide it, OR the viewer is the person who added them (or themselves).
+    Other participants receive `phone_number: null` for hidden entries.
+    """
+    try:
+        docs = await db.twilio_call_participants.find({"room_name": room_name}).to_list(500)
+    except Exception:
+        docs = []
+    participants = []
+    for d in docs:
+        hide = bool(d.get("hide_number"))
+        added_by = d.get("added_by")
+        identity = d.get("identity")
+        phone = d.get("phone_number")
+        can_see_phone = (not hide) or (bool(viewer) and (viewer == added_by or viewer == identity))
+        participants.append(
+            {
+                "identity": identity,
+                "display_name": d.get("display_name"),
+                "phone_number": phone if can_see_phone else None,
+                "hide_number": hide,
+                "added_by": added_by,
+            }
+        )
+    return {"participants": participants}
+
+
+class TwilioRemoveParticipantRequest(BaseModel):
+    """Host-only: forcibly disconnect a participant from the room."""
+    room_name: str = Field(..., min_length=1, max_length=128)
+    identity: str = Field(..., min_length=1, max_length=120)
+    requester_identity: Optional[str] = Field(None, max_length=120)
+
+
+@api_router.post("/twilio/remove-participant")
+async def twilio_remove_participant(payload: TwilioRemoveParticipantRequest):
+    """
+    Disconnect a participant from the live Twilio room (server-enforced via
+    the REST API) and drop their roster entry. Intended for the call host.
+    """
+    rest = _get_twilio_rest()
+    if rest is None:
+        raise HTTPException(status_code=503, detail="Twilio not configured")
+
+    room_name = payload.room_name
+    disconnected = False
+    try:
+        rooms = rest.video.v1.rooms.list(unique_name=room_name, status="in-progress", limit=1)
+        if rooms:
+            room_sid = rooms[0].sid
+            participants = rest.video.v1.rooms(room_sid).participants.list(status="connected")
+            for p in participants:
+                if p.identity == payload.identity:
+                    rest.video.v1.rooms(room_sid).participants(p.sid).update(status="disconnected")
+                    disconnected = True
+    except TwilioRestException as exc:
+        logger.warning(f"twilio-remove-participant: REST error (non-fatal): {exc}")
+
+    try:
+        await db.twilio_call_participants.delete_one(
+            {"room_name": room_name, "identity": payload.identity}
+        )
+    except Exception:
+        logger.warning("twilio-remove-participant: roster delete failed (non-fatal)")
+
+    return {"ok": True, "disconnected": disconnected}
+
+
+
+# ============================================================
 # Twilio Recording (Phase A.4)
 # ============================================================
 

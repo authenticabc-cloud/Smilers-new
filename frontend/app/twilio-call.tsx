@@ -25,17 +25,20 @@
  * wire this in as the default call path when EXPO_PUBLIC_USE_TWILIO=1.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   AppState,
+  FlatList,
+  Image,
   Modal,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   Vibration,
   View,
 } from 'react-native';
@@ -44,8 +47,17 @@ import { useKeepAwake } from 'expo-keep-awake';
 import * as Haptics from 'expo-haptics';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useQuery } from 'convex/react';
 
-import { fetchTwilioToken, endTwilioCall } from '../src/lib/twilio/twilioApi';
+import { api } from '../src/convexApi';
+import {
+  fetchTwilioToken,
+  endTwilioCall,
+  addTwilioParticipant,
+  removeTwilioParticipant,
+  fetchCallParticipants,
+  type CallRosterEntry,
+} from '../src/lib/twilio/twilioApi';
 import { useTwilioCallSession } from '../src/lib/twilio/useTwilioCallSession';
 import { recordDiagnostic } from '../src/lib/diagnostics';
 import { setPipParams, enterPip, useIsInPip, isPipSupported } from '../src/lib/pip';
@@ -121,6 +133,137 @@ export default function TwilioCallScreen() {
   const [audioOutput, setAudioOutput] = useState<AudioOutputRoute>(isVideo ? 'speaker' : 'earpiece');
   const [showAudioPicker, setShowAudioPicker] = useState(false);
   const [btAvailable, setBtAvailable] = useState(false);
+
+  // iter-233 — multiparty (add participant) + privacy-aware roster.
+  const me = useQuery(api.users.getCurrentUser, {}) as any;
+  const myContacts = useQuery(api.contacts.getContacts, {}) as any[] | undefined;
+  const myName = String(me?.name || me?.displayName || '');
+  const conversationId = roomName.startsWith('smilers_conv_')
+    ? roomName.slice('smilers_conv_'.length)
+    : null;
+
+  const [roster, setRoster] = useState<CallRosterEntry[]>([]);
+  const [showRoster, setShowRoster] = useState(false);
+  const [showAddPicker, setShowAddPicker] = useState(false);
+  const [addSearch, setAddSearch] = useState('');
+  const [pendingAdd, setPendingAdd] = useState<any | null>(null);
+  const [adding, setAdding] = useState(false);
+
+  // Poll the privacy-aware roster while connected so names/numbers stay fresh
+  // for everyone (the backend masks hidden numbers per-viewer).
+  useEffect(() => {
+    if (host.state !== 'connected' && host.state !== 'reconnecting') return;
+    let active = true;
+    const load = () => {
+      fetchCallParticipants(roomName, identity).then((list) => {
+        if (active) setRoster(list);
+      });
+    };
+    load();
+    const iv = setInterval(load, 5000);
+    return () => {
+      active = false;
+      clearInterval(iv);
+    };
+  }, [host.state, roomName, identity]);
+
+  // Identities already in the call — so we don't offer to re-add them.
+  const inCallIds = useMemo(() => {
+    const s = new Set<string>();
+    s.add(identity);
+    host.participants.forEach((p) => p.identity && s.add(p.identity));
+    roster.forEach((r) => r.identity && s.add(r.identity));
+    return s;
+  }, [identity, host.participants, roster]);
+
+  const addableContacts = useMemo(() => {
+    const q = addSearch.trim().toLowerCase();
+    return (myContacts || [])
+      .filter((c) => c?._id && !inCallIds.has(String(c._id)))
+      .filter(
+        (c) =>
+          !q ||
+          String(c.name || '').toLowerCase().includes(q) ||
+          String(c.phoneNumber || '').includes(q),
+      );
+  }, [myContacts, inCallIds, addSearch]);
+
+  const openAddFlow = () => {
+    setAddSearch('');
+    setPendingAdd(null);
+    setShowAddPicker(true);
+  };
+
+  const confirmAdd = async (hideNumber: boolean) => {
+    const contact = pendingAdd;
+    if (!contact?._id) return;
+    setAdding(true);
+    try {
+      await addTwilioParticipant({
+        roomName,
+        adderIdentity: identity,
+        adderDisplayName: myName,
+        calleeIdentity: String(contact._id),
+        calleeDisplayName: String(contact.name || ''),
+        calleePhone: contact.phoneNumber ? String(contact.phoneNumber) : undefined,
+        hideNumber,
+        isVideo: isVideoMode,
+        conversationId,
+      });
+      setPendingAdd(null);
+      setShowAddPicker(false);
+      fetchCallParticipants(roomName, identity).then(setRoster);
+    } catch (err: any) {
+      Alert.alert('Could not add participant', err?.message || 'Please try again.');
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  // Host controls (only the call initiator). Remove = server-enforced
+  // disconnect via Twilio REST. Mute = cooperative request over the data
+  // channel (the target mutes itself), since Twilio can't force-mute a
+  // remote track server-side.
+  const handleRemoveParticipant = (p: { identity: string; name: string }) => {
+    Alert.alert('Remove from call', `Remove ${p.name} from this call?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Remove',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await removeTwilioParticipant({
+              roomName,
+              identity: p.identity,
+              requesterIdentity: identity,
+            });
+            fetchCallParticipants(roomName, identity).then(setRoster);
+          } catch (err: any) {
+            Alert.alert('Could not remove', err?.message || 'Please try again.');
+          }
+        },
+      },
+    ]);
+  };
+
+  const handleMuteParticipant = (p: { identity: string; name: string }) => {
+    host.session?.sendData(JSON.stringify({ t: 'force-mute', from: identity, target: p.identity }));
+    Alert.alert('Mute requested', `Asked ${p.name} to mute their microphone.`);
+  };
+
+  // Merge live Twilio participants with backend roster metadata for display.
+  const rosterByIdentity = useMemo(() => {
+    const m = new Map<string, CallRosterEntry>();
+    roster.forEach((r) => r.identity && m.set(r.identity, r));
+    return m;
+  }, [roster]);
+  // Resolve friendly names from the viewer's own contacts as a fallback.
+  const contactNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    (myContacts || []).forEach((c) => c?._id && m.set(String(c._id), String(c.name || '')));
+    return m;
+  }, [myContacts]);
+  const participantCount = host.participants.length + 1; // +1 = me
 
   // iter-230 — voice→video upgrade. The call is in "video mode" if it started
   // as video, OUR camera is on, OR the remote published a camera track. This
@@ -199,6 +342,13 @@ export default function TwilioCallScreen() {
         'Camera stayed off',
         'Your contact kept their camera off — they can still see your video.',
       );
+    } else if (msg.t === 'force-mute') {
+      // The host asked us to mute. Cooperative mute (we mute ourselves).
+      if (msg.target === identity && !muted) {
+        setMuted(true);
+        host.session?.setMuted(true);
+        Alert.alert('Microphone muted', 'The host muted your microphone.');
+      }
     }
   };
 
@@ -539,10 +689,14 @@ export default function TwilioCallScreen() {
           <Text style={styles.titleText} numberOfLines={1}>
             {title}
           </Text>
-          <Text style={styles.subTitle}>
-            {host.state}
-            {host.participants.length > 0 ? `  •  ${host.participants.length} participant${host.participants.length === 1 ? '' : 's'}` : ''}
-          </Text>
+          <Text style={styles.subTitle}>{host.state}</Text>
+          <Pressable onPress={() => setShowRoster(true)} style={styles.participantsPill} hitSlop={8}>
+            <Feather name="users" size={13} color="#fff" />
+            <Text style={styles.participantsPillText}>
+              {participantCount} {participantCount === 1 ? 'person' : 'people'}
+            </Text>
+            <Feather name="chevron-right" size={13} color="#bbb" />
+          </Pressable>
         </View>
       ) : null}
 
@@ -591,6 +745,7 @@ export default function TwilioCallScreen() {
           onPress={handleScreenShare}
           active={host.screenShareState === 'on'}
         />
+        <ControlBtn icon="user-plus" label="Add" onPress={openAddFlow} />
         <Pressable onPress={handleHangup} style={[styles.controlBtn, styles.hangupBtn]}>
           <Feather name="phone-off" size={24} color="#fff" />
           <Text style={styles.hangupLabel}>End</Text>
@@ -616,6 +771,189 @@ export default function TwilioCallScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* iter-233 — Add participant: contact picker → privacy choice. */}
+      <Modal
+        visible={showAddPicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => (adding ? undefined : setShowAddPicker(false))}
+      >
+        <View style={styles.addBackdrop}>
+          <View style={[styles.addSheet, { paddingBottom: insets.bottom + 12 }]}>
+            <View style={styles.addHeader}>
+              <Text style={styles.addTitle}>{pendingAdd ? 'Share number?' : 'Add to call'}</Text>
+              <Pressable onPress={() => (adding ? undefined : setShowAddPicker(false))} hitSlop={8}>
+                <Feather name="x" size={22} color="#fff" />
+              </Pressable>
+            </View>
+
+            {pendingAdd ? (
+              // Privacy step — regulatory: adder decides number visibility.
+              <View style={styles.privacyStep}>
+                <View style={styles.privacyAvatar}>
+                  <Text style={styles.privacyAvatarText}>
+                    {String(pendingAdd.name || '?').trim().charAt(0).toUpperCase()}
+                  </Text>
+                </View>
+                <Text style={styles.privacyName}>{pendingAdd.name || 'Contact'}</Text>
+                <Text style={styles.privacyMsg}>
+                  Should other participants be able to see{' '}
+                  {String(pendingAdd.name || 'this contact').split(' ')[0]}&apos;s phone number?
+                </Text>
+                <Pressable
+                  style={[styles.privacyChoice, styles.privacyHide]}
+                  disabled={adding}
+                  onPress={() => confirmAdd(true)}
+                >
+                  <Feather name="eye-off" size={20} color="#fff" />
+                  <View style={styles.privacyChoiceText}>
+                    <Text style={styles.privacyChoiceTitle}>Hide number</Text>
+                    <Text style={styles.privacyChoiceSub}>Others won&apos;t see their phone number</Text>
+                  </View>
+                </Pressable>
+                <Pressable
+                  style={[styles.privacyChoice, styles.privacyShow]}
+                  disabled={adding}
+                  onPress={() => confirmAdd(false)}
+                >
+                  <Feather name="eye" size={20} color="#fff" />
+                  <View style={styles.privacyChoiceText}>
+                    <Text style={styles.privacyChoiceTitle}>Show number</Text>
+                    <Text style={styles.privacyChoiceSub}>Others will see their phone number</Text>
+                  </View>
+                </Pressable>
+                <Pressable style={styles.privacyBack} disabled={adding} onPress={() => setPendingAdd(null)}>
+                  <Text style={styles.privacyBackText}>{adding ? 'Adding…' : 'Back'}</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <>
+                <View style={styles.addSearchRow}>
+                  <Feather name="search" size={16} color="#888" />
+                  <TextInput
+                    style={styles.addSearchInput}
+                    placeholder="Search contacts"
+                    placeholderTextColor="#888"
+                    value={addSearch}
+                    onChangeText={setAddSearch}
+                    autoCorrect={false}
+                  />
+                </View>
+                <FlatList
+                  data={addableContacts}
+                  keyExtractor={(item) => String(item._id)}
+                  keyboardShouldPersistTaps="handled"
+                  style={styles.addList}
+                  ListEmptyComponent={
+                    <Text style={styles.addEmpty}>
+                      {myContacts === undefined ? 'Loading contacts…' : 'No contacts to add'}
+                    </Text>
+                  }
+                  renderItem={({ item }) => (
+                    <Pressable style={styles.addRow} onPress={() => setPendingAdd(item)}>
+                      {item.avatar ? (
+                        <Image source={{ uri: item.avatar }} style={styles.addRowAvatar} />
+                      ) : (
+                        <View style={[styles.addRowAvatar, styles.addRowAvatarFallback]}>
+                          <Text style={styles.addRowAvatarText}>
+                            {String(item.name || '?').trim().charAt(0).toUpperCase()}
+                          </Text>
+                        </View>
+                      )}
+                      <View style={styles.addRowText}>
+                        <Text style={styles.addRowName} numberOfLines={1}>{item.name || 'Contact'}</Text>
+                        {item.phoneNumber ? (
+                          <Text style={styles.addRowPhone} numberOfLines={1}>{item.phoneNumber}</Text>
+                        ) : null}
+                      </View>
+                      <Feather name="plus-circle" size={22} color={Colors.primary} />
+                    </Pressable>
+                  )}
+                />
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* iter-233 — Participant roster (privacy-aware numbers). */}
+      <Modal
+        visible={showRoster}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowRoster(false)}
+      >
+        <View style={styles.addBackdrop}>
+          <View style={[styles.addSheet, { paddingBottom: insets.bottom + 12 }]}>
+            <View style={styles.addHeader}>
+              <Text style={styles.addTitle}>In this call ({participantCount})</Text>
+              <Pressable onPress={() => setShowRoster(false)} hitSlop={8}>
+                <Feather name="x" size={22} color="#fff" />
+              </Pressable>
+            </View>
+            <View style={styles.rosterList}>
+              <RosterRow name={`${myName || 'You'} (you)`} phone={null} />
+              {host.participants.map((p) => {
+                const meta = rosterByIdentity.get(p.identity);
+                const name = meta?.displayName || contactNameById.get(p.identity) || p.identity;
+                return (
+                  <RosterRow
+                    key={p.sid}
+                    name={name}
+                    phone={meta?.phoneNumber || null}
+                    hidden={meta?.hideNumber}
+                    isHost={isCaller}
+                    onRemove={() => handleRemoveParticipant({ identity: p.identity, name })}
+                    onMute={() => handleMuteParticipant({ identity: p.identity, name })}
+                  />
+                );
+              })}
+            </View>
+            <Pressable style={styles.rosterAddBtn} onPress={() => { setShowRoster(false); openAddFlow(); }}>
+              <Feather name="user-plus" size={18} color="#fff" />
+              <Text style={styles.rosterAddText}>Add participant</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+interface RosterRowProps {
+  name: string;
+  phone: string | null;
+  hidden?: boolean;
+  isHost?: boolean;
+  onRemove?: () => void;
+  onMute?: () => void;
+}
+
+function RosterRow({ name, phone, hidden, isHost, onRemove, onMute }: RosterRowProps) {
+  return (
+    <View style={styles.rosterRow}>
+      <View style={[styles.addRowAvatar, styles.addRowAvatarFallback]}>
+        <Text style={styles.addRowAvatarText}>{name.trim().charAt(0).toUpperCase()}</Text>
+      </View>
+      <View style={styles.addRowText}>
+        <Text style={styles.addRowName} numberOfLines={1}>{name}</Text>
+        {phone ? (
+          <Text style={styles.addRowPhone} numberOfLines={1}>{phone}</Text>
+        ) : hidden ? (
+          <Text style={styles.rosterHidden}>Number hidden</Text>
+        ) : null}
+      </View>
+      {isHost ? (
+        <View style={styles.rosterActions}>
+          <Pressable onPress={onMute} hitSlop={8} style={styles.rosterIconBtn}>
+            <Feather name="mic-off" size={18} color="#ddd" />
+          </Pressable>
+          <Pressable onPress={onRemove} hitSlop={8} style={styles.rosterIconBtn}>
+            <Feather name="user-x" size={18} color="#e63946" />
+          </Pressable>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -771,6 +1109,86 @@ const styles = StyleSheet.create({
   audioRowLabel: { color: '#fff', fontSize: 16, fontWeight: '500', flex: 1 },
   audioRowLabelSelected: { color: Colors.primary },
   audioRowCheck: { marginLeft: 'auto' },
+  participantsPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 6,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 16,
+  },
+  participantsPillText: { color: '#fff', fontSize: 12, fontWeight: '600' },
+  addBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+  addSheet: {
+    backgroundColor: '#1c1c1e',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    maxHeight: '78%',
+  },
+  addHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  addTitle: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  addSearchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    height: 44,
+    marginBottom: 8,
+  },
+  addSearchInput: { flex: 1, color: '#fff', fontSize: 15, padding: 0 },
+  addList: { maxHeight: 360 },
+  addEmpty: { color: '#888', textAlign: 'center', paddingVertical: 28, fontSize: 14 },
+  addRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
+  addRowAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#333' },
+  addRowAvatarFallback: { alignItems: 'center', justifyContent: 'center' },
+  addRowAvatarText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  addRowText: { flex: 1 },
+  addRowName: { color: '#fff', fontSize: 16, fontWeight: '500' },
+  addRowPhone: { color: '#9a9a9a', fontSize: 13, marginTop: 1 },
+  privacyStep: { alignItems: 'center', paddingTop: 8, paddingBottom: 6, gap: 8 },
+  privacyAvatar: {
+    width: 64, height: 64, borderRadius: 32, backgroundColor: Colors.primary,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  privacyAvatarText: { color: '#fff', fontSize: 26, fontWeight: '700' },
+  privacyName: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  privacyMsg: { color: '#b5b5b5', fontSize: 14, textAlign: 'center', paddingHorizontal: 16, marginBottom: 6 },
+  privacyChoice: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    width: '100%', borderRadius: 14, paddingVertical: 14, paddingHorizontal: 16,
+  },
+  privacyHide: { backgroundColor: 'rgba(255,255,255,0.10)' },
+  privacyShow: { backgroundColor: 'rgba(255,255,255,0.06)' },
+  privacyChoiceText: { flex: 1 },
+  privacyChoiceTitle: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  privacyChoiceSub: { color: '#9a9a9a', fontSize: 12, marginTop: 1 },
+  privacyBack: { paddingVertical: 12 },
+  privacyBackText: { color: Colors.primary, fontSize: 15, fontWeight: '600' },
+  rosterList: { gap: 4 },
+  rosterRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 },
+  rosterHidden: { color: '#777', fontSize: 13, fontStyle: 'italic', marginTop: 1 },
+  rosterActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  rosterIconBtn: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  rosterAddBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: Colors.primary, borderRadius: 14, paddingVertical: 14, marginTop: 14,
+  },
+  rosterAddText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   upgradeBanner: {
     position: 'absolute',
     left: 16,

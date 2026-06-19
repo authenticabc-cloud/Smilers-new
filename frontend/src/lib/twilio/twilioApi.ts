@@ -179,3 +179,103 @@ export function isTwilioEnabled(): boolean {
   const raw = (process.env.EXPO_PUBLIC_USE_TWILIO || '').toLowerCase();
   return raw === '1' || raw === 'true' || raw === 'yes';
 }
+
+export interface CallRosterEntry {
+  identity: string;
+  displayName: string | null;
+  /** null when hidden from this viewer by the adder's privacy choice. */
+  phoneNumber: string | null;
+  hideNumber: boolean;
+  addedBy: string | null;
+}
+
+/**
+ * POST /api/twilio/add-participant — ring an additional person into the
+ * SAME live room (Twilio Group Rooms mix everyone server-side). The
+ * `hideNumber` flag records the adder's choice on whether the new
+ * participant's phone number is visible to the OTHER participants.
+ */
+export async function addTwilioParticipant(args: {
+  roomName: string;
+  adderIdentity: string;
+  adderDisplayName?: string;
+  calleeIdentity: string;
+  calleeDisplayName?: string;
+  calleePhone?: string;
+  hideNumber: boolean;
+  isVideo: boolean;
+  conversationId?: string | null;
+}): Promise<void> {
+  if (!BACKEND_URL) throw new Error('[twilio-api] EXPO_PUBLIC_BACKEND_URL is empty in this build');
+  const resp = await fetch(`${BACKEND_URL}/api/twilio/add-participant`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      room_name: args.roomName,
+      adder_identity: args.adderIdentity,
+      adder_display_name: args.adderDisplayName ?? null,
+      callee_identity: args.calleeIdentity,
+      callee_display_name: args.calleeDisplayName ?? null,
+      callee_phone: args.calleePhone ?? null,
+      hide_number: args.hideNumber,
+      is_video: args.isVideo,
+      conversation_id: args.conversationId ?? null,
+    }),
+  });
+  if (!resp.ok) {
+    let body = '';
+    try {
+      body = (await resp.text()).slice(0, 200);
+    } catch {}
+    recordDiagnostic({ tag: 'TWILIO-CALL', source: 'addParticipant', message: `HTTP_${resp.status} body=${body}` });
+    throw new Error(`[twilio-api] add-participant HTTP ${resp.status}`);
+  }
+}
+
+/**
+ * POST /api/twilio/remove-participant — host action: server-enforced
+ * disconnect of a participant from the live room (via Twilio REST).
+ */
+export async function removeTwilioParticipant(args: {
+  roomName: string;
+  identity: string;
+  requesterIdentity?: string;
+}): Promise<void> {
+  if (!BACKEND_URL) throw new Error('[twilio-api] EXPO_PUBLIC_BACKEND_URL is empty in this build');
+  const resp = await fetch(`${BACKEND_URL}/api/twilio/remove-participant`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      room_name: args.roomName,
+      identity: args.identity,
+      requester_identity: args.requesterIdentity ?? null,
+    }),
+  });
+  if (!resp.ok) {
+    recordDiagnostic({ tag: 'TWILIO-CALL', source: 'removeParticipant', message: `HTTP_${resp.status}` });
+    throw new Error(`[twilio-api] remove-participant HTTP ${resp.status}`);
+  }
+}
+
+/**
+ * GET /api/twilio/call-participants — privacy-aware roster for a room.
+ * The viewer's identity decides which phone numbers are revealed.
+ */
+export async function fetchCallParticipants(roomName: string, viewer: string): Promise<CallRosterEntry[]> {
+  if (!BACKEND_URL || !roomName) return [];
+  try {
+    const url = `${BACKEND_URL}/api/twilio/call-participants?room_name=${encodeURIComponent(roomName)}&viewer=${encodeURIComponent(viewer)}`;
+    const resp = await fetch(url);
+    if (!resp.ok) return [];
+    const json = await resp.json();
+    return (json.participants || []).map((p: any) => ({
+      identity: p.identity,
+      displayName: p.display_name ?? null,
+      phoneNumber: p.phone_number ?? null,
+      hideNumber: !!p.hide_number,
+      addedBy: p.added_by ?? null,
+    }));
+  } catch {
+    return [];
+  }
+}
