@@ -8,7 +8,7 @@
     "icon": "./assets/images/icon.png",
     "scheme": "smilers",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.smilers.app",

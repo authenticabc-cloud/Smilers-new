@@ -41,12 +41,12 @@ import {
   TextInput,
   Vibration,
   View,
+  Linking,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useKeepAwake } from 'expo-keep-awake';
 import * as Haptics from 'expo-haptics';
-import * as ExpoCamera from 'expo-camera';
-import { Linking } from 'react-native';
+import { requestCameraPermissionsAsync, requestMicrophonePermissionsAsync } from 'expo-camera';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery } from 'convex/react';
@@ -111,10 +111,10 @@ export default function TwilioCallScreen() {
     let cancelled = false;
     (async () => {
       try {
-        const mic = await ExpoCamera.requestMicrophonePermissionsAsync();
+        const mic = await requestMicrophonePermissionsAsync();
         let camGranted = true;
         if (isVideo) {
-          const cam = await ExpoCamera.requestCameraPermissionsAsync();
+          const cam = await requestCameraPermissionsAsync();
           camGranted = cam.granted;
         }
         recordDiagnostic({
