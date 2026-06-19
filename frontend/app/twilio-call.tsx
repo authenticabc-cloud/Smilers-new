@@ -30,8 +30,10 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
+  Modal,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   Vibration,
@@ -47,7 +49,10 @@ import { fetchTwilioToken, endTwilioCall } from '../src/lib/twilio/twilioApi';
 import { useTwilioCallSession } from '../src/lib/twilio/useTwilioCallSession';
 import { recordDiagnostic } from '../src/lib/diagnostics';
 import { setPipParams, enterPip, useIsInPip, isPipSupported } from '../src/lib/pip';
+import { InCallAudio } from '../src/lib/webrtc/inCallManager';
 import { Colors } from '../src/theme';
+
+type AudioOutputRoute = 'earpiece' | 'speaker' | 'bluetooth';
 
 export default function TwilioCallScreen() {
   // iter-222: keep the screen ON for the entire call so it never dims/sleeps
@@ -110,7 +115,12 @@ export default function TwilioCallScreen() {
   // Local UI state for mute / video / speaker buttons.
   const [muted, setMuted] = useState(false);
   const [videoOn, setVideoOn] = useState(isVideo);
-  const [speakerOn, setSpeakerOn] = useState(isVideo); // default speaker on for video
+  // iter-232: full audio routing (earpiece / speaker / bluetooth) for BOTH
+  // voice and video calls, via InCallManager (same engine the rest of the app
+  // uses). Default mirrors the system dialer: video → speaker, voice → earpiece.
+  const [audioOutput, setAudioOutput] = useState<AudioOutputRoute>(isVideo ? 'speaker' : 'earpiece');
+  const [showAudioPicker, setShowAudioPicker] = useState(false);
+  const [btAvailable, setBtAvailable] = useState(false);
 
   // iter-230 — voice→video upgrade. The call is in "video mode" if it started
   // as video, OUR camera is on, OR the remote published a camera track. This
@@ -317,15 +327,58 @@ export default function TwilioCallScreen() {
     return () => clearTimeout(t);
   }, [isCaller, host.state, host.participants, host.session, roomName, closeScreen]);
 
+  // iter-232: drive audio routing through InCallManager (Android
+  // MODE_IN_COMMUNICATION + chooseAudioRoute), the same path the rest of the
+  // app uses. Twilio's own speaker toggle only did speaker-on/off and forced
+  // speaker for video — so video calls never responded to earpiece/Bluetooth.
+  const inCallStartedRef = useRef(false);
   useEffect(() => {
-    if (host.session && host.state === 'connected') {
-      // Apply initial speaker preference once we're in the room.
-      try {
-        host.session.setSpeakerOn(speakerOn);
-      } catch {}
+    if (host.state !== 'connected' && host.state !== 'reconnecting') return;
+    if (!inCallStartedRef.current) {
+      InCallAudio.start(isVideoMode ? 'video' : 'audio');
+      inCallStartedRef.current = true;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [host.state]);
+    if (audioOutput === 'speaker') {
+      InCallAudio.setSpeakerOn(true);
+    } else if (audioOutput === 'bluetooth') {
+      InCallAudio.setBluetoothOn(isVideoMode ? 'video' : 'audio');
+    } else {
+      InCallAudio.setEarpieceOn();
+    }
+  }, [audioOutput, host.state, isVideoMode]);
+
+  // Release the audio session when leaving the call screen.
+  useEffect(() => () => InCallAudio.stop(), []);
+
+  // Auto-switch to Bluetooth when a headset connects mid-call; fall back to
+  // speaker (video) / earpiece (voice) when it disconnects — mirrors the
+  // system dialer. Also tracks availability so the picker can show/hide BT.
+  const btWasAvailableRef = useRef(false);
+  useEffect(() => {
+    const unsubscribe = InCallAudio.addAudioDeviceChangedListener(({ available }) => {
+      const has = available.includes('BLUETOOTH');
+      setBtAvailable(has);
+      if (has && !btWasAvailableRef.current) {
+        setAudioOutput('bluetooth');
+      } else if (!has && btWasAvailableRef.current) {
+        setAudioOutput((current) =>
+          current === 'bluetooth' ? (isVideoMode ? 'speaker' : 'earpiece') : current,
+        );
+      }
+      btWasAvailableRef.current = has;
+    });
+    return unsubscribe;
+  }, [isVideoMode]);
+
+  // When a voice call is upgraded to video, bump earpiece → speaker (phone-like)
+  // unless the user is on Bluetooth.
+  const prevVideoModeRef = useRef(isVideoMode);
+  useEffect(() => {
+    if (isVideoMode && !prevVideoModeRef.current) {
+      setAudioOutput((current) => (current === 'earpiece' ? 'speaker' : current));
+    }
+    prevVideoModeRef.current = isVideoMode;
+  }, [isVideoMode]);
 
   const handleMute = async () => {
     const next = !muted;
@@ -341,11 +394,16 @@ export default function TwilioCallScreen() {
 
   const handleFlip = () => host.session?.flipCamera();
 
-  const handleSpeaker = () => {
-    const next = !speakerOn;
-    setSpeakerOn(next);
-    host.session?.setSpeakerOn(next);
+  const selectAudioRoute = (route: AudioOutputRoute) => {
+    setAudioOutput(route);
+    setShowAudioPicker(false);
   };
+
+  // Icon/label for the current audio route (shown on the control button).
+  const audioRouteIcon: keyof typeof Feather.glyphMap =
+    audioOutput === 'speaker' ? 'volume-2' : audioOutput === 'bluetooth' ? 'bluetooth' : 'phone-call';
+  const audioRouteLabel =
+    audioOutput === 'speaker' ? 'Speaker' : audioOutput === 'bluetooth' ? 'Bluetooth' : 'Earpiece';
 
   const handleScreenShare = () => {
     // Phase A.5: iOS requires a ReplayKit Broadcast Extension target
@@ -508,18 +566,25 @@ export default function TwilioCallScreen() {
 
       {/* Bottom controls */}
       {!inPip ? (
-      <View style={[styles.controls, { paddingBottom: insets.bottom + 20 }]}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={[styles.controlsScroll, { paddingBottom: insets.bottom + 20 }]}
+        contentContainerStyle={styles.controls}
+      >
         <ControlBtn icon={muted ? 'mic-off' : 'mic'} label={muted ? 'Unmute' : 'Mute'} onPress={handleMute} active={muted} />
         {isVideoMode ? (
           <ControlBtn icon={videoOn ? 'video' : 'video-off'} label={videoOn ? 'Stop video' : 'Start video'} onPress={handleVideo} active={!videoOn} />
         ) : (
           <ControlBtn icon="video" label={awaitingUpgrade ? 'Requested' : 'Video'} onPress={handleRequestVideo} active={awaitingUpgrade} />
         )}
-        {isVideoMode ? (
-          <ControlBtn icon="rotate-cw" label="Flip" onPress={handleFlip} />
-        ) : (
-          <ControlBtn icon={speakerOn ? 'volume-2' : 'volume'} label="Speaker" onPress={handleSpeaker} active={speakerOn} />
-        )}
+        {isVideoMode ? <ControlBtn icon="rotate-cw" label="Flip" onPress={handleFlip} /> : null}
+        <ControlBtn
+          icon={audioRouteIcon}
+          label={audioRouteLabel}
+          onPress={() => setShowAudioPicker(true)}
+          active={audioOutput === 'speaker' || audioOutput === 'bluetooth'}
+        />
         <ControlBtn
           icon="monitor"
           label={host.screenShareState === 'on' ? 'Stop share' : 'Share'}
@@ -530,9 +595,45 @@ export default function TwilioCallScreen() {
           <Feather name="phone-off" size={24} color="#fff" />
           <Text style={styles.hangupLabel}>End</Text>
         </Pressable>
-      </View>
+      </ScrollView>
       ) : null}
+
+      {/* iter-232 — audio output route picker (earpiece / speaker / bluetooth). */}
+      <Modal
+        visible={showAudioPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowAudioPicker(false)}
+      >
+        <Pressable style={styles.audioBackdrop} onPress={() => setShowAudioPicker(false)}>
+          <Pressable style={[styles.audioSheet, { paddingBottom: insets.bottom + 16 }]} onPress={() => undefined}>
+            <Text style={styles.audioSheetTitle}>Audio output</Text>
+            <AudioRouteRow icon="phone-call" label="Earpiece" selected={audioOutput === 'earpiece'} onPress={() => selectAudioRoute('earpiece')} />
+            <AudioRouteRow icon="volume-2" label="Speaker" selected={audioOutput === 'speaker'} onPress={() => selectAudioRoute('speaker')} />
+            {btAvailable ? (
+              <AudioRouteRow icon="bluetooth" label="Bluetooth" selected={audioOutput === 'bluetooth'} onPress={() => selectAudioRoute('bluetooth')} />
+            ) : null}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
+  );
+}
+
+interface AudioRouteRowProps {
+  icon: keyof typeof Feather.glyphMap;
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}
+
+function AudioRouteRow({ icon, label, selected, onPress }: AudioRouteRowProps) {
+  return (
+    <Pressable onPress={onPress} style={[styles.audioRow, selected && styles.audioRowSelected]}>
+      <Feather name={icon} size={20} color={selected ? Colors.primary : '#fff'} />
+      <Text style={[styles.audioRowLabel, selected && styles.audioRowLabelSelected]}>{label}</Text>
+      {selected ? <Feather name="check" size={18} color={Colors.primary} style={styles.audioRowCheck} /> : null}
+    </Pressable>
   );
 }
 
@@ -615,6 +716,9 @@ const styles = StyleSheet.create({
   header: { position: 'absolute', left: 0, right: 0, alignItems: 'center', gap: 4 },
   titleText: { color: '#fff', fontSize: 18, fontWeight: '600' },
   subTitle: { color: '#999', fontSize: 12 },
+  controlsScroll: {
+    flexGrow: 0,
+  },
   controls: {
     flexDirection: 'row',
     justifyContent: 'space-evenly',
@@ -622,6 +726,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 14,
     gap: 8,
+    flexGrow: 1,
   },
   controlBtn: {
     width: 56, height: 56, borderRadius: 28,
@@ -633,6 +738,39 @@ const styles = StyleSheet.create({
   controlLabelActive: { color: '#222' },
   hangupBtn: { backgroundColor: '#e63946' },
   hangupLabel: { fontSize: 9, color: '#fff', marginTop: 1 },
+  audioBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  audioSheet: {
+    backgroundColor: '#1c1c1e',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+  },
+  audioSheetTitle: {
+    color: '#8e8e93',
+    fontSize: 13,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+    marginLeft: 4,
+  },
+  audioRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingVertical: 15,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+  },
+  audioRowSelected: { backgroundColor: 'rgba(255,255,255,0.06)' },
+  audioRowLabel: { color: '#fff', fontSize: 16, fontWeight: '500', flex: 1 },
+  audioRowLabelSelected: { color: Colors.primary },
+  audioRowCheck: { marginLeft: 'auto' },
   upgradeBanner: {
     position: 'absolute',
     left: 16,
