@@ -83,6 +83,7 @@ export async function fetchTwilioToken(
  */
 export async function initiateTwilioCall(args: {
   callerIdentity: string;
+  callerDisplayName?: string;
   calleeIdentities: string[];
   isVideo?: boolean;
   conversationId?: string | null;
@@ -99,6 +100,7 @@ export async function initiateTwilioCall(args: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       caller_identity: args.callerIdentity,
+      caller_display_name: args.callerDisplayName || null,
       callee_identities: args.calleeIdentities,
       is_video: args.isVideo !== false,
       conversation_id: args.conversationId ?? null,

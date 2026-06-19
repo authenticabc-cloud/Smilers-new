@@ -82,6 +82,7 @@ export async function startCall(args: StartCallArgs): Promise<void> {
   try {
     const result = await initiateTwilioCall({
       callerIdentity: args.callerIdentity,
+      callerDisplayName: args.callerDisplayName,
       calleeIdentities: args.calleeIdentities,
       isVideo,
       conversationId,

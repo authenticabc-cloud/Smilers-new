@@ -64,6 +64,7 @@ type IncomingCallPayload = {
   callId: string;
   callerName?: string;
   callerId?: string;
+  callerIdentity?: string;
   callType?: 'voice' | 'video' | 'audio';
   conversationId?: string;
   twilioRoom?: string;
@@ -115,7 +116,18 @@ function buildCallRoute(data: any): string {
     String(data?.callType) === 'video';
   const title = encodeURIComponent(String(data?.callerName || 'Smilers user'));
   if (room) {
-    return `/twilio-call?room=${encodeURIComponent(room)}&isCaller=0&isVideo=${isVideo ? '1' : '0'}&title=${title}`;
+    // The callee MUST join with a non-empty Twilio identity, otherwise the
+    // /twilio-call screen skips token minting and spins on "connecting"
+    // forever. Derive a stable callee identity from the caller's id (matches
+    // the push-tap handler in usePushNotifications so both answer paths join
+    // the room with the SAME identity).
+    const caller = String(data?.twilio_caller_identity || data?.callerId || '').trim();
+    const calleeIdentity = caller ? `${caller}_callee` : room;
+    return (
+      `/twilio-call?room=${encodeURIComponent(room)}` +
+      `&identity=${encodeURIComponent(calleeIdentity)}` +
+      `&isCaller=0&isVideo=${isVideo ? '1' : '0'}&title=${title}`
+    );
   }
   return String(data?.action_url || '/');
 }
@@ -211,6 +223,7 @@ export async function presentIncomingCallNotifeeWake(payload: IncomingCallPayloa
       conversationId: payload.conversationId || '',
       twilio_room_name: payload.twilioRoom || '',
       twilio_is_video: isVideo ? '1' : '0',
+      twilio_caller_identity: payload.callerIdentity || payload.callerId || '',
       action_url: payload.actionUrl || '',
     };
 

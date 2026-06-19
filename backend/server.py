@@ -365,6 +365,11 @@ async def twilio_initiate_call(payload: TwilioInitiateCallRequest):
             "message": ("Incoming video call" if payload.is_video else "Incoming call"),
             "type": "call",
             "callId": room.sid,
+            # iter-A4c: caller's id so the callee's answer-handler can derive a
+            # unique Twilio identity to join with (without it the callee screen
+            # spins on "connecting" forever).
+            "callerId": payload.caller_identity,
+            "callerName": display_name,
             # Mirrors the legacy /call/<id> deeplink shape so existing
             # taps in the absence of twilio_room_name fall back gracefully.
             "conversationId": payload.conversation_id or room_name,

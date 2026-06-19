@@ -291,6 +291,7 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
     const callType: 'voice' | 'video' = isVideo ? 'video' : 'voice';
     const conversationId = toNonEmptyString(payload.conversationId) || '';
     const twilioRoom = toNonEmptyString(payload.twilio_room_name) || '';
+    const callerIdentity = toNonEmptyString(payload.twilio_caller_identity) || '';
     const actionUrl = toNonEmptyString(payload.action_url) || '';
 
     let notifeeOk = false;
@@ -301,6 +302,7 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
         callId,
         callerId,
         callerName,
+        callerIdentity,
         callType,
         conversationId,
         twilioRoom,
