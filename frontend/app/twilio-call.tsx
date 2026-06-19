@@ -91,6 +91,9 @@ export default function TwilioCallScreen() {
   }, [token, roomName, identity]);
 
   const enabled = Boolean(token && roomName && identity);
+  // Stable wrapper so the call session never rebuilds; the real handler is
+  // (re)assigned every render below with fresh closures.
+  const dataHandlerRef = useRef<(message: string) => void>(() => {});
   const host = useTwilioCallSession({
     identity,
     roomName,
@@ -99,12 +102,76 @@ export default function TwilioCallScreen() {
     isCaller,
     region,
     enabled,
+    onDataMessage: (m) => dataHandlerRef.current(m),
   });
 
   // Local UI state for mute / video / speaker buttons.
   const [muted, setMuted] = useState(false);
   const [videoOn, setVideoOn] = useState(isVideo);
   const [speakerOn, setSpeakerOn] = useState(isVideo); // default speaker on for video
+
+  // iter-230 — voice→video upgrade. The call is in "video mode" if it started
+  // as video, OUR camera is on, OR the remote published a camera track. This
+  // lets a voice call flip to a video layout mid-call.
+  const remoteHasVideo = host.participants.some((p) => !!p.cameraTrackSid);
+  const isVideoMode = isVideo || videoOn || remoteHasVideo;
+  // Callee side of the handshake: remote asked us to switch to video.
+  const [incomingUpgrade, setIncomingUpgrade] = useState(false);
+  // Caller side: we asked and are waiting for them to turn their camera on.
+  const [awaitingUpgrade, setAwaitingUpgrade] = useState(false);
+
+  // Once both cameras are on, clear the "waiting" hint.
+  useEffect(() => {
+    if (awaitingUpgrade && remoteHasVideo) setAwaitingUpgrade(false);
+  }, [awaitingUpgrade, remoteHasVideo]);
+
+  const enableLocalCamera = useCallback(async () => {
+    setVideoOn(true);
+    await host.session?.setVideoEnabled(true);
+  }, [host.session]);
+
+  // Initiator: turn on our camera immediately (one-sided until they accept)
+  // and ask the other side to join with video.
+  const handleRequestVideo = useCallback(async () => {
+    await enableLocalCamera();
+    setAwaitingUpgrade(true);
+    host.session?.sendData(JSON.stringify({ t: 'vid-req', from: identity }));
+  }, [enableLocalCamera, host.session, identity]);
+
+  const handleAcceptUpgrade = useCallback(async () => {
+    setIncomingUpgrade(false);
+    await enableLocalCamera();
+    host.session?.sendData(JSON.stringify({ t: 'vid-acc', from: identity }));
+  }, [enableLocalCamera, host.session, identity]);
+
+  const handleDeclineUpgrade = useCallback(() => {
+    setIncomingUpgrade(false);
+    host.session?.sendData(JSON.stringify({ t: 'vid-dec', from: identity }));
+  }, [host.session, identity]);
+
+  // Handle inbound signaling messages. Reassigned each render so it always
+  // sees fresh state; the hook calls it via the stable wrapper above.
+  dataHandlerRef.current = (raw: string) => {
+    let msg: any;
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.t === 'vid-req') {
+      // Only prompt if our camera is still off.
+      if (!videoOn) setIncomingUpgrade(true);
+    } else if (msg.t === 'vid-acc') {
+      setAwaitingUpgrade(false);
+    } else if (msg.t === 'vid-dec') {
+      setAwaitingUpgrade(false);
+      Alert.alert(
+        'Camera stayed off',
+        'Your contact kept their camera off — they can still see your video.',
+      );
+    }
+  };
 
   // iter-229 — Picture-in-Picture (Android only). When the user swipes the
   // app away mid VIDEO call, collapse into a small PiP window so the call
@@ -116,16 +183,16 @@ export default function TwilioCallScreen() {
   // Enable Android 12+ auto-enter once we're in an active VIDEO call; disable
   // again when the call tears down so other screens never auto-PiP.
   useEffect(() => {
-    if (!isPipSupported || !isVideo) return;
+    if (!isPipSupported || !isVideoMode) return;
     const active = host.state === 'connected' || host.state === 'reconnecting';
     setPipParams({ autoEnterEnabled: active, width: 12, height: 16 });
     return () => setPipParams({ autoEnterEnabled: false });
-  }, [isVideo, host.state]);
+  }, [isVideoMode, host.state]);
 
   // Fallback for Android < 12 (no auto-enter): manually request PiP the moment
   // the app is backgrounded during an active video call.
   useEffect(() => {
-    if (!isPipSupported || !isVideo) return;
+    if (!isPipSupported || !isVideoMode) return;
     const sub = AppState.addEventListener('change', (next) => {
       if (
         (next === 'inactive' || next === 'background') &&
@@ -136,7 +203,7 @@ export default function TwilioCallScreen() {
       }
     });
     return () => sub.remove();
-  }, [isVideo, host.state]);
+  }, [isVideoMode, host.state]);
 
   // iter-216: auto-close the call screen when the call ends remotely.
   // Once the room is completed (caller hung up / callee declined →
@@ -382,8 +449,8 @@ export default function TwilioCallScreen() {
         )}
       </View>
 
-      {/* Local self-view (PiP top-right) — only when video on & not shrunk */}
-      {isVideo && videoOn && !inPip ? (
+      {/* Local self-view (PiP top-right) — only when our camera is on & not shrunk */}
+      {videoOn && !inPip ? (
         <View style={[styles.localPip, { top: insets.top + 12 }]}>
           {host.renderLocalView(styles.localPipInner, videoOn)}
         </View>
@@ -402,14 +469,34 @@ export default function TwilioCallScreen() {
         </View>
       ) : null}
 
+      {/* iter-230 — incoming voice→video upgrade request (callee side). */}
+      {incomingUpgrade && !inPip ? (
+        <View style={[styles.upgradeBanner, { bottom: insets.bottom + 120 }]}>
+          <Feather name="video" size={20} color="#fff" />
+          <Text style={styles.upgradeText} numberOfLines={2}>
+            {title} wants to switch to video
+          </Text>
+          <View style={styles.upgradeActions}>
+            <Pressable onPress={handleDeclineUpgrade} style={[styles.upgradeBtn, styles.upgradeDecline]} hitSlop={6}>
+              <Text style={styles.upgradeBtnText}>Not now</Text>
+            </Pressable>
+            <Pressable onPress={handleAcceptUpgrade} style={[styles.upgradeBtn, styles.upgradeAccept]} hitSlop={6}>
+              <Text style={styles.upgradeBtnText}>Turn on camera</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
       {/* Bottom controls */}
       {!inPip ? (
       <View style={[styles.controls, { paddingBottom: insets.bottom + 20 }]}>
         <ControlBtn icon={muted ? 'mic-off' : 'mic'} label={muted ? 'Unmute' : 'Mute'} onPress={handleMute} active={muted} />
-        {isVideo ? (
+        {isVideoMode ? (
           <ControlBtn icon={videoOn ? 'video' : 'video-off'} label={videoOn ? 'Stop video' : 'Start video'} onPress={handleVideo} active={!videoOn} />
-        ) : null}
-        {isVideo ? (
+        ) : (
+          <ControlBtn icon="video" label={awaitingUpgrade ? 'Requested' : 'Video'} onPress={handleRequestVideo} active={awaitingUpgrade} />
+        )}
+        {isVideoMode ? (
           <ControlBtn icon="rotate-cw" label="Flip" onPress={handleFlip} />
         ) : (
           <ControlBtn icon={speakerOn ? 'volume-2' : 'volume'} label="Speaker" onPress={handleSpeaker} active={speakerOn} />
@@ -527,6 +614,25 @@ const styles = StyleSheet.create({
   controlLabelActive: { color: '#222' },
   hangupBtn: { backgroundColor: '#e63946' },
   hangupLabel: { fontSize: 9, color: '#fff', marginTop: 1 },
+  upgradeBanner: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    backgroundColor: 'rgba(20,20,20,0.95)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    gap: 10,
+  },
+  upgradeText: { color: '#fff', fontSize: 15, fontWeight: '600', textAlign: 'center' },
+  upgradeActions: { flexDirection: 'row', gap: 10, marginTop: 2 },
+  upgradeBtn: { paddingVertical: 10, paddingHorizontal: 18, borderRadius: 24 },
+  upgradeDecline: { backgroundColor: 'rgba(255,255,255,0.14)' },
+  upgradeAccept: { backgroundColor: Colors.primary },
+  upgradeBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
   errorText: { color: '#ff8a8a', fontSize: 15, textAlign: 'center', marginVertical: 12 },
   backBtn: { backgroundColor: Colors.primary, paddingVertical: 12, paddingHorizontal: 24, borderRadius: 8, alignSelf: 'center' },
   backBtnText: { color: Colors.white, fontWeight: '600' },

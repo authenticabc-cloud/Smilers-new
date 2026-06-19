@@ -42,6 +42,8 @@ export interface TwilioVideoRef {
   toggleScreenSharing?: (enabled: boolean) => void;
   publishLocalAudio: () => void;
   unpublishLocalAudio: () => void;
+  /** Send a string over the local data track (used for in-call signaling). */
+  sendString?: (message: string) => void;
 }
 
 export type TwilioConnectionState =
@@ -72,6 +74,8 @@ export interface TwilioCallSessionOptions {
   onParticipantConnected?: (participantSid: string, identity: string) => void;
   onParticipantDisconnected?: (participantSid: string, identity: string) => void;
   onScreenShareChange?: (next: ScreenShareState) => void;
+  /** In-call data-track message received from the remote participant. */
+  onDataMessage?: (message: string) => void;
   onError?: (err: Error) => void;
 }
 
@@ -134,6 +138,7 @@ export class TwilioCallSession {
         accessToken: this.opts.token,
         enableAudio: true,
         enableVideo: this.opts.isVideo,
+        enableDataTrack: true,
         enableNetworkQualityReporting: true,
         dominantSpeakerEnabled: true,
         region: this.opts.region || null,
@@ -228,6 +233,24 @@ export class TwilioCallSession {
     this.log('screen-share-state', next);
     try {
       this.opts.onScreenShareChange?.(next);
+    } catch {}
+  }
+
+  /** Send a string to the remote participant over the data track. */
+  sendData(message: string): void {
+    try {
+      this.ref?.sendString?.(message);
+      this.log('data-send', message.slice(0, 80));
+    } catch (err: any) {
+      this.log('data-send-error', err?.message || String(err));
+    }
+  }
+
+  /** Wired by the host: SDK fired onDataTrackMessageReceived. */
+  emitDataMessage(message: string): void {
+    this.log('data-recv', message.slice(0, 80));
+    try {
+      this.opts.onDataMessage?.(message);
     } catch {}
   }
 

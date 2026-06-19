@@ -72,13 +72,19 @@ export interface UseTwilioCallSessionArgs {
   region?: string;
   /** Defaults to true. Useful for deferring connect until token is ready. */
   enabled?: boolean;
+  /** Called when a data-track message arrives from the remote participant. */
+  onDataMessage?: (message: string) => void;
 }
 
 export function useTwilioCallSession(args: UseTwilioCallSessionArgs): TwilioCallHostState {
-  const { identity, roomName, token, isVideo, isCaller, region, enabled = true } = args;
+  const { identity, roomName, token, isVideo, isCaller, region, enabled = true, onDataMessage } = args;
 
   const twilioRef = useRef<TwilioVideoRef | null>(null);
   const sessionRef = useRef<TwilioCallSession | null>(null);
+  // Keep the latest onDataMessage in a ref so the memoized session/host can
+  // call through to it without being rebuilt (which would drop the call).
+  const onDataMessageRef = useRef<UseTwilioCallSessionArgs['onDataMessage']>(onDataMessage);
+  onDataMessageRef.current = onDataMessage;
   const [state, setState] = useState<TwilioConnectionState>('idle');
   const [participants, setParticipants] = useState<TwilioParticipant[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -108,6 +114,7 @@ export function useTwilioCallSession(args: UseTwilioCallSessionArgs): TwilioCall
       },
       onError: (err) => setError(err.message),
       onScreenShareChange: (next) => setScreenShareState(next),
+      onDataMessage: (m) => onDataMessageRef.current?.(m),
     });
     sessionRef.current = s;
     return s;
@@ -243,6 +250,14 @@ export function useTwilioCallSession(args: UseTwilioCallSessionArgs): TwilioCall
     [session],
   );
 
+  // iter-230 — in-call data-track signaling (voice→video upgrade handshake).
+  const handleDataMessage = useCallback(
+    (evt: { message?: string }) => {
+      if (typeof evt?.message === 'string') session.emitDataMessage(evt.message);
+    },
+    [session],
+  );
+
   // iter-228: render helpers. These were declared in the interface but never
   // implemented/returned, so `host.renderParticipantView` / `renderLocalView`
   // were `undefined` — the remote tile (and a shared screen) never rendered.
@@ -312,6 +327,7 @@ export function useTwilioCallSession(args: UseTwilioCallSessionArgs): TwilioCall
         onParticipantAddedVideoTrack: handleParticipantAddedVideoTrack,
         onParticipantRemovedVideoTrack: handleParticipantRemovedVideoTrack,
         onScreenShareChanged: handleScreenShareChanged,
+        onDataTrackMessageReceived: handleDataMessage,
       }),
     // session is referentially stable per call lifecycle
     // eslint-disable-next-line react-hooks/exhaustive-deps

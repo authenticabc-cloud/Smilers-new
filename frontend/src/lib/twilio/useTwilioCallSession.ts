@@ -19,6 +19,10 @@ export interface TwilioCallHostState {
     participant: { sid: string; identity: string; videoTrackSid?: string },
     style?: any,
   ) => null;
+  renderParticipantScreenView: (
+    participant: { sid: string; identity: string; videoTrackSid?: string },
+    style?: any,
+  ) => null;
   renderScreenShareView: (enabled: boolean, style?: any) => null;
   isSupported: boolean;
   error: string | null;
@@ -32,6 +36,7 @@ export interface UseTwilioCallSessionArgs {
   isCaller: boolean;
   region?: string;
   enabled?: boolean;
+  onDataMessage?: (message: string) => void;
 }
 
 export function useTwilioCallSession(_args: UseTwilioCallSessionArgs): TwilioCallHostState {
@@ -43,6 +48,7 @@ export function useTwilioCallSession(_args: UseTwilioCallSessionArgs): TwilioCal
     screenShareState: 'unsupported',
     renderLocalView: () => null,
     renderParticipantView: () => null,
+    renderParticipantScreenView: () => null,
     renderScreenShareView: () => null,
     isSupported: false,
     error: 'Twilio Video is not supported on web. Open this screen from a mobile build.',
