@@ -23,20 +23,15 @@ import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/theme';
 
-type VisibilityKey = 'lastSeen' | 'profilePhoto' | 'about' | 'status' | 'calls';
-type GroupsKey = 'groups';
+type VisibilityKey = 'lastSeen' | 'profilePhoto' | 'about' | 'status';
 type VisibilityValue = 'everyone' | 'contacts' | 'nobody';
-type GroupsValue = 'everyone' | 'contacts' | 'admins';
 
 interface PrivacySettings {
   lastSeen: VisibilityValue;
   profilePhoto: VisibilityValue;
   about: VisibilityValue;
   status: VisibilityValue;
-  groups: GroupsValue;
-  calls: VisibilityValue;
   readReceipts: boolean;
-  typingIndicators: boolean;
 }
 
 const DEFAULTS: PrivacySettings = {
@@ -44,24 +39,17 @@ const DEFAULTS: PrivacySettings = {
   profilePhoto: 'everyone',
   about: 'everyone',
   status: 'contacts',
-  groups: 'everyone',
-  calls: 'everyone',
   readReceipts: true,
-  typingIndicators: true,
 };
 
 const VISIBILITY_LABEL: Record<VisibilityValue, string> = { everyone: 'Everyone', contacts: 'My contacts', nobody: 'Nobody' };
-const GROUPS_LABEL: Record<GroupsValue, string> = { everyone: 'Everyone', contacts: 'My contacts', admins: 'Group admins only' };
 const VISIBILITY_OPTIONS: VisibilityValue[] = ['everyone', 'contacts', 'nobody'];
-const GROUPS_OPTIONS: GroupsValue[] = ['everyone', 'contacts', 'admins'];
 
-const SECTIONS: Array<{ key: VisibilityKey | GroupsKey; label: string; sub: string; icon: keyof typeof Feather.glyphMap; groups?: boolean }> = [
+const SECTIONS: Array<{ key: VisibilityKey; label: string; sub: string; icon: keyof typeof Feather.glyphMap }> = [
   { key: 'lastSeen', label: 'Last seen', sub: 'Who can see when you were last online', icon: 'clock' },
   { key: 'profilePhoto', label: 'Profile photo', sub: 'Who can see your profile picture', icon: 'user' },
   { key: 'about', label: 'About', sub: 'Who can see your About text', icon: 'info' },
   { key: 'status', label: 'Status', sub: 'Who can see your story updates', icon: 'eye' },
-  { key: 'groups', label: 'Groups', sub: 'Who can add you to groups', icon: 'users', groups: true },
-  { key: 'calls', label: 'Calls', sub: 'Who can call you on Smilers', icon: 'phone' },
 ];
 
 export default function PrivacyScreen() {
