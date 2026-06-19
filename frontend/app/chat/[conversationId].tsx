@@ -2939,19 +2939,22 @@ export default function ChatScreen() {
                         }
                       }}
                       onCallBack={(callType) => {
-                        // iter-204 (web parity): tapping a call log in
-                        // conversation initiates a callback to the same
-                        // peer with the same call type (voice/video).
-                        // We always re-use the open conversation id, so
-                        // we just navigate to /call/:id?type=… and let
-                        // the call screen call `api.calls.initiateCall`.
-                        const safeConvId = String(conversationId || '');
-                        if (!safeConvId) return;
-                        router.push(
-                          `/call/${encodeURIComponent(safeConvId)}?type=${
-                            callType === 'video' ? 'video' : 'voice'
-                          }` as any
+                        // iter-231: route call-backs through the same Twilio
+                        // path as the header call buttons (was navigating to
+                        // the legacy /call WebRTC screen). Keeps ALL calls on
+                        // the Twilio engine for consistent quality.
+                        const calleeId = String(
+                          (hydratedConversation?.otherUser as any)?.userId || '',
                         );
+                        startCall({
+                          router,
+                          callerIdentity: String(me?._id || ''),
+                          callerDisplayName: String((me as any)?.name || (me as any)?.displayName || ''),
+                          calleeIdentities: calleeId ? [calleeId] : [],
+                          conversationId: String(conversationId || ''),
+                          isVideo: callType === 'video',
+                          displayName: title,
+                        });
                       }}
                       testID={`chat-call-pill-${item._id}`}
                     />
