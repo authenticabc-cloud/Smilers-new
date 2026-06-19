@@ -2383,6 +2383,23 @@ export default function ChatScreen() {
     return { ...conversation, otherUser: fetchedOtherUser };
   }, [conversation, fetchedOtherUser]);
 
+  // iter-232: canonical callee resolver for the Twilio call buttons.
+  // The header call/video buttons previously read ONLY `otherUser.userId`,
+  // which is usually undefined — the real id lives on `otherUser._id`
+  // (a Convex doc id). When this returned '' startCall() received an empty
+  // calleeIdentities array and silently fell back to the legacy WebRTC
+  // screen (logs: "route=legacy reason=no-callees"). Mirror the same chain
+  // the rest of this file uses so Twilio always gets a valid callee.
+  const callCalleeId = useMemo(() => {
+    const oc: any = hydratedConversation || {};
+    return String(
+      oc?.otherUser?._id ||
+        oc?.otherUser?.userId ||
+        oc?.otherUserId ||
+        '',
+    ).trim();
+  }, [hydratedConversation]);
+
   // iter-198: keep the sender-side push context fresh (see sendMessage
   // wrapper above). Recipients = every other participant's Convex id.
   useEffect(() => {
@@ -2645,14 +2662,11 @@ export default function ChatScreen() {
           <TouchableOpacity
             testID="call-btn"
             onPress={() => {
-              const calleeId = String(
-                (hydratedConversation?.otherUser as any)?.userId || '',
-              );
               startCall({
                 router,
                 callerIdentity: String(me?._id || ''),
                 callerDisplayName: String((me as any)?.name || (me as any)?.displayName || ''),
-                calleeIdentities: calleeId ? [calleeId] : [],
+                calleeIdentities: callCalleeId ? [callCalleeId] : [],
                 conversationId: String(conversationId || ''),
                 isVideo: false,
                 displayName: title,
@@ -2665,14 +2679,11 @@ export default function ChatScreen() {
           <TouchableOpacity
             testID="video-btn"
             onPress={() => {
-              const calleeId = String(
-                (hydratedConversation?.otherUser as any)?.userId || '',
-              );
               startCall({
                 router,
                 callerIdentity: String(me?._id || ''),
                 callerDisplayName: String((me as any)?.name || (me as any)?.displayName || ''),
-                calleeIdentities: calleeId ? [calleeId] : [],
+                calleeIdentities: callCalleeId ? [callCalleeId] : [],
                 conversationId: String(conversationId || ''),
                 isVideo: true,
                 displayName: title,
@@ -2939,18 +2950,15 @@ export default function ChatScreen() {
                         }
                       }}
                       onCallBack={(callType) => {
-                        // iter-231: route call-backs through the same Twilio
-                        // path as the header call buttons (was navigating to
-                        // the legacy /call WebRTC screen). Keeps ALL calls on
-                        // the Twilio engine for consistent quality.
-                        const calleeId = String(
-                          (hydratedConversation?.otherUser as any)?.userId || '',
-                        );
+                        // iter-231/232: route call-backs through the same
+                        // Twilio path as the header call buttons, using the
+                        // canonical callee resolver (was reading only
+                        // otherUser.userId → empty → legacy WebRTC fallback).
                         startCall({
                           router,
                           callerIdentity: String(me?._id || ''),
                           callerDisplayName: String((me as any)?.name || (me as any)?.displayName || ''),
-                          calleeIdentities: calleeId ? [calleeId] : [],
+                          calleeIdentities: callCalleeId ? [callCalleeId] : [],
                           conversationId: String(conversationId || ''),
                           isVideo: callType === 'video',
                           displayName: title,
