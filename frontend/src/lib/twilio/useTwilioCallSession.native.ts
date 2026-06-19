@@ -29,7 +29,12 @@ import {
 export interface TwilioParticipant {
   sid: string;
   identity: string;
+  /** Primary video track (camera if present, else screen) — back-compat. */
   videoTrackSid?: string;
+  /** Camera video track sid (Twilio default track). */
+  cameraTrackSid?: string;
+  /** Screen-share video track sid (Twilio names this track "screen"). */
+  screenTrackSid?: string;
   audioMuted?: boolean;
   videoMuted?: boolean;
 }
@@ -42,8 +47,13 @@ export interface TwilioCallHostState {
   screenShareState: ScreenShareState;
   /** Render the local self-view. null on web. */
   renderLocalView: (style?: any, enabled?: boolean) => React.ReactElement | null;
-  /** Render a remote participant's video. null if SDK unavailable. */
+  /** Render a remote participant's CAMERA video. null if none. */
   renderParticipantView: (
+    participant: TwilioParticipant,
+    style?: any,
+  ) => React.ReactElement | null;
+  /** Render a remote participant's SHARED SCREEN video. null if none. */
+  renderParticipantScreenView: (
     participant: TwilioParticipant,
     style?: any,
   ) => React.ReactElement | null;
@@ -180,8 +190,19 @@ export function useTwilioCallSession(args: UseTwilioCallSessionArgs): TwilioCall
       const sid = evt?.participant?.sid;
       const trackSid = evt?.track?.trackSid;
       if (!sid || !trackSid) return;
+      // Twilio names the screen-share track "screen" on both iOS & Android,
+      // so we can keep camera + screen as SEPARATE tiles per participant.
+      const trackName = String(evt?.track?.trackName || evt?.track?.name || '');
+      const isScreen = /screen/i.test(trackName);
       setParticipants((prev) =>
-        prev.map((p) => (p.sid === sid ? { ...p, videoTrackSid: trackSid, videoMuted: false } : p)),
+        prev.map((p) => {
+          if (p.sid !== sid) return p;
+          const next = { ...p, videoMuted: false } as TwilioParticipant;
+          if (isScreen) next.screenTrackSid = trackSid;
+          else next.cameraTrackSid = trackSid;
+          next.videoTrackSid = next.cameraTrackSid || next.screenTrackSid;
+          return next;
+        }),
       );
     },
     [],
@@ -190,8 +211,24 @@ export function useTwilioCallSession(args: UseTwilioCallSessionArgs): TwilioCall
   const handleParticipantRemovedVideoTrack = useCallback((evt: any) => {
     const sid = evt?.participant?.sid;
     if (!sid) return;
+    const trackSid = evt?.track?.trackSid;
+    const trackName = String(evt?.track?.trackName || evt?.track?.name || '');
+    const removedIsScreen = /screen/i.test(trackName);
     setParticipants((prev) =>
-      prev.map((p) => (p.sid === sid ? { ...p, videoTrackSid: undefined } : p)),
+      prev.map((p) => {
+        if (p.sid !== sid) return p;
+        const next = { ...p } as TwilioParticipant;
+        if (trackSid) {
+          if (next.cameraTrackSid === trackSid) next.cameraTrackSid = undefined;
+          if (next.screenTrackSid === trackSid) next.screenTrackSid = undefined;
+        } else if (removedIsScreen) {
+          next.screenTrackSid = undefined;
+        } else {
+          next.cameraTrackSid = undefined;
+        }
+        next.videoTrackSid = next.cameraTrackSid || next.screenTrackSid;
+        return next;
+      }),
     );
   }, []);
 
@@ -219,11 +256,24 @@ export function useTwilioCallSession(args: UseTwilioCallSessionArgs): TwilioCall
 
   const renderParticipantView = useCallback(
     (participant: TwilioParticipant, style?: any) => {
-      if (!participant?.videoTrackSid) return null;
+      const sid = participant?.cameraTrackSid || participant?.videoTrackSid;
+      if (!sid) return null;
       return React.createElement(TwilioVideoParticipantView, {
         style,
         scaleType: 'fit',
-        trackIdentifier: { videoTrackSid: participant.videoTrackSid },
+        trackIdentifier: { videoTrackSid: sid },
+      });
+    },
+    [],
+  );
+
+  const renderParticipantScreenView = useCallback(
+    (participant: TwilioParticipant, style?: any) => {
+      if (!participant?.screenTrackSid) return null;
+      return React.createElement(TwilioVideoParticipantView, {
+        style,
+        scaleType: 'fit',
+        trackIdentifier: { videoTrackSid: participant.screenTrackSid },
       });
     },
     [],
@@ -269,6 +319,7 @@ export function useTwilioCallSession(args: UseTwilioCallSessionArgs): TwilioCall
     screenShareState,
     renderLocalView,
     renderParticipantView,
+    renderParticipantScreenView,
     renderScreenShareView,
     isSupported: true,
     error,
