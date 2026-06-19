@@ -221,6 +221,9 @@ export default function ChatScreen() {
   const recStartMsRef = useRef(0);
   const recDurationMsRef = useRef(0);
   const listRef = useRef<FlatList<any>>(null);
+  // iter-231: track whether the user is near the bottom so we only auto-scroll
+  // to the latest message when appropriate (not while they're reading history).
+  const isNearBottomRef = useRef(true);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(audioRecorder, 200);
   const hasValidConversationId =
@@ -3012,10 +3015,26 @@ export default function ChatScreen() {
                 </>
               );
             }}
+            onScroll={(e) => {
+              // iter-231: remember if the user is near the bottom. Used to
+              // decide whether content-size changes should snap to the latest
+              // message — so scrolling up to read history is never interrupted.
+              const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+              const distanceFromBottom =
+                contentSize.height - (contentOffset.y + layoutMeasurement.height);
+              isNearBottomRef.current = distanceFromBottom < 120;
+            }}
+            scrollEventThrottle={16}
             onContentSizeChange={() => {
-              // Don't yank to the bottom while the user is navigating search
-              // matches (iter-220) — the search effect controls scrolling then.
-              if (chatSearchQuery === null) listRef.current?.scrollToEnd({ animated: false });
+              // Only snap to the bottom when the user is ALREADY near the
+              // bottom (new message arrived / initial load). Previously this
+              // fired on EVERY content-size change — including virtualization
+              // while scrolling up and media loading — yanking the user back
+              // to the last message (iter-231 fix). Search owns scrolling when
+              // active, so skip then.
+              if (chatSearchQuery === null && isNearBottomRef.current) {
+                listRef.current?.scrollToEnd({ animated: false });
+              }
             }}
             onScrollToIndexFailed={(info) => {
               // No getItemLayout → far-off indices can fail. Approximate by
