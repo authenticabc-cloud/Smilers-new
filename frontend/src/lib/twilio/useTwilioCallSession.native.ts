@@ -256,7 +256,14 @@ export function useTwilioCallSession(args: UseTwilioCallSessionArgs): TwilioCall
 
   const renderParticipantView = useCallback(
     (participant: TwilioParticipant, style?: any) => {
-      const sid = participant?.cameraTrackSid || participant?.videoTrackSid;
+      // Camera-only. When a participant is sharing their screen WITHOUT a
+      // camera (e.g. voice call + screen share), `videoTrackSid` falls back
+      // to the screen track — so we must NOT use it here or the screen would
+      // be duplicated into the "camera" tile. Use the explicit camera sid,
+      // falling back to the legacy `videoTrackSid` only when no screen exists.
+      const sid =
+        participant?.cameraTrackSid ||
+        (participant?.screenTrackSid ? undefined : participant?.videoTrackSid);
       if (!sid) return null;
       return React.createElement(TwilioVideoParticipantView, {
         style,

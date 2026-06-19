@@ -29,6 +29,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Platform,
   Pressable,
   StyleSheet,
@@ -43,6 +44,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { fetchTwilioToken, endTwilioCall } from '../src/lib/twilio/twilioApi';
 import { useTwilioCallSession } from '../src/lib/twilio/useTwilioCallSession';
 import { recordDiagnostic } from '../src/lib/diagnostics';
+import { setPipParams, enterPip, useIsInPip, isPipSupported } from '../src/lib/pip';
 import { Colors } from '../src/theme';
 
 export default function TwilioCallScreen() {
@@ -103,6 +105,38 @@ export default function TwilioCallScreen() {
   const [muted, setMuted] = useState(false);
   const [videoOn, setVideoOn] = useState(isVideo);
   const [speakerOn, setSpeakerOn] = useState(isVideo); // default speaker on for video
+
+  // iter-229 — Picture-in-Picture (Android only). When the user swipes the
+  // app away mid VIDEO call, collapse into a small PiP window so the call
+  // keeps running and the remote video stays visible to BOTH parties (the
+  // other side is unaffected). `inPip` lets us hide all chrome (header,
+  // controls, self-PiP) while shrunk.
+  const inPip = useIsInPip();
+
+  // Enable Android 12+ auto-enter once we're in an active VIDEO call; disable
+  // again when the call tears down so other screens never auto-PiP.
+  useEffect(() => {
+    if (!isPipSupported || !isVideo) return;
+    const active = host.state === 'connected' || host.state === 'reconnecting';
+    setPipParams({ autoEnterEnabled: active, width: 12, height: 16 });
+    return () => setPipParams({ autoEnterEnabled: false });
+  }, [isVideo, host.state]);
+
+  // Fallback for Android < 12 (no auto-enter): manually request PiP the moment
+  // the app is backgrounded during an active video call.
+  useEffect(() => {
+    if (!isPipSupported || !isVideo) return;
+    const sub = AppState.addEventListener('change', (next) => {
+      if (
+        (next === 'inactive' || next === 'background') &&
+        (host.state === 'connected' || host.state === 'reconnecting') &&
+        !navigatedRef.current
+      ) {
+        enterPip({ width: 12, height: 16 });
+      }
+    });
+    return () => sub.remove();
+  }, [isVideo, host.state]);
 
   // iter-216: auto-close the call screen when the call ends remotely.
   // Once the room is completed (caller hung up / callee declined →
@@ -308,16 +342,35 @@ export default function TwilioCallScreen() {
           </View>
         ) : (
           host.participants.map((p) => {
-            // iter-228: render the remote video tile whenever the participant
-            // has a video track — this includes a SHARED SCREEN even during a
-            // voice call (previously gated on `isVideo`, so a screen share on a
-            // voice call never appeared on the receiver).
-            const remote = p.videoTrackSid
-              ? host.renderParticipantView(p, styles.remoteVideo)
-              : null;
-            return remote ? (
+            // iter-229: when a participant shares their SCREEN, show it large
+            // (full tile) with their CAMERA as a small PiP overlay on top —
+            // so the receiver sees BOTH the shared screen and the sharer's
+            // face simultaneously (option 1a). The shared screen renders even
+            // on a voice call (no `isVideo` gate).
+            const hasScreen = !!p.screenTrackSid;
+            const camera = host.renderParticipantView(p, styles.remoteVideo);
+
+            if (hasScreen) {
+              const screen = host.renderParticipantScreenView(p, styles.remoteVideo);
+              return (
+                <View key={p.sid} style={styles.remoteVideo}>
+                  {screen}
+                  {camera ? (
+                    <View style={styles.remoteCameraPip}>
+                      {host.renderParticipantView(p, styles.remoteCameraPipInner)}
+                    </View>
+                  ) : null}
+                  <View style={styles.screenShareBadge}>
+                    <Feather name="monitor" size={10} color="#fff" />
+                    <Text style={styles.screenShareBadgeText}>Sharing screen</Text>
+                  </View>
+                </View>
+              );
+            }
+
+            return camera ? (
               <View key={p.sid} style={styles.remoteVideo}>
-                {remote}
+                {camera}
               </View>
             ) : (
               <View key={p.sid} style={[styles.remoteVideo, styles.audioTile]}>
@@ -329,25 +382,28 @@ export default function TwilioCallScreen() {
         )}
       </View>
 
-      {/* Local self-view (PiP top-right) — only when video on */}
-      {isVideo && videoOn ? (
+      {/* Local self-view (PiP top-right) — only when video on & not shrunk */}
+      {isVideo && videoOn && !inPip ? (
         <View style={[styles.localPip, { top: insets.top + 12 }]}>
           {host.renderLocalView(styles.localPipInner, videoOn)}
         </View>
       ) : null}
 
       {/* Top header */}
-      <View style={[styles.header, { top: insets.top + 8 }]}>
-        <Text style={styles.titleText} numberOfLines={1}>
-          {title}
-        </Text>
-        <Text style={styles.subTitle}>
-          {host.state}
-          {host.participants.length > 0 ? `  •  ${host.participants.length} participant${host.participants.length === 1 ? '' : 's'}` : ''}
-        </Text>
-      </View>
+      {!inPip ? (
+        <View style={[styles.header, { top: insets.top + 8 }]}>
+          <Text style={styles.titleText} numberOfLines={1}>
+            {title}
+          </Text>
+          <Text style={styles.subTitle}>
+            {host.state}
+            {host.participants.length > 0 ? `  •  ${host.participants.length} participant${host.participants.length === 1 ? '' : 's'}` : ''}
+          </Text>
+        </View>
+      ) : null}
 
       {/* Bottom controls */}
+      {!inPip ? (
       <View style={[styles.controls, { paddingBottom: insets.bottom + 20 }]}>
         <ControlBtn icon={muted ? 'mic-off' : 'mic'} label={muted ? 'Unmute' : 'Mute'} onPress={handleMute} active={muted} />
         {isVideo ? (
@@ -369,6 +425,7 @@ export default function TwilioCallScreen() {
           <Text style={styles.hangupLabel}>End</Text>
         </Pressable>
       </View>
+      ) : null}
     </View>
   );
 }
@@ -419,6 +476,19 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.2)',
   },
   localPipInner: { flex: 1 },
+  remoteCameraPip: {
+    position: 'absolute',
+    left: 12,
+    bottom: 12,
+    width: 110,
+    height: 150,
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: '#000',
+    borderWidth: 2,
+    borderColor: '#ffb74d',
+  },
+  remoteCameraPipInner: { flex: 1 },
   screenSharePip: {
     position: 'absolute',
     right: 12,

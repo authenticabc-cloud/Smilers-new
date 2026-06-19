@@ -265,6 +265,10 @@
           "cameraPermission": "Smilers needs your camera for video calls",
           "microphonePermission": "Smilers needs your microphone for voice and video calls"
         }
+      ],
+      [
+        "expo-pip",
+        {}
       ]
     ],
     "experiments": {

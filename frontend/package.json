@@ -64,6 +64,7 @@
     "expo-location": "~19.0.8",
     "expo-media-library": "~18.2.1",
     "expo-notifications": "~0.32.17",
+    "expo-pip": "^2.1.0",
     "expo-router": "~6.0.24",
     "expo-screen-capture": "~8.0.9",
     "expo-secure-store": "~15.0.8",
