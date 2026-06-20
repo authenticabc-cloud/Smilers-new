@@ -403,16 +403,31 @@ async def twilio_initiate_call(payload: TwilioInitiateCallRequest):
             # transit by an intermediate proxy.
             "subtext": "Screen share request" if payload.is_screen_share else "Incoming call",
         }
-        push_stats = await send_push(
-            recipients=payload.callee_identities,
-            data=push_data,
-            idempotency_key=f"twilio-call:{room.sid}",
-        )
-        logger.info(
-            f"twilio-initiate-call pushed to {len(payload.callee_identities)} callees: "
-            f"tokens={push_stats.get('token_count')} ok={push_stats.get('success_count')} "
-            f"err={push_stats.get('error_count')}"
-        )
+        push_stats = {"token_count": 0, "success_count": 0, "error_count": 0, "errors": [], "pruned_count": 0, "scheduled": True}
+
+        # iter-241: dispatch the callee push in the BACKGROUND so the caller's
+        # initiate-call response returns as soon as the room + token are ready.
+        # Previously we awaited send_push() (FCM/relay round-trip) before
+        # responding, which made tapping "Call" feel slow before the caller's
+        # own call screen even opened. The ring latency on the callee side is
+        # unaffected (the push still goes out immediately, just not blocking
+        # the caller's HTTP response).
+        async def _dispatch_call_push():
+            try:
+                stats = await send_push(
+                    recipients=payload.callee_identities,
+                    data=push_data,
+                    idempotency_key=f"twilio-call:{room.sid}",
+                )
+                logger.info(
+                    f"twilio-initiate-call pushed to {len(payload.callee_identities)} callees: "
+                    f"tokens={stats.get('token_count')} ok={stats.get('success_count')} "
+                    f"err={stats.get('error_count')}"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(f"twilio-initiate-call: background push to callees failed (non-fatal): {exc}")
+
+        asyncio.create_task(_dispatch_call_push())
     except Exception as exc:
         logger.exception(f"twilio-initiate-call: push to callees failed (non-fatal): {exc}")
 

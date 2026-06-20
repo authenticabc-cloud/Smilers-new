@@ -35,7 +35,6 @@ import {
   Modal,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -821,14 +820,10 @@ function TwilioCallScreenInner() {
         </View>
       ) : null}
 
-      {/* Bottom controls */}
+      {/* Bottom controls — fixed, wrapping bar (no horizontal scroll so the
+          buttons stay put and contained on every screen width). */}
       {!inPip ? (
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={[styles.controlsScroll, { paddingBottom: insets.bottom + 20 }]}
-        contentContainerStyle={styles.controls}
-      >
+      <View style={[styles.controls, { paddingBottom: insets.bottom + 16 }]}>
         <ControlBtn icon={muted ? 'mic-off' : 'mic'} label={muted ? 'Unmute' : 'Mute'} onPress={handleMute} active={muted} />
         {isVideoMode ? (
           <ControlBtn icon={videoOn ? 'video' : 'video-off'} label={videoOn ? 'Stop video' : 'Start video'} onPress={handleVideo} active={!videoOn} />
@@ -850,10 +845,10 @@ function TwilioCallScreenInner() {
         />
         <ControlBtn icon="user-plus" label="Add" onPress={openAddFlow} />
         <Pressable onPress={handleHangup} style={[styles.controlBtn, styles.hangupBtn]}>
-          <Feather name="phone-off" size={24} color="#fff" />
+          <Feather name="phone-off" size={22} color="#fff" />
           <Text style={styles.hangupLabel}>End</Text>
         </Pressable>
-      </ScrollView>
+      </View>
       ) : null}
 
       {/* iter-232 — audio output route picker (earpiece / speaker / bluetooth). */}
@@ -1157,20 +1152,19 @@ const styles = StyleSheet.create({
   header: { position: 'absolute', left: 0, right: 0, alignItems: 'center', gap: 4 },
   titleText: { color: '#fff', fontSize: 18, fontWeight: '600' },
   subTitle: { color: '#999', fontSize: 12 },
-  controlsScroll: {
-    flexGrow: 0,
-  },
   controls: {
     flexDirection: 'row',
-    justifyContent: 'space-evenly',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingTop: 14,
-    gap: 8,
-    flexGrow: 1,
+    rowGap: 12,
+    columnGap: 14,
+    backgroundColor: 'rgba(0,0,0,0.35)',
   },
   controlBtn: {
-    width: 56, height: 56, borderRadius: 28,
+    width: 52, height: 52, borderRadius: 26,
     backgroundColor: 'rgba(255,255,255,0.12)',
     alignItems: 'center', justifyContent: 'center',
   },
