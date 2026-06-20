@@ -22,6 +22,8 @@ import { setAudioModeAsync as setExpoAudioModeAsync } from 'expo-audio';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
+import { getResolvedDisplayName, getSavedContactRecord } from '../../src/lib/displayName';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 import { recordDiagnostic } from '../../src/lib/diagnostics';
 import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
@@ -101,6 +103,23 @@ function StatusViewScreenInner() {
   const otherStories =
     otherStoriesA.data || otherStoriesB.data || otherStoriesC.data || otherStoriesD.data || null;
   const me = useQuery(api.users.getCurrentUser);
+  // iter-239: resolve status author / viewer names from the device address
+  // book (e.g. "ABC Albania") instead of the Smilers/Google account name —
+  // mirrors the chats list behaviour. Falls back to the Smilers name when no
+  // device contact matches.
+  const myContacts = useQuery(api.contacts.getContacts, {}) as any[] | undefined;
+  const deviceIndex = useDeviceContactIndex();
+  const resolveContactName = useCallback(
+    (entityUserId: string | null | undefined, fallbackName: string, extra?: any): string => {
+      const fallback = fallbackName && fallbackName.trim() ? fallbackName : 'User';
+      const saved = entityUserId
+        ? getSavedContactRecord(myContacts, { userId: entityUserId }, me?._id)
+        : null;
+      const record = saved || { _id: entityUserId, name: fallback, ...(extra || {}) };
+      return getResolvedDisplayName(record, deviceIndex, lookupDeviceContactName, fallback);
+    },
+    [myContacts, me, deviceIndex],
+  );
 
   const stories: any[] = useMemo(() => {
     const source: any = userId === 'me' ? myStories : otherStories;
@@ -114,11 +133,16 @@ function StatusViewScreenInner() {
   const author: any = useMemo(() => {
     if (isMine) return { name: 'You', _id: me?._id };
     const source: any = otherStories;
-    if (source && !Array.isArray(source)) {
-      return { name: source.name || source.userName || 'User', _id: targetUserId, avatarUrl: source.avatarUrl };
-    }
-    return { name: 'User', _id: targetUserId };
-  }, [isMine, otherStories, me, targetUserId]);
+    const smilersName =
+      (source && !Array.isArray(source) && (source.name || source.userName)) || 'User';
+    const extra =
+      source && !Array.isArray(source)
+        ? { phoneE164: source.phoneE164, phone: source.phone }
+        : undefined;
+    const resolved = resolveContactName(targetUserId, String(smilersName), extra);
+    const avatarUrl = source && !Array.isArray(source) ? source.avatarUrl : undefined;
+    return { name: resolved, _id: targetUserId, avatarUrl };
+  }, [isMine, otherStories, me, targetUserId, resolveContactName]);
 
   const markViewed = useMutation(api.statuses.markViewed);
   const sendMessage = useMutation(api.messages.send);
@@ -393,17 +417,20 @@ function StatusViewScreenInner() {
               data={current.views || []}
               keyExtractor={(viewer: any, viewerIndex: number) => viewer?.userId || String(viewerIndex)}
               contentContainerStyle={styles.viewersList}
-              renderItem={({ item }: any) => (
-                <View style={styles.viewerRow}>
-                  <View style={styles.viewerAvatar}>
-                    <Text style={styles.viewerAvatarText}>{(item?.name || '?').charAt(0).toUpperCase()}</Text>
+              renderItem={({ item }: any) => {
+                const viewerName = resolveContactName(item?.userId, item?.name || 'User');
+                return (
+                  <View style={styles.viewerRow}>
+                    <View style={styles.viewerAvatar}>
+                      <Text style={styles.viewerAvatarText}>{(viewerName || '?').charAt(0).toUpperCase()}</Text>
+                    </View>
+                    <View style={styles.flexOne}>
+                      <Text style={styles.viewerName}>{viewerName}</Text>
+                      <Text style={styles.viewerTime}>{timeAgo(item?.viewedAt || Date.now())}</Text>
+                    </View>
                   </View>
-                  <View style={styles.flexOne}>
-                    <Text style={styles.viewerName}>{item?.name || 'User'}</Text>
-                    <Text style={styles.viewerTime}>{timeAgo(item?.viewedAt || Date.now())}</Text>
-                  </View>
-                </View>
-              )}
+                );
+              }}
               ListEmptyComponent={<Text style={styles.viewerEmpty}>No one has viewed this yet.</Text>}
             />
           </Pressable>
