@@ -511,7 +511,7 @@ function TwilioCallScreenInner() {
   // AFTER having been active, leave the screen. Guarded so an initial
   // 'failed' (e.g. web stub) never triggers it.
   const navigatedRef = useRef(false);
-  const wasActiveRef = useRef(false);
+  const hadConnectedRef = useRef(false);
   const closeScreen = useCallback(() => {
     if (navigatedRef.current) return;
     navigatedRef.current = true;
@@ -520,10 +520,20 @@ function TwilioCallScreenInner() {
   }, [router]);
 
   useEffect(() => {
-    if (host.state === 'connecting' || host.state === 'connected' || host.state === 'reconnecting') {
-      wasActiveRef.current = true;
+    if (host.state === 'connected' || host.state === 'reconnecting') {
+      hadConnectedRef.current = true;
     }
-    if ((host.state === 'disconnected' || host.state === 'failed') && wasActiveRef.current) {
+    // iter-245: only auto-close on a terminal state if the call had ACTUALLY
+    // connected (a clean hang-up / remote end). An INITIAL connect that fails
+    // (e.g. callee "failed" before ever connecting) must STAY on screen so the
+    // user can read the error and tap Retry — previously this auto-closed
+    // after 700ms because wasActiveRef flipped true during 'connecting',
+    // which is exactly the "screen shows failed for a second then drops back"
+    // the receiver reported.
+    if (
+      (host.state === 'disconnected' || host.state === 'failed') &&
+      hadConnectedRef.current
+    ) {
       recordDiagnostic({
         tag: 'TWILIO-CALL',
         source: 'screen',
@@ -618,6 +628,17 @@ function TwilioCallScreenInner() {
   // app uses. Twilio's own speaker toggle only did speaker-on/off and forced
   // speaker for video — so video calls never responded to earpiece/Bluetooth.
   const inCallStartedRef = useRef(false);
+  // iter-245: start the audio session as soon as permissions are ready (even
+  // while still ringing) so react-native-incall-manager begins emitting
+  // onAudioDeviceChanged — otherwise a paired Bluetooth headset is never
+  // detected until after the call connects and the BT route stays hidden.
+  useEffect(() => {
+    if (Platform.OS === 'web' || !permsReady) return;
+    if (!inCallStartedRef.current) {
+      InCallAudio.start(isVideoMode ? 'video' : 'audio');
+      inCallStartedRef.current = true;
+    }
+  }, [permsReady, isVideoMode]);
   useEffect(() => {
     if (host.state !== 'connected' && host.state !== 'reconnecting') return;
     if (!inCallStartedRef.current) {
@@ -797,6 +818,18 @@ function TwilioCallScreenInner() {
                   : 'Waiting for others to join…'
                 : host.state}
             </Text>
+            {/* iter-245: surface the exact Twilio failure reason + a Retry so
+                a "failed" connect is diagnosable (screenshot/report) instead
+                of a silent spinner. */}
+            {host.state === 'failed' && host.error ? (
+              <Text style={styles.placeholderError}>{host.error}</Text>
+            ) : null}
+            {host.state === 'failed' ? (
+              <Pressable onPress={() => host.session?.connect()} style={styles.retryBtn}>
+                <Feather name="rotate-cw" size={16} color="#fff" />
+                <Text style={styles.retryBtnText}>Retry</Text>
+              </Pressable>
+            ) : null}
           </View>
         ) : (
           host.participants.map((p) => {
@@ -925,9 +958,17 @@ function TwilioCallScreenInner() {
             <Text style={styles.audioSheetTitle}>Audio output</Text>
             <AudioRouteRow icon="phone-call" label="Earpiece" selected={audioOutput === 'earpiece'} onPress={() => selectAudioRoute('earpiece')} />
             <AudioRouteRow icon="volume-2" label="Speaker" selected={audioOutput === 'speaker'} onPress={() => selectAudioRoute('speaker')} />
-            {btAvailable ? (
-              <AudioRouteRow icon="bluetooth" label="Bluetooth" selected={audioOutput === 'bluetooth'} onPress={() => selectAudioRoute('bluetooth')} />
-            ) : null}
+            {/* iter-245: always offer Bluetooth (was hidden until an
+                onAudioDeviceChanged event flipped btAvailable, which only fires
+                after the call connects — so it was effectively never shown).
+                selectAudioRoute('bluetooth') requests BLUETOOTH_CONNECT and
+                routes SCO; if no device is paired it falls back gracefully. */}
+            <AudioRouteRow
+              icon="bluetooth"
+              label={btAvailable ? 'Bluetooth' : 'Bluetooth (connect a device)'}
+              selected={audioOutput === 'bluetooth'}
+              onPress={() => selectAudioRoute('bluetooth')}
+            />
           </Pressable>
         </Pressable>
       </Modal>
@@ -1167,6 +1208,23 @@ const styles = StyleSheet.create({
   },
   placeholder: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
   placeholderText: { color: '#ccc', fontSize: 15 },
+  placeholderError: {
+    color: '#ff8a80',
+    fontSize: 13,
+    textAlign: 'center',
+    paddingHorizontal: 32,
+  },
+  retryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 24,
+    backgroundColor: Colors.primary,
+  },
+  retryBtnText: { color: '#fff', fontWeight: FontWeight.bold, fontSize: 14 },
   remoteVideo: { flexGrow: 1, flexBasis: '45%', minWidth: 160, backgroundColor: '#000' },
   audioTile: { alignItems: 'center', justifyContent: 'center', gap: 12 },
   audioName: { color: '#fff', fontSize: 15 },
