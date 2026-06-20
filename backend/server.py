@@ -1592,6 +1592,20 @@ async def send_push(
     title = str(data["title"])
     message = str(data["message"])
 
+    # iter-242: decide UP FRONT whether this is a CALL push. Calls must be
+    # delivered ONLY via the FCM v1 data-only path below (the single path that
+    # wakes the device background task → renders the notifee full-screen
+    # incoming-call UI with Answer/Decline + looping ringtone). The Emergent
+    # relay can only send a plain `notification` banner (no action buttons,
+    # and it does NOT trigger the data-only background task), so for calls it
+    # produces a button-less banner that masks the real ring. We therefore
+    # SKIP the relay entirely for call pushes (see the relay block below).
+    _call_probe_routing = _derive_push_routing(data)
+    if "type" not in _call_probe_routing:
+        _call_probe_channel = _resolve_android_channel({**data, "title": title}, None)
+        _call_probe_routing["type"] = "call" if _call_probe_channel.startswith("calls") else "message"
+    is_call_push_global = _call_probe_routing.get("type") == "call"
+
     # ── Primary path: FCM v1 ──────────────────────────────────────
     # Look up all stored device tokens for these recipients and send
     # in parallel via Firebase Admin SDK.
@@ -1728,6 +1742,13 @@ async def send_push(
             stats["errors"].append(f"FCM v1 path failed: {e}")
 
     # ── Secondary path: Emergent relay (only works once key is real) ──
+    # iter-242: NEVER route CALL pushes through the relay. The relay delivers a
+    # plain `notification` (button-less banner) that does NOT trigger the
+    # data-only background task, so in deployment (real EMERGENT_PUSH_KEY) it
+    # was showing callees a notification with no Answer/Decline and masking the
+    # FCM v1 data-only ring. Calls are delivered exclusively via FCM v1 above.
+    if is_call_push_global:
+        return stats
     payload: dict = {"recipients": recipients, "data": data}
     if idempotency_key:
         payload["$idempotency_key"] = idempotency_key

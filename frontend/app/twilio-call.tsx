@@ -563,7 +563,24 @@ function TwilioCallScreenInner() {
     return () => clearTimeout(t);
   }, [isCaller, host.state, host.participants, host.session, roomName, closeScreen]);
 
-  // iter-232: drive audio routing through InCallManager (Android
+  // iter-242: caller-side RINGBACK tone. While the caller is waiting for the
+  // callee to answer (we're in the Twilio room but no remote participant has
+  // joined yet) play the looping ringback so the caller audibly hears the call
+  // "ringing". Stops instantly when the callee joins, the call ends, or the
+  // screen unmounts. Uses InCallManager's VOICE_CALL-stream ringback so it is
+  // NOT muted by MODE_IN_COMMUNICATION.
+  useEffect(() => {
+    if (!isCaller) return;
+    const remoteCount = host.participants?.length || 0;
+    const waiting =
+      remoteCount === 0 &&
+      (host.state === 'connecting' || host.state === 'connected' || host.state === 'reconnecting');
+    if (waiting) {
+      InCallAudio.startRingback();
+      return () => InCallAudio.stopRingback();
+    }
+    InCallAudio.stopRingback();
+  }, [isCaller, host.participants, host.state]);
   // MODE_IN_COMMUNICATION + chooseAudioRoute), the same path the rest of the
   // app uses. Twilio's own speaker toggle only did speaker-on/off and forced
   // speaker for video — so video calls never responded to earpiece/Bluetooth.
