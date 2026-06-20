@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { AppState, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useQuery } from 'convex/react';
 import { api } from '../convexApi';
@@ -79,12 +80,12 @@ export function useIncomingCallListener() {
       return;
     }
 
-    // iter-237: route the FOREGROUND answer path to the Twilio call screen
-    // (was deep-linking the legacy WebRTC screen `/call/${conversationId}`,
-    // which cannot join a Twilio room → the caller spins on "Connecting"
-    // forever). This is the most-used path (app already open). Mirror the
-    // push-tap handler in usePushNotifications.ts so all three answer paths
-    // (push tap, Notifee wake, foreground listener) land on /twilio-call.
+    // iter-243: FOREGROUND incoming-call ring. The FCM push pipeline owns
+    // backgrounded/locked/killed delivery; this Convex live query owns the
+    // FOREGROUND case (app open). Only ring when the app is actually active so
+    // we never double-ring with the push-driven Notifee notification.
+    if (AppState.currentState !== 'active') return;
+
     const room =
       String(
         incomingCall?.twilioRoomName ||
@@ -111,11 +112,35 @@ export function useIncomingCallListener() {
       incomingType === 'video' ||
       String(incomingCall?.callType || '').toLowerCase() === 'video';
 
-    router.push(
-      (`/twilio-call?room=${encodeURIComponent(room)}` +
-        `&identity=${encodeURIComponent(calleeIdentity)}` +
-        `&isCaller=0&isVideo=${isVideo ? '1' : '0'}` +
-        (displayName ? `&title=${encodeURIComponent(displayName)}` : '')) as any,
-    );
+    const callUrl =
+      `/twilio-call?room=${encodeURIComponent(room)}` +
+      `&identity=${encodeURIComponent(calleeIdentity)}` +
+      `&isCaller=0&isVideo=${isVideo ? '1' : '0'}` +
+      (displayName ? `&title=${encodeURIComponent(displayName)}` : '');
+
+    // iter-243: on Android present the full-screen Notifee Answer/Decline ring
+    // (WhatsApp-style) — using a STABLE conversation-scoped callId so it
+    // de-dupes with any push-driven ring for the same call. On iOS (no Notifee
+    // full-screen wake) fall back to deep-linking the call screen.
+    if (Platform.OS === 'android') {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { presentIncomingCallNotifeeWake } = require('./notifeeCallWake');
+        void presentIncomingCallNotifeeWake({
+          callId: `smilers_conv_${conversationId}`,
+          callerId: callerIdentity || `conv_${conversationId}`,
+          callerIdentity,
+          callerName: displayName || 'Smilers user',
+          callType: isVideo ? 'video' : 'voice',
+          conversationId: String(conversationId),
+          twilioRoom: room,
+          isVideo,
+        });
+        return;
+      } catch {
+        /* notifee unavailable — fall through to deep-link */
+      }
+    }
+    router.push(callUrl as any);
   }, [incomingCall, router]);
 }

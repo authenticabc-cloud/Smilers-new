@@ -27,6 +27,8 @@ import type { Router } from 'expo-router';
 
 import { initiateTwilioCall, isTwilioEnabled } from './twilioApi';
 import { recordDiagnostic } from '../diagnostics';
+import { api } from '../../convexApi';
+import { getActiveConvexClient } from '../../providers/useConvexAutoReconnect';
 
 export interface StartCallArgs {
   router: Router;
@@ -100,8 +102,32 @@ export async function startCall(args: StartCallArgs): Promise<void> {
         title: displayName,
         autoShare: args.autoShare ? '1' : '0',
         startMuted: args.startMuted ? '1' : '0',
+        // iter-243: 1-on-1 callee id so the caller screen can show
+        // "Ringing…" (callee online) vs "Calling…" (callee offline).
+        calleeId: args.calleeIdentities.length === 1 ? args.calleeIdentities[0] : '',
       },
     } as any);
+
+    // iter-243: create a Convex "ringing" call record so the callee's
+    // FOREGROUND `useIncomingCallListener` (a Convex live query) fires and
+    // shows the in-app ring. The backend FCM push already covers the
+    // backgrounded/locked/killed case. Skip for screen-share (silent) calls.
+    // Fire-and-forget — a Convex hiccup must never block the caller's UI.
+    if (!args.autoShare) {
+      try {
+        const convex = getActiveConvexClient();
+        await convex?.mutation(api.calls.initiateCall, {
+          conversationId,
+          callType: isVideo ? 'video' : 'voice',
+        });
+      } catch (e: any) {
+        recordDiagnostic({
+          tag: 'CALL',
+          source: 'startCall',
+          message: `convex-initiateCall-failed (non-fatal) err=${e?.message || e}`,
+        });
+      }
+    }
   } catch (err: any) {
     recordDiagnostic({
       tag: 'CALL',

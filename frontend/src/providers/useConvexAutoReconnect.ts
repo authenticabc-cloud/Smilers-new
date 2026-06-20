@@ -348,3 +348,10 @@ export async function forceConvexReconnect(reason: string = 'manual'): Promise<b
 }
 
 export default useConvexAutoReconnect;
+
+// iter-243: expose the active Convex client so non-React modules (e.g.
+// startCall) can fire imperative mutations without threading the client
+// through every call site.
+export function getActiveConvexClient(): ConvexReactClient | null {
+  return activeClient;
+}

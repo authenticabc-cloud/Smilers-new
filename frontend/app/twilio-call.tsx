@@ -45,7 +45,7 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useKeepAwake } from 'expo-keep-awake';
 import * as Haptics from 'expo-haptics';
-import { Camera } from 'expo-camera';
+import { requestCameraPermissionsAsync, requestMicrophonePermissionsAsync } from 'expo-camera';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery } from 'convex/react';
@@ -104,6 +104,7 @@ function TwilioCallScreenInner() {
     title?: string;
     autoShare?: string;
     startMuted?: string;
+    calleeId?: string;
   }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -113,6 +114,9 @@ function TwilioCallScreenInner() {
   const isVideo = String(params.isVideo || '1') === '1';
   const isCaller = String(params.isCaller || '0') === '1';
   const title = String(params.title || roomName);
+  // iter-243: the callee's Convex user id (1-on-1 caller flow) — used to show
+  // "Ringing…" when they are online vs "Calling…" when offline (WhatsApp-style).
+  const calleeId = String(params.calleeId || '');
   // Screen-share session: the sharer auto-starts the screen broadcast on
   // connect (and optionally starts muted when sharing without narration).
   const autoShare = String(params.autoShare || '0') === '1';
@@ -128,15 +132,26 @@ function TwilioCallScreenInner() {
   // for video) BEFORE enabling connect. Default true on web (no native SDK).
   const [permsReady, setPermsReady] = useState(Platform.OS === 'web');
 
+  // iter-243: WhatsApp-style caller status. Look up the callee's live presence
+  // (the app keeps users "online" via a 60s heartbeat; getUserById reports
+  // isOnline=false once lastSeen is >2min stale). We show "Ringing…" when the
+  // callee is online (their device can ring now) and "Calling…" when offline
+  // (the call is placed but not ringing). 1-on-1 caller flow only.
+  const calleeUser = useQuery(
+    api.users.getUserById,
+    isCaller && calleeId ? ({ userId: calleeId } as any) : 'skip',
+  ) as any;
+  const calleeOnline = !!(calleeUser?.isOnline ?? calleeUser?.online);
+
   useEffect(() => {
     if (Platform.OS === 'web') return;
     let cancelled = false;
     (async () => {
       try {
-        const mic = await Camera.requestMicrophonePermissionsAsync();
+        const mic = await requestMicrophonePermissionsAsync();
         let camGranted = true;
         if (isVideo) {
-          const cam = await Camera.requestCameraPermissionsAsync();
+          const cam = await requestCameraPermissionsAsync();
           camGranted = cam.granted;
         }
         recordDiagnostic({
@@ -750,7 +765,19 @@ function TwilioCallScreenInner() {
           <View style={styles.placeholder}>
             <ActivityIndicator size="large" color={Colors.primary} />
             <Text style={styles.placeholderText}>
-              {host.state === 'connecting' ? 'Connecting…' : host.state === 'connected' ? 'Waiting for others to join…' : host.state}
+              {host.state === 'connecting'
+                ? isCaller && calleeId
+                  ? calleeOnline
+                    ? 'Ringing…'
+                    : 'Calling…'
+                  : 'Connecting…'
+                : host.state === 'connected'
+                ? isCaller && calleeId
+                  ? calleeOnline
+                    ? 'Ringing…'
+                    : 'Calling…'
+                  : 'Waiting for others to join…'
+                : host.state}
             </Text>
           </View>
         ) : (
