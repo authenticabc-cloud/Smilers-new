@@ -628,17 +628,6 @@ function TwilioCallScreenInner() {
   // app uses. Twilio's own speaker toggle only did speaker-on/off and forced
   // speaker for video — so video calls never responded to earpiece/Bluetooth.
   const inCallStartedRef = useRef(false);
-  // iter-245: start the audio session as soon as permissions are ready (even
-  // while still ringing) so react-native-incall-manager begins emitting
-  // onAudioDeviceChanged — otherwise a paired Bluetooth headset is never
-  // detected until after the call connects and the BT route stays hidden.
-  useEffect(() => {
-    if (Platform.OS === 'web' || !permsReady) return;
-    if (!inCallStartedRef.current) {
-      InCallAudio.start(isVideoMode ? 'video' : 'audio');
-      inCallStartedRef.current = true;
-    }
-  }, [permsReady, isVideoMode]);
   useEffect(() => {
     if (host.state !== 'connected' && host.state !== 'reconnecting') return;
     if (!inCallStartedRef.current) {
