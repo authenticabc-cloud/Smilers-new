@@ -373,7 +373,27 @@ if (Platform.OS !== 'web' && !runtimeScope.__smilersNotificationTaskDefined) {
     }
 
     if (runtimeScope.__smilersAppState === 'active') {
-      return;
+      // iter-242: CALL pushes must still ring when the app is in the
+      // FOREGROUND. The foreground notification-received listener never fires
+      // for DATA-ONLY FCM messages (which is how call pushes are sent), and
+      // the Twilio call path creates no Convex call record, so the foreground
+      // Convex listener can't fire either — this background task is the ONLY
+      // place a foreground incoming call can surface. So let calls through and
+      // bail only for non-call (message) pushes, which the foreground banner /
+      // received-listener already handles.
+      try {
+        const probe = normalizeNotificationPayload(
+          (data as any)?.notification?.request?.content?.data ||
+            (data as any)?.data ||
+            data ||
+            {},
+        );
+        if (toNonEmptyString(probe.type) !== 'call') {
+          return;
+        }
+      } catch {
+        return;
+      }
     }
 
     try {
