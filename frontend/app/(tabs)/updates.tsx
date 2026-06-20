@@ -9,6 +9,8 @@ import Header from '../../src/components/Header';
 import Avatar from '../../src/components/Avatar';
 import { api } from '../../src/convexApi';
 import { uploadFile } from '../../src/lib/uploadFile';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
+import { getResolvedDisplayName, getSavedContactRecord } from '../../src/lib/displayName';
 import { Colors, FontSize, FontWeight, Spacing, Shadow } from '../../src/theme';
 
 export default function StatusScreen() {
@@ -17,6 +19,25 @@ export default function StatusScreen() {
   const statusGroups = useQuery(api.statuses.listStatusGroups);
   const myStatuses = useQuery(api.statuses.getMyStatuses);
   const createStatus = useMutation(api.statuses.create);
+
+  // iter-239: resolve each status author's name from the device address book
+  // (e.g. "ABC Albania") instead of the Smilers/Google account name — same
+  // resolver the chats list and status viewer use. Falls back to the Smilers
+  // name when no device contact matches.
+  const me = useQuery(api.users.getCurrentUser);
+  const myContacts = useQuery(api.contacts.getContacts, {}) as any[] | undefined;
+  const deviceIndex = useDeviceContactIndex();
+  const resolveContactName = useCallback(
+    (item: any): string => {
+      const fallback = item?.name && String(item.name).trim() ? String(item.name) : 'Smilers user';
+      const saved = item?.userId
+        ? getSavedContactRecord(myContacts, { userId: item.userId }, me?._id)
+        : null;
+      const record = saved || { _id: item?.userId, name: fallback, phoneE164: item?.phoneE164, phone: item?.phone };
+      return getResolvedDisplayName(record, deviceIndex, lookupDeviceContactName, fallback);
+    },
+    [myContacts, me, deviceIndex],
+  );
 
   const [showSheet, setShowSheet] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -106,22 +127,25 @@ export default function StatusScreen() {
             {others.length > 0 && <Text style={styles.section}>RECENT UPDATES</Text>}
           </>
         }
-        renderItem={({ item }) => (
-          <TouchableOpacity
-            style={styles.row}
-            activeOpacity={0.7}
-            onPress={() => router.push(`/status-view/${item.userId}` as any)}
-            testID={`status-row-${item.userId}`}
-          >
-            <View style={[styles.statusRing]}>
-              <Avatar name={item.name} size={50} />
-            </View>
-            <View style={styles.rowMid}>
-              <Text style={styles.rowName}>{item.name || 'Smilers user'}</Text>
-              <Text style={styles.rowSub}>{item.count || 1} update{(item.count || 1) === 1 ? '' : 's'}</Text>
-            </View>
-          </TouchableOpacity>
-        )}
+        renderItem={({ item }) => {
+          const displayName = resolveContactName(item);
+          return (
+            <TouchableOpacity
+              style={styles.row}
+              activeOpacity={0.7}
+              onPress={() => router.push(`/status-view/${item.userId}` as any)}
+              testID={`status-row-${item.userId}`}
+            >
+              <View style={[styles.statusRing]}>
+                <Avatar name={displayName} size={50} />
+              </View>
+              <View style={styles.rowMid}>
+                <Text style={styles.rowName}>{displayName}</Text>
+                <Text style={styles.rowSub}>{item.count || 1} update{(item.count || 1) === 1 ? '' : 's'}</Text>
+              </View>
+            </TouchableOpacity>
+          );
+        }}
         ListEmptyComponent={
           statusGroups !== undefined ? (
             <View style={styles.empty}>
