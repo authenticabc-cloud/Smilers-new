@@ -64,11 +64,34 @@ import { useTwilioCallSession } from '../src/lib/twilio/useTwilioCallSession';
 import { recordDiagnostic } from '../src/lib/diagnostics';
 import { setPipParams, enterPip, useIsInPip, isPipSupported } from '../src/lib/pip';
 import { InCallAudio } from '../src/lib/webrtc/inCallManager';
+import CallErrorBoundary from '../src/components/CallErrorBoundary';
 import { Colors } from '../src/theme';
 
 type AudioOutputRoute = 'earpiece' | 'speaker' | 'bluetooth';
 
+// iter-238: the call screen mounts as a modal stack with NO outer error
+// boundary, so ANY uncaught JS error during mount (e.g. a native-module
+// init failure, a stale ref deref) takes down the whole React tree and the
+// OS shows a hard "app has a bug" crash. Wrap the screen so such errors show
+// a friendly fallback (and get logged) instead of crashing the app.
 export default function TwilioCallScreen() {
+  const router = useRouter();
+  const onClose = useCallback(() => {
+    try {
+      if (router.canGoBack()) router.back();
+      else router.replace('/');
+    } catch {
+      /* best effort */
+    }
+  }, [router]);
+  return (
+    <CallErrorBoundary onClose={onClose}>
+      <TwilioCallScreenInner />
+    </CallErrorBoundary>
+  );
+}
+
+function TwilioCallScreenInner() {
   // iter-222: keep the screen ON for the entire call so it never dims/sleeps
   // mid-conversation (paired with the native showWhenLocked/turnScreenOn
   // wake-on-incoming via the withCallWakeScreen config plugin).
