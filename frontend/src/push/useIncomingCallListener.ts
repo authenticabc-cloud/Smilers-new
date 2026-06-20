@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import { useQuery } from 'convex/react';
 import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
+import { isTwilioEnabled } from '../lib/twilio/twilioApi';
 
 /**
  * Real-time incoming-call listener — when foregrounded, Convex's reactive
@@ -61,6 +62,22 @@ export function useIncomingCallListener() {
       ''
     ).trim();
     if (!conversationId) return;
+
+    // iter-240: respect the runtime engine flag (EXPO_PUBLIC_USE_TWILIO).
+    // When Twilio is DISABLED the app's outgoing calls use the legacy WebRTC
+    // stack, which NEVER creates a Twilio room. Previously this foreground
+    // listener always synthesized a room name and routed to /twilio-call —
+    // so a WebRTC caller's callee landed on the Twilio screen and spun on
+    // "Connecting" forever (the exact mismatch support flagged). Route the
+    // foreground answer to the legacy /call/<id> screen when Twilio is off.
+    if (!isTwilioEnabled()) {
+      router.push(
+        displayName
+          ? (`/call/${conversationId}?displayName=${encodeURIComponent(displayName)}` as any)
+          : (`/call/${conversationId}` as any),
+      );
+      return;
+    }
 
     // iter-237: route the FOREGROUND answer path to the Twilio call screen
     // (was deep-linking the legacy WebRTC screen `/call/${conversationId}`,

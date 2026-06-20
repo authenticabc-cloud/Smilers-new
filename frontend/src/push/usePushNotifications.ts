@@ -10,6 +10,7 @@ import { api } from '../convexApi';
 import { readStoredJson } from '../lib/settingsStorage';
 import { getPushDiagnosticsState, setPushDiagnostics, setPushDiagnosticsRetryHandler } from './pushDiagnostics';
 import { useAuth } from '../providers/AuthProvider';
+import { isTwilioEnabled } from '../lib/twilio/twilioApi';
 
 // Foreground display behavior — show banner + sound for incoming pushes
 if (Platform.OS !== 'web') {
@@ -922,7 +923,7 @@ export function usePushNotifications() {
         // legacy /call/<id> path only when no `twilio_room_name` is
         // present (i.e., the caller is still on the old WebRTC stack).
         const twilioRoom = toNonEmptyString((payload as any).twilio_room_name);
-        if (twilioRoom) {
+        if (twilioRoom && isTwilioEnabled()) {
           const twilioIsVideo = String((payload as any).twilio_is_video ?? '1') === '1' ? '1' : '0';
           const twilioCallerIdentity = toNonEmptyString((payload as any).twilio_caller_identity) || '';
           router.push({

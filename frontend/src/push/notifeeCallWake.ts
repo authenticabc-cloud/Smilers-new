@@ -109,6 +109,21 @@ function loadNative(): any | null {
 
 /** Build the in-app route that answers a Twilio call. */
 function buildCallRoute(data: any): string {
+  // iter-240: respect the runtime engine flag (EXPO_PUBLIC_USE_TWILIO). When
+  // Twilio is disabled the app uses the legacy WebRTC call screen, so an
+  // answered call must open /call/<conversationId> — NOT /twilio-call (which
+  // would spin on "Connecting" because no Twilio room exists).
+  let twilioOn = true;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    twilioOn = require('../lib/twilio/twilioApi').isTwilioEnabled();
+  } catch {}
+  const conversationId = String(data?.conversationId || '');
+  if (!twilioOn) {
+    const name = encodeURIComponent(String(data?.callerName || 'Smilers user'));
+    if (conversationId) return `/call/${conversationId}?displayName=${name}`;
+    return String(data?.action_url || '/');
+  }
   const room = String(data?.twilio_room_name || data?.twilioRoom || '');
   const isVideo =
     data?.isVideo === true ||
