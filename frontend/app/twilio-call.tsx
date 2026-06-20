@@ -141,7 +141,25 @@ function TwilioCallScreenInner() {
     api.users.getUserById,
     isCaller && calleeId ? ({ userId: calleeId } as any) : 'skip',
   ) as any;
-  const calleeOnline = !!(calleeUser?.isOnline ?? calleeUser?.online);
+  // iter-244: robust online detection — works whether the Convex backend
+  // exposes an explicit isOnline/online boolean OR only a lastSeen timestamp
+  // (online if seen within the 2-min heartbeat window). This is what makes the
+  // "Ringing…" vs "Calling…" indicator reflect reality instead of always
+  // defaulting to "Calling…".
+  const calleeOnline = useMemo(() => {
+    if (!calleeUser) return false;
+    if (calleeUser.isOnline === true || calleeUser.online === true) return true;
+    const raw =
+      calleeUser.lastSeen ?? calleeUser.lastActiveAt ?? calleeUser.updatedAt ?? null;
+    let ts = 0;
+    if (typeof raw === 'number' && Number.isFinite(raw)) ts = raw;
+    else if (typeof raw === 'string') {
+      const parsed = Date.parse(raw);
+      if (Number.isFinite(parsed)) ts = parsed;
+    }
+    if (ts) return Date.now() - ts < 120000;
+    return false;
+  }, [calleeUser]);
 
   useEffect(() => {
     if (Platform.OS === 'web') return;
