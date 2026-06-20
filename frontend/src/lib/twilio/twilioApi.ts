@@ -88,6 +88,7 @@ export async function initiateTwilioCall(args: {
   isVideo?: boolean;
   conversationId?: string | null;
   roomName?: string | null;
+  isScreenShare?: boolean;
   signal?: AbortSignal;
 }): Promise<TwilioInitiateCallResult> {
   if (!BACKEND_URL) {
@@ -105,6 +106,7 @@ export async function initiateTwilioCall(args: {
       is_video: args.isVideo !== false,
       conversation_id: args.conversationId ?? null,
       room_name: args.roomName ?? null,
+      is_screen_share: args.isScreenShare === true,
     }),
     signal: args.signal,
   });

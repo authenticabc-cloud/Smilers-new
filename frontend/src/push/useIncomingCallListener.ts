@@ -60,12 +60,45 @@ export function useIncomingCallListener() {
       incomingCall?.caller?.fullName ||
       ''
     ).trim();
-    if (conversationId) {
-      router.push(
-        displayName
-          ? (`/call/${conversationId}?displayName=${encodeURIComponent(displayName)}` as any)
-          : (`/call/${conversationId}` as any)
-      );
-    }
+    if (!conversationId) return;
+
+    // iter-237: route the FOREGROUND answer path to the Twilio call screen
+    // (was deep-linking the legacy WebRTC screen `/call/${conversationId}`,
+    // which cannot join a Twilio room → the caller spins on "Connecting"
+    // forever). This is the most-used path (app already open). Mirror the
+    // push-tap handler in usePushNotifications.ts so all three answer paths
+    // (push tap, Notifee wake, foreground listener) land on /twilio-call.
+    const room =
+      String(
+        incomingCall?.twilioRoomName ||
+        incomingCall?.twilioRoom ||
+        incomingCall?.twilio_room_name ||
+        incomingCall?.roomName ||
+        '',
+      ).trim() || `smilers_conv_${conversationId}`;
+    const callerIdentity = String(
+      incomingCall?.callerId ||
+      incomingCall?.callerIdentity ||
+      incomingCall?.twilioCallerIdentity ||
+      incomingCall?.caller?._id ||
+      '',
+    ).trim();
+    // The callee must join with a unique, non-empty identity (same derivation
+    // as the push handler). Fall back to a conversation-scoped id if the
+    // caller identity isn't on the record.
+    const calleeIdentity = callerIdentity
+      ? `${callerIdentity}_callee`
+      : `conv_${conversationId}_callee`;
+    const isVideo =
+      incomingCall?.isVideo === true ||
+      incomingType === 'video' ||
+      String(incomingCall?.callType || '').toLowerCase() === 'video';
+
+    router.push(
+      (`/twilio-call?room=${encodeURIComponent(room)}` +
+        `&identity=${encodeURIComponent(calleeIdentity)}` +
+        `&isCaller=0&isVideo=${isVideo ? '1' : '0'}` +
+        (displayName ? `&title=${encodeURIComponent(displayName)}` : '')) as any,
+    );
   }, [incomingCall, router]);
 }

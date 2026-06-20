@@ -87,6 +87,7 @@ export async function startCall(args: StartCallArgs): Promise<void> {
       isVideo,
       conversationId,
       record: args.record ?? false,
+      isScreenShare: args.autoShare === true,
     });
     router.push({
       pathname: '/twilio-call',

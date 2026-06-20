@@ -232,6 +232,7 @@ class TwilioInitiateCallRequest(BaseModel):
     conversation_id: Optional[str] = Field(None, description="Convex conversation _id — used for room naming + push routing")
     room_name: Optional[str] = Field(None, description="Optional explicit room name; otherwise generated")
     record: bool = Field(False, description="If true, Twilio records all participants from connect")
+    is_screen_share: bool = Field(False, description="If true, this is a screen-share request, not a regular call")
 
 
 class TwilioInitiateCallResponse(BaseModel):
@@ -358,11 +359,18 @@ async def twilio_initiate_call(payload: TwilioInitiateCallRequest):
     # payload includes `twilio_room_name` so the mobile tap-handler
     # routes to /twilio-call instead of the legacy /call screen.
     push_stats: dict = {"token_count": 0, "success_count": 0, "error_count": 0, "errors": [], "pruned_count": 0}
-    display_name = payload.caller_display_name or payload.caller_identity
+    # iter-237: when the caller has no display name set, fall back to a
+    # readable label instead of the raw Convex user id (which surfaced as a
+    # "code" in the incoming-call notification).
+    display_name = payload.caller_display_name or "Smilers User"
     try:
         push_data = {
             "title": display_name,
-            "message": ("Incoming video call" if payload.is_video else "Incoming call"),
+            "message": (
+                "Screen share request"
+                if payload.is_screen_share
+                else ("Incoming video call" if payload.is_video else "Incoming call")
+            ),
             "type": "call",
             "callId": room.sid,
             # iter-A4c: caller's id so the callee's answer-handler can derive a
@@ -393,7 +401,7 @@ async def twilio_initiate_call(payload: TwilioInitiateCallRequest):
             # iter-A4b: extra hints so the classifier picks the call
             # channel even if `type` or `action_url` are stripped in
             # transit by an intermediate proxy.
-            "subtext": "Incoming call",
+            "subtext": "Screen share request" if payload.is_screen_share else "Incoming call",
         }
         push_stats = await send_push(
             recipients=payload.callee_identities,
