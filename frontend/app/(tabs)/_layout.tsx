@@ -6,7 +6,6 @@ import { useMutation, useQuery } from 'convex/react';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { api } from '../../src/convexApi';
 import { PHONE_VERIFIED_INSTALL_KEY, readStoredString } from '../../src/lib/settingsStorage';
-import { useIncomingCallListener } from '../../src/push/useIncomingCallListener';
 import { Colors, FontSize, FontWeight } from '../../src/theme';
 
 export default function TabsLayout() {
@@ -27,8 +26,9 @@ export default function TabsLayout() {
   const [bootstrapAttempted, setBootstrapAttempted] = useState(false);
   const [meGateTimedOut, setMeGateTimedOut] = useState(false);
 
-  // Wire up real-time foreground incoming-call detector
-  useIncomingCallListener();
+  // Real-time foreground incoming-call detection is now mounted globally in
+  // app/_layout.tsx (PresenceHeartbeat) so it fires on every authenticated
+  // screen, not just the tabs.
 
   // Sync user with Convex backend on login (creates or updates user record)
   useEffect(() => {

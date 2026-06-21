@@ -105,6 +105,20 @@ export class TwilioCallSession {
     this.ref = ref;
   }
 
+  /**
+   * Update the access token after construction. The callee path fetches its
+   * token asynchronously AFTER the session object is built (the session is
+   * memoized once per call), so without this the session would connect with
+   * the stale empty token → Twilio "Access token is required". Caller path is
+   * unaffected (its token is present at construction).
+   */
+  setToken(token: string): void {
+    if (token && token !== this.opts.token) {
+      this.opts.token = token;
+      this.log('token-updated', `len=${token.length}`);
+    }
+  }
+
   /** Current connection state. */
   getState(): TwilioConnectionState {
     return this.state;

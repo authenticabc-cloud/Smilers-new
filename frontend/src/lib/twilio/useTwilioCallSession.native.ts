@@ -124,6 +124,10 @@ export function useTwilioCallSession(args: UseTwilioCallSessionArgs): TwilioCall
   // Auto-connect once we have a ref + token + caller is enabled.
   useEffect(() => {
     if (!enabled || !token) return;
+    // The callee fetches its token AFTER the session was memoized, so push the
+    // latest token into the session before connecting (otherwise it connects
+    // with the stale empty token → "Access token is required").
+    session.setToken(token);
     // Defer one tick so the <TwilioVideo> ref is populated.
     const id = setTimeout(() => {
       session.connect();

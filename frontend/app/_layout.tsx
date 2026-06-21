@@ -181,6 +181,14 @@ function PresenceHeartbeat() {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { usePresenceHeartbeat } = require('../src/hooks/usePresenceHeartbeat');
   usePresenceHeartbeat();
+  // iter-247: mount the incoming-call listener GLOBALLY (was only in the tabs
+  // layout, so a foreground call never rang while the callee was inside a chat
+  // or any non-tab screen — "nothing arrives when on the app"). This sits
+  // inside ConvexClientProvider + AuthProvider, so the Convex live query is
+  // available on every authenticated screen.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { useIncomingCallListener } = require('../src/push/useIncomingCallListener');
+  useIncomingCallListener();
   return null;
 }
 
