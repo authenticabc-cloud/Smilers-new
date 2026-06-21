@@ -635,13 +635,21 @@ function TwilioCallScreenInner() {
       inCallStartedRef.current = true;
     }
     if (audioOutput === 'speaker') {
+      host.session?.setBluetoothHeadset(false);
       InCallAudio.setSpeakerOn(true);
     } else if (audioOutput === 'bluetooth') {
+      // iter-249: route Bluetooth via the Twilio SDK's OWN audio API. Twilio
+      // Video manages its audio session internally and overrides
+      // InCallManager's SCO routing, so calls kept coming out of the
+      // speaker/earpiece. Driving Twilio directly is what actually moves audio
+      // onto the paired headset. Also nudge InCallManager as a fallback.
+      host.session?.setBluetoothHeadset(true);
       InCallAudio.setBluetoothOn(isVideoMode ? 'video' : 'audio');
     } else {
+      host.session?.setBluetoothHeadset(false);
       InCallAudio.setEarpieceOn();
     }
-  }, [audioOutput, host.state, isVideoMode]);
+  }, [audioOutput, host.state, isVideoMode, host.session]);
 
   // Release the audio session when leaving the call screen.
   useEffect(() => () => InCallAudio.stop(), []);

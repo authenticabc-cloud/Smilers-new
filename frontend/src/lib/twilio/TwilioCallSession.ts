@@ -39,6 +39,7 @@ export interface TwilioVideoRef {
   setLocalVideoEnabled: (enabled: boolean) => Promise<boolean>;
   flipCamera: () => void;
   toggleSoundSetup: (speaker: boolean) => void;
+  setBluetoothHeadsetConnected?: (enabled: boolean) => Promise<boolean>;
   toggleScreenSharing?: (enabled: boolean) => void;
   publishLocalAudio: () => void;
   unpublishLocalAudio: () => void;
@@ -116,6 +117,30 @@ export class TwilioCallSession {
     if (token && token !== this.opts.token) {
       this.opts.token = token;
       this.log('token-updated', `len=${token.length}`);
+    }
+  }
+
+  /**
+   * Route call audio via the Twilio SDK's OWN audio session. InCallManager
+   * conflicts with how @twilio/video-react-native-sdk manages the audio
+   * session internally, so for speaker/earpiece we drive Twilio directly.
+   */
+  setSpeakerphone(on: boolean): void {
+    try {
+      this.ref?.toggleSoundSetup(on);
+      this.log('audio-speaker', String(on));
+    } catch (e: any) {
+      this.log('audio-speaker-failed', e?.message || String(e));
+    }
+  }
+
+  /** Route call audio to a paired Bluetooth headset via the Twilio SDK. */
+  async setBluetoothHeadset(on: boolean): Promise<void> {
+    try {
+      await this.ref?.setBluetoothHeadsetConnected?.(on);
+      this.log('audio-bluetooth', String(on));
+    } catch (e: any) {
+      this.log('audio-bluetooth-failed', e?.message || String(e));
     }
   }
 
