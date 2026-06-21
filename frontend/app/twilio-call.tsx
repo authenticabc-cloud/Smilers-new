@@ -33,6 +33,7 @@ import {
   FlatList,
   Image,
   Modal,
+  PermissionsAndroid,
   Platform,
   Pressable,
   StyleSheet,
@@ -45,7 +46,6 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useKeepAwake } from 'expo-keep-awake';
 import * as Haptics from 'expo-haptics';
-import { requestCameraPermissionsAsync, requestMicrophonePermissionsAsync } from 'expo-camera';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery } from 'convex/react';
@@ -166,19 +166,60 @@ function TwilioCallScreenInner() {
     let cancelled = false;
     (async () => {
       try {
-        const mic = await requestMicrophonePermissionsAsync();
+        let micGranted = false;
         let camGranted = true;
-        if (isVideo) {
-          const cam = await requestCameraPermissionsAsync();
-          camGranted = cam.granted;
+        let canAskAgain = true;
+
+        if (Platform.OS === 'android') {
+          // CRITICAL: request the runtime permissions via React Native's core
+          // PermissionsAndroid (always present — NOT dependent on expo-camera's
+          // native module, which in older builds threw "undefined is not a
+          // function" and left the mic UNGRANTED → Twilio connect() hung in
+          // "connecting" forever because it can't create the local audio track
+          // without RECORD_AUDIO). This is the real cause of the callee never
+          // connecting / "Waiting for others" isolation.
+          const wanted = [PermissionsAndroid.PERMISSIONS.RECORD_AUDIO];
+          if (isVideo) wanted.push(PermissionsAndroid.PERMISSIONS.CAMERA);
+          const res = await PermissionsAndroid.requestMultiple(wanted);
+          micGranted =
+            res[PermissionsAndroid.PERMISSIONS.RECORD_AUDIO] === PermissionsAndroid.RESULTS.GRANTED;
+          camGranted =
+            !isVideo ||
+            res[PermissionsAndroid.PERMISSIONS.CAMERA] === PermissionsAndroid.RESULTS.GRANTED;
+          canAskAgain =
+            res[PermissionsAndroid.PERMISSIONS.RECORD_AUDIO] !==
+            PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN;
+        } else {
+          // iOS: use expo-camera's permission helpers when available; the
+          // Twilio audio session ALSO triggers the native mic prompt on
+          // connect, so a missing helper is non-fatal here. Lazy + guarded so
+          // an undefined export never throws.
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            const cam = require('expo-camera');
+            if (typeof cam.requestMicrophonePermissionsAsync === 'function') {
+              const mic = await cam.requestMicrophonePermissionsAsync();
+              micGranted = !!mic?.granted;
+              canAskAgain = mic?.canAskAgain !== false;
+            } else {
+              micGranted = true; // let Twilio's session prompt handle it
+            }
+            if (isVideo && typeof cam.requestCameraPermissionsAsync === 'function') {
+              const c = await cam.requestCameraPermissionsAsync();
+              camGranted = !!c?.granted;
+            }
+          } catch {
+            micGranted = true; // non-fatal on iOS — session prompt covers it
+          }
         }
+
         recordDiagnostic({
           tag: 'TWILIO-CALL',
           source: isCaller ? 'caller' : 'callee',
-          message: `perms mic=${mic.granted} cam=${isVideo ? camGranted : 'n/a'} canAskAgain=${mic.canAskAgain}`,
+          message: `perms mic=${micGranted} cam=${isVideo ? camGranted : 'n/a'} canAskAgain=${canAskAgain}`,
         });
         if (cancelled) return;
-        if (mic.granted && camGranted) {
+        if (micGranted && camGranted) {
           setPermsReady(true);
           return;
         }
@@ -190,13 +231,15 @@ function TwilioCallScreenInner() {
           isVideo
             ? 'Camera and microphone access are needed to make video calls.'
             : 'Microphone access is needed to make calls.',
-          [
-            { text: 'Cancel', style: 'cancel', onPress: () => router.back() },
-            { text: 'Open Settings', onPress: () => Linking.openSettings() },
-          ],
+          canAskAgain
+            ? [{ text: 'OK', onPress: () => router.back() }]
+            : [
+                { text: 'Cancel', style: 'cancel', onPress: () => router.back() },
+                { text: 'Open Settings', onPress: () => Linking.openSettings() },
+              ],
         );
       } catch (err: any) {
-        // If the permission module itself throws, don't hard-block the call —
+        // If the permission request itself throws, don't hard-block the call —
         // let connect() proceed (the OS may already have granted access).
         recordDiagnostic({
           tag: 'TWILIO-CALL',
