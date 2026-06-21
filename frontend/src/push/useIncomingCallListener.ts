@@ -15,6 +15,7 @@ import { isTwilioEnabled } from '../lib/twilio/twilioApi';
 export function useIncomingCallListener() {
   const router = useRouter();
   const { isAuthenticated } = useAuth();
+  const me = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip');
   const incomingCall = useQuery(
     api.calls.getIncomingCall,
     isAuthenticated ? {} : 'skip'
@@ -25,6 +26,26 @@ export function useIncomingCallListener() {
     if (!incomingCall || !incomingCall._id) return;
     if (incomingCall.status !== 'ringing') return;
     if (handledCallId.current === incomingCall._id) return;
+
+    // iter-246 (CRITICAL crash fix): NEVER ring myself for my OWN outgoing
+    // call. startCall now creates a Convex "ringing" record so the *callee's*
+    // foreground listener fires — but this hook is global, so the CALLER's own
+    // query also returns that record. Without this guard the caller tried to
+    // present a full-screen incoming-call notification to themselves the moment
+    // they tapped "Call", hard-crashing on Android before the call screen even
+    // mounted (diagnostics showed no TWILIO-CALL events). Skip when the call's
+    // caller is me.
+    const myId = me && (me as any)._id ? String((me as any)._id) : '';
+    const recordCallerId = String(
+      incomingCall?.callerId ||
+      incomingCall?.callerIdentity ||
+      incomingCall?.caller?._id ||
+      '',
+    );
+    if (myId && recordCallerId && myId === recordCallerId) {
+      handledCallId.current = incomingCall._id;
+      return;
+    }
 
     // Suppress auto-route + ringtone when the incoming call is actually a
     // screen-share request. The IncomingScreenShareModal handles those
@@ -142,5 +163,5 @@ export function useIncomingCallListener() {
       }
     }
     router.push(callUrl as any);
-  }, [incomingCall, router]);
+  }, [incomingCall, router, me]);
 }
