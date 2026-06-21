@@ -25,6 +25,7 @@ import {
   type TwilioVideoRef,
   type ScreenShareState,
 } from './TwilioCallSession';
+import { recordDiagnostic } from '../diagnostics';
 
 export interface TwilioParticipant {
   sid: string;
@@ -147,9 +148,48 @@ export function useTwilioCallSession(args: UseTwilioCallSessionArgs): TwilioCall
 
   // Bind SDK events to the session. These callbacks are stable refs so
   // we declare them once outside of <TwilioVideo>'s JSX.
-  const handleRoomDidConnect = useCallback(() => {
-    session.markConnected();
-  }, [session]);
+  const handleRoomDidConnect = useCallback(
+    (evt?: {
+      roomSid?: string;
+      roomName?: string;
+      participants?: { sid?: string; identity?: string }[];
+    }) => {
+      session.markConnected();
+      // CRITICAL (iter-250): seed the participants list with everyone who is
+      // ALREADY in the room at the moment we connect. Twilio only fires
+      // onRoomParticipantDidConnect for participants who join AFTER us, so a
+      // late joiner (the callee, who connects after the caller) would NEVER
+      // see the caller — this is the exact "Waiting for others to join…"
+      // isolation bug where both sides connect to the same room but render
+      // nobody. The RoomEventArgs.participants array is the only source of the
+      // already-present remote participants.
+      const existing = Array.isArray(evt?.participants) ? evt!.participants! : [];
+      if (existing.length) {
+        setParticipants((prev) => {
+          const merged = [...prev];
+          existing.forEach((p) => {
+            const sid = p?.sid;
+            const ident = p?.identity;
+            // The native SDK includes the LOCAL participant in this array on
+            // both iOS and Android — never add ourselves as a remote tile.
+            if (sid && ident && ident !== identity && !merged.some((m) => m.sid === sid)) {
+              merged.push({ sid, identity: ident });
+            }
+          });
+          return merged;
+        });
+      }
+      try {
+        const remoteCount = existing.filter((p) => p?.identity && p.identity !== identity).length;
+        recordDiagnostic({
+          tag: 'TWILIO-CALL',
+          source: isCaller ? 'caller' : 'callee',
+          message: `room-connected sid=${evt?.roomSid || '-'} name=${evt?.roomName || roomName} remotesAtConnect=${remoteCount}`,
+        });
+      } catch {}
+    },
+    [session, isCaller, roomName, identity],
+  );
 
   const handleRoomDidDisconnect = useCallback(
     (evt?: { error?: string }) => {
