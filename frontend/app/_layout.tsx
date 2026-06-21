@@ -189,6 +189,33 @@ function PresenceHeartbeat() {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { useIncomingCallListener } = require('../src/push/useIncomingCallListener');
   useIncomingCallListener();
+
+  // iter-248 (CRITICAL): wire the notifee call-navigator BRIDGE. The Answer
+  // handlers in notifeeCallWake.ts call `callNavigator(route)` to open
+  // /twilio-call WITH the call's room + identity — but callNavigator was never
+  // registered, so the route was silently stashed in pendingCallRoute and
+  // never consumed. Result: tapping the incoming-call notification opened the
+  // app with NO identity → token fetch short-circuited → "Access token is
+  // required" / wrong identity → "duplicate identity". Register the navigator
+  // here (global, inside Convex+Auth providers) and drain any pending/cold-
+  // start answer route.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { useRouter } = require('expo-router');
+  const router = useRouter();
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const {
+      setCallNavigator,
+      consumePendingCallRoute,
+      handleNotifeeInitialCallNotification,
+    } = require('../src/push/notifeeCallWake');
+    setCallNavigator((url: string) => router.push(url as any));
+    const pending = consumePendingCallRoute();
+    if (pending) router.push(pending as any);
+    handleNotifeeInitialCallNotification();
+    return () => setCallNavigator(null);
+  }, [router]);
+
   return null;
 }
 

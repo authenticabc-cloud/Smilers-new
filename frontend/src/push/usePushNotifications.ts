@@ -373,11 +373,23 @@ if (Platform.OS !== 'web' && !runtimeScope.__smilersNotificationTaskDefined) {
     }
 
     if (runtimeScope.__smilersAppState === 'active') {
-      // Foreground calls are handled by the Convex `useIncomingCallListener`
-      // (it presents the Notifee Answer/Decline ring). The background task
-      // owns ONLY backgrounded/locked/killed delivery — so bail when active to
-      // avoid a double ring (push-notifee + Convex-notifee) for the same call.
-      return;
+      // iter-248: in the FOREGROUND, only bail for non-CALL pushes. Call pushes
+      // are sent data-only, which bypasses the foreground notification listener
+      // entirely, and the Convex live-query path has proven unreliable at
+      // surfacing the ring — so let CALL pushes fall through to
+      // presentBackgroundLocalNotification (the Notifee Answer/Decline ring is
+      // idempotent by call id, so it won't double-ring with the Convex path).
+      try {
+        const probe = normalizeNotificationPayload(
+          (data as any)?.notification?.request?.content?.data ||
+            (data as any)?.data ||
+            data ||
+            {},
+        );
+        if (toNonEmptyString(probe.type) !== 'call') return;
+      } catch {
+        return;
+      }
     }
 
     try {
@@ -1035,6 +1047,10 @@ export function usePushNotifications() {
             void presentIncomingCallNotifeeWake({
               callId,
               callerId: toNonEmptyString(payload.callerId) || callId,
+              callerIdentity:
+                toNonEmptyString(payload.twilio_caller_identity) ||
+                toNonEmptyString(payload.callerId) ||
+                '',
               callerName: getDisplayNameFromPayload(payload) || 'Smilers user',
               callType: isVideo ? 'video' : 'voice',
               conversationId: conversationId || '',
