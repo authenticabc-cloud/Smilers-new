@@ -64,7 +64,7 @@ import { recordDiagnostic } from '../src/lib/diagnostics';
 import { setPipParams, enterPip, useIsInPip, isPipSupported } from '../src/lib/pip';
 import { InCallAudio } from '../src/lib/webrtc/inCallManager';
 import CallErrorBoundary from '../src/components/CallErrorBoundary';
-import { Colors } from '../src/theme';
+import { Colors, FontWeight } from '../src/theme';
 
 type AudioOutputRoute = 'earpiece' | 'speaker' | 'bluetooth';
 
