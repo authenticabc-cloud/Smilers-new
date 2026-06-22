@@ -324,6 +324,78 @@ export class CallSession {
     }
   }
 
+  /**
+   * Upgrade an in-progress VOICE call to VIDEO by capturing the camera and
+   * publishing it to the peer. Mirrors the screen-share "add a video sender to
+   * a voice-only call + renegotiate" path so it works mid-call without an
+   * onnegotiationneeded handler. Safe to call when already sending video (it
+   * just refreshes the camera track). Interoperates with the web app, which is
+   * notified separately via api.calls.requestVideoUpgrade.
+   */
+  async upgradeToVideo(): Promise<MediaStream | null> {
+    if (!this.pc || this.closed) return null;
+    const webrtc = await this.getWebRTC();
+    let camTrack: any = null;
+    try {
+      const camStream = (await webrtc.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          mandatory: { minWidth: 640, minHeight: 480, minFrameRate: 24 },
+          facingMode: 'user',
+        },
+      } as any)) as unknown as MediaStream;
+      camTrack = camStream.getVideoTracks()[0];
+    } catch (e: any) {
+      throw new Error('Could not access the camera: ' + (e?.message || e));
+    }
+    if (!camTrack) throw new Error('No camera track available.');
+
+    const senders = (this.pc as any).getSenders ? (this.pc as any).getSenders() : [];
+    const videoSender = senders.find((s: any) => s.track && s.track.kind === 'video');
+    if (videoSender) {
+      try {
+        videoSender.track?.stop();
+      } catch {}
+      try {
+        await videoSender.replaceTrack(camTrack);
+      } catch (e: any) {
+        throw new Error('Failed to enable camera: ' + (e?.message || e));
+      }
+    } else {
+      // Voice-only → add a new video sender + renegotiate so the remote
+      // (mobile OR web peer) starts receiving our camera.
+      try {
+        (this.pc as any).addTrack(camTrack, this.localStream || undefined);
+      } catch (e: any) {
+        throw new Error('Failed to attach camera track: ' + (e?.message || e));
+      }
+      try {
+        const offer = await this.pc.createOffer({} as any);
+        await this.pc.setLocalDescription(offer);
+        await this.opts.sendSignal({
+          callId: this.opts.callId,
+          toUserId: this.opts.remoteUserId,
+          type: 'offer',
+          payload: JSON.stringify(offer),
+        });
+      } catch {}
+    }
+
+    if (this.localStream) {
+      try {
+        this.localStream.getVideoTracks().forEach((t) => {
+          try {
+            this.localStream?.removeTrack(t);
+          } catch {}
+        });
+        this.localStream.addTrack(camTrack);
+        this.opts.onLocalStream?.(this.localStream as MediaStream);
+      } catch {}
+    }
+    return this.localStream;
+  }
+
+
   /** Build the RTCPeerConnection and wire all listeners. */
   async createPeerConnection(): Promise<RTCPeerConnection> {
     const webrtc = await this.getWebRTC();

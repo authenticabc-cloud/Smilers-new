@@ -25,7 +25,7 @@
 import { Alert } from 'react-native';
 import type { Router } from 'expo-router';
 
-import { initiateTwilioCall, isTwilioEnabled } from './twilioApi';
+import { initiateTwilioCall, isTwilioEnabled, ringWebrtcCall } from './twilioApi';
 import { recordDiagnostic } from '../diagnostics';
 import { api } from '../../convexApi';
 import { getActiveConvexClient } from '../../providers/useConvexAutoReconnect';
@@ -69,6 +69,19 @@ export async function startCall(args: StartCallArgs): Promise<void> {
             : 'no-callees'
         } conv=${conversationId} video=${isVideo}`,
     });
+    // iter-254: in WebRTC mode the caller no longer hits /twilio/initiate-call,
+    // so nothing was sending the FCM wake-push — which broke ringing when the
+    // callee app was killed/backgrounded. Fire the call push here (best-effort,
+    // deduped by conversationId with any Convex-sent push).
+    if (args.callerIdentity && args.calleeIdentities.length > 0) {
+      void ringWebrtcCall({
+        calleeIdentities: args.calleeIdentities,
+        callerIdentity: args.callerIdentity,
+        callerDisplayName: args.callerDisplayName,
+        conversationId,
+        isVideo,
+      });
+    }
     router.push(
       `/call/${conversationId}?type=${isVideo ? 'video' : 'voice'}&displayName=${encodeURIComponent(displayName)}` as any,
     );

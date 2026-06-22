@@ -242,6 +242,7 @@ function CallScreenInner() {
   // hangup. See useEngagementTracker for thresholds (must connect).
   const engagement = useEngagementTracker();
   const declineCall = useMutation(api.calls.declineCall);
+  const requestVideoUpgrade = useMutation((api as any).calls.requestVideoUpgrade);
   // Backend-confirmed contract (June 2025): `api.calls.heartbeat({ callId })`
   // is wired up to a 60s cron that auto-`ends` calls without a recent ping.
   // Without this mobile-side heartbeat ping, an active call gets force-ended
@@ -1448,6 +1449,51 @@ function CallScreenInner() {
     sessionRef.current?.switchCamera();
   }, []);
 
+  // iter-254: switch an in-progress VOICE call to VIDEO. Mirrors the Twilio
+  // "Video" control. Publishes our camera (renegotiating the WebRTC peer) and
+  // notifies the remote peer (web or mobile) via requestVideoUpgrade so it can
+  // flip to video too. autoUpgradedRef prevents the mirror-effect below from
+  // re-acquiring the camera after we initiate.
+  const switchingVideoRef = useRef(false);
+  const autoUpgradedRef = useRef(requestedType === 'video');
+  const handleSwitchToVideo = useCallback(async () => {
+    const session = sessionRef.current;
+    if (!session) {
+      Alert.alert('Video', 'Video will be available as soon as the call connects.');
+      return;
+    }
+    if (switchingVideoRef.current || callType === 'video') return;
+    switchingVideoRef.current = true;
+    autoUpgradedRef.current = true;
+    try {
+      try {
+        await requestVideoUpgrade({ callId });
+      } catch {}
+      await session.upgradeToVideo();
+      setCameraOff(false);
+      setCallType('video');
+    } catch (e: any) {
+      autoUpgradedRef.current = false;
+      Alert.alert('Video', e?.message || 'Could not switch to video.');
+    } finally {
+      switchingVideoRef.current = false;
+    }
+  }, [callType, callId, requestVideoUpgrade]);
+
+  // When the REMOTE party upgrades to video, the Convex call record's callType
+  // flips to 'video' (synced into our state elsewhere). Mirror it by enabling
+  // our own camera so both sides see video.
+  useEffect(() => {
+    if (callType !== 'video' || autoUpgradedRef.current || !sessionRef.current) return;
+    autoUpgradedRef.current = true;
+    (async () => {
+      try {
+        await sessionRef.current?.upgradeToVideo();
+        setCameraOff(false);
+      } catch {}
+    })();
+  }, [callType]);
+
   const handleSelectAudioOutput = useCallback((nextOutput: AudioOutputRoute) => {
     setAudioOutput(nextOutput);
     setAudioOutputMenuVisible(false);
@@ -2030,7 +2076,16 @@ function CallScreenInner() {
               label="Flip"
             />
           </View>
-        ) : null}
+        ) : isScreenOnly ? null : (
+          <View style={styles.controlsSecondaryRow}>
+            <SmallControl
+              testID="switch-to-video-btn"
+              onPress={handleSwitchToVideo}
+              icon={<Feather name="video" size={22} color={Colors.white} />}
+              label="Video"
+            />
+          </View>
+        )}
         <View style={styles.row}>
           <ControlBtn
             testID="hangup-btn"

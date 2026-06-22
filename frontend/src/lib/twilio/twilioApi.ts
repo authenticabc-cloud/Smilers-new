@@ -16,6 +16,40 @@ import { recordDiagnostic } from '../diagnostics';
 
 const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/$/, '');
 
+/**
+ * POST /api/calls/ring — send the FCM wake-push for a WebRTC call.
+ *
+ * In WebRTC mode the mobile caller doesn't hit /twilio/initiate-call, so this
+ * is what wakes a backgrounded/killed callee device and rings it. Fire-and-
+ * forget: a failure here must never block the caller's own call UI.
+ */
+export async function ringWebrtcCall(args: {
+  calleeIdentities: string[];
+  callerIdentity: string;
+  callerDisplayName?: string;
+  conversationId: string;
+  isVideo: boolean;
+}): Promise<void> {
+  if (!BACKEND_URL || !args.conversationId || args.calleeIdentities.length === 0) return;
+  try {
+    await fetch(`${BACKEND_URL}/api/calls/ring`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        callee_identities: args.calleeIdentities,
+        caller_identity: args.callerIdentity,
+        caller_display_name: args.callerDisplayName,
+        conversation_id: args.conversationId,
+        is_video: args.isVideo,
+        call_id: args.conversationId,
+      }),
+    });
+    recordDiagnostic({ tag: 'CALL', source: 'ringWebrtcCall', message: `ok conv=${args.conversationId} video=${args.isVideo}` });
+  } catch (e: any) {
+    recordDiagnostic({ tag: 'CALL', source: 'ringWebrtcCall', message: `fail ${e?.message || e}` });
+  }
+}
+
 export interface TwilioToken {
   token: string;
   identity: string;

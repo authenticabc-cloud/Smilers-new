@@ -445,6 +445,71 @@ async def twilio_initiate_call(payload: TwilioInitiateCallRequest):
 
 
 # ============================================================
+# WebRTC call ring — wake a (possibly killed) callee device
+# ============================================================
+#
+# When EXPO_PUBLIC_USE_TWILIO=0 the app connects calls over WebRTC + Convex
+# signaling (interoperates with the web app). In that mode the mobile caller
+# does NOT hit /twilio/initiate-call, so nothing was sending the FCM wake-push
+# — which is why ringing stopped working when the callee app was killed. This
+# endpoint sends ONLY the call push (no Twilio room), tagged as a call so the
+# device delivers it data-only and the Notifee full-screen wake fires and
+# routes to /call/<conversationId> (the WebRTC screen).
+class WebRtcRingRequest(BaseModel):
+    callee_identities: List[str] = Field(default_factory=list)
+    caller_identity: str = ""
+    caller_display_name: str | None = None
+    conversation_id: str = Field(..., min_length=1)
+    is_video: bool = False
+    call_id: str | None = None
+
+
+@api_router.post("/calls/ring")
+async def webrtc_ring(payload: WebRtcRingRequest):
+    if not payload.callee_identities:
+        return {"scheduled": False, "reason": "no-callees"}
+    display_name = payload.caller_display_name or "Smilers User"
+    call_id = payload.call_id or payload.conversation_id
+    push_data = {
+        "title": display_name,
+        "message": "Incoming video call" if payload.is_video else "Incoming call",
+        "type": "call",
+        "callId": call_id,
+        "callerId": payload.caller_identity,
+        "callerName": display_name,
+        "displayName": display_name,
+        "conversationId": payload.conversation_id,
+        "twilio_is_video": "1" if payload.is_video else "0",
+        "twilio_caller_identity": payload.caller_identity,
+        # NO twilio_room_name → the Notifee wake routes to /call/<conversationId>
+        # (the WebRTC screen), not /twilio-call.
+        "action_url": f"/call/{payload.conversation_id}",
+        # Force the call ringtone channel (data-only → full-screen wake).
+        "channel_id": "calls-v4-smilers_never_cry",
+        "subtext": "Incoming call",
+    }
+
+    async def _dispatch():
+        try:
+            stats = await send_push(
+                recipients=payload.callee_identities,
+                data=push_data,
+                idempotency_key=f"twilio-call:{payload.conversation_id}",
+            )
+            logger.info(
+                f"webrtc-ring pushed to {len(payload.callee_identities)} callees: "
+                f"tokens={stats.get('token_count')} ok={stats.get('success_count')} "
+                f"err={stats.get('error_count')}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(f"webrtc-ring: push failed (non-fatal): {exc}")
+
+    asyncio.create_task(_dispatch())
+    return {"scheduled": True, "conversation_id": payload.conversation_id}
+
+
+
+# ============================================================
 # Twilio Multiparty — add participant + privacy-aware roster
 # ============================================================
 
