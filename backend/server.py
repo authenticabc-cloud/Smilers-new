@@ -1460,10 +1460,29 @@ def _resolve_android_channel(data: dict, token_doc: dict | None = None) -> str:
         str(data.get(k) or "") for k in ("title", "message", "subtext")
     )
     action_url = str(data.get("action_url") or "")
+    # iter-262: ALSO treat the mere PRESENCE of call-metadata fields as a
+    # definitive call signal. The killed-app "message tone for incoming calls"
+    # bug happens when Convex sends an incoming-call push whose title is just
+    # the caller's name (no "incoming call" words) and without type/action_url
+    # — the relay then mis-routed it to the message channel, so the OS played
+    # the short message tone and the data-only → notifee full-screen ring never
+    # fired. Any of these keys can ONLY belong to a call payload.
+    has_call_metadata = any(
+        str(data.get(k) or "").strip()
+        for k in (
+            "callId",
+            "callType",
+            "callerId",
+            "twilio_room_name",
+            "twilio_room_sid",
+            "twilio_caller_identity",
+        )
+    )
     is_call = (
         explicit.startswith("calls")
         or str(data.get("type") or "").strip() in ("call", "incoming-call")
         or action_url.startswith("/call")
+        or has_call_metadata
         or bool(re.search(r"\b(incoming|missed)\b[^.]*\bcall", haystack, re.IGNORECASE))
     )
     if token_doc:
