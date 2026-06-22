@@ -15,7 +15,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Feather, Ionicons } from '@expo/vector-icons';
+import { Feather, Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery } from 'convex/react';
 import { Camera } from 'expo-camera';
@@ -1463,6 +1463,13 @@ function CallScreenInner() {
     sessionRef.current?.switchCamera();
   }, []);
 
+  // "Pop out" → float the call over other apps via OS Picture-in-Picture
+  // (matches the web app's Pop out button). On Android this immediately drops
+  // the call into a movable PiP window.
+  const handlePopOut = useCallback(() => {
+    enterPip({ width: 12, height: 16 });
+  }, []);
+
   // iter-254: switch an in-progress VOICE call to VIDEO. Mirrors the Twilio
   // "Video" control. Publishes our camera (renegotiating the WebRTC peer) and
   // notifies the remote peer (web or mobile) via requestVideoUpgrade so it can
@@ -2134,6 +2141,14 @@ function CallScreenInner() {
               icon={<Ionicons name="camera-reverse-outline" size={22} color={Colors.white} />}
               label="Flip"
             />
+            {isPipSupported ? (
+              <SmallControl
+                testID="pop-out-btn"
+                onPress={handlePopOut}
+                icon={<MaterialIcons name="picture-in-picture-alt" size={22} color={Colors.white} />}
+                label="Pop out"
+              />
+            ) : null}
           </View>
         ) : isScreenOnly ? null : (
           <View style={styles.controlsSecondaryRow}>
@@ -2143,6 +2158,14 @@ function CallScreenInner() {
               icon={<Feather name="video" size={22} color={Colors.white} />}
               label="Video"
             />
+            {isPipSupported ? (
+              <SmallControl
+                testID="pop-out-btn"
+                onPress={handlePopOut}
+                icon={<MaterialIcons name="picture-in-picture-alt" size={22} color={Colors.white} />}
+                label="Pop out"
+              />
+            ) : null}
           </View>
         )}
         <View style={styles.row}>
