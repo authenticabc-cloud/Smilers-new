@@ -26,10 +26,10 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useMutation } from 'convex/react';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../src/providers/AuthProvider';
-import { startCall } from '../src/lib/twilio/startCall';
 import { getDisplayNameFromUser, getDisplayInitials } from '../src/lib/displayName';
 import { useDeviceContactIndex, resolveDeviceContactNameFromUser } from '../src/lib/deviceContactIndex';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
@@ -70,6 +70,9 @@ export default function ScreenShareSenderScreen() {
       : null,
   );
   const [submitting, setSubmitting] = useState(false);
+
+  const getOrCreateDirect = useMutation(api.conversations.getOrCreateDirect);
+  const requestScreenShare = useMutation((api as any).screenSharing.requestScreenShare);
 
   const { data: contacts, loading: contactsLoading } = useSafeConvexQuery<any[]>(
     api.contacts.getContacts,
@@ -125,23 +128,42 @@ export default function ScreenShareSenderScreen() {
     }
     setSubmitting(true);
     try {
-      // iter-234: screen-sharing now runs on Twilio (same engine as calls) —
-      // no more broken Convex `screenSharing.sendSignal`. We open a Twilio
-      // room and auto-start the screen broadcast; the recipient is rung via
-      // the normal call push and sees the screen as soon as they answer.
-      await startCall({
-        router,
-        callerIdentity: myId,
-        callerDisplayName: getDisplayNameFromUser(me, 'Smilers user'),
-        calleeIdentities: [selectedId],
-        conversationId: `share-${myId.slice(-6)}-${Date.now()}`,
-        isVideo: false,
-        displayName: selected?.displayName
-          ? `Screen share · ${selected.displayName}`
-          : 'Screen share',
-        autoShare: true,
-        startMuted: !includeAudio,
-      });
+      // Screen-share is its own request/accept flow (NOT a call). We:
+      //   1. resolve/create the direct conversation with the recipient,
+      //   2. create a `screenSharingSessions` row via
+      //      api.screenSharing.requestScreenShare (status "requesting"),
+      //   3. open the screen-only WebRTC view as the SHARER.
+      // The recipient is notified via IncomingScreenShareModal (polls
+      // screenSharing.listIncoming) + a backend push — NO ringtone, no call.
+      const convResult: any = await getOrCreateDirect({ otherUserId: selectedId });
+      const conversationId = String(
+        typeof convResult === 'string'
+          ? convResult
+          : convResult?.conversationId || convResult?._id || convResult?.id || '',
+      );
+      if (!conversationId) {
+        throw new Error('Could not open a conversation with this contact.');
+      }
+
+      const sessionResult: any = await requestScreenShare({ conversationId });
+      const sessionId = String(
+        typeof sessionResult === 'string'
+          ? sessionResult
+          : sessionResult?.sessionId || sessionResult?._id || sessionResult?.id || '',
+      );
+      if (!sessionId) {
+        throw new Error('Could not start the screen-share session.');
+      }
+
+      const audio = includeAudio ? 1 : 0;
+      router.replace(
+        `/call/${sessionId}?type=screen&screenOnly=1&audio=${audio}&role=sharer&convId=${conversationId}&peerUserId=${selectedId}` as any,
+      );
+    } catch (errorValue: any) {
+      Alert.alert(
+        'Could not share screen',
+        String(errorValue?.message || errorValue || 'Please try again.').slice(0, 140),
+      );
     } finally {
       setSubmitting(false);
     }
