@@ -72,6 +72,9 @@ export default function BroadcastCreateScreen() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  // Glanceable post-send confirmation: how many of the targeted users the
+  // backend actually delivered the broadcast to.
+  const [lastResult, setLastResult] = useState<{ sent: number; total: number } | null>(null);
 
   const allUsers = useMemo(() => (Array.isArray(users) ? users : []), [users]);
 
@@ -119,16 +122,13 @@ export default function BroadcastCreateScreen() {
     }
     setSending(true);
     try {
+      const total = selected.size;
       const result = await messageUsers({
         userIds: Array.from(selected) as any,
         text: trimmed,
       });
-      const sent = Number((result as any)?.sent ?? selected.size);
-      Alert.alert(
-        'Broadcast sent',
-        `Your announcement was delivered to ${sent} ${sent === 1 ? 'user' : 'users'} as "Smilers".`,
-        [{ text: 'Done', onPress: () => router.back() }],
-      );
+      const sent = Number((result as any)?.sent ?? total);
+      setLastResult({ sent, total });
       setSelected(new Set());
       setText('');
     } catch (errorValue: any) {
@@ -142,7 +142,7 @@ export default function BroadcastCreateScreen() {
     } finally {
       setSending(false);
     }
-  }, [messageUsers, router, selected, text]);
+  }, [messageUsers, selected, text]);
 
   // ── ACCESS GATE ──────────────────────────────────────
   if (!meLoading && !isAdmin) {
@@ -176,6 +176,19 @@ export default function BroadcastCreateScreen() {
           <Text style={styles.headerSubtitle}>Sends as “Smilers” · {selected.size} selected</Text>
         </View>
       </View>
+
+      {lastResult ? (
+        <View style={styles.resultBanner} testID="broadcast-result-banner">
+          <Feather name="check-circle" size={18} color="#166534" />
+          <Text style={styles.resultBannerText} testID="broadcast-result-text">
+            Delivered to {lastResult.sent} of {lastResult.total}{' '}
+            {lastResult.total === 1 ? 'user' : 'users'} as “Smilers”.
+          </Text>
+          <TouchableOpacity onPress={() => setLastResult(null)} hitSlop={10} testID="broadcast-result-dismiss">
+            <Feather name="x" size={16} color="#166534" />
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       {/* Message composer */}
       <View style={styles.composeWrap}>
@@ -312,6 +325,20 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
     padding: 12,
   },
+  resultBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: Spacing.base,
+    marginTop: Spacing.md,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: Radius.lg,
+    backgroundColor: '#DCFCE7',
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+  },
+  resultBannerText: { flex: 1, fontSize: FontSize.sm, color: '#166534', fontWeight: FontWeight.semibold },
   composeInput: {
     minHeight: 64,
     maxHeight: 140,
