@@ -1796,21 +1796,33 @@ async def send_push(
                     if not tokens:
                         logger.info("send_push: all call tokens deduped — nothing to send")
 
+                # iter-262: resolve the Android channel PER TOKEN up front so we
+                # can both reuse it in the send AND log the exact channel each
+                # device was targeted on (useful when one device rings and
+                # another plays the message tone — different registered channels).
+                resolved_channels = [
+                    _resolve_android_channel({**data, "title": title}, t) for t in tokens
+                ]
+                if tokens:
+                    from collections import Counter
+
+                    logger.info(
+                        "[PUSH][channels] %s",
+                        dict(Counter(resolved_channels)),
+                    )
+
                 send_tasks = [
                     fcm_send_v1(
                         device_token=t["device_token"],
                         title=title,
                         message=message,
                         data=fcm_data,
-                        # iter-182: channel resolved per token — honors the
-                        # device's registered (tone-versioned) channel ids,
-                        # then Convex's explicit channel_id, then a
-                        # type-derived default. This is what makes incoming
-                        # calls RING on the calls channel instead of landing
-                        # in "messages-v3" with a single short beep.
-                        android_channel_id=_resolve_android_channel(
-                            {**data, "title": title}, t
-                        ),
+                        # iter-182/262: channel resolved per token (precomputed
+                        # above) — honors the device's registered (tone-versioned)
+                        # channel ids, then Convex's explicit channel_id, then a
+                        # type-derived default. This is what makes incoming calls
+                        # RING on the calls channel instead of the message beep.
+                        android_channel_id=ch,
                         # iter-197: incoming-call pushes expire fast so a
                         # device that was offline doesn't get a ghost ring
                         # minutes after the caller hung up.
@@ -1832,7 +1844,7 @@ async def send_push(
                         # those won't ring — an accepted Android platform limit.
                         android_data_only=is_call_push,
                     )
-                    for t in tokens
+                    for t, ch in zip(tokens, resolved_channels)
                 ]
                 results = await asyncio.gather(*send_tasks, return_exceptions=True)
                 for token_doc, result in zip(tokens, results):
