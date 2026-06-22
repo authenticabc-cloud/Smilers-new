@@ -24,6 +24,7 @@ import AppLockGate from '../src/components/AppLockGate';
 import VoiceCommandLauncher from '../src/components/VoiceCommandLauncher';
 import IncomingScreenShareModal from '../src/components/IncomingScreenShareModal';
 import CallHost from '../src/components/call/CallHost';
+import CallReturnBanner from '../src/components/call/CallReturnBanner';
 import { recordTouchActivity } from '../src/lib/touchActivity';
 import { applyInterFontPatch } from '../src/lib/fontPatch';
 import {
@@ -475,6 +476,7 @@ export default function RootLayout() {
             <VoiceCommandLauncher />
             <IncomingScreenShareModal />
             <CallHost />
+            <CallReturnBanner />
               </View>
             </AppLockGate>
             </DeviceContactBridge>

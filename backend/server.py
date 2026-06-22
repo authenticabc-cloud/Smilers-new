@@ -1697,6 +1697,25 @@ async def send_push(
         _call_probe_routing["type"] = "call" if _call_probe_channel.startswith("calls") else "message"
     is_call_push_global = _call_probe_routing.get("type") == "call"
 
+    # iter-262: one-line classification log so production push routing is
+    # debuggable (esp. the "killed app plays the message tone for calls" bug —
+    # this tells us whether the relay saw it as CALL or MESSAGE and why).
+    try:
+        _diag_channel = _resolve_android_channel({**data, "title": title}, None)
+        logger.info(
+            "[PUSH][classify] -> %s channel=%s recipients=%d type=%r action_url=%r "
+            "has_callId=%s title=%r",
+            "CALL" if is_call_push_global else "MESSAGE",
+            _diag_channel,
+            len(recipients),
+            str(data.get("type") or ""),
+            str(data.get("action_url") or ""),
+            bool(str(data.get("callId") or "").strip()),
+            title[:48],
+        )
+    except Exception:
+        pass
+
     # ── Primary path: FCM v1 ──────────────────────────────────────
     # Look up all stored device tokens for these recipients and send
     # in parallel via Firebase Admin SDK.

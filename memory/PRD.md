@@ -1,5 +1,13 @@
 # Smilers Mobile App — PRD
 
+## iter-262 (Jun 2026): Killed-app call-tone root cause + relay hardening + return-to-call banner
+**Diagnosis (user-confirmed):** killed app plays the MESSAGE tone for incoming calls. A message tone on a killed app means JS never ran → the OS rendered a notification-block push on `messages-v4-message_notification`, i.e. the relay MISCLASSIFIED the call as a message. So the iter-260 Notifee v3 vibration fix only helps when Notifee actually renders (foreground / backgrounded-alive), NOT the killed case.
+**Fix 1 — relay classifier hardening** (`backend/server.py` `_resolve_android_channel`): now also treats the PRESENCE of call-metadata fields (`callId`/`callType`/`callerId`/`twilio_room_name`/`twilio_room_sid`/`twilio_caller_identity`) as a definitive call signal → such pushes go data-only → wake background task → render the Notifee full-screen ring instead of a message banner. Dependency: only works if (a) prod routes calls through this backend's `/api/send-push-internal` (Convex does today) AND (b) Convex's call push carries at least one call signal (type:'call' | action_url:/call/ | a call-metadata field). If Convex sends ZERO call signals, the fix must be on Convex.
+**Fix 2 — relay classification log** (`send_push`): one-line `[PUSH][classify] -> CALL|MESSAGE channel=… recipients=… type=… action_url=… has_callId=… title=…` so production push routing is debuggable from deployed backend logs.
+**Feature — return-to-call banner** (`src/components/call/CallReturnBanner.tsx`, mounted in `_layout.tsx` after CallHost): WhatsApp-style slim green bar pinned to the top of every screen while a call is MINIMIZED; tap → `callHost.maximize()`. Companion to the draggable floating window. Web returns null.
+**Still pending native validation on Emergent Android build.** Hard limit unchanged: force-killed apps on aggressive OEMs may not wake JS even with a correct data-only push → needs native CallKeep/foreground service (deferred P2).
+
+
 ## iter-261 (Jun 2026): In-app "Minimize" floating call window (global CallHost refactor)
 **Goal:** let users minimize a live WebRTC call into a small draggable window and keep browsing Smilers without dropping the call.
 **Architecture (P1):** The call no longer lives inside the `/call/[conversationId]` route. New external store `src/lib/call/callHost.ts` (`start/end/minimize/maximize`, `useCallHost` via useSyncExternalStore) drives a root-mounted `src/components/call/CallHost.tsx` that renders `CallScreenInner` ONCE.
