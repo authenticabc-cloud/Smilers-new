@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { AppState, Platform } from 'react-native';
+import { AppState } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useQuery } from 'convex/react';
 import { api } from '../convexApi';
@@ -125,43 +125,23 @@ export function useIncomingCallListener() {
     // The callee must join with a unique, non-empty identity (same derivation
     // as the push handler). Fall back to a conversation-scoped id if the
     // caller identity isn't on the record.
-    const calleeIdentity = callerIdentity
-      ? `${callerIdentity}_callee`
-      : `conv_${conversationId}_callee`;
     const isVideo =
       incomingCall?.isVideo === true ||
       incomingType === 'video' ||
       String(incomingCall?.callType || '').toLowerCase() === 'video';
 
-    const callUrl =
-      `/twilio-call?room=${encodeURIComponent(room)}` +
-      `&identity=${encodeURIComponent(calleeIdentity)}` +
-      `&isCaller=0&isVideo=${isVideo ? '1' : '0'}` +
-      (displayName ? `&title=${encodeURIComponent(displayName)}` : '');
-
-    // iter-243: on Android present the full-screen Notifee Answer/Decline ring
-    // (WhatsApp-style) — using a STABLE conversation-scoped callId so it
-    // de-dupes with any push-driven ring for the same call. On iOS (no Notifee
-    // full-screen wake) fall back to deep-linking the call screen.
-    if (Platform.OS === 'android') {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { presentIncomingCallNotifeeWake } = require('./notifeeCallWake');
-        void presentIncomingCallNotifeeWake({
-          callId: `smilers_conv_${conversationId}`,
-          callerId: callerIdentity || `conv_${conversationId}`,
-          callerIdentity,
-          callerName: displayName || 'Smilers user',
-          callType: isVideo ? 'video' : 'voice',
-          conversationId: String(conversationId),
-          twilioRoom: room,
-          isVideo,
-        });
-        return;
-      } catch {
-        /* notifee unavailable — fall through to deep-link */
-      }
-    }
-    router.push(callUrl as any);
+    // iter-251: route to the in-app INCOMING-CALL screen (Answer/Decline)
+    // instead of presenting a notification or dropping straight into the room.
+    // The screen resolves the callee's REAL user id (me._id) and only joins
+    // the Twilio room on Answer — so the callee always gets to accept/decline
+    // and the caller sees the callee's name (not a `twilio-<room>` code).
+    const incUrl =
+      `/incoming-call?room=${encodeURIComponent(room)}` +
+      `&callerId=${encodeURIComponent(callerIdentity)}` +
+      `&callerName=${encodeURIComponent(displayName || 'Smilers user')}` +
+      `&isVideo=${isVideo ? '1' : '0'}` +
+      `&conversationId=${encodeURIComponent(String(conversationId))}` +
+      `&convexCallId=${encodeURIComponent(String(incomingCall._id))}`;
+    router.push(incUrl as any);
   }, [incomingCall, router, me]);
 }

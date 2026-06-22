@@ -131,17 +131,19 @@ function buildCallRoute(data: any): string {
     String(data?.callType) === 'video';
   const title = encodeURIComponent(String(data?.callerName || 'Smilers user'));
   if (room) {
-    // The callee MUST join with a non-empty Twilio identity, otherwise the
-    // /twilio-call screen skips token minting and spins on "connecting"
-    // forever. Derive a stable callee identity from the caller's id (matches
-    // the push-tap handler in usePushNotifications so both answer paths join
-    // the room with the SAME identity).
-    const caller = String(data?.twilio_caller_identity || data?.callerId || '').trim();
-    const calleeIdentity = caller ? `${caller}_callee` : room;
+    // iter-251: route to the in-app incoming-call screen with autoAnswer=1.
+    // The user already tapped "Answer" on the Notifee notification, so we skip
+    // the buttons and join immediately — but routing through /incoming-call
+    // lets it resolve the callee's REAL user id (me._id) so the caller sees a
+    // name instead of a `twilio-<room>` code.
     return (
-      `/twilio-call?room=${encodeURIComponent(room)}` +
-      `&identity=${encodeURIComponent(calleeIdentity)}` +
-      `&isCaller=0&isVideo=${isVideo ? '1' : '0'}&title=${title}`
+      `/incoming-call?room=${encodeURIComponent(room)}` +
+      `&callerId=${encodeURIComponent(String(data?.twilio_caller_identity || data?.callerId || ''))}` +
+      `&callerName=${title}` +
+      `&isVideo=${isVideo ? '1' : '0'}` +
+      `&conversationId=${encodeURIComponent(String(data?.conversationId || ''))}` +
+      `&callId=${encodeURIComponent(String(data?.callId || ''))}` +
+      `&autoAnswer=1`
     );
   }
   return String(data?.action_url || '/');

@@ -425,6 +425,23 @@ function TwilioCallScreenInner() {
     (myContacts || []).forEach((c) => c?._id && m.set(String(c._id), String(c.name || '')));
     return m;
   }, [myContacts]);
+  // Resolve a friendly display name for a remote participant. Order:
+  //   1. server roster (added participants),
+  //   2. the viewer's own contacts (keyed by the participant's real user id),
+  //   3. the call title (the other party's name — valid only for a 1:1 call),
+  //   4. a generic label — NEVER the raw Twilio identity code.
+  const friendlyTitle = title && title !== roomName ? title : '';
+  const resolveParticipantName = useCallback(
+    (pid: string, isOneRemote: boolean) => {
+      return (
+        rosterByIdentity.get(pid)?.displayName ||
+        contactNameById.get(pid) ||
+        (isOneRemote ? friendlyTitle : '') ||
+        'Smilers user'
+      );
+    },
+    [rosterByIdentity, contactNameById, friendlyTitle],
+  );
   const participantCount = host.participants.length + 1; // +1 = me
 
   // iter-230 — voice→video upgrade. The call is in "video mode" if it started
@@ -906,7 +923,9 @@ function TwilioCallScreenInner() {
             ) : (
               <View key={p.sid} style={[styles.remoteVideo, styles.audioTile]}>
                 <Feather name="user" size={56} color={Colors.white} />
-                <Text style={styles.audioName}>{p.identity}</Text>
+                <Text style={styles.audioName}>
+                  {resolveParticipantName(p.identity, host.participants.length === 1)}
+                </Text>
               </View>
             );
           })
@@ -1137,7 +1156,7 @@ function TwilioCallScreenInner() {
               <RosterRow name={`${myName || 'You'} (you)`} phone={null} />
               {host.participants.map((p) => {
                 const meta = rosterByIdentity.get(p.identity);
-                const name = meta?.displayName || contactNameById.get(p.identity) || p.identity;
+                const name = resolveParticipantName(p.identity, host.participants.length === 1);
                 return (
                   <RosterRow
                     key={p.sid}

@@ -433,6 +433,8 @@ export default function RootLayout() {
               <Stack.Screen name="auth-webview" options={{ presentation: 'modal' }} />
               <Stack.Screen name="chat/[conversationId]" />
               <Stack.Screen name="call/[conversationId]" options={{ presentation: 'modal' }} />
+              <Stack.Screen name="incoming-call" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
+              <Stack.Screen name="twilio-call" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
               <Stack.Screen name="conference/[conferenceId]/index" />
               <Stack.Screen name="conference/[conferenceId]/room" options={{ presentation: 'modal' }} />
               <Stack.Screen name="groups-create" />

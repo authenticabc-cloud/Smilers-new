@@ -942,14 +942,18 @@ export function usePushNotifications() {
         if (twilioRoom && isTwilioEnabled()) {
           const twilioIsVideo = String((payload as any).twilio_is_video ?? '1') === '1' ? '1' : '0';
           const twilioCallerIdentity = toNonEmptyString((payload as any).twilio_caller_identity) || '';
+          // iter-251: route to the in-app incoming-call screen (Answer/Decline)
+          // FIRST instead of dropping straight into the room. The screen
+          // resolves the callee's real user id and joins only on Answer.
           router.push({
-            pathname: '/twilio-call',
+            pathname: '/incoming-call',
             params: {
               room: twilioRoom,
-              identity: twilioCallerIdentity ? `${twilioCallerIdentity}_callee` : (conversationId || twilioRoom),
+              callerId: twilioCallerIdentity,
+              callerName: displayName || 'Smilers user',
               isVideo: twilioIsVideo,
-              isCaller: '0',
-              title: displayName || 'Incoming call',
+              conversationId: conversationId || '',
+              callId: toNonEmptyString((payload as any).callId) || '',
             },
           } as any);
           return;
