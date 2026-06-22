@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
+  BackHandler,
   FlatList,
   Modal,
   Platform,
@@ -1468,6 +1469,19 @@ export function CallScreenInner() {
   }, [callType, peerConnected]);
 
   // ====== Control handlers ======
+  // Android hardware BACK while the call is full-screen should MINIMIZE it into
+  // the floating window (so the user can browse without dropping the call),
+  // never end it. Incoming (not-yet-answered) calls are left alone so back
+  // doesn't accidentally swallow the answer/decline decision.
+  useEffect(() => {
+    if (Platform.OS !== 'android' || isMini || isIncoming) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      callHost.minimize();
+      return true;
+    });
+    return () => sub.remove();
+  }, [isMini, isIncoming]);
+
   const toggleMute = useCallback(() => {
     const next = !muted;
     sessionRef.current?.setMuted(next);
