@@ -191,9 +191,11 @@ function EarningsScreenInner() {
     })();
   }, [isAuthenticated, profile, profileCode, generateCodeM]);
   const referralCode = profileCode || localCode;
+  // Contract: getLeaderboard takes NO args ({}) — passing { limit } fails
+  // strict arg validation. Server returns top 20, anonymized by viewer role.
   const { data: top } = useSafeConvexQuery<any[]>(
     api.earnings.getLeaderboard,
-    { limit: 20 },
+    {},
     [],
     isAuthenticated && tab === 'top',
   );
@@ -649,28 +651,34 @@ function TopEarnersList({ list }: { list: any[] }) {
         <Ionicons name="trophy" size={18} color={Colors.primary} />
         <Text style={styles.sectionTitle}>Top Earners</Text>
       </View>
-      {list.map((item: any, idx: number) => (
-        <View key={item._id || idx} style={styles.topRow}>
-          <Text style={styles.topRank}>#{idx + 1}</Text>
-          <View style={styles.topAvatar}>
-            {item.avatarUrl ? (
-              <Image source={{ uri: item.avatarUrl }} style={styles.topAvatarImg} />
-            ) : (
-              <Text style={styles.topAvatarText}>
-                {getDisplayInitials(getDisplayNameFromUser(item, 'User'))}
+      {list.map((item: any, idx: number) => {
+        // Contract fields: userId, name (real for admins / "User #N" otherwise),
+        // avatar (admins only), level, totalEngagements, referralCount.
+        // Render EXACTLY what the server returns — never de-anonymize client-side.
+        const displayName = item.name || `User #${idx + 1}`;
+        const avatarUri = item.avatar || item.avatarUrl;
+        const points = Number(item.totalEngagements ?? item.engagements ?? item.points ?? 0);
+        return (
+          <View key={item.userId || item._id || idx} style={styles.topRow}>
+            <Text style={styles.topRank}>#{idx + 1}</Text>
+            <View style={styles.topAvatar}>
+              {avatarUri ? (
+                <Image source={{ uri: avatarUri }} style={styles.topAvatarImg} />
+              ) : (
+                <Text style={styles.topAvatarText}>{getDisplayInitials(displayName)}</Text>
+              )}
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.topName} numberOfLines={1}>
+                {displayName}
               </Text>
-            )}
+              <Text style={styles.topSub}>
+                Level {item.level || 'A'} · {formatNumber(points)} engagements
+              </Text>
+            </View>
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.topName} numberOfLines={1}>
-              {getDisplayNameFromUser(item, 'Smilers user')}
-            </Text>
-            <Text style={styles.topSub}>
-              Level {item.level || 'A'} · {formatNumber(item.engagements || item.points || 0)} engagements
-            </Text>
-          </View>
-        </View>
-      ))}
+        );
+      })}
     </View>
   );
 }

@@ -161,9 +161,23 @@ async function ensureCallChannel(): Promise<string | null> {
   } catch {
     sound = 'smilers_never_cry';
   }
-  const channelId = `incoming-call-wake-v2-${sound || 'silent'}`;
+  const channelId = `incoming-call-wake-v3-${sound || 'silent'}`;
   if (createdCallChannels.has(channelId)) return channelId;
   try {
+    // iter-260: a notification's vibration plays the channel's pattern ONCE.
+    // The old short pattern (~2.4s) felt like a message buzz, not a ringing
+    // phone, when the app was backgrounded/swiped (the user-reported P0).
+    // `loopSound` loops the AUDIO but NOT the vibration, so we instead bake a
+    // LONG repeating buzz pattern (≈ the full RING_TIMEOUT_MS) into the
+    // channel so the device keeps vibrating for the whole incoming ring.
+    // Channels are immutable on Android O+, hence the `v3` id bump.
+    const buzz = 700;   // vibrate
+    const pause = 600;  // gap between buzzes (ringtone-like cadence)
+    const longVibrationPattern: number[] = [0];
+    const cycles = Math.ceil(RING_TIMEOUT_MS / (buzz + pause));
+    for (let i = 0; i < cycles; i += 1) {
+      longVibrationPattern.push(buzz, pause);
+    }
     await native.notifee.createChannel({
       id: channelId,
       name: 'Incoming calls (wake-screen)',
@@ -172,7 +186,7 @@ async function ensureCallChannel(): Promise<string | null> {
       // Play the user's chosen ringtone (undefined => silent channel).
       sound,
       vibration: true,
-      vibrationPattern: [0, 600, 300, 600, 300, 600],
+      vibrationPattern: longVibrationPattern,
       bypassDnd: false,
       visibility: native.AndroidVisibility.PUBLIC,
     });

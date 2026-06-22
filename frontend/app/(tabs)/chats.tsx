@@ -394,7 +394,7 @@ export default function ChatsScreen() {
       <FabStack
         onPencil={() => router.push('/(tabs)/contacts')}
         onBuilding={() => router.push('/community-create' as any)}
-        onBroadcast={() => router.push('/broadcast-create' as any)}
+        onBroadcast={me?.role === 'admin' ? () => router.push('/broadcast-create' as any) : undefined}
         onPeople={() => router.push('/groups-create' as any)}
       />
     </SafeAreaView>

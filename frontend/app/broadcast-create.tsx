@@ -1,11 +1,15 @@
 /**
- * New Broadcast — mirrors the Smilers web "New Broadcast / Add recipients" UX.
+ * Admin Broadcast — send a single announcement to many users as "Smilers".
  *
- * Lets the user pick multiple contacts to broadcast a single message to.
- * On submit creates a broadcast-style conversation using
- * `api.conversations.createBroadcast` if available, or falls back to
- * `createGroup` with isBroadcast=true. Either way, the user is dropped into
- * the chat screen where they can compose the broadcast message.
+ * Backend contract (verified):
+ *   api.admin.messaging.messageUsers({ userIds: Id<"users">[], text: string })
+ *     → { sent: number }   (admin-only; FORBIDDEN otherwise)
+ *
+ * - Recipient list comes from the admin query api.admin.queries.getAllUsers
+ *   (NO args). We render per-row checkboxes + a select-all control and track a
+ *   Set<userId> purely client-side, then fire ONE messageUsers call.
+ * - The sender is the shared "Smilers" system account; the admin identity is
+ *   never exposed. Each recipient gets a read-only `isBroadcast` conversation.
  */
 
 import React, { useCallback, useMemo, useState } from 'react';
@@ -25,149 +29,219 @@ import { useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
 
 import { api } from '../src/convexApi';
+import { useAuth } from '../src/providers/AuthProvider';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { getDisplayInitials, getDisplayNameFromUser } from '../src/lib/displayName';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/theme';
 
-function getContactId(item: any): string | null {
-  const value = item?.userId || item?._id || item?.id;
-  return value ? String(value) : null;
+interface AdminUser {
+  _id: string;
+  name?: string;
+  email?: string;
+  phone?: string;
+  avatar?: string;
+  role?: 'admin' | 'user';
+  level?: string;
+  totalEngagements?: number;
 }
+
+const MAX_TEXT = 5000;
 
 export default function BroadcastCreateScreen() {
   const router = useRouter();
-  const createBroadcast = useMutation((api as any).conversations.createBroadcast);
-  const createGroup = useMutation((api as any).conversations.createGroup);
-  const { data: contacts, loading } = useSafeConvexQuery<any[]>(
-    (api as any).contacts.getContacts,
+  const { isAuthenticated } = useAuth();
+
+  const { data: me, loading: meLoading } = useSafeConvexQuery<any | null>(
+    api.users.getCurrentUser,
+    {},
+    null,
+    isAuthenticated,
+  );
+  const isAdmin = me?.role === 'admin';
+
+  // NO args — passing { search } fails backend arg validation.
+  const { data: users, loading } = useSafeConvexQuery<AdminUser[]>(
+    api.admin.queries.getAllUsers,
     {},
     [],
+    isAdmin,
   );
+  const messageUsers = useMutation(api.admin.messaging.messageUsers);
 
   const [search, setSearch] = useState('');
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [creating, setCreating] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const allUsers = useMemo(() => (Array.isArray(users) ? users : []), [users]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const list = Array.isArray(contacts) ? contacts : [];
-    if (!q) return list;
-    return list.filter((item: any) => {
-      const hay = `${getDisplayNameFromUser(item)} ${item?.phone || ''} ${item?.email || ''}`.toLowerCase();
+    if (!q) return allUsers;
+    return allUsers.filter((u) => {
+      const hay = `${getDisplayNameFromUser(u)} ${u?.email || ''} ${u?.phone || ''}`.toLowerCase();
       return hay.includes(q);
     });
-  }, [contacts, search]);
+  }, [allUsers, search]);
+
+  const allFilteredSelected =
+    filtered.length > 0 && filtered.every((u) => selected.has(String(u._id)));
 
   const toggle = useCallback((id: string) => {
-    setSelectedIds((current) =>
-      current.includes(id) ? current.filter((x) => x !== id) : [...current, id],
-    );
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }, []);
 
-  const handleCreate = useCallback(async () => {
-    if (selectedIds.length === 0) {
-      Alert.alert('Select recipients', 'Choose at least one contact to broadcast to.');
+  const toggleSelectAll = useCallback(() => {
+    setSelected((current) => {
+      const next = new Set(current);
+      const ids = filtered.map((u) => String(u._id));
+      const everySelected = ids.length > 0 && ids.every((id) => next.has(id));
+      if (everySelected) ids.forEach((id) => next.delete(id));
+      else ids.forEach((id) => next.add(id));
+      return next;
+    });
+  }, [filtered]);
+
+  const handleSend = useCallback(async () => {
+    const trimmed = text.trim();
+    if (selected.size === 0) {
+      Alert.alert('Select recipients', 'Choose at least one user to broadcast to.');
       return;
     }
-    setCreating(true);
+    if (trimmed.length === 0) {
+      Alert.alert('Write a message', 'Enter the announcement text to broadcast.');
+      return;
+    }
+    setSending(true);
     try {
-      // Prefer dedicated broadcast endpoint; fall back to group with flag.
-      let created: any = null;
-      try {
-        created = await createBroadcast({ memberIds: selectedIds });
-      } catch (e: any) {
-        const message = String(e?.message || '');
-        const isMissing = message.includes('CouldNotFindFunction') || message.includes('not found');
-        if (!isMissing) throw e;
-        // Fallback: group with isBroadcast flag (best effort)
-        created = await createGroup({
-          name: 'Broadcast list',
-          memberIds: selectedIds,
-          isBroadcast: true,
-        } as any);
-      }
-      const conversationId =
-        typeof created === 'string' ? created : created?._id || created?.conversationId || created?.id;
-      if (!conversationId) throw new Error('Broadcast was created without an id.');
-      router.replace(`/chat/${conversationId}` as any);
-    } catch (errorValue: any) {
+      const result = await messageUsers({
+        userIds: Array.from(selected) as any,
+        text: trimmed,
+      });
+      const sent = Number((result as any)?.sent ?? selected.size);
       Alert.alert(
-        'Could not create broadcast',
-        errorValue?.message || 'The backend has not enabled broadcasts yet.',
+        'Broadcast sent',
+        `Your announcement was delivered to ${sent} ${sent === 1 ? 'user' : 'users'} as "Smilers".`,
+        [{ text: 'Done', onPress: () => router.back() }],
+      );
+      setSelected(new Set());
+      setText('');
+    } catch (errorValue: any) {
+      const message = String(errorValue?.message || '');
+      Alert.alert(
+        'Could not send broadcast',
+        message.includes('FORBIDDEN')
+          ? 'Only Smilers admins can send broadcasts.'
+          : message || 'Please try again.',
       );
     } finally {
-      setCreating(false);
+      setSending(false);
     }
-  }, [createBroadcast, createGroup, router, selectedIds]);
+  }, [messageUsers, router, selected, text]);
+
+  // ── ACCESS GATE ──────────────────────────────────────
+  if (!meLoading && !isAdmin) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']} testID="broadcast-denied">
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={12} style={styles.headerBack}>
+            <Ionicons name="arrow-back" size={26} color={Colors.white} />
+          </TouchableOpacity>
+          <View style={styles.headerTextWrap}>
+            <Text style={styles.headerTitle}>New Broadcast</Text>
+          </View>
+        </View>
+        <View style={styles.emptyWrap}>
+          <Ionicons name="lock-closed" size={40} color={Colors.danger} />
+          <Text style={styles.emptyTitle}>Admin access required</Text>
+          <Text style={styles.emptyText}>Broadcasts can only be sent by Smilers admins.</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="broadcast-create-screen">
-      {/* Dark header to match web app screenshot */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} hitSlop={12} style={styles.headerBack} testID="broadcast-back">
           <Ionicons name="arrow-back" size={26} color={Colors.white} />
         </TouchableOpacity>
         <View style={styles.headerTextWrap}>
           <Text style={styles.headerTitle}>New Broadcast</Text>
-          <Text style={styles.headerSubtitle}>Add recipients</Text>
+          <Text style={styles.headerSubtitle}>Sends as “Smilers” · {selected.size} selected</Text>
         </View>
-        {selectedIds.length > 0 ? (
-          <TouchableOpacity
-            onPress={handleCreate}
-            disabled={creating}
-            style={styles.headerCta}
-            testID="broadcast-next"
-          >
-            {creating ? (
-              <ActivityIndicator size="small" color={Colors.headerBg} />
-            ) : (
-              <Text style={styles.headerCtaText}>Next ({selectedIds.length})</Text>
-            )}
-          </TouchableOpacity>
-        ) : null}
       </View>
 
-      {/* Search */}
-      <View style={styles.searchWrap}>
-        <Feather name="search" size={18} color={Colors.textMuted} />
+      {/* Message composer */}
+      <View style={styles.composeWrap}>
         <TextInput
-          value={search}
-          onChangeText={setSearch}
-          placeholder="Search contacts"
+          value={text}
+          onChangeText={(v) => setText(v.slice(0, MAX_TEXT))}
+          placeholder="Write your announcement…"
           placeholderTextColor={Colors.textMuted}
-          style={styles.searchInput}
-          testID="broadcast-search-input"
+          style={styles.composeInput}
+          multiline
+          testID="broadcast-text-input"
         />
+        <Text style={styles.composeCount}>{text.length}/{MAX_TEXT}</Text>
       </View>
 
-      {/* Contact list */}
-      {loading && filtered.length === 0 ? (
+      {/* Search + select-all */}
+      <View style={styles.toolRow}>
+        <View style={styles.searchWrap}>
+          <Feather name="search" size={18} color={Colors.textMuted} />
+          <TextInput
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Search users"
+            placeholderTextColor={Colors.textMuted}
+            style={styles.searchInput}
+            autoCorrect={false}
+            autoCapitalize="none"
+            testID="broadcast-search-input"
+          />
+        </View>
+        <TouchableOpacity onPress={toggleSelectAll} style={styles.selectAllBtn} testID="broadcast-select-all">
+          <Feather name={allFilteredSelected ? 'check-square' : 'square'} size={18} color={Colors.primary} />
+          <Text style={styles.selectAllText}>{allFilteredSelected ? 'Clear' : 'All'}</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* User list */}
+      {loading && allUsers.length === 0 ? (
         <View style={styles.emptyWrap} testID="broadcast-loading">
           <ActivityIndicator color={Colors.primary} />
-          <Text style={styles.emptyText}>Loading contacts…</Text>
+          <Text style={styles.emptyText}>Loading users…</Text>
         </View>
       ) : (
         <FlatList
           data={filtered}
-          keyExtractor={(item, index) => getContactId(item) || `c-${index}`}
+          keyExtractor={(item, index) => String(item._id) || `u-${index}`}
           renderItem={({ item }) => {
-            const id = getContactId(item) || '';
-            const isSel = selectedIds.includes(id);
-            const name = getDisplayNameFromUser(item, 'Smilers contact');
-            const subtitle = item?.status || item?.about || 'Hey there! I am using Smilers.';
+            const id = String(item._id);
+            const isSel = selected.has(id);
+            const name = getDisplayNameFromUser(item, 'Smilers user');
             return (
               <TouchableOpacity
                 style={styles.row}
-                onPress={() => id && toggle(id)}
+                onPress={() => toggle(id)}
                 activeOpacity={0.7}
-                testID={`broadcast-row-${id || 'unknown'}`}
+                testID={`broadcast-row-${id}`}
               >
                 <View style={styles.avatar}>
                   <Text style={styles.avatarText}>{getDisplayInitials(name, 1)}</Text>
                 </View>
                 <View style={styles.rowMid}>
                   <Text style={styles.rowName} numberOfLines={1}>{name}</Text>
-                  <Text style={styles.rowSub} numberOfLines={1}>{subtitle}</Text>
+                  <Text style={styles.rowSub} numberOfLines={1}>
+                    Level {item.level || 'A'} · {Number(item.totalEngagements || 0)} pts
+                    {item.role === 'admin' ? ' · Admin' : ''}
+                  </Text>
                 </View>
                 <View style={[styles.check, isSel ? styles.checkOn : null]} testID={`broadcast-check-${id}`}>
                   {isSel ? <Feather name="check" size={16} color={Colors.white} /> : null}
@@ -177,31 +251,34 @@ export default function BroadcastCreateScreen() {
           }}
           ItemSeparatorComponent={() => <View style={styles.divider} />}
           contentContainerStyle={styles.listContent}
+          keyboardShouldPersistTaps="handled"
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
               <Feather name="users" size={36} color={Colors.textMuted} />
-              <Text style={styles.emptyTitle}>No contacts found</Text>
-              <Text style={styles.emptyText}>Add contacts first, then come back to start a broadcast.</Text>
+              <Text style={styles.emptyTitle}>No users found</Text>
+              <Text style={styles.emptyText}>Try a different search term.</Text>
             </View>
           }
         />
       )}
 
-      {/* Bottom create button (visible only when 1+ selected, for one-handed reach) */}
-      {selectedIds.length > 0 ? (
+      {/* Send button */}
+      {selected.size > 0 ? (
         <TouchableOpacity
           style={styles.bottomCta}
-          onPress={handleCreate}
-          disabled={creating}
+          onPress={handleSend}
+          disabled={sending}
           activeOpacity={0.85}
-          testID="broadcast-create-btn"
+          testID="broadcast-send-btn"
         >
-          {creating ? (
+          {sending ? (
             <ActivityIndicator color={Colors.headerBg} />
           ) : (
             <>
               <Feather name="radio" size={20} color={Colors.headerBg} />
-              <Text style={styles.bottomCtaText}>Create broadcast · {selectedIds.length} recipient{selectedIds.length === 1 ? '' : 's'}</Text>
+              <Text style={styles.bottomCtaText}>
+                Broadcast to {selected.size} {selected.size === 1 ? 'user' : 'users'}
+              </Text>
             </>
           )}
         </TouchableOpacity>
@@ -225,24 +302,38 @@ const styles = StyleSheet.create({
   headerTextWrap: { flex: 1, marginLeft: 4 },
   headerTitle: { color: Colors.white, fontSize: FontSize.xl, fontWeight: FontWeight.bold },
   headerSubtitle: { color: 'rgba(255,255,255,0.7)', fontSize: FontSize.sm, marginTop: 2 },
-  headerCta: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 8,
-    borderRadius: Radius.pill,
-    backgroundColor: Colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minWidth: 80,
-  },
-  headerCtaText: { color: Colors.headerBg, fontWeight: FontWeight.bold, fontSize: FontSize.sm },
 
-  searchWrap: {
+  composeWrap: {
+    marginHorizontal: Spacing.base,
+    marginTop: Spacing.md,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 12,
+  },
+  composeInput: {
+    minHeight: 64,
+    maxHeight: 140,
+    fontSize: FontSize.base,
+    color: Colors.textPrimary,
+    textAlignVertical: 'top',
+  },
+  composeCount: { alignSelf: 'flex-end', fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 4 },
+
+  toolRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: Spacing.sm,
     marginHorizontal: Spacing.base,
     marginTop: Spacing.md,
     marginBottom: Spacing.sm,
+  },
+  searchWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     paddingHorizontal: 14,
     minHeight: 44,
     borderRadius: Radius.lg,
@@ -251,6 +342,16 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
   },
   searchInput: { flex: 1, fontSize: FontSize.base, color: Colors.textPrimary },
+  selectAllBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    minHeight: 44,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.primaryLight,
+  },
+  selectAllText: { color: Colors.primaryDark, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
 
   listContent: { paddingBottom: 100 },
   row: {

@@ -1,5 +1,14 @@
 # Smilers Mobile App — PRD
 
+## iter-260 (Jun 2026): Admin features (broadcast/user insights/leaderboard) + P0 killed-app call vibration
+**Admin contract wired (verified against backend by user):**
+- **Admin User List** (`app/admin.tsx` UsersTab): each row now shows a Level pill + `<N> pts · <N> refs` from `api.admin.queries.getAllUsers` ({} args; added `level`/`totalEngagements`/`referralCount` to UserItem). Added a "Send broadcast as Smilers" CTA at top of the Users tab.
+- **Admin Broadcasts** (`app/broadcast-create.tsx`, fully rewritten): admin-gated screen fetching `api.admin.queries.getAllUsers`, per-row checkboxes + select-all, a 1–5000 char message composer, then ONE `api.admin.messaging.messageUsers({ userIds, text })` call; surfaces returned `{ sent }`. FAB broadcast button (`FabStack`/chats) now only renders for `me.role === 'admin'`.
+- **Broadcast read-only enforcement** (`app/chat/[conversationId].tsx`): when `conversation.isBroadcast === true` → title forced to "Smilers", subtitle "Announcement · read-only", call/video header buttons hidden, composer replaced with a read-only banner, and reactions/long-press/swipe-to-reply disabled (new `isBroadcastReadOnly` flag mirroring the existing `viewerSuspension` spectator path).
+- **Leaderboard** (`app/earnings.tsx` Top tab): `getLeaderboard` now called with `{}` (was `{ limit: 20 }` → would fail strict arg validation). TopEarnersList reads contract fields verbatim (`userId`/`name`/`avatar`/`level`/`totalEngagements`); server anonymizes to "User #N" for non-admins — no client-side de-anonymization.
+**P0 — killed/backgrounded incoming-call vibration too short (recurring):** Notifee call wake channel (`src/push/notifeeCallWake.ts`) played a ~2.4s vibration pattern ONCE (`loopSound` loops audio, not vibration) → felt like a message buzz. Fixed by baking a LONG repeating buzz pattern (≈ RING_TIMEOUT_MS, 700ms on / 600ms off) into the channel; channels are immutable on Android O+ so bumped id `incoming-call-wake-v2-*` → `v3`. NOTE: this FastAPI backend already sends call pushes data-only (correct); IF production points at the separate Hercules/Convex backend and that sends a notification-block on a message channel, killed-app vibration must also be fixed there. **All native-only (Notifee/push/WebRTC) — requires user's Emergent Android build to validate.**
+
+
 ## iter-221 (Feb 2026): Profile screen — match web app (phone section + card styling)
 User compared native vs web Profile (screenshots). Changes in `app/(tabs)/profile.tsx`:
 - **Added PHONE NUMBER section** above YOUR NAME (web parity): phone icon + "PHONE NUMBER" label, the number (`me.phoneE164 ?? me.phone`) + green **Verified** pill (`me.phoneVerified`, shield-check) + edit pencil (→ `/phone-verify`), and helper text "Your phone number is how friends find and recognize you on Smilers." Shown only when a phone exists.

@@ -16,9 +16,11 @@ export default function FabStack({ onPencil, onBuilding, onBroadcast, onPeople }
       <TouchableOpacity style={styles.secondaryFab} onPress={onBuilding} activeOpacity={0.85} testID="fab-communities">
         <MaterialCommunityIcons name="office-building-outline" size={20} color={Colors.headerBg} />
       </TouchableOpacity>
-      <TouchableOpacity style={styles.secondaryFab} onPress={onBroadcast} activeOpacity={0.85} testID="fab-broadcast">
-        <Ionicons name="radio-outline" size={22} color={Colors.headerBg} />
-      </TouchableOpacity>
+      {onBroadcast ? (
+        <TouchableOpacity style={styles.secondaryFab} onPress={onBroadcast} activeOpacity={0.85} testID="fab-broadcast">
+          <Ionicons name="radio-outline" size={22} color={Colors.headerBg} />
+        </TouchableOpacity>
+      ) : null}
       <TouchableOpacity style={styles.secondaryFab} onPress={onPeople} activeOpacity={0.85} testID="fab-group">
         <Feather name="users" size={20} color={Colors.headerBg} />
       </TouchableOpacity>

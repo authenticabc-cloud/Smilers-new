@@ -52,6 +52,9 @@ interface UserItem {
   role?: 'admin' | 'user';
   status?: 'active' | 'suspended';
   _creationTime?: number;
+  level?: string;
+  totalEngagements?: number;
+  referralCount?: number;
 }
 
 interface ReportItem {
@@ -356,6 +359,7 @@ export default function AdminDashboard() {
             busyId={busyId}
             onToggleSuspend={toggleSuspend}
             onToggleAdmin={toggleAdmin}
+            onBroadcast={() => router.push('/broadcast-create' as any)}
           />
         ) : null}
         {tab === 'reports' ? (
@@ -498,6 +502,7 @@ function UsersTab({
   busyId,
   onToggleSuspend,
   onToggleAdmin,
+  onBroadcast,
 }: {
   search: string;
   onSearch: (v: string) => void;
@@ -506,6 +511,7 @@ function UsersTab({
   busyId: string | null;
   onToggleSuspend: (u: UserItem) => void;
   onToggleAdmin: (u: UserItem) => void;
+  onBroadcast: () => void;
 }) {
   // iter-140b: `getAllUsers` returns the full list with no server-side
   // filter. Filter client-side so the search box still works exactly
@@ -540,6 +546,11 @@ function UsersTab({
           </TouchableOpacity>
         ) : null}
       </View>
+
+      <TouchableOpacity style={styles.broadcastCta} onPress={onBroadcast} testID="admin-broadcast-cta" activeOpacity={0.85}>
+        <Ionicons name="radio-outline" size={18} color={Colors.headerBg} />
+        <Text style={styles.broadcastCtaText}>Send broadcast as “Smilers”</Text>
+      </TouchableOpacity>
 
       {loading && filtered.length === 0 ? (
         <View style={styles.loadingWrap}>
@@ -577,6 +588,15 @@ function UsersTab({
                 <Text style={styles.rowSub} numberOfLines={1}>
                   {u.email || u.phone || u._id}
                 </Text>
+                <View style={styles.userStatsLine}>
+                  <View style={styles.levelChip}>
+                    <Ionicons name="ribbon-outline" size={11} color={Colors.primaryDark} />
+                    <Text style={styles.levelChipText}>Level {u.level || 'A'}</Text>
+                  </View>
+                  <Text style={styles.userStatsText} numberOfLines={1}>
+                    {Number(u.totalEngagements || 0)} pts · {Number(u.referralCount || 0)} refs
+                  </Text>
+                </View>
               </View>
               <RowMenu
                 disabled={busyId === u._id}
@@ -1576,6 +1596,30 @@ const styles = StyleSheet.create({
   rowTitleLine: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   rowTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   rowSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
+  userStatsLine: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+  levelChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: Colors.primaryLight,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: Radius.pill,
+  },
+  levelChipText: { fontSize: FontSize.xs, color: Colors.primaryDark, fontWeight: FontWeight.semibold },
+  userStatsText: { fontSize: FontSize.xs, color: Colors.textMuted, flex: 1 },
+  broadcastCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginHorizontal: Spacing.base,
+    marginBottom: Spacing.sm,
+    minHeight: 46,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.primary,
+  },
+  broadcastCtaText: { color: Colors.headerBg, fontSize: FontSize.sm, fontWeight: FontWeight.bold },
   tag: {
     paddingHorizontal: 6,
     paddingVertical: 2,

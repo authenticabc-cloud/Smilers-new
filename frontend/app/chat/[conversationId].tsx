@@ -2461,14 +2461,22 @@ export default function ChatScreen() {
     lookupDeviceContactName,
     '',
   );
-  const title =
-    deviceTitle ||
-    savedContactTitle ||
-    (conversationLoading
-      ? 'Loading…'
-      : getConversationDisplayName(hydratedConversation, me?._id ? String(me._id) : undefined, 'Chat'));
+  // Broadcast conversations (sent from the shared "Smilers" system account
+  // via the admin broadcast contract) are READ-ONLY on the recipient side:
+  // no composer/reply, no reactions, no calling, and the sender identity is
+  // ALWAYS shown as "Smilers" (the admin who sent it is never revealed).
+  const isBroadcastReadOnly = (hydratedConversation as any)?.isBroadcast === true;
+  const title = isBroadcastReadOnly
+    ? 'Smilers'
+    : deviceTitle ||
+      savedContactTitle ||
+      (conversationLoading
+        ? 'Loading…'
+        : getConversationDisplayName(hydratedConversation, me?._id ? String(me._id) : undefined, 'Chat'));
   const isMineSelected = selectedMsg && me && selectedMsg.senderId === me._id;
-  const subtitle = formatPresenceSubtitle(mergedPresenceSource);
+  const subtitle = isBroadcastReadOnly
+    ? 'Announcement · read-only'
+    : formatPresenceSubtitle(mergedPresenceSource);
   const avatarInitial = getDisplayInitials(title);
 
   // Slice B of Groups spec — when the current user is suspended in this
@@ -2659,6 +2667,8 @@ export default function ChatScreen() {
               color={Colors.white}
             />
           </TouchableOpacity>
+          {isBroadcastReadOnly ? null : (
+            <>
           <TouchableOpacity
             testID="call-btn"
             onPress={() => {
@@ -2693,6 +2703,8 @@ export default function ChatScreen() {
           >
             <Ionicons name="videocam-outline" size={21} color={Colors.white} />
           </TouchableOpacity>
+            </>
+          )}
           <TouchableOpacity testID="chat-disappearing-btn" onPress={() => setShowDisappearingSheet(true)} style={styles.headerIconButton}>
             <Ionicons name="time-outline" size={20} color={Colors.white} />
           </TouchableOpacity>
@@ -2980,7 +2992,7 @@ export default function ChatScreen() {
                     // iter-185 WhatsApp-style swipe-to-reply. Disabled in
                     // multi-select mode (pan conflicts with tap-to-toggle),
                     // for suspended viewers, and on deleted messages.
-                    enabled={!viewerSuspension && !multiSelectIds && !item.deletedAt && isConversationAvailable}
+                    enabled={!viewerSuspension && !isBroadcastReadOnly && !multiSelectIds && !item.deletedAt && isConversationAvailable}
                     onReply={() => {
                       setReplyTo(item);
                       messageInputRef.current?.focus();
@@ -3002,7 +3014,7 @@ export default function ChatScreen() {
                       })()}
                       appearance={chatAppearance}
                       e2eeStatus={e2eeStatus}
-                      onLongPress={viewerSuspension ? () => {} : () => {
+                      onLongPress={viewerSuspension || isBroadcastReadOnly ? () => {} : () => {
                         // While in multi-select mode, long-press is reserved
                         // for toggling selection (matching the easier muscle
                         // memory of "tap to toggle, long-press to enter").
@@ -3017,7 +3029,7 @@ export default function ChatScreen() {
                       searchTerm={searchTermNorm || null}
                       isActiveSearchMatch={activeMatchTimelineIdx >= 0 && index === activeMatchTimelineIdx}
                       onToggleReaction={
-                        viewerSuspension || multiSelectIds
+                        viewerSuspension || isBroadcastReadOnly || multiSelectIds
                           ? () => {}
                           : (emoji) => onToggleMyReaction(item._id, emoji)
                       }
@@ -3086,6 +3098,13 @@ export default function ChatScreen() {
               <Feather name="alert-octagon" size={18} color="#7f1d1d" />
               <Text style={styles.suspensionBannerText} testID="suspension-banner-text">
                 {viewerSuspension.label}
+              </Text>
+            </View>
+          ) : isBroadcastReadOnly ? (
+            <View style={styles.suspensionBanner} testID="broadcast-readonly-banner">
+              <Feather name="radio" size={18} color="#7f1d1d" />
+              <Text style={styles.suspensionBannerText} testID="broadcast-readonly-text">
+                This is an announcement from Smilers. You can&apos;t reply.
               </Text>
             </View>
           ) : (
