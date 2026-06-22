@@ -1849,7 +1849,8 @@ async def send_push(
                         stats["pruned_count"] += 1
                 logger.info(
                     f"send_push FCM v1: {stats['success_count']}/{len(tokens)} delivered "
-                    f"(recipients={len(recipients)}, pruned={stats['pruned_count']})"
+                    f"(recipients={len(recipients)}, pruned={stats['pruned_count']}, "
+                    f"is_call={is_call_push}, data_only={is_call_push}, dispatched_tokens={len(tokens)})"
                 )
         except Exception as e:
             logger.warning(f"send_push FCM v1 path failed: {e}")
