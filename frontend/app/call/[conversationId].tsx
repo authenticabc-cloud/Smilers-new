@@ -2800,8 +2800,12 @@ const styles = StyleSheet.create({
   },
   controlsSecondaryRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'center',
-    gap: Spacing.xl,
+    alignItems: 'flex-start',
+    columnGap: Spacing.lg,
+    rowGap: 12,
+    paddingHorizontal: 8,
     marginBottom: 4,
   },
   row: {

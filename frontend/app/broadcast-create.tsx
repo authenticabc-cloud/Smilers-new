@@ -25,7 +25,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useMutation } from 'convex/react';
 
 import { api } from '../src/convexApi';
@@ -49,6 +49,7 @@ const MAX_TEXT = 5000;
 
 export default function BroadcastCreateScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ preselect?: string }>();
   const { isAuthenticated } = useAuth();
 
   const { data: me, loading: meLoading } = useSafeConvexQuery<any | null>(
@@ -69,7 +70,10 @@ export default function BroadcastCreateScreen() {
   const messageUsers = useMutation(api.admin.messaging.messageUsers);
 
   const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(() => {
+    const pre = typeof params.preselect === 'string' ? params.preselect : '';
+    return pre ? new Set([pre]) : new Set();
+  });
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   // Glanceable post-send confirmation: how many of the targeted users the

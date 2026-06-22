@@ -360,6 +360,7 @@ export default function AdminDashboard() {
             onToggleSuspend={toggleSuspend}
             onToggleAdmin={toggleAdmin}
             onBroadcast={() => router.push('/broadcast-create' as any)}
+            onMessageUser={(u) => router.push(`/broadcast-create?preselect=${u._id}` as any)}
           />
         ) : null}
         {tab === 'reports' ? (
@@ -503,6 +504,7 @@ function UsersTab({
   onToggleSuspend,
   onToggleAdmin,
   onBroadcast,
+  onMessageUser,
 }: {
   search: string;
   onSearch: (v: string) => void;
@@ -512,6 +514,7 @@ function UsersTab({
   onToggleSuspend: (u: UserItem) => void;
   onToggleAdmin: (u: UserItem) => void;
   onBroadcast: () => void;
+  onMessageUser: (u: UserItem) => void;
 }) {
   // iter-140b: `getAllUsers` returns the full list with no server-side
   // filter. Filter client-side so the search box still works exactly
@@ -601,6 +604,11 @@ function UsersTab({
               <RowMenu
                 disabled={busyId === u._id}
                 actions={[
+                  {
+                    label: 'Message as “Smilers”',
+                    icon: 'chatbubble-ellipses-outline',
+                    onPress: () => onMessageUser(u),
+                  },
                   {
                     label: u.role === 'admin' ? 'Remove admin' : 'Make admin',
                     icon: 'shield-outline',
