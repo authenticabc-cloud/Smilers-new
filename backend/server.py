@@ -1664,7 +1664,11 @@ async def send_push(
                     "twilio_room_name",
                     "twilio_room_sid",
                     "twilio_is_video",
+                    "twilio_caller_identity",
                     "callId",
+                    "callerId",
+                    "callerName",
+                    "callType",
                     "conversationId",
                     "displayName",
                 ):
@@ -1790,6 +1794,11 @@ class SendPushBody(BaseModel):
     # "messages" — default for chat/mention notifications (high importance)
     # "default" — fallback catch-all
     channel_id: str | None = None
+    # iter-253: optional structured passthrough so Convex can forward the
+    # Twilio call fields (twilio_room_name, type, callId, …) on its backup
+    # incoming-call push. Without these the ring shows but can't connect the
+    # callee to the room. Values must be strings (FCM data is string-only).
+    data: dict[str, str] | None = None
 
 
 @api_router.post("/send-push-internal", status_code=202)
@@ -1824,6 +1833,13 @@ async def send_push_internal(
         data["action_url"] = body.action_url
     if body.channel_id:
         data["channel_id"] = body.channel_id
+    # iter-253: forward Convex's structured call fields (twilio_room_name,
+    # type, callId, twilio_caller_identity, …) so the backup incoming-call
+    # push can actually connect the callee to the Twilio room.
+    if body.data:
+        for _k, _v in body.data.items():
+            if _v is not None and _k not in ("title", "message"):
+                data[_k] = str(_v)
 
     # iter-198: cross-trigger dedupe — the sender's device may have already
     # fired this exact push via /api/notify-event.
