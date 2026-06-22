@@ -46,6 +46,7 @@ import { useReactiveSafeConvexQuery } from '../../src/hooks/useReactiveSafeConve
 import { useEngagementTracker } from '../../src/hooks/useEngagementTracker';
 import { Colors, FontSize, FontWeight, Shadow, Spacing } from '../../src/theme';
 import { useRingtonePlayer } from '../../src/lib/ringtone/useRingtonePlayer';
+import { setPipParams, enterPip, isPipSupported, useIsInPip } from '../../src/lib/pip';
 
 type CallType = 'voice' | 'video';
 type AudioOutputRoute = 'earpiece' | 'speaker' | 'bluetooth';
@@ -1422,15 +1423,28 @@ function CallScreenInner() {
     };
   }, []);
 
-  // App state listener — keep call alive when backgrounded but pause video preview
+  // iter-255: Picture-in-Picture — keep a VIDEO call floating over other apps
+  // when the user backgrounds the app. (Audio calls keep running via the iOS
+  // `audio`/`voip` background modes + Android foreground-service perms.)
+  const inPip = useIsInPip();
+  // Android 12+ : auto-slide into PiP the moment the app is backgrounded
+  // during a connected video call. Disabled when the call tears down so other
+  // screens never auto-PiP.
   useEffect(() => {
+    if (!isPipSupported || callType !== 'video') return;
+    setPipParams({ autoEnterEnabled: peerConnected, width: 12, height: 16 });
+    return () => setPipParams({ autoEnterEnabled: false });
+  }, [callType, peerConnected]);
+  // Android < 12 fallback: manually request PiP on background.
+  useEffect(() => {
+    if (!isPipSupported || callType !== 'video') return;
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'background' && callType === 'video') {
-        // Optionally turn off camera while in background
+      if ((state === 'inactive' || state === 'background') && peerConnected) {
+        enterPip({ width: 12, height: 16 });
       }
     });
     return () => sub.remove();
-  }, [callType]);
+  }, [callType, peerConnected]);
 
   // ====== Control handlers ======
   const toggleMute = useCallback(() => {
@@ -1480,19 +1494,64 @@ function CallScreenInner() {
     }
   }, [callType, callId, requestVideoUpgrade]);
 
-  // When the REMOTE party upgrades to video, the Convex call record's callType
-  // flips to 'video' (synced into our state elsewhere). Mirror it by enabling
-  // our own camera so both sides see video.
-  useEffect(() => {
-    if (callType !== 'video' || autoUpgradedRef.current || !sessionRef.current) return;
+  // ── Video-upgrade handshake (mirrors the web flow) ──────────────────────
+  // The web app does NOT silently auto-flip to video. Either party requests;
+  // the requester's camera goes on immediately while the other side stays
+  // camera-off until they explicitly Accept. State lives on the call doc's
+  // `videoUpgrade` = { requestedBy, status: pending|accepted|declined }.
+  const respondVideoUpgrade = useMutation((api as any).calls.respondVideoUpgrade);
+  const myUserId = me?._id ? String(me._id) : '';
+  const peerDisplayName =
+    (Array.isArray(rawDisplayName) ? rawDisplayName[0] : rawDisplayName) || 'Your contact';
+  const promptedUpgradeRef = useRef<string | null>(null);
+  const notifiedDeclineRef = useRef<string | null>(null);
+
+  const acceptVideoUpgrade = useCallback(async () => {
     autoUpgradedRef.current = true;
-    (async () => {
-      try {
-        await sessionRef.current?.upgradeToVideo();
-        setCameraOff(false);
-      } catch {}
-    })();
-  }, [callType]);
+    try {
+      await sessionRef.current?.upgradeToVideo();
+      setCameraOff(false);
+      setCallType('video');
+    } catch (e: any) {
+      Alert.alert('Video', e?.message || 'Could not enable the camera.');
+    }
+    try {
+      await respondVideoUpgrade({ callId, accept: true });
+    } catch {}
+  }, [callId, respondVideoUpgrade]);
+
+  const declineVideoUpgrade = useCallback(async () => {
+    try {
+      await respondVideoUpgrade({ callId, accept: false });
+    } catch {}
+  }, [callId, respondVideoUpgrade]);
+
+  useEffect(() => {
+    const vu = (activeCall as any)?.videoUpgrade;
+    if (!vu || !myUserId) return;
+    const key = `${callId}:${vu.requestedAt || vu.status || ''}`;
+    // Incoming request from the OTHER party → prompt to accept/decline.
+    if (vu.status === 'pending' && vu.requestedBy !== myUserId) {
+      if (promptedUpgradeRef.current === key) return;
+      promptedUpgradeRef.current = key;
+      Alert.alert(
+        'Switch to video?',
+        `${peerDisplayName} wants to switch to a video call.`,
+        [
+          { text: 'Decline', style: 'cancel', onPress: () => void declineVideoUpgrade() },
+          { text: 'Accept', onPress: () => void acceptVideoUpgrade() },
+        ],
+      );
+      return;
+    }
+    // I requested and they declined → let me know (my camera stays on; it's a
+    // one-way video until they choose to turn theirs on).
+    if (vu.status === 'declined' && vu.requestedBy === myUserId) {
+      if (notifiedDeclineRef.current === key) return;
+      notifiedDeclineRef.current = key;
+      Alert.alert('Video', `${peerDisplayName} declined to turn on video.`);
+    }
+  }, [activeCall, myUserId, callId, peerDisplayName, acceptVideoUpgrade, declineVideoUpgrade]);
 
   const handleSelectAudioOutput = useCallback((nextOutput: AudioOutputRoute) => {
     setAudioOutput(nextOutput);
