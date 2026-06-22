@@ -1,5 +1,17 @@
 # Smilers Mobile App — PRD
 
+## iter-261 (Jun 2026): In-app "Minimize" floating call window (global CallHost refactor)
+**Goal:** let users minimize a live WebRTC call into a small draggable window and keep browsing Smilers without dropping the call.
+**Architecture (P1):** The call no longer lives inside the `/call/[conversationId]` route. New external store `src/lib/call/callHost.ts` (`start/end/minimize/maximize`, `useCallHost` via useSyncExternalStore) drives a root-mounted `src/components/call/CallHost.tsx` that renders `CallScreenInner` ONCE.
+- `CallScreenInner` is now `export`ed from the route file and reads its params from `useCallHost()` (not `useLocalSearchParams`). The route default export is now a thin SHIM that forwards route params → `callHost.start()` → pops itself (so every entry point — push wake, startCall, deep links — keeps pushing `/call/<id>` unchanged).
+- CallHost keeps the SAME `<CallScreenInner/>` element mounted across full↔mini (only swaps wrapper STYLE + PanResponder handlers) — critical so React never unmounts it and tears down the peer connection. `pointerEvents="box-none"` in mini lets the app behind stay interactive.
+- Added a "Minimize" control (both video & voice control rows) → `callHost.minimize()`; mini window shows remote video/avatar + duration + expand/end, tap-to-expand, draggable.
+- All call-ending paths now call `callHost.end()` (was `router.back()`); conference escalation uses `callHost.start(newParams)` in place of `router.replace`.
+- Mounted `<CallHost/>` at app root in `_layout.tsx`. Web returns null (no react-native-webrtc on web).
+**Gotcha logged:** Metro runs in CI mode (no file-watch) — NEW files (callHost.ts, CallHost.tsx) are only picked up after `supervisorctl restart expo`. Bundle confirmed clean after restart; app boots to Sign In.
+**MUST validate on native Emergent Android build** (WebRTC/PiP can't run in web/Expo Go): verify minimize keeps the call connected, drag works, expand restores, end works, and conference/screen-share modes still function via the new shim.
+
+
 ## iter-260 (Jun 2026): Admin features (broadcast/user insights/leaderboard) + P0 killed-app call vibration
 **Admin contract wired (verified against backend by user):**
 - **Admin User List** (`app/admin.tsx` UsersTab): each row now shows a Level pill + `<N> pts · <N> refs` from `api.admin.queries.getAllUsers` ({} args; added `level`/`totalEngagements`/`referralCount` to UserItem). Added a "Send broadcast as Smilers" CTA at top of the Users tab.

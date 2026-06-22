@@ -23,6 +23,7 @@ import { useEmergentPush } from '../src/push/useEmergentPush';
 import AppLockGate from '../src/components/AppLockGate';
 import VoiceCommandLauncher from '../src/components/VoiceCommandLauncher';
 import IncomingScreenShareModal from '../src/components/IncomingScreenShareModal';
+import CallHost from '../src/components/call/CallHost';
 import { recordTouchActivity } from '../src/lib/touchActivity';
 import { applyInterFontPatch } from '../src/lib/fontPatch';
 import {
@@ -473,6 +474,7 @@ export default function RootLayout() {
             </Stack>
             <VoiceCommandLauncher />
             <IncomingScreenShareModal />
+            <CallHost />
               </View>
             </AppLockGate>
             </DeviceContactBridge>

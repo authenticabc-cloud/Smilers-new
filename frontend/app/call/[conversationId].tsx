@@ -47,6 +47,7 @@ import { useEngagementTracker } from '../../src/hooks/useEngagementTracker';
 import { Colors, FontSize, FontWeight, Shadow, Spacing } from '../../src/theme';
 import { useRingtonePlayer } from '../../src/lib/ringtone/useRingtonePlayer';
 import { setPipParams, enterPip, isPipSupported, useIsInPip } from '../../src/lib/pip';
+import { callHost, useCallHost } from '../../src/lib/call/callHost';
 
 type CallType = 'voice' | 'video';
 type AudioOutputRoute = 'earpiece' | 'speaker' | 'bluetooth';
@@ -108,33 +109,53 @@ function buildConferenceName(baseName: string, addedName: string) {
 }
 
 export default function CallScreen() {
-  // Wrap the heavy inner component in an Error Boundary so any render-time
-  // crash (WebRTC native-module load failure on Expo Go, stale ref deref
-  // after `activeCall.status → 'active'`, etc.) shows a friendly fallback
-  // instead of bringing down the whole React tree.
+  // This route is now a thin SHIM. The live call UI is rendered once at the
+  // app root by <CallHost/> (see src/components/call/CallHost.tsx) so it can be
+  // minimized into a floating window without dropping the WebRTC session.
+  // We forward the route params into the callHost store, then pop this screen
+  // so the user lands back on a browsable screen with the call as an overlay.
   const router = useRouter();
+  const params = useLocalSearchParams();
+  const forwardedRef = useRef(false);
+  useEffect(() => {
+    if (forwardedRef.current) return;
+    forwardedRef.current = true;
+    const flat: Record<string, string> = {};
+    Object.entries(params || {}).forEach(([key, value]) => {
+      const v = Array.isArray(value) ? value[0] : value;
+      if (typeof v === 'string') flat[key] = v;
+    });
+    callHost.start(flat);
+    // Pop this empty shim route; if there's nothing to pop (cold start from a
+    // push), land on the chats tab so the overlay has a screen behind it.
+    if (router.canGoBack()) router.back();
+    else router.replace('/(tabs)/chats' as any);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
-    <CallErrorBoundary onClose={() => router.back()}>
-      <CallScreenInner />
-    </CallErrorBoundary>
+    <View style={{ flex: 1, backgroundColor: '#0b141a' }} testID="call-route-shim" />
   );
 }
 
-function CallScreenInner() {
+export function CallScreenInner() {
   const router = useRouter();
   const { height: windowHeight } = useWindowDimensions();
   const { isAuthenticated } = useAuth();
-  const { conversationId: rawConversationId, type: rawTypeParam, displayName: rawDisplayName, conferenceMode: rawConfMode, screenOnly: rawScreenOnly, audio: rawAudioParam, role: rawRoleParam, convId: rawConvIdParam, peerUserId: rawPeerUserIdParam } = useLocalSearchParams<{
-    conversationId?: string | string[];
-    type?: string | string[];
-    displayName?: string | string[];
-    conferenceMode?: string | string[];
-    screenOnly?: string | string[];
-    audio?: string | string[];
-    role?: string | string[];
-    convId?: string | string[];
-    peerUserId?: string | string[];
-  }>();
+  // Params now come from the callHost store (this component is rendered by
+  // <CallHost/> at the app root), not from route params — see the shim above.
+  const { params: hostParams, mode: callHostMode } = useCallHost();
+  const isMini = callHostMode === 'mini';
+  const {
+    conversationId: rawConversationId,
+    type: rawTypeParam,
+    displayName: rawDisplayName,
+    conferenceMode: rawConfMode,
+    screenOnly: rawScreenOnly,
+    audio: rawAudioParam,
+    role: rawRoleParam,
+    convId: rawConvIdParam,
+    peerUserId: rawPeerUserIdParam,
+  } = (hostParams || {}) as Record<string, string | undefined>;
   const conversationId = Array.isArray(rawConversationId) ? rawConversationId[0] : rawConversationId;
   const typeParam = Array.isArray(rawTypeParam) ? rawTypeParam[0] : rawTypeParam;
   const routeDisplayName = Array.isArray(rawDisplayName) ? rawDisplayName[0] : rawDisplayName;
@@ -1316,7 +1337,7 @@ function CallScreenInner() {
       // server-side, and the dead-call cron (`expireDeadCalls`) handles
       // pruning expired signaling rows automatically.
     }
-    router.back();
+    callHost.end();
   }, [activeCall?.status, callId, declineCall, endCall, router, callDurationSec, callType, engagement]);
 
   const handleDecline = useCallback(async () => {
@@ -1335,7 +1356,7 @@ function CallScreenInner() {
       } catch {}
       // Cleanup handled server-side by `expireDeadCalls` cron — see comment above.
     }
-    router.back();
+    callHost.end();
   }, [callId, declineCall, router]);
 
   const handleAnswer = useCallback(async () => {
@@ -1374,7 +1395,7 @@ function CallScreenInner() {
         callDebug.push('AUDIO', 'InCallManager.stop() (remote-ended)');
       }
       // Give the user 700ms to see the "Call ended" state before popping
-      const timeoutId = setTimeout(() => router.back(), 700);
+      const timeoutId = setTimeout(() => callHost.end(), 700);
       return () => clearTimeout(timeoutId);
     }
   }, [activeCall, isActive, isIncoming, router]);
@@ -1718,9 +1739,14 @@ function CallScreenInner() {
 
         setShowAddToCall(false);
         setPendingAddContact(null);
-        router.replace(
-          `/call/${nextConversationId}?type=${callType}&privacy=${privacyMode}&addedUserId=${selectedUserId}` as any
-        );
+        // Switch the active call (in-place) to the new conference conversation
+        // — no route navigation since the call lives in the root callHost.
+        callHost.start({
+          conversationId: String(nextConversationId),
+          type: callType,
+          privacy: privacyMode,
+          addedUserId: selectedUserId,
+        });
       } catch (errorValue: any) {
         Alert.alert(
           'Could not add participant',
@@ -1793,6 +1819,50 @@ function CallScreenInner() {
         <ActivityIndicator size="large" color={Colors.white} />
         <Text style={styles.callLoadingText}>Preparing call…</Text>
       </View>
+    );
+  }
+
+  // ── MINIMIZED (floating window) ──────────────────────
+  // Rendered by <CallHost/> inside a small draggable box. Same mounted
+  // component (session stays alive) — just a compact surface that taps back to
+  // full-screen.
+  if (isMini) {
+    return (
+      <Pressable
+        style={{ flex: 1, backgroundColor: '#0b141a' }}
+        onPress={() => callHost.maximize()}
+        testID="mini-call-surface"
+      >
+        {showVideo && remoteStreamURL ? (
+          <RTCViewImpl streamURL={remoteStreamURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror={false} />
+        ) : (
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+            <View style={{ width: 56, height: 56, borderRadius: 28, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' }}>
+              <Text style={{ color: Colors.white, fontSize: 22, fontWeight: '700' }}>{getDisplayInitials(otherName) || '?'}</Text>
+            </View>
+          </View>
+        )}
+        <View style={{ position: 'absolute', top: 6, left: 8, right: 8 }} pointerEvents="none">
+          <Text style={{ color: Colors.white, fontSize: 12, fontWeight: '700' }} numberOfLines={1}>{otherName}</Text>
+          <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 10 }} numberOfLines={1}>{isActive ? durationLabel : statusText}</Text>
+        </View>
+        <View style={{ position: 'absolute', bottom: 8, left: 0, right: 0, flexDirection: 'row', justifyContent: 'center', gap: 14 }}>
+          <TouchableOpacity
+            onPress={() => callHost.maximize()}
+            style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.22)', alignItems: 'center', justifyContent: 'center' }}
+            testID="mini-expand-btn"
+          >
+            <Ionicons name="expand-outline" size={17} color={Colors.white} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={handleHangup}
+            style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.danger, alignItems: 'center', justifyContent: 'center' }}
+            testID="mini-end-btn"
+          >
+            <Ionicons name="call" size={17} color={Colors.white} style={{ transform: [{ rotate: '135deg' }] }} />
+          </TouchableOpacity>
+        </View>
+      </Pressable>
     );
   }
 
@@ -1997,7 +2067,7 @@ function CallScreenInner() {
         <ConferenceHUD
           conferenceId={conversationId}
           myUserId={me?._id ? String(me._id) : null}
-          onLeave={() => router.back()}
+          onLeave={() => callHost.end()}
           onToggleScreenShare={toggleScreenShare}
           screenSharing={screenSharing}
         />
@@ -2030,7 +2100,7 @@ function CallScreenInner() {
             } catch {
               /* swallow */
             }
-            router.back();
+            callHost.end();
           }}
           RTCViewImpl={RTCViewImpl}
           sessionId={conversationId || null}
@@ -2141,6 +2211,12 @@ function CallScreenInner() {
               icon={<Ionicons name="camera-reverse-outline" size={22} color={Colors.white} />}
               label="Flip"
             />
+            <SmallControl
+              testID="minimize-call-btn"
+              onPress={() => callHost.minimize()}
+              icon={<Feather name="minimize-2" size={22} color={Colors.white} />}
+              label="Minimize"
+            />
             {isPipSupported ? (
               <SmallControl
                 testID="pop-out-btn"
@@ -2157,6 +2233,12 @@ function CallScreenInner() {
               onPress={handleSwitchToVideo}
               icon={<Feather name="video" size={22} color={Colors.white} />}
               label="Video"
+            />
+            <SmallControl
+              testID="minimize-call-btn"
+              onPress={() => callHost.minimize()}
+              icon={<Feather name="minimize-2" size={22} color={Colors.white} />}
+              label="Minimize"
             />
             {isPipSupported ? (
               <SmallControl
