@@ -1407,7 +1407,14 @@ def _resolve_android_channel(data: dict, token_doc: dict | None = None) -> str:
             return str(override)
     if explicit:
         return explicit
-    return "calls" if is_call else "messages-v3"
+    # iter-252: default to the VERSIONED channels (created by the app with the
+    # correct custom sounds), NOT the legacy "calls"/"messages-v3" ids. Android
+    # channels are immutable, so those legacy channels keep whatever sound they
+    # were FIRST created with on older builds (often the system default) — which
+    # is exactly why messages rang with the default tone and mis-classified
+    # call pushes used the message beep. The versioned ids are (re)created on
+    # every app launch via applyNotificationChannelPrefs with the right sound.
+    return "calls-v4-smilers_never_cry" if is_call else "messages-v4-message_notification"
 
 
 def _derive_push_routing(data: dict) -> dict[str, str]:

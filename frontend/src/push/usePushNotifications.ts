@@ -317,12 +317,34 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
 
     if (!notifeeOk) {
       // Fallback so the call still rings on a build without notifee.
+      // iter-252: ring on a FRESH versioned channel created with the ringtone
+      // sound — NOT the legacy `calls` channel, which on older installs is
+      // immutably stuck on the system default / message tone (the exact
+      // "subsequent calls use the message tone" bug). Creating a new versioned
+      // id guarantees the sound sticks.
+      const fallbackCallChannel = 'calls-v4-smilers_never_cry';
+      if (Platform.OS === 'android') {
+        try {
+          await Notifications.setNotificationChannelAsync(fallbackCallChannel, {
+            name: 'Incoming Calls',
+            importance: Notifications.AndroidImportance.MAX,
+            sound: 'smilers_never_cry',
+            vibrationPattern: [0, 1000, 500, 1000, 500, 1000],
+            lightColor: '#E4B53B',
+            lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+            bypassDnd: true,
+            enableVibrate: true,
+            enableLights: true,
+            showBadge: false,
+          });
+        } catch {}
+      }
       await Notifications.scheduleNotificationAsync({
         content: {
           title: toNonEmptyString(payload.title) || 'Incoming call',
           body: callerName,
           data: payload,
-          sound: resolveCallChannelSound(toNonEmptyString(payload.sound) || 'ringtone'),
+          sound: 'smilers_never_cry',
           categoryIdentifier: CALL_CATEGORY,
           sticky: true,
           autoDismiss: false,
@@ -330,7 +352,7 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
           vibrate: [0, 600, 300, 600, 300, 600],
           interruptionLevel: 'timeSensitive',
         },
-        trigger: Platform.OS === 'android' ? { channelId: CALLS_CHANNEL } : null,
+        trigger: Platform.OS === 'android' ? { channelId: fallbackCallChannel } : null,
       });
     }
     return;
@@ -349,18 +371,35 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
   const body =
     getDisplayNameFromPayload(payload) || 'Open Smilers to view the message';
 
+  // iter-252: schedule on the VERSIONED message channel (custom Smilers tone),
+  // not the legacy immutable `messages-v3` (stuck on the system default tone).
+  const messageChannel = 'messages-v4-message_notification';
+  if (Platform.OS === 'android') {
+    try {
+      await Notifications.setNotificationChannelAsync(messageChannel, {
+        name: 'Messages',
+        importance: Notifications.AndroidImportance.HIGH,
+        sound: 'message_notification',
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#E4B53B',
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+        enableVibrate: true,
+        showBadge: true,
+      });
+    } catch {}
+  }
   await Notifications.scheduleNotificationAsync({
     content: {
       title,
       body,
       data: payload,
-      sound: resolveMessageChannelSound('smilers_notification'),
+      sound: 'message_notification',
       autoDismiss: true,
       priority: Notifications.AndroidNotificationPriority.HIGH,
       vibrate: [0, 250, 250, 250],
       interruptionLevel: 'active',
     },
-    trigger: Platform.OS === 'android' ? { channelId: MESSAGES_CHANNEL } : null,
+    trigger: Platform.OS === 'android' ? { channelId: messageChannel } : null,
   });
 }
 
