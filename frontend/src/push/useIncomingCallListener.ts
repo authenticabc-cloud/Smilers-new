@@ -93,10 +93,15 @@ export function useIncomingCallListener() {
     // "Connecting" forever (the exact mismatch support flagged). Route the
     // foreground answer to the legacy /call/<id> screen when Twilio is off.
     if (!isTwilioEnabled()) {
+      const callIsVideo =
+        incomingCall?.isVideo === true ||
+        incomingType === 'video' ||
+        String(incomingCall?.callType || '').toLowerCase() === 'video';
+      const typeQs = `type=${callIsVideo ? 'video' : 'voice'}`;
       router.push(
         displayName
-          ? (`/call/${conversationId}?displayName=${encodeURIComponent(displayName)}` as any)
-          : (`/call/${conversationId}` as any),
+          ? (`/call/${conversationId}?${typeQs}&displayName=${encodeURIComponent(displayName)}` as any)
+          : (`/call/${conversationId}?${typeQs}` as any),
       );
       return;
     }
