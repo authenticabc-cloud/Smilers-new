@@ -1,5 +1,11 @@
 # Smilers Mobile App — PRD
 
+## iter-272 (Jun 2026): Conference — speaking indicator + hand-raise UI
+- **Speaking indicator:** `MeshPeer` now reads WebRTC `getStats()` audio levels (`getInboundAudioLevel` from inbound-rtp, `getLocalAudioLevel` from media-source). `MeshController` polls every 700ms and emits `onSpeakingChange({ [peerUserId]:bool, __local:bool })` (threshold 0.02; local gated by mic-enabled). `useConferenceMesh` exposes `speaking`. Conference `ParticipantTile` shows a green ring (`tileSpeaking`) on the active talker.
+- **Hand-raise:** added `api.conferenceRoom.toggleHandRaise({conferenceId, handRaised})` mutation + a "Raise/Lower hand" control in the room's bottom bar (extended `SelfControl` with an `mci` flag for the MaterialCommunityIcons `hand-back-right` icon). Tile already renders the hand-raised badge from `participant.handRaised`.
+- ⚠️ **ASSUMED** `api.conferenceRoom.toggleHandRaise` arg shape (parallel to toggleMute/toggleVideo) — web team to confirm; calls degrade gracefully via `safeMutate` if wrong. Lint clean; web bundle builds; app boots. NATIVE BUILD required to validate speaking levels (getStats audioLevel support is native-only).
+
+
 ## iter-271 (Jun 2026): Conference = voice AND video (mesh) + confirmed signaling
 - Web team confirmed all `api.conferenceSignaling.*` shapes are EXACT 1:1 matches with my native impl (send `{conferenceId,toUserId,type:'offer'|'answer'|'ice-candidate',payload}`; poll `{conferenceId}`→`[{_id,fromUserId,toUserId,type,payload,consumed}]`; markConsumed `{messageIds}`; plus `cleanupMine({conferenceId})` on leave). No signaling changes needed.
 - **Conference is voice+video** (unlike group calls which are voice-first). Extended `MeshController` with `video` option + `setVideoEnabled`/`getLocalStream` (getUserMedia now requests camera for video confs; MeshPeer already exchanges all tracks). `useConferenceMesh` now accepts `videoEnabled`/`cameraOn`, exposes `remoteStreams`+`localStream`, and calls `conferenceSignaling.cleanupMine` on unmount.

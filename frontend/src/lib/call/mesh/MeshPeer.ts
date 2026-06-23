@@ -191,6 +191,50 @@ export class MeshPeer {
     }
   }
 
+  /** Remote talker audio level (0..1) from inbound-rtp stats. */
+  async getInboundAudioLevel(): Promise<number> {
+    if (!this.pc || this.closed) return 0;
+    try {
+      const stats = await this.pc.getStats();
+      let level = 0;
+      stats.forEach((r: Any) => {
+        if (
+          r &&
+          r.type === 'inbound-rtp' &&
+          (r.kind === 'audio' || r.mediaType === 'audio') &&
+          typeof r.audioLevel === 'number'
+        ) {
+          level = Math.max(level, r.audioLevel);
+        }
+      });
+      return level;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Local mic audio level (0..1) from media-source stats. */
+  async getLocalAudioLevel(): Promise<number> {
+    if (!this.pc || this.closed) return 0;
+    try {
+      const stats = await this.pc.getStats();
+      let level = 0;
+      stats.forEach((r: Any) => {
+        if (
+          r &&
+          r.type === 'media-source' &&
+          (r.kind === 'audio' || r.mediaType === 'audio') &&
+          typeof r.audioLevel === 'number'
+        ) {
+          level = Math.max(level, r.audioLevel);
+        }
+      });
+      return level;
+    } catch {
+      return 0;
+    }
+  }
+
   close(): void {
     if (this.closed) return;
     this.closed = true;

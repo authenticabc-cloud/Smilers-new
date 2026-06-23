@@ -47,6 +47,8 @@ interface UseConferenceMeshResult {
   connectedPeers: Record<string, boolean>;
   /** The local camera/mic stream (for the self-view tile). */
   localStream: Any;
+  /** `{ [peerUserId]: boolean, __local: boolean }` — who is currently talking. */
+  speaking: Record<string, boolean>;
 }
 
 export function useConferenceMesh({
@@ -68,6 +70,7 @@ export function useConferenceMesh({
   const controllerRef = useRef<MeshControllerType | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Record<string, Any>>({});
   const [localStream, setLocalStream] = useState<Any>(null);
+  const [speaking, setSpeaking] = useState<Record<string, boolean>>({});
   const connectedPeers = useMemo(() => {
     const map: Record<string, boolean> = {};
     Object.keys(remoteStreams).forEach((id) => {
@@ -93,6 +96,9 @@ export function useConferenceMesh({
           },
           onRemoteStreamsChanged: (streams) => {
             if (!disposed) setRemoteStreams(streams);
+          },
+          onSpeakingChange: (s) => {
+            if (!disposed) setSpeaking(s);
           },
         });
         controllerRef.current = controller;
@@ -179,5 +185,5 @@ export function useConferenceMesh({
     if (ids.length > 0) void markConsumedM({ messageIds: ids } as Any).catch(() => {});
   }, [rawSignals, myUserId, markConsumedM]);
 
-  return { remoteStreams, connectedPeers, localStream };
+  return { remoteStreams, connectedPeers, localStream, speaking };
 }

@@ -23,6 +23,8 @@ export interface MeshControllerOptions {
   sendSignal: (toUserId: string, type: MeshSignalType, payload: string) => void;
   /** Called whenever the set of remote streams changes. */
   onRemoteStreamsChanged?: (streams: Record<string, Any>) => void;
+  /** Periodic speaking state: `{ [peerUserId]: boolean, __local: boolean }`. */
+  onSpeakingChange?: (speaking: Record<string, boolean>) => void;
   onError?: (err: Error) => void;
 }
 
@@ -37,6 +39,7 @@ export class MeshController {
   private wantsVideo: boolean;
   private started = false;
   private closed = false;
+  private speakingTimer: Any = null;
 
   constructor(opts: MeshControllerOptions) {
     this.opts = opts;
@@ -58,6 +61,30 @@ export class MeshController {
       audio: true,
       video: this.wantsVideo ? ({ facingMode: 'user' } as Any) : false,
     });
+    this.startSpeakingPoll();
+  }
+
+  private startSpeakingPoll(): void {
+    if (this.speakingTimer || !this.opts.onSpeakingChange) return;
+    const THRESHOLD = 0.02;
+    this.speakingTimer = setInterval(async () => {
+      if (this.closed) return;
+      const peers = Array.from(this.peers.values());
+      const speaking: Record<string, boolean> = {};
+      for (const peer of peers) {
+        try {
+          speaking[peer.peerUserId] = (await peer.getInboundAudioLevel()) > THRESHOLD;
+        } catch {}
+      }
+      let localLevel = 0;
+      if (peers[0]) {
+        try {
+          localLevel = await peers[0].getLocalAudioLevel();
+        } catch {}
+      }
+      speaking.__local = this.micEnabled && localLevel > THRESHOLD;
+      this.opts.onSpeakingChange?.(speaking);
+    }, 700);
   }
 
   /** The local camera/mic stream (for rendering a self-view). */
@@ -159,6 +186,10 @@ export class MeshController {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    if (this.speakingTimer) {
+      clearInterval(this.speakingTimer);
+      this.speakingTimer = null;
+    }
     for (const peer of this.peers.values()) peer.close();
     this.peers.clear();
     try {

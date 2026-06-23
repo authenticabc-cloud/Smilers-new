@@ -199,7 +199,7 @@ export default function ConferenceRoomScreen() {
   useEffect(() => {
     setLocalCamOn(myVideoEnabled);
   }, [myVideoEnabled]);
-  const { remoteStreams, localStream } = useConferenceMesh({
+  const { remoteStreams, localStream, speaking } = useConferenceMesh({
     conferenceId,
     myUserId,
     peerUserIds,
@@ -208,6 +208,7 @@ export default function ConferenceRoomScreen() {
     videoEnabled: isVideoConf,
     cameraOn: localCamOn,
   });
+  const myHandRaised = !!me?.handRaised;
 
   // Native-only RTCView (video tiles). Web/Expo Go get a null stub.
   const [RTCViewImpl, setRTCViewImpl] = useState<any>(null);
@@ -227,6 +228,7 @@ export default function ConferenceRoomScreen() {
   const leaveRoomM = useMutation((api as any).conferenceRoom.leaveRoom);
   const toggleMuteM = useMutation((api as any).conferenceRoom.toggleMute);
   const toggleVideoM = useMutation((api as any).conferenceRoom.toggleVideo);
+  const toggleHandRaiseM = useMutation((api as any).conferenceRoom.toggleHandRaise);
   const admitM = useMutation((api as any).conferenceRoom.admitParticipant);
   const denyM = useMutation((api as any).conferenceRoom.denyParticipant);
   const suspendM = useMutation((api as any).conferenceRoom.suspendParticipant);
@@ -332,6 +334,11 @@ export default function ConferenceRoomScreen() {
     await safeMutate('Toggle camera', async () => toggleVideoM({ conferenceId, videoEnabled: !myVideoEnabled }));
     void refetchState();
   }, [conferenceId, myVideoEnabled, refetchState, toggleVideoM]);
+
+  const handleToggleHandRaise = useCallback(async () => {
+    await safeMutate('Toggle hand', async () => toggleHandRaiseM({ conferenceId, handRaised: !myHandRaised }));
+    void refetchState();
+  }, [conferenceId, myHandRaised, refetchState, toggleHandRaiseM]);
 
   const handleAdmit = useCallback(
     async (p: Participant) => {
@@ -604,6 +611,7 @@ export default function ConferenceRoomScreen() {
                 streamURL={streamURL}
                 RTCViewImpl={RTCViewImpl}
                 mirror={item.userId === myUserId}
+                isSpeaking={item.userId === myUserId ? !!speaking.__local : !!speaking[item.userId]}
                 onLongPress={() => (isChair && item.userId !== myUserId ? setActionTarget(item) : undefined)}
               />
             );
@@ -634,6 +642,14 @@ export default function ConferenceRoomScreen() {
             active={!myVideoEnabled}
             onPress={handleToggleSelfVideo}
             testID="conf-self-video"
+          />
+          <SelfControl
+            icon="hand-back-right"
+            label={myHandRaised ? 'Lower hand' : 'Raise hand'}
+            active={myHandRaised}
+            mci
+            onPress={handleToggleHandRaise}
+            testID="conf-self-hand"
           />
           <SelfControl
             icon="message-circle"
@@ -961,6 +977,7 @@ function ParticipantTile({
   streamURL,
   RTCViewImpl,
   mirror,
+  isSpeaking,
   onLongPress,
 }: {
   participant: Participant;
@@ -971,6 +988,7 @@ function ParticipantTile({
   streamURL?: string | null;
   RTCViewImpl?: any;
   mirror?: boolean;
+  isSpeaking?: boolean;
   onLongPress?: () => void;
 }) {
   const role = normalizeRole(participant.role);
@@ -989,6 +1007,7 @@ function ParticipantTile({
         styles.tile,
         { width, height },
         isSuspended ? styles.tileSuspended : null,
+        isSpeaking ? styles.tileSpeaking : null,
         pressed && canManage ? styles.tilePressed : null,
       ]}
       testID={`conf-tile-${participant.userId}`}
@@ -1060,6 +1079,7 @@ function SelfControl({
   label,
   active,
   danger,
+  mci,
   onPress,
   testID,
 }: {
@@ -1067,9 +1087,11 @@ function SelfControl({
   label: string;
   active?: boolean;
   danger?: boolean;
+  mci?: boolean;
   onPress: () => void;
   testID?: string;
 }) {
+  const iconColor = danger ? Colors.white : active ? '#3D2A00' : Colors.white;
   return (
     <TouchableOpacity
       style={styles.selfControlWrap}
@@ -1084,7 +1106,11 @@ function SelfControl({
           danger ? styles.selfControlBtnDanger : null,
         ]}
       >
-        <Feather name={icon as any} size={22} color={danger ? Colors.white : active ? '#3D2A00' : Colors.white} />
+        {mci ? (
+          <MaterialCommunityIcons name={icon as any} size={22} color={iconColor} />
+        ) : (
+          <Feather name={icon as any} size={22} color={iconColor} />
+        )}
       </View>
       <Text style={[styles.selfControlLabel, danger ? { color: Colors.danger } : null]}>{label}</Text>
     </TouchableOpacity>
@@ -1606,6 +1632,7 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.sm,
   },
   tileSuspended: { opacity: 0.55, borderColor: Colors.danger },
+  tileSpeaking: { borderColor: Colors.success, borderWidth: 3 },
   tilePressed: { borderColor: Colors.primary, transform: [{ scale: 0.98 }] },
   tileVideo: {
     flex: 1,
