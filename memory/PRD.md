@@ -1,5 +1,15 @@
 # Smilers Mobile App — PRD
 
+## iter-273 (Jun 2026): Conference meeting-tools wired to confirmed backend + breakout mesh scoping
+Web team confirmed exact signatures. Changes in `app/conference/[conferenceId]/room.tsx`:
+- **Breakout-room peer scoping (option a):** mesh now connects ONLY participants in the SAME breakout (`peerUserIds` filtered by `conferenceRoles.breakoutRoomId` from getRoomState; null=main). Added **Join** button per breakout room → `api.breakoutRooms.joinRoom({conferenceId, roomId})`.
+- **Hand-raise REMOVED** from formal conference (web confirmed it does NOT exist there — only group calls have it; `conferenceRoles` has no handRaised field). Removed the button/handler/mutation added in iter-272. (Speaking indicator from iter-272 stays — it's client-side getStats.)
+- **Namespace fixes:** `muteAll`→`api.chairControls.muteAll`; minutes append→`api.conferenceMinutes.addEntry`.
+- **Motion voting added:** For/Against/Abstain per motion → `api.conferenceMotions.castVote({motionId, vote})`.
+- ⚠️ **Poll voting NOT wired yet** (`api.conferencePolls.vote({pollId, optionId})` declared, eslint-disabled) — polls render doesn't list options; needs option rendering. FOLLOW-UP. Also not yet wired: reads for active timer (`conferenceSpeakerTimer.getActiveTimer`), minutes log (`conferenceMinutes.getMinutes`), reactions (`conferenceReactions.getRecentReactions`); and timer start/end namespace unconfirmed (left as `conferences.*`).
+Lint clean; web bundle builds (web:200); app boots. NATIVE BUILD required to validate media/votes. Full contract: web repo `docs/CONFERENCE_MEETING_TOOLS_NATIVE_CONTRACT.md`; my verify doc `/app/docs/WEB_TEAM_VERIFY_conference_tools_signatures.md`.
+
+
 ## iter-272 (Jun 2026): Conference — speaking indicator + hand-raise UI
 - **Speaking indicator:** `MeshPeer` now reads WebRTC `getStats()` audio levels (`getInboundAudioLevel` from inbound-rtp, `getLocalAudioLevel` from media-source). `MeshController` polls every 700ms and emits `onSpeakingChange({ [peerUserId]:bool, __local:bool })` (threshold 0.02; local gated by mic-enabled). `useConferenceMesh` exposes `speaking`. Conference `ParticipantTile` shows a green ring (`tileSpeaking`) on the active talker.
 - **Hand-raise:** added `api.conferenceRoom.toggleHandRaise({conferenceId, handRaised})` mutation + a "Raise/Lower hand" control in the room's bottom bar (extended `SelfControl` with an `mci` flag for the MaterialCommunityIcons `hand-back-right` icon). Tile already renders the hand-raised badge from `participant.handRaised`.

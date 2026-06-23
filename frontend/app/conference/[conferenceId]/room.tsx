@@ -184,9 +184,21 @@ export default function ConferenceRoomScreen() {
   // Peers = other active participants in the room. The mesh engine
   // (MeshController/MeshPeer) is shared with group calls; here it is driven by
   // `api.conferenceSignaling.*` keyed by conferenceId (no callId for conferences).
+  // Breakout scoping: the mesh only connects participants in the SAME breakout
+  // room (web exposes this via conferenceRoles.breakoutRoomId in getRoomState;
+  // null/undefined = main room).
+  const myBreakoutRoomId = (me as any)?.breakoutRoomId ?? null;
   const peerUserIds = useMemo(
-    () => active.map((p) => p.userId).filter((id) => id && id !== myUserId),
-    [active, myUserId],
+    () =>
+      active
+        .filter(
+          (p) =>
+            p.userId &&
+            p.userId !== myUserId &&
+            (((p as any).breakoutRoomId ?? null) === myBreakoutRoomId),
+        )
+        .map((p) => p.userId),
+    [active, myUserId, myBreakoutRoomId],
   );
   const isVideoConf = (state?.conference as any)?.type === 'video';
   // Local mic/camera mirrors so toggles take effect instantly; server state
@@ -208,7 +220,6 @@ export default function ConferenceRoomScreen() {
     videoEnabled: isVideoConf,
     cameraOn: localCamOn,
   });
-  const myHandRaised = !!me?.handRaised;
 
   // Native-only RTCView (video tiles). Web/Expo Go get a null stub.
   const [RTCViewImpl, setRTCViewImpl] = useState<any>(null);
@@ -228,7 +239,6 @@ export default function ConferenceRoomScreen() {
   const leaveRoomM = useMutation((api as any).conferenceRoom.leaveRoom);
   const toggleMuteM = useMutation((api as any).conferenceRoom.toggleMute);
   const toggleVideoM = useMutation((api as any).conferenceRoom.toggleVideo);
-  const toggleHandRaiseM = useMutation((api as any).conferenceRoom.toggleHandRaise);
   const admitM = useMutation((api as any).conferenceRoom.admitParticipant);
   const denyM = useMutation((api as any).conferenceRoom.denyParticipant);
   const suspendM = useMutation((api as any).conferenceRoom.suspendParticipant);
@@ -241,9 +251,9 @@ export default function ConferenceRoomScreen() {
   // Toolbar pill actions (graceful fallback when functions don't exist):
   const startTimerM = useMutation((api as any).conferences.startTimer);
   const endTimerM = useMutation((api as any).conferences.endTimer);
-  const appendMinutesM = useMutation((api as any).conferences.appendMinutes);
+  const appendMinutesM = useMutation((api as any).conferenceMinutes.addEntry);
   const sendReactionM = useMutation((api as any).conferences.sendReaction);
-  const muteAllM = useMutation((api as any).conferences.muteAll); // eslint-disable-line @typescript-eslint/no-unused-vars
+  const muteAllM = useMutation((api as any).chairControls.muteAll); // eslint-disable-line @typescript-eslint/no-unused-vars
   // Confirmed canonical contracts (iter 154):
   //   Motions   → api.conferenceMotions.proposeMotion / getMotions
   //   Polls     → api.conferencePolls.createPoll / getPolls
@@ -252,6 +262,9 @@ export default function ConferenceRoomScreen() {
   const closeBreakoutRoomM = useMutation((api as any).breakoutRooms.closeRoom); // eslint-disable-line @typescript-eslint/no-unused-vars
   const proposeMotionM = useMutation((api as any).conferenceMotions.proposeMotion);
   const createPollM = useMutation((api as any).conferencePolls.createPoll);
+  const joinBreakoutRoomM = useMutation((api as any).breakoutRooms.joinRoom);
+  const castMotionVoteM = useMutation((api as any).conferenceMotions.castVote);
+  const votePollM = useMutation((api as any).conferencePolls.vote); // eslint-disable-line @typescript-eslint/no-unused-vars
 
   // List queries for drawer panels (graceful fallback to []).
   const { data: motions } = useSafeConvexQuery<any[]>(
@@ -334,11 +347,6 @@ export default function ConferenceRoomScreen() {
     await safeMutate('Toggle camera', async () => toggleVideoM({ conferenceId, videoEnabled: !myVideoEnabled }));
     void refetchState();
   }, [conferenceId, myVideoEnabled, refetchState, toggleVideoM]);
-
-  const handleToggleHandRaise = useCallback(async () => {
-    await safeMutate('Toggle hand', async () => toggleHandRaiseM({ conferenceId, handRaised: !myHandRaised }));
-    void refetchState();
-  }, [conferenceId, myHandRaised, refetchState, toggleHandRaiseM]);
 
   const handleAdmit = useCallback(
     async (p: Participant) => {
@@ -644,14 +652,6 @@ export default function ConferenceRoomScreen() {
             testID="conf-self-video"
           />
           <SelfControl
-            icon="hand-back-right"
-            label={myHandRaised ? 'Lower hand' : 'Raise hand'}
-            active={myHandRaised}
-            mci
-            onPress={handleToggleHandRaise}
-            testID="conf-self-hand"
-          />
-          <SelfControl
             icon="message-circle"
             label="Chat"
             onPress={() => setActivePanel('chat')}
@@ -789,6 +789,18 @@ export default function ConferenceRoomScreen() {
                   {Array.isArray(r.participants) ? `${r.participants.length} participant${r.participants.length === 1 ? '' : 's'}` : 'Open'}
                 </Text>
               </View>
+              <TouchableOpacity
+                style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, backgroundColor: 'rgba(129,140,248,0.18)' }}
+                onPress={async () => {
+                  await safeMutate('Join breakout room', async () =>
+                    joinBreakoutRoomM({ conferenceId, roomId: r._id || r.id }),
+                  );
+                  void refetchState();
+                }}
+                testID={`conf-breakout-join-${r._id || r.id}`}
+              >
+                <Text style={{ color: '#818CF8', fontWeight: '700', fontSize: 13 }}>Join</Text>
+              </TouchableOpacity>
             </View>
           ))
         ) : (
@@ -828,6 +840,23 @@ export default function ConferenceRoomScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.panelRowTitle} numberOfLines={2}>{m.title || m.text || 'Motion'}</Text>
                   <Text style={styles.panelRowSubtitle}>{stateLabel}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 4 }}>
+                  {(['for', 'against', 'abstain'] as const).map((v) => (
+                    <TouchableOpacity
+                      key={v}
+                      onPress={async () => {
+                        await safeMutate('Cast vote', async () => castMotionVoteM({ motionId: m._id || m.id, vote: v }));
+                        void refetchState();
+                      }}
+                      style={{ paddingHorizontal: 8, paddingVertical: 6, borderRadius: 6, backgroundColor: 'rgba(168,85,247,0.18)' }}
+                      testID={`conf-motion-vote-${v}-${m._id || m.id}`}
+                    >
+                      <Text style={{ color: '#A855F7', fontSize: 11, fontWeight: '700' }}>
+                        {v === 'for' ? 'For' : v === 'against' ? 'Vs' : 'Abs'}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
                 </View>
               </View>
             );
