@@ -183,6 +183,15 @@ export default function UserProfileScreen() {
     (typeof user?.status === 'string' && user.status) ||
     '';
   const lastSeenLabel = formatLastSeenLabel(user, 'last seen recently');
+  const profileOnline =
+    (user as any)?.isOnline === true ||
+    (user as any)?.online === true ||
+    (() => {
+      const ls = (user as any)?.lastSeen;
+      const t = typeof ls === 'number' ? ls : typeof ls === 'string' ? new Date(ls).getTime() : NaN;
+      return Number.isFinite(t) && Date.now() - t < 120000;
+    })();
+  const presenceLabel = profileOnline ? 'Online' : lastSeenLabel;
   const level: string =
     (typeof user?.level === 'string' && user.level) ||
     (typeof user?.tier === 'string' && user.tier) ||
@@ -328,6 +337,7 @@ export default function UserProfileScreen() {
               )}
             </View>
           </TouchableOpacity>
+          {profileOnline ? <View style={styles.profileOnlineDot} testID="user-profile-online" /> : null}
         </View>
 
         {/* Name + last seen */}
@@ -335,8 +345,12 @@ export default function UserProfileScreen() {
           <Text style={styles.name} numberOfLines={1} testID="user-profile-name">
             {displayName}
           </Text>
-          <Text style={styles.lastSeen} numberOfLines={1} testID="user-profile-last-seen">
-            {lastSeenLabel}
+          <Text
+            style={[styles.lastSeen, profileOnline ? styles.lastSeenOnline : null]}
+            numberOfLines={1}
+            testID="user-profile-last-seen"
+          >
+            {presenceLabel}
           </Text>
 
           {(level || engagementCount > 0) ? (
@@ -812,6 +826,19 @@ const styles = StyleSheet.create({
     fontSize: FontSize.base,
     color: Colors.textSecondary,
     textAlign: 'center',
+  },
+  lastSeenOnline: { color: '#16A34A', fontWeight: FontWeight.semibold },
+  profileOnlineDot: {
+    position: 'absolute',
+    bottom: 12,
+    right: '50%',
+    marginRight: -(AVATAR_SIZE / 2 - 18),
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#22C55E',
+    borderWidth: 3,
+    borderColor: Colors.background,
   },
 
   // Level pill

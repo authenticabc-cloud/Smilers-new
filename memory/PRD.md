@@ -1,5 +1,11 @@
 # Smilers Mobile App — PRD
 
+## iter-266 (Jun 2026): Presence polish — chat header + user profile
+- **Chat header** (`chat/[conversationId].tsx`): added a green online dot to the header avatar (wrapped it so the dot isn't clipped by the avatar's `overflow:hidden`). `headerOnline` is DM-only (no group/broadcast), derived from `mergedPresenceSource` (`isOnline`/`online` flag or `lastSeen` within 2 min). Presence subtitle text was already present.
+- **User profile** (`user/[userId].tsx`): added an online dot on the avatar ring + the last-seen line now shows "Online" (green) when the user is online (`profileOnline`); falls back to the existing `formatLastSeenLabel`.
+Both read the same Convex `users` presence as the web app. Lint clean, web bundle builds (2514 modules). Native-validate on build. (Continues iter-265 which added presence to Admin list, chat list, contacts.)
+
+
 ## iter-265 (Jun 2026): Online dot + last-seen parity (Admin, chat list, contacts)
 **Goal:** match the web app, which shows presence everywhere the native app didn't.
 - **Avatar** (`src/components/Avatar.tsx`): added reusable `online?: boolean` prop → renders a green presence dot at bottom-right (outside the clipped circle, scales with size). Used everywhere.

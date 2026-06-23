@@ -2478,6 +2478,18 @@ export default function ChatScreen() {
     ? 'Announcement · read-only'
     : formatPresenceSubtitle(mergedPresenceSource);
   const avatarInitial = getDisplayInitials(title);
+  // DM-only online state for the header avatar dot (mirrors web). Online if the
+  // peer flag is set or they were seen within 2 min; never on groups/broadcast.
+  const headerOnline = (() => {
+    if (isBroadcastReadOnly) return false;
+    const src: any = mergedPresenceSource;
+    if (!src || src?.type === 'group') return false;
+    const peer = src?.otherUser || src;
+    if (peer?.isOnline === true || peer?.online === true || src?.isOnline === true) return true;
+    const ls = peer?.lastSeen ?? src?.lastSeen;
+    const t = typeof ls === 'number' ? ls : typeof ls === 'string' ? new Date(ls).getTime() : NaN;
+    return Number.isFinite(t) && Date.now() - t < 120000;
+  })();
 
   // Slice B of Groups spec — when the current user is suspended in this
   // group, switch into spectator mode (composer hidden, reactions disabled).
@@ -2624,24 +2636,27 @@ export default function ChatScreen() {
             }}
             testID="chat-header-identity"
           >
-            <View style={styles.headerAvatar} testID="chat-header-avatar">
-              {(() => {
-                const headerAvatarUri =
-                  (hydratedConversation?.otherUser as any)?.avatar ||
-                  (hydratedConversation?.otherUser as any)?.avatarUrl ||
-                  (hydratedConversation as any)?.avatar ||
-                  null;
-                if (headerAvatarUri && /^https?:/i.test(headerAvatarUri)) {
-                  return (
-                    <Image
-                      source={{ uri: headerAvatarUri }}
-                      style={styles.headerAvatarImage}
-                      resizeMode="cover"
-                    />
-                  );
-                }
-                return <Text style={styles.headerAvatarText}>{avatarInitial}</Text>;
-              })()}
+            <View style={styles.headerAvatarWrap}>
+              <View style={styles.headerAvatar} testID="chat-header-avatar">
+                {(() => {
+                  const headerAvatarUri =
+                    (hydratedConversation?.otherUser as any)?.avatar ||
+                    (hydratedConversation?.otherUser as any)?.avatarUrl ||
+                    (hydratedConversation as any)?.avatar ||
+                    null;
+                  if (headerAvatarUri && /^https?:/i.test(headerAvatarUri)) {
+                    return (
+                      <Image
+                        source={{ uri: headerAvatarUri }}
+                        style={styles.headerAvatarImage}
+                        resizeMode="cover"
+                      />
+                    );
+                  }
+                  return <Text style={styles.headerAvatarText}>{avatarInitial}</Text>;
+                })()}
+              </View>
+              {headerOnline ? <View style={styles.headerOnlineDot} testID="chat-header-online" /> : null}
             </View>
             <View style={styles.headerTextWrap}>
               <Text style={styles.chatHeaderTitle} numberOfLines={1} testID="chat-header-title">{title}</Text>
@@ -3681,6 +3696,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginHorizontal: 8,
     overflow: 'hidden',
+  },
+  headerAvatarWrap: {
+    width: 42,
+    height: 42,
+    marginHorizontal: 8,
+  },
+  headerOnlineDot: {
+    position: 'absolute',
+    right: -1,
+    bottom: -1,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#22C55E',
+    borderWidth: 2,
+    borderColor: Colors.headerBg,
   },
   // iter-109 Diary mode — blue avatar circle housing the book icon.
   headerAvatarDiary: {
