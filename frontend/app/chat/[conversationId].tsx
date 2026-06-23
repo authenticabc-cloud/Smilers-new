@@ -224,6 +224,12 @@ export default function ChatScreen() {
   // iter-231: track whether the user is near the bottom so we only auto-scroll
   // to the latest message when appropriate (not while they're reading history).
   const isNearBottomRef = useRef(true);
+  // iter-274: true while the user is actively dragging/flinging the list.
+  // The auto-snap-to-bottom in onContentSizeChange must NOT fire during an
+  // active scroll — virtualization + media loading change contentSize on
+  // every frame, and snapping back each time caused the rapid up/down
+  // jitter the user reported while scrolling.
+  const isUserScrollingRef = useRef(false);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(audioRecorder, 200);
   const hasValidConversationId =
@@ -3073,14 +3079,30 @@ export default function ChatScreen() {
               isNearBottomRef.current = distanceFromBottom < 120;
             }}
             scrollEventThrottle={16}
+            onScrollBeginDrag={() => {
+              isUserScrollingRef.current = true;
+            }}
+            onScrollEndDrag={() => {
+              isUserScrollingRef.current = false;
+            }}
+            onMomentumScrollBegin={() => {
+              isUserScrollingRef.current = true;
+            }}
+            onMomentumScrollEnd={() => {
+              isUserScrollingRef.current = false;
+            }}
             onContentSizeChange={() => {
-              // Only snap to the bottom when the user is ALREADY near the
-              // bottom (new message arrived / initial load). Previously this
-              // fired on EVERY content-size change — including virtualization
-              // while scrolling up and media loading — yanking the user back
-              // to the last message (iter-231 fix). Search owns scrolling when
-              // active, so skip then.
-              if (chatSearchQuery === null && isNearBottomRef.current) {
+              // iter-274: only snap to the bottom when the user is NEAR the
+              // bottom AND is NOT actively scrolling. Virtualization + media
+              // loading fire onContentSizeChange on nearly every frame while
+              // the list scrolls; snapping to end each time yanked the view
+              // back and produced the rapid up/down jitter the user reported.
+              // Search owns scrolling when active, so skip then.
+              if (
+                chatSearchQuery === null &&
+                isNearBottomRef.current &&
+                !isUserScrollingRef.current
+              ) {
                 listRef.current?.scrollToEnd({ animated: false });
               }
             }}

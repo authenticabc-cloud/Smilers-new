@@ -2141,9 +2141,9 @@ export function CallScreenInner() {
         <ScreenShareOverlay
           isReceiver={isScreenOnlyReceiver}
           remoteStreamURL={remoteStreamURL}
-          allowMic={screenOnlyAudio}
+          allowMic={!isScreenOnlyReceiver}
           muted={muted}
-          onToggleMic={() => setMuted((current) => !current)}
+          onToggleMic={toggleMute}
           screenSharing={screenSharing}
           peerConnected={peerConnected}
           onToggleScreenShare={toggleScreenShare}
