@@ -52,6 +52,7 @@ import { StatusBar } from 'expo-status-bar';
 
 import { api } from '../../../src/convexApi';
 import { useSafeConvexQuery } from '../../../src/hooks/useSafeConvexQuery';
+import { useConferenceMesh } from '../../../src/lib/call/mesh/useConferenceMesh';
 import { getDisplayInitials } from '../../../src/lib/displayName';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../../src/theme';
 
@@ -179,6 +180,28 @@ export default function ConferenceRoomScreen() {
   const myMuted = !!me?.isMuted;
   const myVideoEnabled = me?.videoEnabled !== false;
 
+  // --- Live voice mesh (web-interop conference audio) ---
+  // Peers = other active participants in the room. The mesh engine
+  // (MeshController/MeshPeer) is shared with group calls; here it is driven by
+  // `api.conferenceSignaling.*` keyed by conferenceId (no callId for conferences).
+  const peerUserIds = useMemo(
+    () => active.map((p) => p.userId).filter((id) => id && id !== myUserId),
+    [active, myUserId],
+  );
+  // Local mic mirror so tapping mute cuts audio instantly (server state syncs
+  // via the 3s room refetch, incl. admin force-mute).
+  const [localMicOn, setLocalMicOn] = useState(true);
+  useEffect(() => {
+    setLocalMicOn(!myMuted);
+  }, [myMuted]);
+  useConferenceMesh({
+    conferenceId,
+    myUserId,
+    peerUserIds,
+    isActive: isValid && !!myUserId,
+    micEnabled: localMicOn,
+  });
+
   // --- Mutations ---
   const joinRoomM = useMutation((api as any).conferenceRoom.joinRoom);
   const leaveRoomM = useMutation((api as any).conferenceRoom.leaveRoom);
@@ -279,6 +302,7 @@ export default function ConferenceRoomScreen() {
   }, [conferenceId, leaveRoomM, router]);
 
   const handleToggleSelfMute = useCallback(async () => {
+    setLocalMicOn((v) => !v); // instant local mic cut/restore via the mesh
     await safeMutate('Toggle mute', async () => toggleMuteM({ conferenceId, isMuted: !myMuted }));
     void refetchState();
   }, [conferenceId, myMuted, refetchState, toggleMuteM]);
