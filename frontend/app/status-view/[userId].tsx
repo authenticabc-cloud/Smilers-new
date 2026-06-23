@@ -189,6 +189,12 @@ function StatusViewScreenInner() {
   const progress = useRef(new Animated.Value(0)).current;
   const animRef = useRef<Animated.CompositeAnimation | null>(null);
   const videoPlayerRef = useRef<VideoPlayer | null>(null);
+  // iter-268: guard so markViewed fires AT MOST once per status id. Marking
+  // a status viewed mutates the Convex data, which hands back a NEW `current`
+  // object reference; the old effect keyed on `current` then re-fired
+  // markViewed AND reset the progress bar to 0 on every data echo — so the
+  // bar never filled and the story never auto-advanced/closed.
+  const viewedRef = useRef<Set<string>>(new Set());
 
   const current = stories[idx];
   const total = stories.length;
@@ -240,8 +246,14 @@ function StatusViewScreenInner() {
 
   useEffect(() => {
     if (!current || isMine) return;
+    const key = String(current._id || current.id || current.statusId || '');
+    if (!key || viewedRef.current.has(key)) return;
+    viewedRef.current.add(key);
     markViewed({ statusId: current._id || current.id || current.statusId }).catch(() => {});
-  }, [current, isMine, markViewed]);
+    // Keyed on `idx` (not `current`) + a once-per-id guard so a data echo
+    // from the mutation can't re-trigger this and reset the timer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idx, isMine]);
 
   useEffect(() => {
     if (!current) return;
@@ -250,7 +262,7 @@ function StatusViewScreenInner() {
     if (paused) return;
 
     let duration = DEFAULT_DURATION_MS;
-    if (current.type === 'video') {
+    if (readStoryType(current) === 'video') {
       const seconds = current.duration && current.duration > 1000 ? current.duration / 1000 : current.duration || 5;
       duration = Math.min(MAX_VIDEO_DURATION_MS, seconds * 1000);
     }
@@ -270,7 +282,14 @@ function StatusViewScreenInner() {
         animRef.current.stop();
       }
     };
-  }, [idx, paused, current, goNext, progress]);
+    // iter-268: depend on `idx`/`paused`/`total` — NOT the `current` object.
+    // markViewed (and other Convex echoes) hand back a fresh `current`
+    // reference on every render; keying on it reset the progress bar to 0
+    // continuously so it never filled and never fired goNext (no
+    // auto-advance / auto-close). `idx` uniquely identifies the active slide;
+    // `total` re-arms the timer once stories finish loading.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idx, paused, total]);
 
   useEffect(() => {
     const video = videoPlayerRef.current;
