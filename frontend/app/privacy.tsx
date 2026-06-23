@@ -21,6 +21,12 @@ import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../src/providers/AuthProvider';
+import {
+  PRIVACY_SETTINGS_KEY,
+  DEFAULT_PRIVACY_SETTINGS,
+  readStoredJson,
+  writeStoredJson,
+} from '../src/lib/settingsStorage';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/theme';
 
 type VisibilityKey = 'lastSeen' | 'profilePhoto' | 'about' | 'status';
@@ -32,6 +38,7 @@ interface PrivacySettings {
   about: VisibilityValue;
   status: VisibilityValue;
   readReceipts: boolean;
+  typingIndicators: boolean;
 }
 
 const DEFAULTS: PrivacySettings = {
@@ -40,6 +47,7 @@ const DEFAULTS: PrivacySettings = {
   about: 'everyone',
   status: 'contacts',
   readReceipts: true,
+  typingIndicators: true,
 };
 
 const VISIBILITY_LABEL: Record<VisibilityValue, string> = { everyone: 'Everyone', contacts: 'My contacts', nobody: 'Nobody' };
@@ -64,19 +72,47 @@ export default function PrivacyScreen() {
   const controlsDisabled = !cloudSyncEnabled || saving;
 
   useEffect(() => {
-    if (serverSettings) setDraft({ ...DEFAULTS, ...serverSettings });
+    // Preserve the locally-managed typingIndicators across server echoes —
+    // the cloud `settings` may not include it (see persist()).
+    if (serverSettings) {
+      setDraft((prev) => ({ ...DEFAULTS, ...serverSettings, typingIndicators: prev.typingIndicators }));
+    }
   }, [serverSettings]);
+
+  // Seed typingIndicators from on-device storage on mount.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const local = await readStoredJson(PRIVACY_SETTINGS_KEY, DEFAULT_PRIVACY_SETTINGS);
+      if (active && local && typeof local.typingIndicators === 'boolean') {
+        setDraft((prev) => ({ ...prev, typingIndicators: local.typingIndicators }));
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const persist = useCallback(async (next: PrivacySettings) => {
     if (!cloudSyncEnabled) {
       return;
     }
     setDraft(next);
+    // typingIndicators is managed ON-DEVICE and kept OUT of the cloud payload.
+    // The Convex `updateSettings` validator may not define it; sending an
+    // unknown field would reject the WHOLE mutation and revert every toggle
+    // (the exact "typing indicators can't be turned on" symptom). Persist it
+    // locally; sync the rest to the cloud.
+    void writeStoredJson(PRIVACY_SETTINGS_KEY, { ...DEFAULT_PRIVACY_SETTINGS, ...next });
     setSaving(true);
     try {
-      await updateSettings({ settings: next });
+      const { typingIndicators, ...cloud } = next;
+      void typingIndicators;
+      await updateSettings({ settings: cloud });
     } catch {
-      if (serverSettings) setDraft({ ...DEFAULTS, ...serverSettings });
+      if (serverSettings) {
+        setDraft((prev) => ({ ...DEFAULTS, ...serverSettings, typingIndicators: prev.typingIndicators }));
+      }
     } finally {
       setSaving(false);
     }
