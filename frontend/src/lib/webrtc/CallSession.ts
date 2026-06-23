@@ -41,6 +41,10 @@ export class CallSession {
   // True while the outgoing video track is a SCREEN capture (not the camera).
   // Drives the encoder cap in applyScreenEncodingParameters().
   private screenShareActive = false;
+  // Screen-share quality profile chosen by the user in the share UI.
+  //   'sharp'  → prioritise resolution (best for text / static screens).
+  //   'smooth' → prioritise framerate (best for video / motion).
+  private screenQuality: 'sharp' | 'smooth' = 'sharp';
 
   private closed = false;
   private remoteDescriptionSet = false;
@@ -306,28 +310,48 @@ export class CallSession {
       if (!params.encodings || params.encodings.length === 0) {
         params.encodings = [{ active: true }];
       }
-      // Downscale captures wider/taller than ~1280px so the encoder isn't
-      // handed a 1080×2400 surface it can't handle.
+      // Per-profile tuning. 'sharp' keeps near-native resolution at a low
+      // framerate (text/code stays legible); 'smooth' trades resolution for
+      // a higher framerate (scrolling video / animation stays fluid).
+      const profile =
+        this.screenQuality === 'smooth'
+          ? { maxFramerate: 24, maxBitrate: 3_000_000, scaleThreshold: 960, scaleCap: 2.5, degradation: 'maintain-framerate' }
+          : { maxFramerate: 12, maxBitrate: 2_500_000, scaleThreshold: 1600, scaleCap: 1.5, degradation: 'maintain-resolution' };
+      // Downscale captures larger than the profile threshold so the encoder
+      // isn't handed a surface it can't handle.
       let scale = 1;
       try {
         const settings = videoSender.track?.getSettings?.() || {};
         const maxDim = Math.max(Number(settings.width) || 0, Number(settings.height) || 0);
-        if (maxDim > 1280) scale = Math.min(2, maxDim / 1280);
+        if (maxDim > profile.scaleThreshold) {
+          scale = Math.min(profile.scaleCap, maxDim / profile.scaleThreshold);
+        }
       } catch {}
       params.encodings.forEach((enc: any) => {
         enc.active = true;
-        enc.maxFramerate = 15;
-        enc.maxBitrate = 2_500_000;
-        if (scale > 1) enc.scaleResolutionDownBy = scale;
+        enc.maxFramerate = profile.maxFramerate;
+        enc.maxBitrate = profile.maxBitrate;
+        enc.scaleResolutionDownBy = scale > 1 ? scale : 1;
       });
-      params.degradationPreference = 'maintain-resolution';
+      params.degradationPreference = profile.degradation;
       await videoSender.setParameters(params);
       callDebug.push(
         'SCRN',
-        `encode capped: 15fps / 2.5Mbps / scale=${scale.toFixed(2)} / maintain-resolution`,
+        `encode capped: q=${this.screenQuality} ${profile.maxFramerate}fps / ${(profile.maxBitrate / 1e6).toFixed(1)}Mbps / scale=${scale.toFixed(2)} / ${profile.degradation}`,
       );
     } catch (e: any) {
       callDebug.push('ERR', `applyScreenEncodingParameters failed: ${e?.message || e}`);
+    }
+  }
+
+  /**
+   * Switch the screen-share quality profile at runtime. Re-applies the
+   * encoder caps immediately if a screen capture is currently active.
+   */
+  async setScreenQuality(mode: 'sharp' | 'smooth'): Promise<void> {
+    this.screenQuality = mode;
+    if (this.screenShareActive) {
+      await this.applyScreenEncodingParameters();
     }
   }
 

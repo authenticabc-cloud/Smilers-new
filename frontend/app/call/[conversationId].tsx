@@ -381,6 +381,10 @@ export function CallScreenInner() {
   const [audioOutput, setAudioOutput] = useState<AudioOutputRoute>(requestedType === 'voice' ? 'earpiece' : 'speaker');
   const [audioOutputMenuVisible, setAudioOutputMenuVisible] = useState(false);
   const [screenSharing, setScreenSharing] = useState(startInScreenShare);
+  // Screen-share quality profile chosen via the in-share toggle. 'sharp'
+  // keeps near-native resolution (text/code), 'smooth' favours framerate
+  // (scrolling video). Applied through CallSession.setScreenQuality().
+  const [screenQuality, setScreenQuality] = useState<'sharp' | 'smooth'>('sharp');
   const [statusText, setStatusText] = useState('Connecting…');
   const [permissionDenied, setPermissionDenied] = useState(false);
   // iter-189: true once the WebRTC connection actually reaches 'connected'.
@@ -1637,7 +1641,15 @@ export function CallScreenInner() {
       }
       Alert.alert('Screen sharing failed', e?.message || 'Could not start screen sharing.');
     }
-  }, [screenSharing, callType]);
+  }, [screenSharing, callType, isScreenOnly]);
+
+  const handleSelectScreenQuality = useCallback(
+    (mode: 'sharp' | 'smooth') => {
+      setScreenQuality(mode);
+      void sessionRef.current?.setScreenQuality?.(mode);
+    },
+    [],
+  );
 
   const savedContactName = useMemo(
     () => findSavedContactDisplayName(contacts, conversation, me?._id ? String(me._id) : undefined),
@@ -2107,6 +2119,8 @@ export function CallScreenInner() {
           screenSharing={screenSharing}
           peerConnected={peerConnected}
           onToggleScreenShare={toggleScreenShare}
+          screenQuality={screenQuality}
+          onSelectQuality={handleSelectScreenQuality}
           onStop={() => {
             // Best-effort: tell the backend we're ending the session, then
             // route back. Failure is swallowed because the backend may not

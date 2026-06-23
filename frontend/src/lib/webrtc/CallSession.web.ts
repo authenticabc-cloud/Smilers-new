@@ -49,6 +49,14 @@ export class CallSession {
     // no-op on web
   }
 
+  async setScreenQuality(_mode: 'sharp' | 'smooth'): Promise<void> {
+    // no-op on web
+  }
+
+  async applyScreenEncodingParameters(): Promise<void> {
+    // no-op on web
+  }
+
   createPeerConnection(): any {
     return null;
   }

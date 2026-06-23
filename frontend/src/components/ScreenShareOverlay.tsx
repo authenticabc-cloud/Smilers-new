@@ -39,6 +39,9 @@ interface ScreenShareOverlayProps {
   onToggleScreenShare: () => void | Promise<void>;
   onStop: () => void;
   RTCViewImpl: any;
+  /** Screen-share quality profile + setter (sender-side toggle). */
+  screenQuality?: 'sharp' | 'smooth';
+  onSelectQuality?: (mode: 'sharp' | 'smooth') => void;
   /** Active screen-share session id (used by switch-share controls). */
   sessionId?: string | null;
   /** Conversation id backing the session (sharer-side `getActiveSession` query). */
@@ -56,6 +59,8 @@ export default function ScreenShareOverlay({
   onToggleScreenShare,
   onStop,
   RTCViewImpl,
+  screenQuality = 'sharp',
+  onSelectQuality,
   sessionId,
   conversationId,
 }: ScreenShareOverlayProps) {
@@ -207,6 +212,51 @@ export default function ScreenShareOverlay({
           </Text>
         </TouchableOpacity>
 
+        {/* Quality toggle — Sharp (resolution, best for text) vs Smooth
+            (framerate, best for video/motion). */}
+        {onSelectQuality ? (
+          <View style={styles.qualityRow} testID="screen-share-quality-toggle">
+            <TouchableOpacity
+              style={[styles.qualityChip, screenQuality === 'sharp' ? styles.qualityChipActive : null]}
+              onPress={() => onSelectQuality('sharp')}
+              activeOpacity={0.85}
+              testID="screen-share-quality-sharp"
+            >
+              <MaterialCommunityIcons
+                name="text-box-outline"
+                size={16}
+                color={screenQuality === 'sharp' ? '#3D2A00' : 'rgba(255,255,255,0.85)'}
+              />
+              <Text style={[styles.qualityChipText, screenQuality === 'sharp' ? styles.qualityChipTextActive : null]}>
+                Sharp
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.qualityChip, screenQuality === 'smooth' ? styles.qualityChipActive : null]}
+              onPress={() => onSelectQuality('smooth')}
+              activeOpacity={0.85}
+              testID="screen-share-quality-smooth"
+            >
+              <MaterialCommunityIcons
+                name="play-speed"
+                size={16}
+                color={screenQuality === 'smooth' ? '#3D2A00' : 'rgba(255,255,255,0.85)'}
+              />
+              <Text style={[styles.qualityChipText, screenQuality === 'smooth' ? styles.qualityChipTextActive : null]}>
+                Smooth
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {onSelectQuality ? (
+          <Text style={styles.qualityHint}>
+            {screenQuality === 'sharp'
+              ? 'Crisp text & detail — best for documents and code.'
+              : 'Higher frame rate — best for video and animation.'}
+          </Text>
+        ) : null}
+
         {/* Optional mic toggle — only when the sender opted-in to mic narration */}
         {allowMic ? (
           <TouchableOpacity
@@ -337,6 +387,41 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.85)',
     fontWeight: FontWeight.semibold,
     fontSize: FontSize.sm,
+  },
+  qualityRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+  },
+  qualityChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderRadius: Radius.pill,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+  },
+  qualityChipActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  qualityChipText: {
+    color: 'rgba(255,255,255,0.85)',
+    fontWeight: FontWeight.semibold,
+    fontSize: FontSize.sm,
+  },
+  qualityChipTextActive: {
+    color: '#3D2A00',
+  },
+  qualityHint: {
+    color: 'rgba(255,255,255,0.65)',
+    fontSize: FontSize.sm,
+    textAlign: 'center',
+    marginTop: 8,
+    paddingHorizontal: 20,
   },
   senderFooter: {
     paddingHorizontal: Spacing.lg,
