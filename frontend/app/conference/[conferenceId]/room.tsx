@@ -56,6 +56,23 @@ import { useConferenceMesh } from '../../../src/lib/call/mesh/useConferenceMesh'
 import { getDisplayInitials } from '../../../src/lib/displayName';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../../src/theme';
 
+// Speaker-timer countdown. Web's `getActiveTimer` returns no `endsAt` — it
+// gives `{ durationSeconds, startedAt (ISO), status, pausedAt?, elapsedBeforePause? }`.
+// Remaining = duration − elapsed, where elapsed accumulates the time spent
+// running (frozen while paused).
+function computeTimerRemainingSec(t: any): number {
+  if (!t) return 0;
+  const duration = Number(t.durationSeconds) || 0;
+  const startedAtMs = Date.parse(t.startedAt || '') || 0;
+  const elapsedBeforePause = Number(t.elapsedBeforePause) || 0;
+  if (!startedAtMs) return Math.max(0, Math.round(duration - elapsedBeforePause));
+  const refMs =
+    t.status === 'paused' ? Date.parse(t.pausedAt || '') || startedAtMs : Date.now();
+  const elapsed = elapsedBeforePause + Math.max(0, (refMs - startedAtMs) / 1000);
+  return Math.max(0, Math.round(duration - elapsed));
+}
+
+
 type Role = 'chair' | 'clerk' | 'protocol' | 'participant';
 type Audience = 'everyone' | 'chair' | 'clerk';
 type ParticipantStatus = 'invited' | 'waiting' | 'active' | 'suspended' | 'removed' | 'left';
@@ -249,10 +266,13 @@ export default function ConferenceRoomScreen() {
   const assignProtocolM = useMutation((api as any).conferenceSpeakerTimer.assignProtocolRole);
   const removeProtocolM = useMutation((api as any).conferenceSpeakerTimer.removeProtocolRole);
   // Toolbar pill actions (graceful fallback when functions don't exist):
-  const startTimerM = useMutation((api as any).conferences.startTimer);
-  const endTimerM = useMutation((api as any).conferences.endTimer);
+  // Web-team confirmed: speaker timer lives in `api.conferenceSpeakerTimer.*`
+  // (start with `durationSeconds`; end via `stopTimer({ timerId })` — there is
+  // no `endTimer`).
+  const startTimerM = useMutation((api as any).conferenceSpeakerTimer.startTimer);
+  const stopTimerM = useMutation((api as any).conferenceSpeakerTimer.stopTimer);
   const appendMinutesM = useMutation((api as any).conferenceMinutes.addEntry);
-  const sendReactionM = useMutation((api as any).conferences.sendReaction);
+  const sendReactionM = useMutation((api as any).conferenceReactions.sendReaction);
   const muteAllM = useMutation((api as any).chairControls.muteAll); // eslint-disable-line @typescript-eslint/no-unused-vars
   // Confirmed canonical contracts (iter 154):
   //   Motions   → api.conferenceMotions.proposeMotion / getMotions
@@ -343,7 +363,7 @@ export default function ConferenceRoomScreen() {
   //     active so the "Xs remaining" label decrements smoothly (refetchState
   //     only fires every 3s, which made the countdown jump). ---
   const [, setClockTick] = useState(0);
-  const timerHasCountdown = typeof (activeTimer as any)?.endsAt === 'number';
+  const timerHasCountdown = (activeTimer as any)?.status === 'running';
   useEffect(() => {
     if (!timerHasCountdown) return;
     const id = setInterval(() => setClockTick((n) => n + 1), 1000);
@@ -952,8 +972,18 @@ export default function ConferenceRoomScreen() {
                     {p.options.map((o: any, idx: number) => {
                       const optionId = o?._id || o?.id || String(idx);
                       const label = o?.text || o?.label || o?.option || String(o);
+                      // Confirmed web shape: counts live in `poll.voteCounts`
+                      // (a { optionId: count } map), and the viewer's own
+                      // selection(s) in `poll.myVotes` (optionId[]).
                       const count =
-                        typeof o?.votes === 'number' ? o.votes : typeof o?.count === 'number' ? o.count : null;
+                        p?.voteCounts && typeof p.voteCounts[optionId] === 'number'
+                          ? p.voteCounts[optionId]
+                          : typeof o?.votes === 'number'
+                            ? o.votes
+                            : typeof o?.count === 'number'
+                              ? o.count
+                              : null;
+                      const mine = Array.isArray(p?.myVotes) && p.myVotes.includes(optionId);
                       return (
                         <TouchableOpacity
                           key={optionId}
@@ -968,12 +998,18 @@ export default function ConferenceRoomScreen() {
                             paddingHorizontal: 12,
                             paddingVertical: 10,
                             borderRadius: 8,
-                            backgroundColor: closed ? 'rgba(255,255,255,0.05)' : 'rgba(20,184,166,0.12)',
+                            borderWidth: mine ? 1 : 0,
+                            borderColor: mine ? '#14B8A6' : 'transparent',
+                            backgroundColor: closed
+                              ? 'rgba(255,255,255,0.05)'
+                              : mine
+                                ? 'rgba(20,184,166,0.28)'
+                                : 'rgba(20,184,166,0.12)',
                           }}
                           testID={`conf-poll-opt-${optionId}`}
                         >
                           <Text style={{ color: Colors.white, fontSize: 13, flex: 1 }} numberOfLines={1}>
-                            {label}
+                            {mine ? '\u2713 ' : ''}{label}
                           </Text>
                           {count !== null ? (
                             <Text style={{ color: '#14B8A6', fontSize: 12, fontWeight: '700', marginLeft: 8 }}>
@@ -1009,7 +1045,7 @@ export default function ConferenceRoomScreen() {
               activeOpacity={0.85}
               onPress={async () => {
                 await safeMutate('Start timer', async () =>
-                  startTimerM({ conferenceId, durationSec: mins * 60 }),
+                  startTimerM({ conferenceId, durationSeconds: mins * 60 }),
                 );
                 void refetchState();
               }}
@@ -1022,21 +1058,23 @@ export default function ConferenceRoomScreen() {
         {activeTimer ? (
           <View style={{ marginTop: 12, padding: 12, borderRadius: 10, backgroundColor: 'rgba(245,158,11,0.15)' }}>
             <Text style={{ color: '#F59E0B', fontWeight: '700', fontSize: 13 }}>
-              Timer running{(activeTimer as any).speakerName ? ` · ${(activeTimer as any).speakerName}` : ''}
+              Timer {(activeTimer as any).status === 'paused' ? 'paused' : 'running'}
+              {(activeTimer as any).speakerName ? ` · ${(activeTimer as any).speakerName}` : ''}
             </Text>
-            {typeof (activeTimer as any).endsAt === 'number' ? (
-              <Text style={{ color: Colors.white, fontSize: 12, marginTop: 2 }}>
-                {Math.max(0, Math.round(((activeTimer as any).endsAt - Date.now()) / 1000))}s remaining
-              </Text>
-            ) : typeof (activeTimer as any).durationSec === 'number' ? (
-              <Text style={{ color: Colors.white, fontSize: 12, marginTop: 2 }}>{(activeTimer as any).durationSec}s</Text>
-            ) : null}
+            <Text style={{ color: Colors.white, fontSize: 12, marginTop: 2 }}>
+              {computeTimerRemainingSec(activeTimer)}s remaining
+            </Text>
           </View>
         ) : null}
         <TouchableOpacity
           style={[styles.panelGhostBtn, { marginTop: 12 }]}
           onPress={async () => {
-            await safeMutate('End timer', async () => endTimerM({ conferenceId }));
+            const timerId = (activeTimer as any)?._id;
+            if (!timerId) {
+              closePanel();
+              return;
+            }
+            await safeMutate('End timer', async () => stopTimerM({ timerId }));
             void refetchState();
           }}
           testID="conf-timer-end"
@@ -1060,7 +1098,7 @@ export default function ConferenceRoomScreen() {
           activeOpacity={0.85}
           onPress={async () => {
             await safeMutate('Append minute entry', async () =>
-              appendMinutesM({ conferenceId, text: `Note logged at ${new Date().toLocaleTimeString()}` }),
+              appendMinutesM({ conferenceId, content: `Note logged at ${new Date().toLocaleTimeString()}`, category: 'note' }),
             );
             void refetchState();
           }}

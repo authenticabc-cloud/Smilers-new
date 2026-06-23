@@ -23,28 +23,23 @@ any differ, give the correct signature.
 - `assignProtocolRole({ conferenceId, targetUserId })`
 - `removeProtocolRole({ conferenceId, targetUserId })`
 
-## 4. `api.conferences.*`  (timer / minutes / reactions / mute-all)
-- `startTimer({ conferenceId, durationSec })`
-- `endTimer({ conferenceId })`
-- `appendMinutes({ conferenceId, text })`
-- `sendReaction({ conferenceId, emoji })`
-- `muteAll({ conferenceId })`
+## 4. Speaker timer / minutes / reactions  — ✅ READ NAMESPACES CONFIRMED (web team)
 
-### ⚠️ Read-side namespace mismatch — please confirm exact paths
-Mobile now subscribes (live `watchQuery`) to the three reads below, but they were
-GUESSED and live in DIFFERENT modules than the writes above — which is suspicious
-(Convex read+write for one feature usually share a module). For each, confirm the
-exact deployed query path + returned fields, or give the correct one:
+Confirmed deployed:
+- **Timer** → `api.conferenceSpeakerTimer.*`: `startTimer({ conferenceId, speakerId?, speakerName?, durationSeconds })`,
+  `pauseTimer({ timerId })`, `resumeTimer({ timerId })`, `stopTimer({ timerId })`, `getActiveTimer({ conferenceId })`.
+  Read shape: `{ _id, durationSeconds, startedAt(ISO), status:"running"|"paused"|"stopped", pausedAt?(ISO), elapsedBeforePause?(number) }`.
+  → Mobile now uses these exact paths/args (was `api.conferences.startTimer`/`durationSec`/`endTimer`).
+- **Minutes** → `api.conferenceMinutes.getMinutes` read shape: `{ _id, content, category, authorName, timestamp(ISO) }`.
+- **Reactions** → `api.conferenceReactions.getRecentReactions` read shape: `{ _id, emoji, userName, timestamp }` (last 20, ≤30s).
+- **Polls** → `api.conferencePolls.getPolls` shape: `{ _id, question, options:[{id,text}], voteCounts:{optionId:count}, myVotes:[optionId], isClosed, ... }`.
+  → Mobile now reads counts from `voteCounts` + highlights `myVotes`.
 
-- **Active speaker timer** — reading: `api.conferenceSpeakerTimer.getActiveTimer({ conferenceId })`
-  - but writing via `api.conferences.startTimer` / `endTimer`. Which module is correct?
-  - expected fields used by mobile: `{ endsAt?: number(ms), durationSec?: number, speakerName?: string }`
-- **Minutes log** — reading: `api.conferenceMinutes.getMinutes({ conferenceId })`
-  - writing via `api.conferenceMinutes.addEntry({ conferenceId, text })` (mobile uses `addEntry`, NOT `appendMinutes` — confirm name)
-  - expected fields: `{ _id, text|content, authorName? }`
-- **Recent reactions** — reading: `api.conferenceReactions.getRecentReactions({ conferenceId })`
-  - but writing via `api.conferences.sendReaction`. Which module is correct?
-  - expected fields: `{ _id, emoji }`
+### ❓ Still need the two WRITE signatures (only reads were given):
+- **Minutes write:** mobile calls `api.conferenceMinutes.addEntry({ conferenceId, content, category:'note' })`.
+  Confirm function name (`addEntry`?) + args (`content` vs `text`, is `category` required?).
+- **Reaction write:** mobile calls `api.conferenceReactions.sendReaction({ conferenceId, emoji })`
+  (moved to match the read module). Confirm exact name + namespace.
 
 ## 5. `api.conferenceMotions.*`  (motions)
 - `getMotions({ conferenceId })` → motion[] — fields? (title, status, votesFor/Against, _id)
