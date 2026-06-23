@@ -264,7 +264,7 @@ export default function ConferenceRoomScreen() {
   const createPollM = useMutation((api as any).conferencePolls.createPoll);
   const joinBreakoutRoomM = useMutation((api as any).breakoutRooms.joinRoom);
   const castMotionVoteM = useMutation((api as any).conferenceMotions.castVote);
-  const votePollM = useMutation((api as any).conferencePolls.vote); // eslint-disable-line @typescript-eslint/no-unused-vars
+  const votePollM = useMutation((api as any).conferencePolls.vote);
 
   // List queries for drawer panels (graceful fallback to []).
   const { data: motions } = useSafeConvexQuery<any[]>(
@@ -285,6 +285,25 @@ export default function ConferenceRoomScreen() {
     [],
     !!conferenceId,
   );
+  // Confirmed read queries (web contract): minutes log, active speaker timer, recent reactions.
+  const { data: minutesEntries } = useSafeConvexQuery<any[]>(
+    (api as any).conferenceMinutes.getMinutes,
+    { conferenceId },
+    [],
+    !!conferenceId,
+  );
+  const { data: activeTimer } = useSafeConvexQuery<any>(
+    (api as any).conferenceSpeakerTimer.getActiveTimer,
+    { conferenceId },
+    null,
+    !!conferenceId,
+  );
+  const { data: recentReactions } = useSafeConvexQuery<any[]>(
+    (api as any).conferenceReactions.getRecentReactions,
+    { conferenceId },
+    [],
+    !!conferenceId,
+  );
 
   // --- Toolbar panel state ---
   const [activePanel, setActivePanel] = useState<
@@ -293,9 +312,11 @@ export default function ConferenceRoomScreen() {
   const closePanel = useCallback(() => setActivePanel(null), []);
 
   // --- Floating reactions overlay (incoming reactions) ---
-  const incomingReactions: any[] = Array.isArray((state as any)?.recentReactions)
-    ? (state as any).recentReactions
-    : [];
+  const incomingReactions: any[] = Array.isArray(recentReactions)
+    ? recentReactions
+    : Array.isArray((state as any)?.recentReactions)
+      ? (state as any).recentReactions
+      : [];
 
   // --- Auto-join once on mount ---
   const joinedRef = useRef(false);
@@ -899,16 +920,60 @@ export default function ConferenceRoomScreen() {
           polls.map((p: any) => {
             const closed = p.status === 'closed' || p.closed === true;
             return (
-              <View key={String(p._id || p.id)} style={styles.panelRow} testID={`conf-poll-${p._id || p.id}`}>
-                <View style={[styles.panelAvatar, { backgroundColor: 'rgba(20,184,166,0.18)' }]}>
-                  <MaterialCommunityIcons name="poll" size={18} color="#14B8A6" />
+              <View
+                key={String(p._id || p.id)}
+                style={[styles.panelRow, { flexDirection: 'column', alignItems: 'stretch' }]}
+                testID={`conf-poll-${p._id || p.id}`}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <View style={[styles.panelAvatar, { backgroundColor: 'rgba(20,184,166,0.18)' }]}>
+                    <MaterialCommunityIcons name="poll" size={18} color="#14B8A6" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.panelRowTitle} numberOfLines={2}>{p.question || 'Poll'}</Text>
+                    <Text style={styles.panelRowSubtitle}>
+                      {closed ? 'Closed' : `${Array.isArray(p.options) ? p.options.length : 0} options`}
+                    </Text>
+                  </View>
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.panelRowTitle} numberOfLines={2}>{p.question || 'Poll'}</Text>
-                  <Text style={styles.panelRowSubtitle}>
-                    {closed ? 'Closed' : `${Array.isArray(p.options) ? p.options.length : 0} options`}
-                  </Text>
-                </View>
+                {Array.isArray(p.options) && p.options.length > 0 ? (
+                  <View style={{ marginTop: 8, gap: 6 }}>
+                    {p.options.map((o: any, idx: number) => {
+                      const optionId = o?._id || o?.id || String(idx);
+                      const label = o?.text || o?.label || o?.option || String(o);
+                      const count =
+                        typeof o?.votes === 'number' ? o.votes : typeof o?.count === 'number' ? o.count : null;
+                      return (
+                        <TouchableOpacity
+                          key={optionId}
+                          disabled={closed}
+                          onPress={async () => {
+                            await safeMutate('Vote', async () => votePollM({ pollId: p._id || p.id, optionId }));
+                          }}
+                          style={{
+                            flexDirection: 'row',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            paddingHorizontal: 12,
+                            paddingVertical: 10,
+                            borderRadius: 8,
+                            backgroundColor: closed ? 'rgba(255,255,255,0.05)' : 'rgba(20,184,166,0.12)',
+                          }}
+                          testID={`conf-poll-opt-${optionId}`}
+                        >
+                          <Text style={{ color: Colors.white, fontSize: 13, flex: 1 }} numberOfLines={1}>
+                            {label}
+                          </Text>
+                          {count !== null ? (
+                            <Text style={{ color: '#14B8A6', fontSize: 12, fontWeight: '700', marginLeft: 8 }}>
+                              {count}
+                            </Text>
+                          ) : null}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                ) : null}
               </View>
             );
           })
@@ -943,6 +1008,20 @@ export default function ConferenceRoomScreen() {
             </TouchableOpacity>
           ))}
         </View>
+        {activeTimer ? (
+          <View style={{ marginTop: 12, padding: 12, borderRadius: 10, backgroundColor: 'rgba(245,158,11,0.15)' }}>
+            <Text style={{ color: '#F59E0B', fontWeight: '700', fontSize: 13 }}>
+              Timer running{(activeTimer as any).speakerName ? ` · ${(activeTimer as any).speakerName}` : ''}
+            </Text>
+            {typeof (activeTimer as any).endsAt === 'number' ? (
+              <Text style={{ color: Colors.white, fontSize: 12, marginTop: 2 }}>
+                {Math.max(0, Math.round(((activeTimer as any).endsAt - Date.now()) / 1000))}s remaining
+              </Text>
+            ) : typeof (activeTimer as any).durationSec === 'number' ? (
+              <Text style={{ color: Colors.white, fontSize: 12, marginTop: 2 }}>{(activeTimer as any).durationSec}s</Text>
+            ) : null}
+          </View>
+        ) : null}
         <TouchableOpacity
           style={[styles.panelGhostBtn, { marginTop: 12 }]}
           onPress={async () => {
@@ -979,6 +1058,23 @@ export default function ConferenceRoomScreen() {
           <Feather name="edit-3" size={18} color="#FFFFFF" />
           <Text style={[styles.panelPrimaryBtnText, { color: '#FFFFFF' }]}>Append entry</Text>
         </TouchableOpacity>
+        {Array.isArray(minutesEntries) && minutesEntries.length > 0 ? (
+          <View style={{ marginTop: 12, gap: 8 }}>
+            {minutesEntries.map((m: any, i: number) => (
+              <View
+                key={String(m?._id || i)}
+                style={{ padding: 10, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.06)' }}
+              >
+                <Text style={{ color: Colors.white, fontSize: 13 }}>{m?.text || m?.content || ''}</Text>
+                {m?.authorName ? (
+                  <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11, marginTop: 2 }}>{m.authorName}</Text>
+                ) : null}
+              </View>
+            ))}
+          </View>
+        ) : (
+          <Text style={[styles.panelEmpty, { marginTop: 12 }]}>No minutes yet</Text>
+        )}
       </SideDrawerPanel>
 
       {/* Floating reactions overlay (incoming) */}

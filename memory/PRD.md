@@ -1,5 +1,13 @@
 # Smilers Mobile App — PRD
 
+## iter-274 (Jun 2026): Conference — poll voting + timer/minutes/reactions read displays
+In `app/conference/[conferenceId]/room.tsx`:
+- **Poll voting wired:** polls now render each option as a tappable button → `api.conferencePolls.vote({pollId, optionId})` (shows vote count if present; disabled when poll closed).
+- **Read subscriptions added** (confirmed web queries): `conferenceMinutes.getMinutes` → minutes list in Minutes panel; `conferenceSpeakerTimer.getActiveTimer` → active-timer block (remaining secs from `endsAt`/`durationSec`) in Timer panel; `conferenceReactions.getRecentReactions` → drives the floating reactions overlay (was reading stale `state.recentReactions`).
+- Lint clean; web bundle builds (web:200); app boots. NATIVE BUILD required to validate.
+- ⚠️ Still unconfirmed: timer **start/end** namespace (left `conferences.startTimer/endTimer`); option/field shapes for polls/minutes/timer/reactions read defensively (multiple key fallbacks) — adjust if web shapes differ. Conference feature now: voice+video mesh, mic/cam toggles, roster/roles, speaking indicator, breakout peer-scoping + join, motion voting, poll voting, minutes/timer/reactions displays, chat. (Hand-raise intentionally absent — not supported by formal-conference backend.)
+
+
 ## iter-273 (Jun 2026): Conference meeting-tools wired to confirmed backend + breakout mesh scoping
 Web team confirmed exact signatures. Changes in `app/conference/[conferenceId]/room.tsx`:
 - **Breakout-room peer scoping (option a):** mesh now connects ONLY participants in the SAME breakout (`peerUserIds` filtered by `conferenceRoles.breakoutRoomId` from getRoomState; null=main). Added **Join** button per breakout room → `api.breakoutRooms.joinRoom({conferenceId, roomId})`.
