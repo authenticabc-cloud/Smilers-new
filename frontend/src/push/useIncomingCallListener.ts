@@ -97,6 +97,7 @@ export function useIncomingCallListener() {
       // callId (the calls doc id). 1:1 calls keep the legacy /call screen.
       const isConferenceCall =
         (incomingCall as any)?.isConference === true ||
+        String((incomingCall as any)?.isConference ?? '') === '1' ||
         String((incomingCall as any)?.callType || '').toLowerCase() === 'conference';
       if (isConferenceCall) {
         router.push(`/group-call/${conversationId}?callId=${encodeURIComponent(String(incomingCall._id))}` as any);

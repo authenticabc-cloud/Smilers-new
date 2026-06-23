@@ -1020,6 +1020,7 @@ export function usePushNotifications() {
         const isConferenceCall =
           (payload as any).isConference === true ||
           String((payload as any).isConference ?? '').toLowerCase() === 'true' ||
+          String((payload as any).isConference ?? '') === '1' ||
           String((payload as any).callType ?? '').toLowerCase() === 'conference';
         if (isConferenceCall) {
           const joinCallId = toNonEmptyString((payload as any).callId);
