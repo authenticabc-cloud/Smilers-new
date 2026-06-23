@@ -1511,7 +1511,18 @@ export function CallScreenInner() {
   // (matches the web app's Pop out button). On Android this immediately drops
   // the call into a movable PiP window.
   const handlePopOut = useCallback(() => {
-    enterPip({ width: 12, height: 16 });
+    const r = enterPip({ width: 12, height: 16 });
+    if (!r.ok) {
+      Alert.alert(
+        'Pop out unavailable',
+        `Picture-in-Picture could not start.\n\nReason: ${r.reason || 'unknown'}`,
+      );
+    } else if (r.reason === 'native-module-not-linked') {
+      Alert.alert(
+        'Pop out unavailable',
+        'Picture-in-Picture is not available in this build (native module not linked). Please use a fresh production build.',
+      );
+    }
   }, []);
 
   // iter-254: switch an in-progress VOICE call to VIDEO. Mirrors the Twilio

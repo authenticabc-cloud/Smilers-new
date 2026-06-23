@@ -44,11 +44,32 @@ export function setPipParams(opts: {
   } catch {}
 }
 
-/** Manually request PiP now (fallback for Android < 12 on background). */
-export function enterPip(opts?: { width?: number; height?: number }): void {
+/** Manually request PiP now. Returns a diagnostic result so callers can
+ *  surface WHY it failed instead of silently doing nothing. */
+export function enterPip(opts?: { width?: number; height?: number }): {
+  ok: boolean;
+  reason?: string;
+} {
+  if (Platform.OS !== 'android') return { ok: false, reason: 'not-android' };
+  if (!ExpoPip) return { ok: false, reason: 'expo-pip JS module not loaded' };
+  // getMaxNumPictureInPictureActions() returns null when the NATIVE module
+  // isn't linked into the build (config plugin missing / Expo Go), which is
+  // the usual reason "nothing happens".
+  let nativeLinked = true;
   try {
-    ExpoPip?.enterPipMode?.(opts ?? { width: 12, height: 16 });
-  } catch {}
+    nativeLinked = ExpoPip.getMaxNumPictureInPictureActions?.() != null;
+  } catch {
+    nativeLinked = false;
+  }
+  if (typeof ExpoPip.enterPipMode !== 'function') {
+    return { ok: false, reason: 'enterPipMode missing on module' };
+  }
+  try {
+    ExpoPip.enterPipMode(opts ?? { width: 12, height: 16 });
+    return { ok: true, reason: nativeLinked ? undefined : 'native-module-not-linked' };
+  } catch (e: any) {
+    return { ok: false, reason: e?.message || String(e) };
+  }
 }
 
 /** True while the app is rendered inside the small PiP window. */
