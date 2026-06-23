@@ -5,6 +5,7 @@ import {
   Dimensions,
   Image,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -52,6 +53,7 @@ import {
 } from '../lib/messageMedia';
 import { usePhoneMessageActions, findPhoneMatches } from '../lib/usePhoneMessageActions';
 import { useAutoDownloadMedia } from '../lib/mediaAutoDownload';
+import { purgeMessageMedia } from '../lib/deletedMediaPurge';
 
 // Module-level "currently playing" audio singleton — guarantees only one
 // voice message plays at a time. Uses expo-audio's AudioPlayer (expo-av
@@ -165,6 +167,19 @@ export default function MediaBubble({
 }: BubbleProps) {
   const time = msg._creationTime ? new Date(msg._creationTime) : new Date();
   const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+  // "Delete for everyone" native purge: when the sender deletes a message for
+  // everyone, the web backend permanently corrupts the file server-side
+  // (storage 404s) and stamps `deletedAt`. Once that reactive update reaches
+  // this device we wipe any app-owned local copies (cache / SmilersDownloads)
+  // we previously saved for this message. Idempotent + best-effort.
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    if (!msg?.deletedAt) return;
+    const id = String(msg?._id || '');
+    if (!id) return;
+    purgeMessageMedia(id).catch(() => {});
+  }, [msg?.deletedAt, msg?._id]);
 
   // iter-166 system-message renderer (Identity Rework).
   // Backend per canonical contract emits:

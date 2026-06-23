@@ -19,6 +19,7 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as MediaLibrary from 'expo-media-library';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
+import { recordMessageMediaArtifact } from './deletedMediaPurge';
 
 export type AutoDownloadType = 'photos' | 'videos' | 'audio' | 'documents';
 
@@ -200,6 +201,9 @@ async function saveDocument(src: string, msg: any): Promise<boolean> {
     `smilers_${Date.now()}${inferExt(msg, 'documents')}`;
   try {
     await fs.copyAsync({ from: local, to: `${dir}${rawName}` });
+    // Track the app-owned copy so it can be purged if the sender deletes
+    // this message for everyone.
+    await recordMessageMediaArtifact(String(msg?._id || ''), `${dir}${rawName}`);
     return true;
   } catch {
     return false;
@@ -212,6 +216,8 @@ async function saveToGallery(src: string, msg: any, bucket: AutoDownloadType): P
   if (perm.status !== 'granted') return false;
   const local = await toLocalFile(src, msg, bucket);
   if (!local) return false;
+  // Track the staged app-cache copy so it can be purged on delete-for-everyone.
+  await recordMessageMediaArtifact(String(msg?._id || ''), local);
   if (typeof (MediaLibrary as any).saveToLibraryAsync === 'function') {
     await (MediaLibrary as any).saveToLibraryAsync(local);
   } else {
