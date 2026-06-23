@@ -1,7 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { Colors, FontSize, FontWeight, Spacing, Shadow, Radius } from '../theme';
+import { Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { Colors, FontSize, FontWeight, Shadow, Radius } from '../theme';
 
 interface SosButtonProps {
   onPress?: () => void;
@@ -15,7 +14,6 @@ export default function SosButton({ onPress }: SosButtonProps) {
       activeOpacity={0.85}
       testID="sos-button"
     >
-      <MaterialCommunityIcons name="alarm-light-outline" size={18} color={Colors.white} />
       <Text style={styles.sosText}>SOS</Text>
     </TouchableOpacity>
   );
@@ -29,18 +27,18 @@ const styles = StyleSheet.create({
     // labels (Chats/Contacts/etc). 84px clears a 56px tab bar + 28px
     // safe gap on Android phones with bottom navigation gestures.
     bottom: 84,
-    // Push the button further off-screen on the left so only the "SOS" label
-    // peeks out — mirrors the web app's chat list peeking-pill look.
-    left: -60,
+    // Tuck the pill mostly off-screen on the left so ONLY the "SOS" label
+    // peeks out (icon removed). The left offset hides the rounded left
+    // corner + extra padding; the text starts ~12px inside the screen edge.
+    left: -44,
     backgroundColor: Colors.danger,
     paddingVertical: 10,
-    paddingRight: 18,
-    paddingLeft: 68,
+    paddingRight: 16,
+    paddingLeft: 56,
     borderTopRightRadius: Radius.pill,
     borderBottomRightRadius: Radius.pill,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
     ...Shadow.lg,
   },
   sosText: {
