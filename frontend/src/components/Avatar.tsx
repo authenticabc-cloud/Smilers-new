@@ -9,6 +9,8 @@ interface AvatarProps {
   uri?: string | null;
   backgroundColor?: string;
   textColor?: string;
+  /** Show a green "online" presence dot at the bottom-right (matches web). */
+  online?: boolean;
 }
 
 /**
@@ -26,6 +28,7 @@ export default function Avatar({
   uri,
   backgroundColor,
   textColor,
+  online,
 }: AvatarProps) {
   const initial = getDisplayInitials(name);
   const fontSize = size * 0.45;
@@ -33,30 +36,46 @@ export default function Avatar({
 
   const radius = size / 2;
   const hasUri = typeof uri === 'string' && uri.trim().length > 0 && !imgFailed;
+  const dotSize = Math.max(10, Math.round(size * 0.26));
 
   return (
-    <View
-      style={[
-        styles.avatar,
-        {
-          width: size,
-          height: size,
-          borderRadius: radius,
-          backgroundColor: backgroundColor || Colors.primaryLight,
-        },
-      ]}
-    >
-      {hasUri ? (
-        <Image
-          source={{ uri: uri as string }}
-          style={{ width: size, height: size, borderRadius: radius }}
-          onError={() => setImgFailed(true)}
+    <View style={{ width: size, height: size }}>
+      <View
+        style={[
+          styles.avatar,
+          {
+            width: size,
+            height: size,
+            borderRadius: radius,
+            backgroundColor: backgroundColor || Colors.primaryLight,
+          },
+        ]}
+      >
+        {hasUri ? (
+          <Image
+            source={{ uri: uri as string }}
+            style={{ width: size, height: size, borderRadius: radius }}
+            onError={() => setImgFailed(true)}
+          />
+        ) : (
+          <Text style={[styles.text, { fontSize, color: textColor || Colors.primary }]}>
+            {initial}
+          </Text>
+        )}
+      </View>
+      {online ? (
+        <View
+          style={[
+            styles.onlineDot,
+            {
+              width: dotSize,
+              height: dotSize,
+              borderRadius: dotSize / 2,
+              borderWidth: Math.max(1.5, Math.round(dotSize * 0.16)),
+            },
+          ]}
         />
-      ) : (
-        <Text style={[styles.text, { fontSize, color: textColor || Colors.primary }]}>
-          {initial}
-        </Text>
-      )}
+      ) : null}
     </View>
   );
 }
@@ -69,5 +88,12 @@ const styles = StyleSheet.create({
   },
   text: {
     fontWeight: FontWeight.bold,
+  },
+  onlineDot: {
+    position: 'absolute',
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#22C55E',
+    borderColor: Colors.background,
   },
 });

@@ -437,6 +437,21 @@ function PinnedRow({
   );
 }
 
+function peerIsOnline(item: any): boolean {
+  // DM-only presence (mirrors the web chat list — no dot on groups).
+  const isGroup =
+    item?.isGroup ||
+    item?.type === 'group' ||
+    (Array.isArray(item?.participants) && item.participants.length > 2);
+  if (isGroup) return false;
+  const peer = item?.otherUser || item?.otherParticipant || item;
+  if (peer?.isOnline === true || peer?.online === true) return true;
+  const ls = peer?.lastSeen ?? item?.lastSeen;
+  const t = typeof ls === 'number' ? ls : typeof ls === 'string' ? new Date(ls).getTime() : NaN;
+  if (!Number.isFinite(t)) return false;
+  return Date.now() - t < 120000; // online if seen within 2 min
+}
+
 function ConversationRow({ item, currentUserId, contacts, onPress }: { item: any; currentUserId?: string; contacts?: any[]; onPress: () => void }) {
   // iter-176: Device address-book name beats both the saved-contact name
   // AND the Smilers display name. e.g. if your phone has the other user
@@ -476,7 +491,7 @@ function ConversationRow({ item, currentUserId, contacts, onPress }: { item: any
     contactRecord?.user?.avatar;
   return (
     <TouchableOpacity onPress={onPress} style={styles.row} activeOpacity={0.7} testID={`conv-${item._id}`}>
-      <Avatar name={name} size={52} uri={photoUri} />
+      <Avatar name={name} size={52} uri={photoUri} online={peerIsOnline(item)} />
       <View style={styles.rowMiddle}>
         <Text style={styles.rowTitle}>{name}</Text>
         <Text style={styles.rowSubtitle} numberOfLines={1}>

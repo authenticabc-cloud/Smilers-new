@@ -39,6 +39,22 @@ interface DeviceContact {
   email?: string;
 }
 
+function formatContactLastSeen(lastSeen?: string | number): string {
+  if (lastSeen == null) return '';
+  const t = typeof lastSeen === 'number' ? lastSeen : new Date(lastSeen).getTime();
+  if (!Number.isFinite(t)) return '';
+  const sec = Math.max(1, Math.floor((Date.now() - t) / 1000));
+  if (sec < 60) return `Last seen ${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `Last seen ${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `Last seen ${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `Last seen ${day}d ago`;
+  return '';
+}
+
+
 function getContactUserId(contact: any): string {
   const candidate = [
     contact?.userId,
@@ -661,7 +677,11 @@ export default function ContactsScreen() {
                     {displayName}
                   </Text>
                   <Text style={styles.rowSub} numberOfLines={1}>
-                    {item.about || 'Hey there! I am using Smilers.'}
+                    {online
+                      ? 'Online'
+                      : formatContactLastSeen(item.lastSeen) ||
+                        item.about ||
+                        'Hey there! I am using Smilers.'}
                   </Text>
                 </View>
               </TouchableOpacity>
