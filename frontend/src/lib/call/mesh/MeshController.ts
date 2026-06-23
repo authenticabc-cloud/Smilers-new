@@ -25,6 +25,8 @@ export interface MeshControllerOptions {
   onRemoteStreamsChanged?: (streams: Record<string, Any>) => void;
   /** Periodic speaking state: `{ [peerUserId]: boolean, __local: boolean }`. */
   onSpeakingChange?: (speaking: Record<string, boolean>) => void;
+  /** `{ [peerUserId]: RTCPeerConnectionState }` whenever a peer's link changes. */
+  onConnectionStateChanged?: (states: Record<string, string>) => void;
   onError?: (err: Error) => void;
 }
 
@@ -34,6 +36,7 @@ export class MeshController {
   private localStream: Any = null;
   private peers = new Map<string, MeshPeer>();
   private remoteStreams: Record<string, Any> = {};
+  private connStates: Record<string, string> = {};
   private micEnabled = true;
   private cameraEnabled: boolean;
   private wantsVideo: boolean;
@@ -105,6 +108,10 @@ export class MeshController {
       if (!next.has(peerId)) {
         this.peers.get(peerId)?.close();
         this.peers.delete(peerId);
+        if (this.connStates[peerId]) {
+          delete this.connStates[peerId];
+          this.opts.onConnectionStateChanged?.({ ...this.connStates });
+        }
         if (this.remoteStreams[peerId]) {
           delete this.remoteStreams[peerId];
           this.emitStreams();
@@ -128,6 +135,10 @@ export class MeshController {
       onRemoteStream: (id, stream) => {
         this.remoteStreams[id] = stream;
         this.emitStreams();
+      },
+      onConnectionState: (id, state) => {
+        this.connStates[id] = state;
+        this.opts.onConnectionStateChanged?.({ ...this.connStates });
       },
     });
     this.peers.set(peerUserId, peer);

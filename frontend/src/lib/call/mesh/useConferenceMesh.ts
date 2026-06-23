@@ -49,6 +49,8 @@ interface UseConferenceMeshResult {
   localStream: Any;
   /** `{ [peerUserId]: boolean, __local: boolean }` — who is currently talking. */
   speaking: Record<string, boolean>;
+  /** userId → RTCPeerConnectionState ('connected' | 'connecting' | 'failed' …). */
+  connectionStates: Record<string, string>;
 }
 
 export function useConferenceMesh({
@@ -71,6 +73,7 @@ export function useConferenceMesh({
   const [remoteStreams, setRemoteStreams] = useState<Record<string, Any>>({});
   const [localStream, setLocalStream] = useState<Any>(null);
   const [speaking, setSpeaking] = useState<Record<string, boolean>>({});
+  const [connectionStates, setConnectionStates] = useState<Record<string, string>>({});
   const connectedPeers = useMemo(() => {
     const map: Record<string, boolean> = {};
     Object.keys(remoteStreams).forEach((id) => {
@@ -99,6 +102,9 @@ export function useConferenceMesh({
           },
           onSpeakingChange: (s) => {
             if (!disposed) setSpeaking(s);
+          },
+          onConnectionStateChanged: (states) => {
+            if (!disposed) setConnectionStates(states);
           },
         });
         controllerRef.current = controller;
@@ -185,5 +191,6 @@ export function useConferenceMesh({
     if (ids.length > 0) void markConsumedM({ messageIds: ids } as Any).catch(() => {});
   }, [rawSignals, myUserId, markConsumedM]);
 
-  return { remoteStreams, connectedPeers, localStream, speaking };
+  return { remoteStreams, connectedPeers, localStream, speaking, connectionStates };
+
 }

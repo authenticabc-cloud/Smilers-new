@@ -72,6 +72,25 @@ function computeTimerRemainingSec(t: any): number {
   return Math.max(0, Math.round(duration - elapsed));
 }
 
+// Map an RTCPeerConnectionState to a coarse link-quality bucket for the
+// per-participant status dot. No `getStats` polling needed — the state
+// transitions (new→connecting→connected, or disconnected/failed) already give
+// a reliable signal of whether a peer's media is flowing.
+function peerConnectionQuality(state?: string): 'good' | 'fair' | 'poor' {
+  switch (state) {
+    case 'connected':
+    case 'completed':
+      return 'good';
+    case 'disconnected':
+    case 'failed':
+    case 'closed':
+      return 'poor';
+    default:
+      // 'new' | 'connecting' | 'checking' | undefined
+      return 'fair';
+  }
+}
+
 
 type Role = 'chair' | 'clerk' | 'protocol' | 'participant';
 type Audience = 'everyone' | 'chair' | 'clerk';
@@ -228,7 +247,7 @@ export default function ConferenceRoomScreen() {
   useEffect(() => {
     setLocalCamOn(myVideoEnabled);
   }, [myVideoEnabled]);
-  const { remoteStreams, localStream, speaking } = useConferenceMesh({
+  const { remoteStreams, localStream, speaking, connectionStates } = useConferenceMesh({
     conferenceId,
     myUserId,
     peerUserIds,
@@ -1156,6 +1175,7 @@ function ParticipantTile({
   RTCViewImpl,
   mirror,
   isSpeaking,
+  connectionQuality,
   onLongPress,
 }: {
   participant: Participant;
@@ -1167,6 +1187,7 @@ function ParticipantTile({
   RTCViewImpl?: any;
   mirror?: boolean;
   isSpeaking?: boolean;
+  connectionQuality?: 'good' | 'fair' | 'poor' | null;
   onLongPress?: () => void;
 }) {
   const role = normalizeRole(participant.role);
@@ -1213,6 +1234,22 @@ function ParticipantTile({
         )}
         {/* Top-right badges */}
         <View style={styles.tileTopRight}>
+          {connectionQuality ? (
+            <View
+              style={[
+                styles.tileQualityDot,
+                {
+                  backgroundColor:
+                    connectionQuality === 'good'
+                      ? Colors.success
+                      : connectionQuality === 'fair'
+                        ? '#F59E0B'
+                        : Colors.danger,
+                },
+              ]}
+              testID={`conf-tile-quality-${participant.userId}`}
+            />
+          ) : null}
           {handRaised ? (
             <View style={styles.handRaisedBadge}>
               <MaterialCommunityIcons name="hand-front-right" size={14} color="#92400E" />
@@ -1858,7 +1895,15 @@ const styles = StyleSheet.create({
     top: 6,
     right: 6,
     flexDirection: 'row',
+    alignItems: 'center',
     gap: 4,
+  },
+  tileQualityDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: 'rgba(0,0,0,0.35)',
   },
   handRaisedBadge: {
     width: 22,
