@@ -43,6 +43,31 @@ try {
 const DEFAULT_DURATION_MS = 5000;
 const MAX_VIDEO_DURATION_MS = 30000;
 
+// iter-267: the web status contract exposes type under `type` OR `kind`, text
+// under `content` OR `text`, and colors under `backgroundColor`/`textColor` OR
+// `palette.{background,text}`. The native viewer previously only read `type`/
+// `text`, so text statuses (e.g. "Only God is our helper") fell through to the
+// media branch and showed "Couldn't load this media". These tolerant readers
+// fix that regardless of which alias the backend sends.
+function readStoryType(s: any): string {
+  const raw = s?.type || s?.kind;
+  if (raw) return String(raw).toLowerCase();
+  const hasMedia =
+    s?.mediaUrl || s?.url || s?.uri || s?.src || s?.media ||
+    s?.imageUrl || s?.videoUrl || s?.fileUrl || s?.storageId;
+  return hasMedia ? 'image' : 'text';
+}
+function readStoryText(s: any): string {
+  return String(s?.text ?? s?.content ?? '');
+}
+function readStoryBg(s: any): string {
+  return s?.backgroundColor || s?.palette?.background || '#3A2608';
+}
+function readStoryFg(s: any): string {
+  return s?.textColor || s?.palette?.text || '#FFFFFF';
+}
+
+
 export default function StatusViewScreen() {
   // iter-149: wrap the inner screen in an ErrorBoundary so a render
   // crash (e.g. an unexpected story shape from the server, a broken
@@ -78,9 +103,15 @@ function StatusViewScreenInner() {
     null,
     !!targetUserId && !otherStoriesA.data && !otherStoriesA.loading,
   );
+  // iter-267: web contract confirmed — `listForUser`/`listByUser` are the real
+  // per-user queries and both return an ARRAY OF GROUPS (read the matching
+  // group's `stories`). `getUserStatuses`/`listForOther` don't exist; replaced
+  // the last probe with `listStatusGroups` (the same query the working list tab
+  // uses) as a bulletproof fallback. All return media URLs ALREADY resolved
+  // server-side under `mediaUrl`/`url`/… aliases — no storageId resolution.
   const otherStoriesC = useSafeConvexQuery<any>(
-    (api as any).statuses?.getUserStatuses,
-    targetUserId ? { userId: targetUserId } : {},
+    (api as any).statuses?.listStatusGroups,
+    {},
     null,
     !!targetUserId &&
       !otherStoriesA.data &&
@@ -88,20 +119,8 @@ function StatusViewScreenInner() {
       !otherStoriesB.data &&
       !otherStoriesB.loading,
   );
-  const otherStoriesD = useSafeConvexQuery<any>(
-    (api as any).statuses?.listForOther,
-    targetUserId ? { userId: targetUserId } : {},
-    null,
-    !!targetUserId &&
-      !otherStoriesA.data &&
-      !otherStoriesA.loading &&
-      !otherStoriesB.data &&
-      !otherStoriesB.loading &&
-      !otherStoriesC.data &&
-      !otherStoriesC.loading,
-  );
   const otherStories =
-    otherStoriesA.data || otherStoriesB.data || otherStoriesC.data || otherStoriesD.data || null;
+    otherStoriesA.data || otherStoriesB.data || otherStoriesC.data || null;
   const me = useQuery(api.users.getCurrentUser);
   // iter-239: resolve status author / viewer names from the device address
   // book (e.g. "ABC Albania") instead of the Smilers/Google account name —
@@ -124,23 +143,38 @@ function StatusViewScreenInner() {
   const stories: any[] = useMemo(() => {
     const source: any = userId === 'me' ? myStories : otherStories;
     if (!source) return [];
-    if (Array.isArray(source)) return source;
-    if (Array.isArray(source.stories)) return source.stories;
-    return [];
-  }, [userId, myStories, otherStories]);
+    const pickStories = (g: any): any[] =>
+      g?.stories || g?.statuses || g?.items || [];
+    if (Array.isArray(source)) {
+      // `getMyStatuses` → flat array of stories. `listForUser`/`listByUser`/
+      // `listStatusGroups` → array of GROUPS. Detect groups by a nested
+      // stories array and pick the one matching this user (else the first).
+      const looksGrouped =
+        source.length > 0 &&
+        (Array.isArray(source[0]?.stories) ||
+          Array.isArray(source[0]?.statuses) ||
+          Array.isArray(source[0]?.items));
+      if (looksGrouped) {
+        const grp =
+          source.find((g: any) => String(g?.userId) === String(targetUserId)) || source[0];
+        return pickStories(grp);
+      }
+      return source; // flat stories
+    }
+    return pickStories(source);
+  }, [userId, myStories, otherStories, targetUserId]);
 
   const isMine = userId === 'me';
   const author: any = useMemo(() => {
     if (isMine) return { name: 'You', _id: me?._id };
-    const source: any = otherStories;
-    const smilersName =
-      (source && !Array.isArray(source) && (source.name || source.userName)) || 'User';
-    const extra =
-      source && !Array.isArray(source)
-        ? { phoneE164: source.phoneE164, phone: source.phone }
-        : undefined;
+    const src: any = otherStories;
+    const grp = Array.isArray(src)
+      ? src.find((g: any) => String(g?.userId) === String(targetUserId)) || src[0]
+      : src;
+    const smilersName = (grp && (grp.name || grp.userName)) || 'User';
+    const extra = grp ? { phoneE164: grp.phoneE164, phone: grp.phone } : undefined;
     const resolved = resolveContactName(targetUserId, String(smilersName), extra);
-    const avatarUrl = source && !Array.isArray(source) ? source.avatarUrl : undefined;
+    const avatarUrl = grp ? grp.avatarUrl : undefined;
     return { name: resolved, _id: targetUserId, avatarUrl };
   }, [isMine, otherStories, me, targetUserId, resolveContactName]);
 
@@ -206,7 +240,7 @@ function StatusViewScreenInner() {
 
   useEffect(() => {
     if (!current || isMine) return;
-    markViewed({ statusId: current._id }).catch(() => {});
+    markViewed({ statusId: current._id || current.id || current.statusId }).catch(() => {});
   }, [current, isMine, markViewed]);
 
   useEffect(() => {
@@ -297,8 +331,9 @@ function StatusViewScreenInner() {
     );
   }
 
-  const bg = current.type === 'text' ? current.backgroundColor || '#3A2608' : '#000';
-  const fg = current.type === 'text' ? current.textColor || '#FFFFFF' : '#FFFFFF';
+  const isTextStory = readStoryType(current) === 'text';
+  const bg = isTextStory ? readStoryBg(current) : '#000';
+  const fg = isTextStory ? readStoryFg(current) : '#FFFFFF';
   const viewsCount = current.views?.length || current.viewCount || 0;
 
   return (
@@ -470,6 +505,10 @@ function StoryContent({
     (typeof story?.url === 'string' && story.url.length > 0 && story.url) ||
     (typeof story?.imageUrl === 'string' && story.imageUrl.length > 0 && story.imageUrl) ||
     (typeof story?.videoUrl === 'string' && story.videoUrl.length > 0 && story.videoUrl) ||
+    (typeof story?.uri === 'string' && story.uri.length > 0 && story.uri) ||
+    (typeof story?.src === 'string' && story.src.length > 0 && story.src) ||
+    (typeof story?.media === 'string' && story.media.length > 0 && story.media) ||
+    (typeof story?.downloadUrl === 'string' && story.downloadUrl.length > 0 && story.downloadUrl) ||
     null;
   const safeStorageId =
     !directUrl && typeof story?.storageId === 'string' && story.storageId.length > 0
@@ -511,10 +550,10 @@ function StoryContent({
     viaFiles.refetch();
   }, [viaMessages, viaStorage, viaFiles]);
 
-  if (story.type === 'text') {
+  if (readStoryType(story) === 'text') {
     return (
-      <View style={styles.textBody}>
-        <Text style={[styles.textContent, { color: fg }]}>{story.text || ''}</Text>
+      <View style={[styles.textBody, { backgroundColor: readStoryBg(story) }]}>
+        <Text style={[styles.textContent, { color: readStoryFg(story) }]}>{readStoryText(story)}</Text>
       </View>
     );
   }

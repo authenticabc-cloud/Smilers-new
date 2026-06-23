@@ -1616,7 +1616,11 @@ export function CallScreenInner() {
     // explainer alert as a graceful fallback.
     try {
       if (screenSharing) {
-        await session.stopScreenShare(callType === 'video');
+        // In standalone screen-share (screen-only) mode there is no camera to
+        // fall back to — restoring it would leak the sharer's front camera to
+        // the viewer (the "camera shows when I stop sharing" bug). Only
+        // restore the camera for a real video call.
+        await session.stopScreenShare(!isScreenOnly && callType === 'video');
         setScreenSharing(false);
         setCameraOff(false);
       } else {

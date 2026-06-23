@@ -38,6 +38,10 @@ export class CallSession {
   public localStream: MediaStream | null = null;
   public remoteStream: MediaStream | null = null;
 
+  // True while the outgoing video track is a SCREEN capture (not the camera).
+  // Drives the encoder cap in applyScreenEncodingParameters().
+  private screenShareActive = false;
+
   private closed = false;
   private remoteDescriptionSet = false;
   private pendingIce: RTCIceCandidate[] = [];
@@ -82,6 +86,7 @@ export class CallSession {
     const webrtc = await this.getWebRTC();
     if (useScreen) {
       // Screen-share-only mode: capture the device screen + mic audio
+      this.screenShareActive = true;
       const screenStream = await this.captureScreen();
       // Add a mic audio track so the remote can still hear us
       try {
@@ -107,6 +112,8 @@ export class CallSession {
     // signature. Explicitly requesting all three telephony DSPs +
     // forcing the audio source to VOICE_COMMUNICATION (the only mode
     // where Android's hardware AEC kicks in reliably) fixes echo.
+    // Camera path — clear any prior screen-share state.
+    this.screenShareActive = false;
     const constraints: any = {
       audio: {
         echoCancellation: true,
@@ -217,6 +224,7 @@ export class CallSession {
    */
   async startScreenShare(): Promise<MediaStream> {
     if (!this.pc) throw new Error('Peer connection not initialized');
+    this.screenShareActive = true;
     const screenStream = await this.captureScreen();
     const screenTrack = screenStream.getVideoTracks()[0];
     if (!screenTrack) throw new Error('Failed to acquire screen track.');
@@ -269,7 +277,58 @@ export class CallSession {
       this.localStream = screenStream;
     }
     this.opts.onLocalStream?.(this.localStream as MediaStream);
+    // Tame the full-resolution screen capture so the hardware encoder can
+    // actually encode it (see applyScreenEncodingParameters).
+    await this.applyScreenEncodingParameters();
     return screenStream;
+  }
+
+  /**
+   * Cap the screen-share video sender's resolution / framerate / bitrate.
+   *
+   * react-native-webrtc's getDisplayMedia() ignores ALL constraints and
+   * captures the full native display (often 1080×2400) at 30fps. Many
+   * Android hardware H.264 encoders cannot encode a surface that large and
+   * silently emit BLACK frames to the remote peer — which is exactly why a
+   * normal video call works (the 640×480 camera encodes fine) but a shared
+   * screen shows up black on the receiver. We tame the outgoing encode:
+   * downscale very large captures, drop to 15fps (plenty for screen
+   * content), cap the bitrate, and keep resolution over framerate so text
+   * stays crisp.
+   */
+  async applyScreenEncodingParameters(): Promise<void> {
+    if (!this.pc) return;
+    try {
+      const senders = (this.pc as any).getSenders ? (this.pc as any).getSenders() : [];
+      const videoSender = senders.find((s: any) => s.track && s.track.kind === 'video');
+      if (!videoSender || typeof videoSender.getParameters !== 'function') return;
+      const params: any = videoSender.getParameters();
+      if (!params.encodings || params.encodings.length === 0) {
+        params.encodings = [{ active: true }];
+      }
+      // Downscale captures wider/taller than ~1280px so the encoder isn't
+      // handed a 1080×2400 surface it can't handle.
+      let scale = 1;
+      try {
+        const settings = videoSender.track?.getSettings?.() || {};
+        const maxDim = Math.max(Number(settings.width) || 0, Number(settings.height) || 0);
+        if (maxDim > 1280) scale = Math.min(2, maxDim / 1280);
+      } catch {}
+      params.encodings.forEach((enc: any) => {
+        enc.active = true;
+        enc.maxFramerate = 15;
+        enc.maxBitrate = 2_500_000;
+        if (scale > 1) enc.scaleResolutionDownBy = scale;
+      });
+      params.degradationPreference = 'maintain-resolution';
+      await videoSender.setParameters(params);
+      callDebug.push(
+        'SCRN',
+        `encode capped: 15fps / 2.5Mbps / scale=${scale.toFixed(2)} / maintain-resolution`,
+      );
+    } catch (e: any) {
+      callDebug.push('ERR', `applyScreenEncodingParameters failed: ${e?.message || e}`);
+    }
   }
 
   /**
@@ -277,6 +336,7 @@ export class CallSession {
    * the camera track. Otherwise just stop the screen track (voice call).
    */
   async stopScreenShare(restoreVideo: boolean = true): Promise<void> {
+    this.screenShareActive = false;
     if (!this.pc) return;
     const senders = (this.pc as any).getSenders ? (this.pc as any).getSenders() : [];
     const videoSender = senders.find((s: any) => s.track && s.track.kind === 'video');
@@ -334,6 +394,7 @@ export class CallSession {
    */
   async upgradeToVideo(): Promise<MediaStream | null> {
     if (!this.pc || this.closed) return null;
+    this.screenShareActive = false;
     const webrtc = await this.getWebRTC();
     let camTrack: any = null;
     try {
@@ -516,9 +577,13 @@ export class CallSession {
       type: 'offer',
       payload: JSON.stringify(offer),
     });
+    // Screen-only sharer path: initLocalMedia(true) → createPeerConnection →
+    // createOffer (no startScreenShare() call), so cap the screen encode here
+    // too. No-op when sending the camera.
+    if (this.screenShareActive) {
+      await this.applyScreenEncodingParameters();
+    }
   }
-
-  /** Callee: handle a received offer and reply with an answer. */
   async handleRemoteOffer(payload: string): Promise<void> {
     if (!this.pc) {
       callDebug.push('ERR', 'handleRemoteOffer: pc is null');
