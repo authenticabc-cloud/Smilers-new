@@ -383,8 +383,12 @@ export function CallScreenInner() {
   const [screenSharing, setScreenSharing] = useState(startInScreenShare);
   // Screen-share quality profile chosen via the in-share toggle. 'sharp'
   // keeps near-native resolution (text/code), 'smooth' favours framerate
-  // (scrolling video). Applied through CallSession.setScreenQuality().
-  const [screenQuality, setScreenQuality] = useState<'sharp' | 'smooth'>('sharp');
+  // (scrolling video), 'auto' switches between them based on detected
+  // motion. Applied through CallSession.setScreenQuality().
+  const [screenQuality, setScreenQuality] = useState<'sharp' | 'smooth' | 'auto'>('auto');
+  // In 'auto' mode, the profile the motion-detector is currently using
+  // (for display only).
+  const [autoActiveProfile, setAutoActiveProfile] = useState<'sharp' | 'smooth'>('sharp');
   const [statusText, setStatusText] = useState('Connecting…');
   const [permissionDenied, setPermissionDenied] = useState(false);
   // iter-189: true once the WebRTC connection actually reaches 'connected'.
@@ -975,6 +979,7 @@ export function CallScreenInner() {
           }
         },
         onError: (err) => console.warn('[Call] error:', err?.message),
+        onScreenAutoProfile: (profile) => setAutoActiveProfile(profile),
       });
 
       sessionRef.current = session;
@@ -1644,12 +1649,20 @@ export function CallScreenInner() {
   }, [screenSharing, callType, isScreenOnly]);
 
   const handleSelectScreenQuality = useCallback(
-    (mode: 'sharp' | 'smooth') => {
+    (mode: 'sharp' | 'smooth' | 'auto') => {
       setScreenQuality(mode);
       void sessionRef.current?.setScreenQuality?.(mode);
     },
     [],
   );
+
+  // Push the user's chosen quality profile into the CallSession once the peer
+  // connection exists (sessionReadyTick bumps when pc is created). This makes
+  // the session adopt the default 'auto' profile and start the motion monitor.
+  useEffect(() => {
+    if (!sessionRef.current || !screenSharing) return;
+    void sessionRef.current.setScreenQuality?.(screenQuality);
+  }, [sessionReadyTick, screenQuality, screenSharing]);
 
   const savedContactName = useMemo(
     () => findSavedContactDisplayName(contacts, conversation, me?._id ? String(me._id) : undefined),
@@ -2121,6 +2134,7 @@ export function CallScreenInner() {
           onToggleScreenShare={toggleScreenShare}
           screenQuality={screenQuality}
           onSelectQuality={handleSelectScreenQuality}
+          autoActiveProfile={autoActiveProfile}
           onStop={() => {
             // Best-effort: tell the backend we're ending the session, then
             // route back. Failure is swallowed because the backend may not

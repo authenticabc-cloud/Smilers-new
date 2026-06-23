@@ -49,7 +49,7 @@ export class CallSession {
     // no-op on web
   }
 
-  async setScreenQuality(_mode: 'sharp' | 'smooth'): Promise<void> {
+  async setScreenQuality(_mode: 'sharp' | 'smooth' | 'auto'): Promise<void> {
     // no-op on web
   }
 

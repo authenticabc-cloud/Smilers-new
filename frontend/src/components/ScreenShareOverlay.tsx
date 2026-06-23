@@ -40,8 +40,10 @@ interface ScreenShareOverlayProps {
   onStop: () => void;
   RTCViewImpl: any;
   /** Screen-share quality profile + setter (sender-side toggle). */
-  screenQuality?: 'sharp' | 'smooth';
-  onSelectQuality?: (mode: 'sharp' | 'smooth') => void;
+  screenQuality?: 'sharp' | 'smooth' | 'auto';
+  onSelectQuality?: (mode: 'sharp' | 'smooth' | 'auto') => void;
+  /** In 'auto' mode, the profile the motion-detector is currently using. */
+  autoActiveProfile?: 'sharp' | 'smooth';
   /** Active screen-share session id (used by switch-share controls). */
   sessionId?: string | null;
   /** Conversation id backing the session (sharer-side `getActiveSession` query). */
@@ -61,6 +63,7 @@ export default function ScreenShareOverlay({
   RTCViewImpl,
   screenQuality = 'sharp',
   onSelectQuality,
+  autoActiveProfile = 'sharp',
   sessionId,
   conversationId,
 }: ScreenShareOverlayProps) {
@@ -217,6 +220,21 @@ export default function ScreenShareOverlay({
         {onSelectQuality ? (
           <View style={styles.qualityRow} testID="screen-share-quality-toggle">
             <TouchableOpacity
+              style={[styles.qualityChip, screenQuality === 'auto' ? styles.qualityChipActive : null]}
+              onPress={() => onSelectQuality('auto')}
+              activeOpacity={0.85}
+              testID="screen-share-quality-auto"
+            >
+              <MaterialCommunityIcons
+                name="auto-fix"
+                size={16}
+                color={screenQuality === 'auto' ? '#3D2A00' : 'rgba(255,255,255,0.85)'}
+              />
+              <Text style={[styles.qualityChipText, screenQuality === 'auto' ? styles.qualityChipTextActive : null]}>
+                Auto
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
               style={[styles.qualityChip, screenQuality === 'sharp' ? styles.qualityChipActive : null]}
               onPress={() => onSelectQuality('sharp')}
               activeOpacity={0.85}
@@ -251,9 +269,11 @@ export default function ScreenShareOverlay({
 
         {onSelectQuality ? (
           <Text style={styles.qualityHint}>
-            {screenQuality === 'sharp'
-              ? 'Crisp text & detail — best for documents and code.'
-              : 'Higher frame rate — best for video and animation.'}
+            {screenQuality === 'auto'
+              ? `Auto-adjusting — currently ${autoActiveProfile === 'smooth' ? 'Smooth (motion)' : 'Sharp (still)'}.`
+              : screenQuality === 'sharp'
+                ? 'Crisp text & detail — best for documents and code.'
+                : 'Higher frame rate — best for video and animation.'}
           </Text>
         ) : null}
 

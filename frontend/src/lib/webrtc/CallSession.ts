@@ -26,6 +26,9 @@ export type CallSessionOptions = {
   onLocalStream?: (stream: MediaStream) => void;
   onConnectionStateChange?: (state: string) => void;
   onError?: (err: Error) => void;
+  /** Fired (in 'auto' screen-quality mode) when the auto-detector switches
+   * the active profile based on detected motion. */
+  onScreenAutoProfile?: (profile: 'sharp' | 'smooth') => void;
 };
 
 /**
@@ -44,7 +47,17 @@ export class CallSession {
   // Screen-share quality profile chosen by the user in the share UI.
   //   'sharp'  → prioritise resolution (best for text / static screens).
   //   'smooth' → prioritise framerate (best for video / motion).
-  private screenQuality: 'sharp' | 'smooth' = 'sharp';
+  //   'auto'   → start sharp, auto-switch to smooth when motion is detected.
+  private screenQuality: 'sharp' | 'smooth' | 'auto' = 'sharp';
+  // In 'auto' mode, the profile currently applied by the motion detector.
+  private autoProfile: 'sharp' | 'smooth' = 'sharp';
+  // Motion-detection bookkeeping (auto mode): poll outbound bitrate as a
+  // proxy for on-screen motion (static text encodes to a trickle, video
+  // sustains a high bitrate).
+  private motionTimer: ReturnType<typeof setInterval> | null = null;
+  private motionPrevBytes = 0;
+  private motionPrevTs = 0;
+  private motionStreak = 0;
 
   private closed = false;
   private remoteDescriptionSet = false;
@@ -312,9 +325,11 @@ export class CallSession {
       }
       // Per-profile tuning. 'sharp' keeps near-native resolution at a low
       // framerate (text/code stays legible); 'smooth' trades resolution for
-      // a higher framerate (scrolling video / animation stays fluid).
+      // a higher framerate (scrolling video / animation stays fluid). In
+      // 'auto' mode we follow the motion detector's current pick.
+      const effective = this.screenQuality === 'auto' ? this.autoProfile : this.screenQuality;
       const profile =
-        this.screenQuality === 'smooth'
+        effective === 'smooth'
           ? { maxFramerate: 24, maxBitrate: 3_000_000, scaleThreshold: 960, scaleCap: 2.5, degradation: 'maintain-framerate' }
           : { maxFramerate: 12, maxBitrate: 2_500_000, scaleThreshold: 1600, scaleCap: 1.5, degradation: 'maintain-resolution' };
       // Downscale captures larger than the profile threshold so the encoder
@@ -337,7 +352,7 @@ export class CallSession {
       await videoSender.setParameters(params);
       callDebug.push(
         'SCRN',
-        `encode capped: q=${this.screenQuality} ${profile.maxFramerate}fps / ${(profile.maxBitrate / 1e6).toFixed(1)}Mbps / scale=${scale.toFixed(2)} / ${profile.degradation}`,
+        `encode capped: q=${this.screenQuality}${this.screenQuality === 'auto' ? `(${effective})` : ''} ${profile.maxFramerate}fps / ${(profile.maxBitrate / 1e6).toFixed(1)}Mbps / scale=${scale.toFixed(2)} / ${profile.degradation}`,
       );
     } catch (e: any) {
       callDebug.push('ERR', `applyScreenEncodingParameters failed: ${e?.message || e}`);
@@ -348,11 +363,82 @@ export class CallSession {
    * Switch the screen-share quality profile at runtime. Re-applies the
    * encoder caps immediately if a screen capture is currently active.
    */
-  async setScreenQuality(mode: 'sharp' | 'smooth'): Promise<void> {
+  async setScreenQuality(mode: 'sharp' | 'smooth' | 'auto'): Promise<void> {
     this.screenQuality = mode;
+    if (mode === 'auto') {
+      this.startMotionMonitor();
+    } else {
+      this.stopMotionMonitor();
+    }
     if (this.screenShareActive) {
       await this.applyScreenEncodingParameters();
     }
+  }
+
+  /**
+   * 'auto' mode: poll the outbound video bitrate as a proxy for on-screen
+   * motion. Static screens (text/code) encode to a trickle; video/animation
+   * sustains a high bitrate. We require 2 consecutive samples past a
+   * threshold (hysteresis) before flipping the profile so we don't thrash on
+   * brief spikes.
+   */
+  private startMotionMonitor(): void {
+    if (this.motionTimer) return;
+    const HIGH_KBPS = 1400; // sustained → motion → smooth
+    const LOW_KBPS = 500; // quiet → static → sharp
+    this.motionPrevBytes = 0;
+    this.motionPrevTs = 0;
+    this.motionStreak = 0;
+    this.motionTimer = setInterval(async () => {
+      if (this.closed || !this.pc) return;
+      try {
+        const senders = (this.pc as any).getSenders ? (this.pc as any).getSenders() : [];
+        const videoSender = senders.find((s: any) => s.track && s.track.kind === 'video');
+        if (!videoSender || typeof videoSender.getStats !== 'function') return;
+        const stats = await videoSender.getStats();
+        let bytes = 0;
+        let ts = 0;
+        stats.forEach((report: any) => {
+          if (report.type === 'outbound-rtp' && (report.kind === 'video' || report.mediaType === 'video')) {
+            bytes = Number(report.bytesSent) || bytes;
+            ts = Number(report.timestamp) || ts;
+          }
+        });
+        if (!bytes || !ts) return;
+        if (this.motionPrevTs && ts > this.motionPrevTs) {
+          const dtSec = (ts - this.motionPrevTs) / 1000;
+          const kbps = ((bytes - this.motionPrevBytes) * 8) / 1000 / dtSec;
+          const wantSmooth = kbps >= HIGH_KBPS;
+          const wantSharp = kbps <= LOW_KBPS;
+          const target = wantSmooth ? 'smooth' : wantSharp ? 'sharp' : this.autoProfile;
+          if (target !== this.autoProfile) {
+            // Require 2 consecutive samples agreeing before flipping.
+            this.motionStreak += 1;
+            if (this.motionStreak >= 2) {
+              this.autoProfile = target;
+              this.motionStreak = 0;
+              this.opts.onScreenAutoProfile?.(target);
+              callDebug.push('SCRN', `auto: ${Math.round(kbps)}kbps → ${target}`);
+              void this.applyScreenEncodingParameters();
+            }
+          } else {
+            this.motionStreak = 0;
+          }
+        }
+        this.motionPrevBytes = bytes;
+        this.motionPrevTs = ts;
+      } catch {
+        /* stats unavailable this tick — ignore */
+      }
+    }, 3000);
+  }
+
+  private stopMotionMonitor(): void {
+    if (this.motionTimer) {
+      clearInterval(this.motionTimer);
+      this.motionTimer = null;
+    }
+    this.motionStreak = 0;
   }
 
   /**
@@ -361,6 +447,7 @@ export class CallSession {
    */
   async stopScreenShare(restoreVideo: boolean = true): Promise<void> {
     this.screenShareActive = false;
+    this.stopMotionMonitor();
     if (!this.pc) return;
     const senders = (this.pc as any).getSenders ? (this.pc as any).getSenders() : [];
     const videoSender = senders.find((s: any) => s.track && s.track.kind === 'video');
@@ -949,6 +1036,8 @@ export class CallSession {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+
+    this.stopMotionMonitor();
 
     // iter-128: cancel any pending ICE restart timer so it doesn't fire
     // after the call is torn down.
