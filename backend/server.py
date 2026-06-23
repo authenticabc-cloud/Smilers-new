@@ -1509,6 +1509,21 @@ def _derive_push_routing(data: dict) -> dict[str, str]:
     did NOTHING because the handler only routes on `payload.type`.
     """
     out: dict[str, str] = {}
+    # iter-272: honor an EXPLICIT type sent by the caller. Convex's
+    # `notifyIncomingCall` now sends a data-only payload with `type:'call'`.
+    # `is_call_push` (which drives android_data_only → dropping the FCM
+    # notification block, plus the 45s TTL) is derived from THIS routing, so
+    # we must trust the explicit type even when `action_url` is absent or
+    # points somewhere else. Without this a killed app gets a notification
+    # block → plays the message tone instead of ringing.
+    explicit_type = str(data.get("type") or "").strip().lower()
+    if explicit_type in ("call", "incoming-call"):
+        out["type"] = "call"
+    elif explicit_type == "missed-call":
+        out["type"] = "missed-call"
+    elif explicit_type == "message":
+        out["type"] = "message"
+
     action_url = str(data.get("action_url") or "")
     if not action_url.startswith("/"):
         return out
@@ -1519,7 +1534,9 @@ def _derive_push_routing(data: dict) -> dict[str, str]:
         out["conversationId"] = parts[1]
         out["callId"] = parts[1]
     elif len(parts) >= 2 and parts[0] == "chat":
-        out["type"] = "message"
+        # Don't downgrade an explicit call type via the action_url path.
+        if out.get("type") != "call":
+            out["type"] = "message"
         out["conversationId"] = parts[1]
     if query:
         try:
