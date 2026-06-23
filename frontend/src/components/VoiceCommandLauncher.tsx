@@ -3,8 +3,10 @@ import {
   Alert,
   Animated,
   AppState,
+  Dimensions,
   Easing,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   StyleSheet,
@@ -819,6 +821,58 @@ export default function VoiceCommandLauncher() {
   const fabOpacity = useRef(new Animated.Value(1)).current;
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // ---- Draggable FAB position (in-memory, persists across navigation) ----
+  // The wrap is anchored bottom-right; `pan` is a translate offset from that
+  // anchor. Lets the user move the mic off whatever it overlaps (e.g. the
+  // Privacy "Typing indicators" toggle). Auto-hide still works unchanged.
+  const pan = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
+  const lastOffset = useRef({ x: 0, y: 0 });
+  const draggingRef = useRef(false);
+  // Latest fade/hide callbacks, read by the (stable) PanResponder handlers.
+  const fadeInRef = useRef<() => void>(() => {});
+  const scheduleHideRef = useRef<() => void>(() => {});
+  const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+
+  const panResponder = useRef(
+    PanResponder.create({
+      // Only hijack the gesture once it's clearly a drag (>6px) so a quick
+      // tap still fires the TouchableOpacity onPress (opens the sheet).
+      onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 6 || Math.abs(g.dy) > 6,
+      onPanResponderGrant: () => {
+        draggingRef.current = true;
+        if (hideTimeoutRef.current) clearTimeout(hideTimeoutRef.current);
+        fadeInRef.current();
+        pan.setOffset({ x: lastOffset.current.x, y: lastOffset.current.y });
+        pan.setValue({ x: 0, y: 0 });
+      },
+      onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], {
+        useNativeDriver: false,
+      }),
+      onPanResponderRelease: (_e, g) => {
+        pan.flattenOffset();
+        // Clamp the new translate so the 52px button stays on-screen
+        // (clear of the status bar + bottom tab bar).
+        const { width: W, height: H } = Dimensions.get('window');
+        const nx = clamp(lastOffset.current.x + g.dx, 78 - W, 10);
+        const ny = clamp(lastOffset.current.y + g.dy, 204 - H, 62);
+        lastOffset.current = { x: nx, y: ny };
+        Animated.spring(pan, {
+          toValue: { x: nx, y: ny },
+          useNativeDriver: false,
+          friction: 7,
+          tension: 60,
+        }).start();
+        draggingRef.current = false;
+        scheduleHideRef.current();
+      },
+      onPanResponderTerminate: () => {
+        draggingRef.current = false;
+        scheduleHideRef.current();
+      },
+      onPanResponderTerminationRequest: () => false,
+    }),
+  ).current;
+
   const fadeIn = useCallback(() => {
     setFabVisible((current) => {
       if (current) return current;
@@ -857,6 +911,13 @@ export default function VoiceCommandLauncher() {
   const handleActivity = useCallback(() => {
     fadeIn();
     scheduleHide();
+  }, [fadeIn, scheduleHide]);
+
+  // Keep the PanResponder's fade/hide callbacks fresh (the responder itself
+  // is created once and never re-created).
+  useEffect(() => {
+    fadeInRef.current = fadeIn;
+    scheduleHideRef.current = scheduleHide;
   }, [fadeIn, scheduleHide]);
 
   // Subscribe to global touch activity so any tap anywhere on screen
@@ -898,6 +959,7 @@ export default function VoiceCommandLauncher() {
   if (isHiddenRoute) return null;
 
   const handlePress = () => {
+    if (draggingRef.current) return; // ignore the tap that ended a drag
     fadeIn();
     setSheetVisible(true);
   };
@@ -905,17 +967,26 @@ export default function VoiceCommandLauncher() {
   return (
     <>
       <Animated.View
-        style={[styles.fabWrap, { opacity: fabOpacity, pointerEvents: fabVisible ? 'box-none' : 'none' }]}
+        style={[
+          styles.fabWrap,
+          {
+            transform: pan.getTranslateTransform(),
+            pointerEvents: fabVisible ? 'auto' : 'none',
+          },
+        ]}
+        {...panResponder.panHandlers}
       >
-        <TouchableOpacity
-          style={styles.fab}
-          onPress={handlePress}
-          testID="voice-command-fab"
-          activeOpacity={0.85}
-          accessibilityLabel="Voice command (muted, tap to listen)"
-        >
-          <Feather name="mic-off" size={22} color={Colors.textPrimary} />
-        </TouchableOpacity>
+        <Animated.View style={{ opacity: fabOpacity }}>
+          <TouchableOpacity
+            style={styles.fab}
+            onPress={handlePress}
+            testID="voice-command-fab"
+            activeOpacity={0.85}
+            accessibilityLabel="Voice command (muted, tap to listen, drag to move)"
+          >
+            <Feather name="mic-off" size={22} color={Colors.textPrimary} />
+          </TouchableOpacity>
+        </Animated.View>
       </Animated.View>
       <VoiceCommandSheet
         visible={sheetVisible}
