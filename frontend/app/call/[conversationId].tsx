@@ -1743,16 +1743,20 @@ export function CallScreenInner() {
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   }, [callDurationSec]);
 
-  const openAddParticipantFlow = useCallback(() => {
-    setAudioOutputMenuVisible(false);
-    setAddToCallSearch('');
-    setPendingAddContact(null);
-    setShowAddToCall(true);
-  }, []);
-
   const handleAddParticipant = useCallback(() => {
-    openAddParticipantFlow();
-  }, [openAddParticipantFlow]);
+    // iter-273: adding a participant escalated the 1:1 call into a brand-new
+    // "conference" conversation and restarted callHost there. The WebRTC
+    // engine is peer-to-peer (1:1) — it cannot host 3+ parties — so the
+    // escalation tore down the live call (local + remote video went black,
+    // the invitee never rang) with no way to recover. Until a media server
+    // (SFU) backs group calling, surface a clear message instead of breaking
+    // the active call.
+    setAudioOutputMenuVisible(false);
+    Alert.alert(
+      'Group calls coming soon',
+      'Adding someone to an ongoing call isn’t available yet on Smilers. For now, please start a separate call with them.',
+    );
+  }, []);
 
   const closeAddParticipantFlow = useCallback(() => {
     if (creatingConference) return;
@@ -3193,10 +3197,13 @@ const styles = StyleSheet.create({
   },
   pipWrap: {
     position: 'absolute',
-    top: Spacing.lg,
+    // iter-273: move the self-preview to the LOWER-right as a small rectangle
+    // (above the controls) so it no longer covers the other participant's face
+    // in the upper/centre of the frame. Smaller footprint too.
+    bottom: 168,
     right: Spacing.base,
-    width: 110,
-    height: 160,
+    width: 96,
+    height: 130,
     borderRadius: 12,
     overflow: 'hidden',
     backgroundColor: '#000',
@@ -3205,7 +3212,8 @@ const styles = StyleSheet.create({
   },
   videoTopOverlay: {
     position: 'absolute',
-    top: Spacing.xl,
+    // iter-273: nudge the participant name higher so it clears the centre.
+    top: Spacing.xs,
     left: 0,
     right: 0,
     alignItems: 'center',
@@ -3217,7 +3225,9 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.xl,
+    // iter-273: shift the call buttons lower (less bottom padding above the
+    // safe-area inset) so they sit nearer the bottom edge and free the centre.
+    paddingBottom: Spacing.base,
     paddingTop: Spacing.xxl,
     gap: Spacing.lg,
     backgroundColor: 'transparent',
