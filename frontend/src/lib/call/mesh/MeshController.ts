@@ -18,6 +18,8 @@ type WebRTCModule = typeof import('react-native-webrtc');
 export interface MeshControllerOptions {
   callId: string;
   myUserId: string;
+  /** Acquire a camera track too (conferences are voice+video). Default false. */
+  video?: boolean;
   sendSignal: (toUserId: string, type: MeshSignalType, payload: string) => void;
   /** Called whenever the set of remote streams changes. */
   onRemoteStreamsChanged?: (streams: Record<string, Any>) => void;
@@ -31,11 +33,15 @@ export class MeshController {
   private peers = new Map<string, MeshPeer>();
   private remoteStreams: Record<string, Any> = {};
   private micEnabled = true;
+  private cameraEnabled: boolean;
+  private wantsVideo: boolean;
   private started = false;
   private closed = false;
 
   constructor(opts: MeshControllerOptions) {
     this.opts = opts;
+    this.wantsVideo = !!opts.video;
+    this.cameraEnabled = !!opts.video;
   }
 
   private async getWebRTC(): Promise<WebRTCModule> {
@@ -43,12 +49,20 @@ export class MeshController {
     return this.webrtc;
   }
 
-  /** Acquire the microphone. Call once before syncing the roster. */
+  /** Acquire mic (and camera for video conferences). Call once before syncing. */
   async start(): Promise<void> {
     if (this.started || this.closed) return;
     this.started = true;
     const webrtc = await this.getWebRTC();
-    this.localStream = await webrtc.mediaDevices.getUserMedia({ audio: true, video: false });
+    this.localStream = await webrtc.mediaDevices.getUserMedia({
+      audio: true,
+      video: this.wantsVideo ? ({ facingMode: 'user' } as Any) : false,
+    });
+  }
+
+  /** The local camera/mic stream (for rendering a self-view). */
+  getLocalStream(): Any {
+    return this.localStream;
   }
 
   /**
@@ -118,6 +132,20 @@ export class MeshController {
 
   isMicEnabled(): boolean {
     return this.micEnabled;
+  }
+
+  /** Enable/disable the local camera track (video conferences). */
+  setVideoEnabled(enabled: boolean): void {
+    this.cameraEnabled = enabled;
+    try {
+      this.localStream?.getVideoTracks?.().forEach((t: Any) => {
+        t.enabled = enabled;
+      });
+    } catch {}
+  }
+
+  isCameraEnabled(): boolean {
+    return this.cameraEnabled;
   }
 
   getRemoteStreams(): Record<string, Any> {

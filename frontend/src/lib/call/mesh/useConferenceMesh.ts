@@ -34,11 +34,19 @@ interface UseConferenceMeshArgs {
   isActive: boolean;
   /** Mirror of the user's mute state — false mutes the local mic track. */
   micEnabled: boolean;
+  /** Acquire a camera (conferences are voice+video). */
+  videoEnabled?: boolean;
+  /** Mirror of the user's camera toggle — false disables the local video track. */
+  cameraOn?: boolean;
 }
 
 interface UseConferenceMeshResult {
-  /** userId → true once a remote audio stream is flowing. */
+  /** userId → live remote MediaStream (audio + video). */
+  remoteStreams: Record<string, Any>;
+  /** userId → true once a remote stream is flowing. */
   connectedPeers: Record<string, boolean>;
+  /** The local camera/mic stream (for the self-view tile). */
+  localStream: Any;
 }
 
 export function useConferenceMesh({
@@ -47,17 +55,28 @@ export function useConferenceMesh({
   peerUserIds,
   isActive,
   micEnabled,
+  videoEnabled = false,
+  cameraOn = true,
 }: UseConferenceMeshArgs): UseConferenceMeshResult {
   const isWeb = Platform.OS === 'web';
   const enabled = !isWeb && !!conferenceId && !!myUserId && isActive;
 
   const sendSignalM = useMutation((api as Any).conferenceSignaling.send);
   const markConsumedM = useMutation((api as Any).conferenceSignaling.markConsumed);
+  const cleanupMineM = useMutation((api as Any).conferenceSignaling.cleanupMine);
 
   const controllerRef = useRef<MeshControllerType | null>(null);
-  const [connectedPeers, setConnectedPeers] = useState<Record<string, boolean>>({});
+  const [remoteStreams, setRemoteStreams] = useState<Record<string, Any>>({});
+  const [localStream, setLocalStream] = useState<Any>(null);
+  const connectedPeers = useMemo(() => {
+    const map: Record<string, boolean> = {};
+    Object.keys(remoteStreams).forEach((id) => {
+      map[id] = true;
+    });
+    return map;
+  }, [remoteStreams]);
 
-  // Build the controller + acquire the mic once we're active.
+  // Build the controller + acquire the mic/camera once we're active.
   useEffect(() => {
     if (!enabled || controllerRef.current) return;
     let disposed = false;
@@ -68,31 +87,29 @@ export function useConferenceMesh({
         const controller = new MeshController({
           callId: conferenceId as string, // opaque shared-room id (not used for signaling)
           myUserId: myUserId as string,
+          video: videoEnabled,
           sendSignal: (toUserId, type, payload) => {
             void sendSignalM({ conferenceId, toUserId, type, payload } as Any).catch(() => {});
           },
           onRemoteStreamsChanged: (streams) => {
-            if (disposed) return;
-            const map: Record<string, boolean> = {};
-            Object.keys(streams).forEach((id) => {
-              map[id] = true;
-            });
-            setConnectedPeers(map);
+            if (!disposed) setRemoteStreams(streams);
           },
         });
         controllerRef.current = controller;
         await controller.start();
         try {
-          InCallAudio.start('audio');
+          InCallAudio.start(videoEnabled ? 'video' : 'audio');
           InCallAudio.setSpeakerOn?.(true);
         } catch {}
         controller.setMicEnabled(micEnabled);
+        if (videoEnabled) controller.setVideoEnabled(cameraOn);
+        if (!disposed) setLocalStream(controller.getLocalStream());
         if (disposed) {
           controller.close();
           controllerRef.current = null;
         }
       } catch {
-        /* mic denied / webrtc unavailable — room still works for chat/roster */
+        /* mic/cam denied or webrtc unavailable — room still works for chat/roster */
       }
     })();
     return () => {
@@ -101,13 +118,14 @@ export function useConferenceMesh({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, conferenceId, myUserId]);
 
-  // Teardown on unmount.
+  // Teardown on unmount: close peers, stop audio, and clean up our signaling rows.
   useEffect(() => {
     return () => {
       try {
         controllerRef.current?.close();
       } catch {}
       controllerRef.current = null;
+      if (conferenceId) void cleanupMineM({ conferenceId } as Any).catch(() => {});
       if (!isWeb) {
         import('../../webrtc/inCallManager')
           .then((m) => m.InCallAudio.stop())
@@ -130,6 +148,11 @@ export function useConferenceMesh({
   useEffect(() => {
     controllerRef.current?.setMicEnabled(micEnabled);
   }, [micEnabled]);
+
+  // Reflect camera toggle onto the local video track.
+  useEffect(() => {
+    if (videoEnabled) controllerRef.current?.setVideoEnabled(cameraOn);
+  }, [cameraOn, videoEnabled]);
 
   // Route incoming signaling messages, then mark them consumed.
   const signalsQ = useReactiveSafeConvexQuery<Any[]>(
@@ -156,5 +179,5 @@ export function useConferenceMesh({
     if (ids.length > 0) void markConsumedM({ messageIds: ids } as Any).catch(() => {});
   }, [rawSignals, myUserId, markConsumedM]);
 
-  return { connectedPeers };
+  return { remoteStreams, connectedPeers, localStream };
 }

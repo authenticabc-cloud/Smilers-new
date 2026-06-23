@@ -180,7 +180,7 @@ export default function ConferenceRoomScreen() {
   const myMuted = !!me?.isMuted;
   const myVideoEnabled = me?.videoEnabled !== false;
 
-  // --- Live voice mesh (web-interop conference audio) ---
+  // --- Live voice+video mesh (web-interop conference media) ---
   // Peers = other active participants in the room. The mesh engine
   // (MeshController/MeshPeer) is shared with group calls; here it is driven by
   // `api.conferenceSignaling.*` keyed by conferenceId (no callId for conferences).
@@ -188,19 +188,39 @@ export default function ConferenceRoomScreen() {
     () => active.map((p) => p.userId).filter((id) => id && id !== myUserId),
     [active, myUserId],
   );
-  // Local mic mirror so tapping mute cuts audio instantly (server state syncs
-  // via the 3s room refetch, incl. admin force-mute).
+  const isVideoConf = (state?.conference as any)?.type === 'video';
+  // Local mic/camera mirrors so toggles take effect instantly; server state
+  // syncs via the 3s room refetch (incl. admin force-mute).
   const [localMicOn, setLocalMicOn] = useState(true);
+  const [localCamOn, setLocalCamOn] = useState(true);
   useEffect(() => {
     setLocalMicOn(!myMuted);
   }, [myMuted]);
-  useConferenceMesh({
+  useEffect(() => {
+    setLocalCamOn(myVideoEnabled);
+  }, [myVideoEnabled]);
+  const { remoteStreams, localStream } = useConferenceMesh({
     conferenceId,
     myUserId,
     peerUserIds,
     isActive: isValid && !!myUserId,
     micEnabled: localMicOn,
+    videoEnabled: isVideoConf,
+    cameraOn: localCamOn,
   });
+
+  // Native-only RTCView (video tiles). Web/Expo Go get a null stub.
+  const [RTCViewImpl, setRTCViewImpl] = useState<any>(null);
+  useEffect(() => {
+    if (Platform.OS === 'web' || !isVideoConf) return;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const mod = require('../../../src/lib/webrtc/RTCViewWrapper');
+      if (mod?.default) setRTCViewImpl(() => mod.default);
+    } catch {
+      /* RTCView unavailable — fall back to avatar tiles */
+    }
+  }, [isVideoConf]);
 
   // --- Mutations ---
   const joinRoomM = useMutation((api as any).conferenceRoom.joinRoom);
@@ -308,6 +328,7 @@ export default function ConferenceRoomScreen() {
   }, [conferenceId, myMuted, refetchState, toggleMuteM]);
 
   const handleToggleSelfVideo = useCallback(async () => {
+    setLocalCamOn((v) => !v); // instant local camera on/off via the mesh
     await safeMutate('Toggle camera', async () => toggleVideoM({ conferenceId, videoEnabled: !myVideoEnabled }));
     void refetchState();
   }, [conferenceId, myVideoEnabled, refetchState, toggleVideoM]);
@@ -570,16 +591,23 @@ export default function ConferenceRoomScreen() {
           key={`grid-${columns}`}
           contentContainerStyle={styles.gridContent}
           columnWrapperStyle={columns > 1 ? styles.gridRow : undefined}
-          renderItem={({ item }) => (
-            <ParticipantTile
-              participant={item}
-              isMe={item.userId === myUserId}
-              canManage={isChair && item.userId !== myUserId}
-              width={tileWidth}
-              height={tileHeight}
-              onLongPress={() => (isChair && item.userId !== myUserId ? setActionTarget(item) : undefined)}
-            />
-          )}
+          renderItem={({ item }) => {
+            const tileStream = item.userId === myUserId ? localStream : remoteStreams[item.userId];
+            const streamURL = tileStream?.toURL ? tileStream.toURL() : null;
+            return (
+              <ParticipantTile
+                participant={item}
+                isMe={item.userId === myUserId}
+                canManage={isChair && item.userId !== myUserId}
+                width={tileWidth}
+                height={tileHeight}
+                streamURL={streamURL}
+                RTCViewImpl={RTCViewImpl}
+                mirror={item.userId === myUserId}
+                onLongPress={() => (isChair && item.userId !== myUserId ? setActionTarget(item) : undefined)}
+              />
+            );
+          }}
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
               <MaterialCommunityIcons name="account-multiple-outline" size={48} color={Colors.textMuted} />
@@ -930,6 +958,9 @@ function ParticipantTile({
   canManage,
   width,
   height,
+  streamURL,
+  RTCViewImpl,
+  mirror,
   onLongPress,
 }: {
   participant: Participant;
@@ -937,6 +968,9 @@ function ParticipantTile({
   canManage: boolean;
   width: number;
   height: number;
+  streamURL?: string | null;
+  RTCViewImpl?: any;
+  mirror?: boolean;
   onLongPress?: () => void;
 }) {
   const role = normalizeRole(participant.role);
@@ -945,6 +979,7 @@ function ParticipantTile({
   const videoOn = participant.videoEnabled !== false;
   const isSuspended = participant.status === 'suspended';
   const handRaised = !!participant.handRaised;
+  const showVideo = videoOn && !!streamURL && !!RTCViewImpl;
 
   return (
     <Pressable
@@ -960,7 +995,15 @@ function ParticipantTile({
     >
       {/* Video area / avatar */}
       <View style={styles.tileVideo}>
-        {videoOn ? (
+        {showVideo ? (
+          <RTCViewImpl
+            streamURL={streamURL}
+            style={StyleSheet.absoluteFill}
+            objectFit="cover"
+            mirror={!!mirror}
+            zOrder={0}
+          />
+        ) : videoOn ? (
           <View style={styles.tileVideoActive}>
             <MaterialCommunityIcons name="video" size={28} color="rgba(255,255,255,0.3)" />
           </View>
