@@ -1091,22 +1091,26 @@ export default function ConferenceRoomScreen() {
         onClose={closePanel}
       >
         <Text style={styles.panelHelper}>
-          Private to the Clerk. Tap below to append a quick note.
+          {isPrivileged
+            ? 'Private to the Chair & Clerk. Tap below to append a quick note.'
+            : 'Minutes are recorded by the Chair & Clerk. You can view the log below.'}
         </Text>
-        <TouchableOpacity
-          style={[styles.panelPrimaryBtn, { borderColor: '#FFFFFF' }]}
-          activeOpacity={0.85}
-          onPress={async () => {
-            await safeMutate('Append minute entry', async () =>
-              appendMinutesM({ conferenceId, content: `Note logged at ${new Date().toLocaleTimeString()}`, category: 'note' }),
-            );
-            void refetchState();
-          }}
-          testID="conf-minutes-append"
-        >
-          <Feather name="edit-3" size={18} color="#FFFFFF" />
-          <Text style={[styles.panelPrimaryBtnText, { color: '#FFFFFF' }]}>Append entry</Text>
-        </TouchableOpacity>
+        {isPrivileged ? (
+          <TouchableOpacity
+            style={[styles.panelPrimaryBtn, { borderColor: '#FFFFFF' }]}
+            activeOpacity={0.85}
+            onPress={async () => {
+              await safeMutate('Append minute entry', async () =>
+                appendMinutesM({ conferenceId, content: `Note logged at ${new Date().toLocaleTimeString()}`, category: 'note' }),
+              );
+              void refetchState();
+            }}
+            testID="conf-minutes-append"
+          >
+            <Feather name="edit-3" size={18} color="#FFFFFF" />
+            <Text style={[styles.panelPrimaryBtnText, { color: '#FFFFFF' }]}>Append entry</Text>
+          </TouchableOpacity>
+        ) : null}
         {Array.isArray(minutesEntries) && minutesEntries.length > 0 ? (
           <View style={{ marginTop: 12, gap: 8 }}>
             {minutesEntries.map((m: any, i: number) => (
