@@ -1543,34 +1543,44 @@ export default function ChatScreen() {
       return;
     }
 
+    // iter-271: allow picking MULTIPLE videos at once (parity with photos).
     // iter-164 data-friendly: 60s cap + lower quality → smaller payloads.
-    const result = await ImagePicker.launchImageLibraryAsync(VIDEO_PICKER_OPTIONS_CHAT);
+    const result = await ImagePicker.launchImageLibraryAsync({
+      ...VIDEO_PICKER_OPTIONS_CHAT,
+      allowsMultipleSelection: true,
+      selectionLimit: 10,
+    });
 
-    if (result.canceled || !result.assets?.[0]?.uri || !conversationId) return;
-    const asset = result.assets[0];
+    if (result.canceled || !result.assets?.length || !conversationId) return;
+    const assets = result.assets.filter((a) => !!a?.uri);
+    if (assets.length === 0) return;
 
     setUploading(true);
     try {
-      const mime = asset.mimeType || 'video/mp4';
-      const storageId = await uploadFile(convex, asset.uri, mime);
-      const sentVideoId: any = await sendMessage({ conversationId, type: 'video', storageId, mimeType: mime });
-      await refetchMessages();
-      const messageId = typeof sentVideoId === 'string'
-        ? sentVideoId
-        : (sentVideoId?._id || sentVideoId?.id || '');
-      if (messageId) {
-        // Pass the LOCAL file URI so the transcription endpoint receives the
-        // plaintext bytes via multipart upload — the Convex storage URL would
-        // serve AES-GCM ciphertext on E2EE chats and Whisper would fail.
-        triggerTranscription({
-          convex,
-          messageId: String(messageId),
-          storageId,
-          conversationId,
-          localFileUri: asset.uri,
-          fileName: (asset as any)?.fileName || 'video.mp4',
-        }).catch(() => {});
+      // Upload + send each selected video as its own message, sequentially
+      // (keeps memory + upload bandwidth bounded on cellular).
+      for (const asset of assets) {
+        const mime = asset.mimeType || 'video/mp4';
+        const storageId = await uploadFile(convex, asset.uri, mime);
+        const sentVideoId: any = await sendMessage({ conversationId, type: 'video', storageId, mimeType: mime });
+        const messageId = typeof sentVideoId === 'string'
+          ? sentVideoId
+          : (sentVideoId?._id || sentVideoId?.id || '');
+        if (messageId) {
+          // Pass the LOCAL file URI so the transcription endpoint receives the
+          // plaintext bytes via multipart upload — the Convex storage URL would
+          // serve AES-GCM ciphertext on E2EE chats and Whisper would fail.
+          triggerTranscription({
+            convex,
+            messageId: String(messageId),
+            storageId,
+            conversationId,
+            localFileUri: asset.uri,
+            fileName: (asset as any)?.fileName || 'video.mp4',
+          }).catch(() => {});
+        }
       }
+      await refetchMessages();
     } catch (errorValue: any) {
       Alert.alert('Failed to send video', errorValue?.message || 'Unknown error');
     } finally {

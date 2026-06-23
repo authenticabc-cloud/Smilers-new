@@ -221,28 +221,44 @@ export async function triggerTranscription(args: TriggerArgs): Promise<void> {
       segments,
     });
     if (messageId) {
-      try {
-        await convex.mutation((api as any).messages.setTranscription, {
+      // Convex arg validators REJECT unknown/extra fields — so if the web
+      // backend's `setTranscription` doesn't define `transcriptionSegments`
+      // (or `transcriptionLanguage`), the FULL payload throws and NOTHING is
+      // persisted. The sender still sees the transcript (local cache) but the
+      // recipient never does. Retry with progressively smaller arg shapes so
+      // the transcript actually lands on the Convex message for the recipient.
+      const attempts: Array<Record<string, any>> = [
+        {
           messageId,
           transcription,
           transcriptionLanguage: language,
           transcriptionStatus: 'ready',
           transcriptionSegments: segments,
-        });
-      } catch {
-        // Older backends may not accept `setTranscription` — try a generic
-        // patch fallback if exposed, otherwise rely on the local cache.
+        },
+        {
+          messageId,
+          transcription,
+          transcriptionLanguage: language,
+          transcriptionStatus: 'ready',
+        },
+        { messageId, transcription, transcriptionStatus: 'ready' },
+        { messageId, transcription },
+      ];
+      let persisted = false;
+      for (const attemptArgs of attempts) {
         try {
-          await convex.mutation((api as any).messages.patch, {
-            messageId,
-            transcription,
-            transcriptionLanguage: language,
-            transcriptionStatus: 'ready',
-            transcriptionSegments: segments,
-          });
+          await convex.mutation((api as any).messages.setTranscription, attemptArgs);
+          persisted = true;
+          break;
         } catch {
-          /* swallow — local cache still drives the UI */
+          // try the next, smaller arg set
         }
+      }
+      if (!persisted) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[transcribe] setTranscription rejected every arg shape — recipient will not see the transcript (local cache only).',
+        );
       }
     }
   } catch (errorValue: any) {
