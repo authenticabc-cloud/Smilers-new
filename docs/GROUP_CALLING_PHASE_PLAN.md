@@ -64,7 +64,38 @@ Home for the UI: the real call screen `app/call/[conversationId].tsx` (has media
 NOT the scheduled-conference `room.tsx`. Render the `api.conference.*` roster grid
 there when the call is a group call.
 
-## Open questions for web team before Phase 2
-- Exact glare/offerer rule for mesh (who offers to whom).
-- `getParticipants` result shape (fields: userId, name, avatar, isMuted, handRaised, role?).
-- Whether `getMyState` is needed for self mute/hand state or derivable from roster.
+## Phase 2 — SHIPPED (native mesh, voice only) — iter-268
+Web team confirmed web mesh is live. Native mesh built to interop:
+- `src/lib/call/mesh/MeshPeer.ts` — one perfect-negotiation peer connection.
+- `src/lib/call/mesh/MeshController.ts` — owns the mic, one MeshPeer per roster
+  participant, routes signals by `fromUserId`, exposes remote streams.
+- `app/group-call/[conversationId].tsx` — voice room UI (roster grid, mute, leave).
+  Entry: `ActionRow` "Group voice call" on `app/group/[id].tsx` →
+  `/group-call/<conversationId>`. Start path calls
+  `api.calls.initiateCall({conversationId, callType:'voice'})`; join path accepts
+  `?callId=`. Joins roster via `api.conference.joinConference({callId})`,
+  subscribes `api.conference.getParticipants({callId})`, polls
+  `api.signaling.poll({callId})` (filters `toUserId===me`, routes by `fromUserId`,
+  then `api.signaling.markConsumed({messageIds})`), `toggleSelfMute({callId,isMuted})`,
+  `leaveConference({callId})`. Dynamic TURN via Phase-1 `getPeerConnectionConfig()`.
+
+### Glare rule actually implemented (IMPORTANT for web interop)
+- `polite = String(myUserId) > String(peerUserId)` (LARGER Convex `users._id` = polite).
+- **Rollback-free subset** (react-native-webrtc rollback is unreliable):
+  - IMPOLITE peer (smaller id) is the SOLE initiator → fires the offer on
+    `negotiationneeded`. POLITE peer NEVER initiates; it only answers.
+  - On an incoming offer, the impolite side IGNORES it if it collides
+    (`makingOffer || signalingState!=='stable'`) — no rollback.
+  - Interops with web's full perfect-negotiation: when native is polite the web
+    (impolite) drives and native answers; when native is impolite native drives and
+    the web (polite) rolls back on its own side.
+- ICE candidates packaged via `candidate.toJSON()` (carries sdpMid/sdpMLineIndex).
+
+### Still TODO (follow-ups, not blockers)
+- **Incoming group-call ring → route to `/group-call/<conv>?callId=`** (push/CallHost
+  wiring still routes to the 1:1 `/call` screen). Until then, a callee can join from
+  the group screen's "Group voice call" row.
+- Speaking indicator, hand-raise UI, admin mute, group video.
+- Confirm `getParticipants` field names on device (used `userId|_id`, `name|userName`,
+  `avatar|userAvatar`, `isMuted`, `handRaised`).
+- NATIVE BUILD REQUIRED to validate (no WebRTC on web/Expo Go).

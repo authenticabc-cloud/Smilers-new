@@ -428,6 +428,12 @@ function GroupInfoInner() {
               />
             ) : null}
             <ActionRow
+              icon="phone-call"
+              label="Group voice call"
+              onPress={() => router.push(`/group-call/${conversationId}` as any)}
+              testID="group-info-voice-call"
+            />
+            <ActionRow
               icon="file-text"
               label="Regulations Board"
               onPress={() => router.push(`/group/${conversationId}/regulations` as any)}
