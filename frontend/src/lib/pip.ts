@@ -15,7 +15,13 @@ import { Platform } from 'react-native';
 let ExpoPip: any = null;
 if (Platform.OS === 'android') {
   try {
-    ExpoPip = require('expo-pip');
+    // expo-pip exports a DEFAULT class whose methods (enterPipMode,
+    // setPictureInPictureParams, useIsInPip…) are STATIC. require() returns
+    // the module namespace `{ default: ExpoPip, …types }`, so we must unwrap
+    // `.default` — otherwise every call below was `undefined?.()` and the
+    // "Pop out" button silently did nothing.
+    const mod = require('expo-pip');
+    ExpoPip = mod?.default || mod;
   } catch {
     ExpoPip = null;
   }

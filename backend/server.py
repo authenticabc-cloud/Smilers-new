@@ -2133,6 +2133,29 @@ async def notify_event(body: NotifyEventBody):
 
     data: dict = {"title": title, "message": message, "action_url": action_url}
 
+    # iter-269: the BACKUP push path was emitting only title/message/action_url.
+    # The client routes to the full-screen ringing UI (Answer/Decline,
+    # lock-screen wake, looping ringtone) ONLY when it sees `type == 'call'`
+    # + call metadata; without them the push fell through to the plain message
+    # banner with the message tone. Mirror the call payload the Twilio/Convex
+    # call path builds so a backup-triggered call still rings properly.
+    if event == "call":
+        data["type"] = "call"
+        if body.call_id:
+            data["callId"] = str(body.call_id)
+        if conv:
+            data["conversationId"] = conv
+        if body.call_type in ("voice", "video"):
+            data["callType"] = body.call_type
+            data["twilio_is_video"] = "1" if body.call_type == "video" else "0"
+        if display:
+            data["callerName"] = display
+            data["displayName"] = display
+    elif event == "missed-call":
+        data["type"] = "missed-call"
+        if conv:
+            data["conversationId"] = conv
+
     if await _is_duplicate_push(
         body.idempotency_key, _push_content_hash(recipients, data)
     ):

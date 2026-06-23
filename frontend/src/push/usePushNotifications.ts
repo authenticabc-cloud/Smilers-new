@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react';
-import { AppState, Linking, Platform } from 'react-native';
+import { Alert, AppState, Linking, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
@@ -11,14 +11,25 @@ import { readStoredJson } from '../lib/settingsStorage';
 import { getPushDiagnosticsState, setPushDiagnostics, setPushDiagnosticsRetryHandler } from './pushDiagnostics';
 import { useAuth } from '../providers/AuthProvider';
 import { isTwilioEnabled } from '../lib/twilio/twilioApi';
+import {
+  shouldAskForFullScreenIntent,
+  wasAlreadyPrompted,
+  markPrompted,
+  openFullScreenIntentSettings,
+} from '../lib/fullScreenIntentPermission';
 
-// Foreground display behavior — show banner + sound for incoming pushes
+// Foreground display behavior — show banner but DON'T let the OS play the
+// channel sound. iter-269: in the foreground two sources fired at once — the
+// notification channel sound AND the in-app `useMessageNotificationSound`
+// hook's custom Smilers tone. The system sound won by a few ms, producing the
+// "default beep then Smilers tone" double-sound. The in-app hook owns
+// foreground sound, so silence the OS here.
 if (Platform.OS !== 'web') {
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
       shouldShowBanner: true,
       shouldShowList: true,
-      shouldPlaySound: true,
+      shouldPlaySound: false,
       shouldSetBadge: true,
     }),
   });
@@ -586,6 +597,35 @@ export function usePushNotifications() {
   const registrationRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const canRegisterWithBackend = hasAuthSession && isConvexAuthenticated && !isConvexAuthLoading;
+
+  // iter-269: Android 14+ requires a runtime grant for USE_FULL_SCREEN_INTENT.
+  // Without it the OS silently downgrades our full-screen incoming-call UI to a
+  // plain banner (no Answer/Decline, no lock-screen wake). The detection +
+  // settings-deeplink helpers already existed but were never invoked. Prompt
+  // ONCE after sign-in (short explanation first, per permission best-practice),
+  // then deep-link to the settings page if the user opts in.
+  useEffect(() => {
+    if (!hasAuthSession) return undefined;
+    if (!shouldAskForFullScreenIntent()) return undefined;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      if (cancelled) return;
+      if (await wasAlreadyPrompted()) return;
+      await markPrompted();
+      Alert.alert(
+        'Enable full-screen calls',
+        'Allow "Full-screen notifications" so incoming Smilers calls ring full-screen on your lock screen with Answer & Decline buttons.',
+        [
+          { text: 'Not now', style: 'cancel' },
+          { text: 'Open settings', onPress: () => { void openFullScreenIntentSettings(); } },
+        ],
+      );
+    }, 4000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [hasAuthSession]);
 
   const clearRegistrationRetry = useCallback(() => {
     if (registrationRetryTimer.current) {
