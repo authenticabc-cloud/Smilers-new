@@ -159,6 +159,7 @@
     "plugins": [
       "expo-router",
       "./plugins/withCallWakeScreen.js",
+      "./plugins/withWebRTCScreenshare.js",
       [
         "expo-splash-screen",
         {
