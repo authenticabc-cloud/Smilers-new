@@ -29,8 +29,22 @@ any differ, give the correct signature.
 - `appendMinutes({ conferenceId, text })`
 - `sendReaction({ conferenceId, emoji })`
 - `muteAll({ conferenceId })`
-- ❓ Where is the active timer / minutes log / reactions READ from? (which query +
-  fields) — mobile currently has no subscription for these.
+
+### ⚠️ Read-side namespace mismatch — please confirm exact paths
+Mobile now subscribes (live `watchQuery`) to the three reads below, but they were
+GUESSED and live in DIFFERENT modules than the writes above — which is suspicious
+(Convex read+write for one feature usually share a module). For each, confirm the
+exact deployed query path + returned fields, or give the correct one:
+
+- **Active speaker timer** — reading: `api.conferenceSpeakerTimer.getActiveTimer({ conferenceId })`
+  - but writing via `api.conferences.startTimer` / `endTimer`. Which module is correct?
+  - expected fields used by mobile: `{ endsAt?: number(ms), durationSec?: number, speakerName?: string }`
+- **Minutes log** — reading: `api.conferenceMinutes.getMinutes({ conferenceId })`
+  - writing via `api.conferenceMinutes.addEntry({ conferenceId, text })` (mobile uses `addEntry`, NOT `appendMinutes` — confirm name)
+  - expected fields: `{ _id, text|content, authorName? }`
+- **Recent reactions** — reading: `api.conferenceReactions.getRecentReactions({ conferenceId })`
+  - but writing via `api.conferences.sendReaction`. Which module is correct?
+  - expected fields: `{ _id, emoji }`
 
 ## 5. `api.conferenceMotions.*`  (motions)
 - `getMotions({ conferenceId })` → motion[] — fields? (title, status, votesFor/Against, _id)

@@ -339,6 +339,17 @@ export default function ConferenceRoomScreen() {
     return () => clearInterval(id);
   }, [isValid, refetchState]);
 
+  // --- Speaker-timer 1s ticker: re-render every second while a countdown is
+  //     active so the "Xs remaining" label decrements smoothly (refetchState
+  //     only fires every 3s, which made the countdown jump). ---
+  const [, setClockTick] = useState(0);
+  const timerHasCountdown = typeof (activeTimer as any)?.endsAt === 'number';
+  useEffect(() => {
+    if (!timerHasCountdown) return;
+    const id = setInterval(() => setClockTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [timerHasCountdown]);
+
   // --- Local UI state ---
   const [actionTarget, setActionTarget] = useState<Participant | null>(null);
 
