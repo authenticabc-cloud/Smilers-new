@@ -55,6 +55,27 @@ interface UserItem {
   level?: string;
   totalEngagements?: number;
   referralCount?: number;
+  isOnline?: boolean;
+  lastSeen?: string;
+}
+
+// Mirrors the web Admin "Last seen …" label. getAllUsers already forces
+// isOnline=false when lastSeen is older than 2 min, so we trust isOnline.
+function formatAdminLastSeen(lastSeen?: string, isOnline?: boolean): string {
+  if (isOnline) return 'Online now';
+  if (!lastSeen) return 'Last seen a while ago';
+  const t = new Date(lastSeen).getTime();
+  if (!Number.isFinite(t)) return 'Last seen a while ago';
+  const sec = Math.max(1, Math.floor((Date.now() - t) / 1000));
+  if (sec < 60) return `Last seen ${sec} second${sec === 1 ? '' : 's'} ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `Last seen ${min} minute${min === 1 ? '' : 's'} ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `Last seen ${hr} hour${hr === 1 ? '' : 's'} ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `Last seen ${day} day${day === 1 ? '' : 's'} ago`;
+  const mon = Math.floor(day / 30);
+  return `Last seen ${mon} month${mon === 1 ? '' : 's'} ago`;
 }
 
 interface ReportItem {
@@ -571,6 +592,7 @@ function UsersTab({
             >
               <View style={styles.avatar}>
                 <Text style={styles.avatarText}>{(u.name || u.email || '?').charAt(0).toUpperCase()}</Text>
+                {u.isOnline ? <View style={styles.onlineDot} testID={`admin-user-${idx}-online`} /> : null}
               </View>
               <View style={{ flex: 1 }}>
                 <View style={styles.rowTitleLine}>
@@ -600,6 +622,12 @@ function UsersTab({
                     {Number(u.totalEngagements || 0)} pts · {Number(u.referralCount || 0)} refs
                   </Text>
                 </View>
+                <Text
+                  style={[styles.lastSeenText, u.isOnline ? styles.lastSeenOnline : null]}
+                  numberOfLines={1}
+                >
+                  {formatAdminLastSeen(u.lastSeen, u.isOnline)}
+                </Text>
               </View>
               <RowMenu
                 disabled={busyId === u._id}
@@ -1601,6 +1629,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   avatarText: { color: Colors.primaryDark, fontWeight: FontWeight.bold, fontSize: FontSize.lg },
+  onlineDot: {
+    position: 'absolute',
+    bottom: -1,
+    right: -1,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#22C55E',
+    borderWidth: 2,
+    borderColor: Colors.background,
+  },
+  lastSeenText: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 3 },
+  lastSeenOnline: { color: '#16A34A', fontWeight: FontWeight.semibold },
   rowTitleLine: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   rowTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   rowSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
