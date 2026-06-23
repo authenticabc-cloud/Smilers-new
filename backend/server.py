@@ -1789,6 +1789,7 @@ async def send_push(
                     "callerId",
                     "callerName",
                     "callType",
+                    "isConference",
                     "conversationId",
                     "displayName",
                 ):

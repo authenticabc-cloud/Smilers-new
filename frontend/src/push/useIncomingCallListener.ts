@@ -93,6 +93,15 @@ export function useIncomingCallListener() {
     // "Connecting" forever (the exact mismatch support flagged). Route the
     // foreground answer to the legacy /call/<id> screen when Twilio is off.
     if (!isTwilioEnabled()) {
+      // Group (conference) call → join the dedicated mesh room with the shared
+      // callId (the calls doc id). 1:1 calls keep the legacy /call screen.
+      const isConferenceCall =
+        (incomingCall as any)?.isConference === true ||
+        String((incomingCall as any)?.callType || '').toLowerCase() === 'conference';
+      if (isConferenceCall) {
+        router.push(`/group-call/${conversationId}?callId=${encodeURIComponent(String(incomingCall._id))}` as any);
+        return;
+      }
       const callIsVideo =
         incomingCall?.isVideo === true ||
         incomingType === 'video' ||

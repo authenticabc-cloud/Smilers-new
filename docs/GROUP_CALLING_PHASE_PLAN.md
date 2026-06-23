@@ -92,9 +92,15 @@ Web team confirmed web mesh is live. Native mesh built to interop:
 - ICE candidates packaged via `candidate.toJSON()` (carries sdpMid/sdpMLineIndex).
 
 ### Still TODO (follow-ups, not blockers)
-- **Incoming group-call ring → route to `/group-call/<conv>?callId=`** (push/CallHost
-  wiring still routes to the 1:1 `/call` screen). Until then, a callee can join from
-  the group screen's "Group voice call" row.
+- **DONE (iter-269): Incoming group-call ring → group room.** Foreground
+  (`useIncomingCallListener`) routes `isConference` calls to
+  `/group-call/<conv>?callId=`; push-tap handler (`usePushNotifications`) routes
+  `payload.isConference|callType==='conference'` the same way; FastAPI relay
+  (`server.py`) now forwards `isConference` so the flag survives to the device.
+  ⚠️ **Web dependency:** the web team's Convex `initiateCall` must include
+  `isConference: true` (and ideally `callType:'conference'`) in the call push
+  data sent to `/api/send-push-internal`, else the killed/background ring still
+  lands on the 1:1 `/call` screen. Foreground works without this.
 - Speaking indicator, hand-raise UI, admin mute, group video.
 - Confirm `getParticipants` field names on device (used `userId|_id`, `name|userName`,
   `avatar|userAvatar`, `isMuted`, `handRaised`).

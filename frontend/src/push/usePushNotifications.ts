@@ -1013,6 +1013,21 @@ export function usePushNotifications() {
             void cancelIncomingCallNotifeeWake(callId);
           } catch {}
         }
+        // Group (conference) calls run on the LiveKit-free WebRTC mesh — route
+        // to the dedicated group-call room with the shared callId so the callee
+        // joins the same room. Detected via `isConference`/`callType` carried in
+        // the push data (forwarded by the FastAPI relay).
+        const isConferenceCall =
+          (payload as any).isConference === true ||
+          String((payload as any).isConference ?? '').toLowerCase() === 'true' ||
+          String((payload as any).callType ?? '').toLowerCase() === 'conference';
+        if (isConferenceCall) {
+          const joinCallId = toNonEmptyString((payload as any).callId);
+          router.push(
+            (`/group-call/${conversationId}${joinCallId ? `?callId=${encodeURIComponent(joinCallId)}` : ''}` as any),
+          );
+          return;
+        }
         // Phase A.4: incoming Twilio call → route to the new
         // /twilio-call screen with isCaller=0. Falls back to the
         // legacy /call/<id> path only when no `twilio_room_name` is
