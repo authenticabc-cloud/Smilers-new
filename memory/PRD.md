@@ -1,5 +1,11 @@
 # Smilers Mobile App — PRD
 
+## iter-267 (Jun 2026): Group calling decision (NO LiveKit) + dynamic TURN (Phase 1)
+- **Decision:** Group voice calling will NOT use LiveKit/SFU. Web team confirmed the entire stack is WebRTC peer connections + Convex signaling (`api.signaling.*` scoped by shared `callId`, addressed via `toUserId`/`fromUserId`); group roster = `api.conference.*` (singular, keyed by callId); start/ring = `api.calls.initiateCall({conversationId, callType})`. `api.conferenceRoom.*` does NOT exist (the scheduled-conference `room.tsx` is a separate `api.conferences.*` plural events feature). Full contracts + Phase 2 mesh plan in `/app/docs/GROUP_CALLING_PHASE_PLAN.md`.
+- **Phase 1 DONE — dynamic TURN (web parity, helps existing 1:1 calls too):** `src/lib/webrtc/iceServers.ts` adds `fetchTurnServers()` + `getPeerConnectionConfig()` — fetches ephemeral Twilio relay creds from `GET {CONVEX_SITE_URL}/turn-credentials` (derived from `EXPO_PUBLIC_CONVEX_URL` `.cloud`→`.site`), 8s timeout, ~50min cache, falls back to the static metered.ca list on any error. `CallSession.createPeerConnection()` now awaits it (static fallback on error). Endpoint verified live via curl (returns Twilio STUN+TURN). Lint clean; web bundle builds. Native-validate on build.
+- **CRITICAL caveat:** media is still 1:1 on BOTH web and mobile today — true mesh fan-out (every peer↔peer) is Phase 2, to ship alongside the web team's mesh (user confirmed web mesh is coming soon). Existing `CallSession` is already single-remote-peer with `callId`+`toUserId` in its signal shape → mesh = one CallSession per participant via a `MeshCallController` (see doc).
+
+
 ## iter-266 (Jun 2026): Presence polish — chat header + user profile
 - **Chat header** (`chat/[conversationId].tsx`): added a green online dot to the header avatar (wrapped it so the dot isn't clipped by the avatar's `overflow:hidden`). `headerOnline` is DM-only (no group/broadcast), derived from `mergedPresenceSource` (`isOnline`/`online` flag or `lastSeen` within 2 min). Presence subtitle text was already present.
 - **User profile** (`user/[userId].tsx`): added an online dot on the avatar ring + the last-seen line now shows "Online" (green) when the user is online (`profileOnline`); falls back to the existing `formatLastSeenLabel`.

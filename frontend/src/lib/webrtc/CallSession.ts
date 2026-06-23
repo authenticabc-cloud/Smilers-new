@@ -1,4 +1,4 @@
-import { PEER_CONNECTION_CONFIG } from './iceServers';
+import { PEER_CONNECTION_CONFIG, getPeerConnectionConfig } from './iceServers';
 import { callDebug } from '../callDebugLog';
 
 type MediaStream = any;
@@ -571,7 +571,15 @@ export class CallSession {
   /** Build the RTCPeerConnection and wire all listeners. */
   async createPeerConnection(): Promise<RTCPeerConnection> {
     const webrtc = await this.getWebRTC();
-    const pc = new webrtc.RTCPeerConnection(PEER_CONNECTION_CONFIG);
+    // Fetch fresh ephemeral TURN/STUN servers (web parity); falls back to the
+    // static PEER_CONNECTION_CONFIG servers on any network error.
+    let pcConfig: typeof PEER_CONNECTION_CONFIG = PEER_CONNECTION_CONFIG;
+    try {
+      pcConfig = await getPeerConnectionConfig();
+    } catch {
+      pcConfig = PEER_CONNECTION_CONFIG;
+    }
+    const pc = new webrtc.RTCPeerConnection(pcConfig);
     this.pc = pc;
     callDebug.push(
       'PC',

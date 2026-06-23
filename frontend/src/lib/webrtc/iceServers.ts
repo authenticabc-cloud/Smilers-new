@@ -90,3 +90,77 @@ export const ICE_SERVER_SOURCE = {
   turnUrlCount: turnUrls.length,
   stunUrlCount: stunUrls.length,
 };
+
+// ---------------------------------------------------------------------------
+// Dynamic TURN credentials (web parity)
+//
+// The web app does NOT bake TURN secrets into its bundle — it fetches fresh,
+// short-lived (≈1 h) Twilio relay credentials at call time from the Convex
+// HTTP endpoint  GET {CONVEX_SITE_URL}/turn-credentials  (returns a JSON array
+// of standard RTCIceServer objects). Ephemeral credentials are more reliable
+// than the static metered.ca fallback above (which can be rate-limited/expire),
+// so mobile now fetches the same way and only falls back to the static list on
+// network error. This is also the prerequisite for multi-party (mesh) calling.
+// ---------------------------------------------------------------------------
+
+function deriveConvexSiteUrl(): string | null {
+  const cloud = process.env.EXPO_PUBLIC_CONVEX_URL;
+  if (!cloud || typeof cloud !== 'string') return null;
+  // e.g. https://aware-newt-456.convex.cloud  ->  https://aware-newt-456.convex.site
+  return cloud.trim().replace(/\.convex\.cloud\/?$/, '.convex.site');
+}
+
+let cachedDynamicServers: IceServer[] | null = null;
+let cachedAt = 0;
+// Twilio relay credentials are valid ~1 h; refresh well before expiry.
+const DYNAMIC_TTL_MS = 50 * 60 * 1000;
+
+/**
+ * Fetch ephemeral TURN/STUN servers from the Convex backend (same source the
+ * web app uses). Caches the result for ~50 min. Always degrades to the static
+ * `ICE_SERVERS` list on any error so calls never fail to start.
+ */
+export async function fetchTurnServers(force = false): Promise<IceServer[]> {
+  const now = Date.now();
+  if (!force && cachedDynamicServers && now - cachedAt < DYNAMIC_TTL_MS) {
+    return cachedDynamicServers;
+  }
+  const site = deriveConvexSiteUrl();
+  if (!site) return ICE_SERVERS;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(`${site}/turn-credentials`, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) throw new Error(`turn-credentials HTTP ${res.status}`);
+    const json = await res.json();
+    if (!Array.isArray(json) || json.length === 0) throw new Error('empty turn-credentials');
+    const servers: IceServer[] = json
+      .filter((s: any) => s && typeof s.urls === 'string' && s.urls.length > 0)
+      .map((s: any) => ({
+        urls: s.urls,
+        ...(s.username ? { username: s.username } : {}),
+        ...(s.credential ? { credential: s.credential } : {}),
+      }));
+    if (servers.length === 0) throw new Error('no valid ice servers in response');
+    // Keep our Google STUN fallback alongside the fetched relays for redundancy.
+    cachedDynamicServers = [...stunServers, ...servers];
+    cachedAt = now;
+    return cachedDynamicServers;
+  } catch {
+    // Network/parse failure → reuse last good fetch if we have one, else static.
+    return cachedDynamicServers || ICE_SERVERS;
+  }
+}
+
+/**
+ * Async variant of `PEER_CONNECTION_CONFIG` that uses freshly-fetched dynamic
+ * ICE servers. Falls back to the static config's servers on error.
+ */
+export async function getPeerConnectionConfig(): Promise<typeof PEER_CONNECTION_CONFIG> {
+  const iceServers = await fetchTurnServers();
+  return {
+    ...PEER_CONNECTION_CONFIG,
+    iceServers: iceServers as unknown as RTCIceServer[],
+  };
+}
