@@ -66,6 +66,8 @@ import {
 import {
   CHAT_APPEARANCE_KEY,
   DEFAULT_CHAT_APPEARANCE,
+  DEFAULT_PRIVACY_SETTINGS,
+  PRIVACY_SETTINGS_KEY,
   QUICK_TEMPLATES_KEY,
   readStoredJson,
   writeStoredJson,
@@ -230,6 +232,11 @@ export default function ChatScreen() {
   // every frame, and snapping back each time caused the rapid up/down
   // jitter the user reported while scrolling.
   const isUserScrollingRef = useRef(false);
+  // iter-275: respect the user's "Typing indicators" privacy setting. When
+  // OFF we suppress the typing broadcast so the other side never sees
+  // "typing…". Loaded from on-device storage and refreshed on focus (so
+  // toggling it in Privacy takes effect when they return to the chat).
+  const typingIndicatorsEnabledRef = useRef(true);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(audioRecorder, 200);
   const hasValidConversationId =
@@ -355,15 +362,17 @@ export default function ChatScreen() {
   useEffect(() => {
     let mounted = true;
     const loadPersonalization = async () => {
-      const [storedTemplates, storedAppearance] = await Promise.all([
+      const [storedTemplates, storedAppearance, storedPrivacy] = await Promise.all([
         readStoredJson(QUICK_TEMPLATES_KEY, []),
         readStoredJson(CHAT_APPEARANCE_KEY, DEFAULT_CHAT_APPEARANCE),
+        readStoredJson(PRIVACY_SETTINGS_KEY, DEFAULT_PRIVACY_SETTINGS),
       ]);
       if (!mounted) {
         return;
       }
       setQuickTemplates(Array.isArray(storedTemplates) ? storedTemplates : []);
       setChatAppearance(normalizeChatAppearance(storedAppearance));
+      typingIndicatorsEnabledRef.current = storedPrivacy?.typingIndicators !== false;
     };
     void loadPersonalization();
     return () => {
@@ -1147,7 +1156,7 @@ export default function ChatScreen() {
 
   const handleTyping = (val: string) => {
     setText(val);
-    if (conversationId && val.length > 0) {
+    if (conversationId && val.length > 0 && typingIndicatorsEnabledRef.current) {
       setTyping({ conversationId }).catch(() => {});
     }
   };
