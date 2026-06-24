@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -18,7 +18,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useMutation } from 'convex/react';
+import { useMutation, useAction } from 'convex/react';
+import * as WebBrowser from 'expo-web-browser';
+import * as ExpoLinking from 'expo-linking';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import CountrySelectorModal from '../../src/components/CountrySelectorModal';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useDebouncedValue } from '../../src/hooks/useDebouncedValue';
@@ -59,6 +62,13 @@ export default function AdsScreen() {
   );
   const recordClick = useMutation(api.ads.recordClick);
   const redeemCode = useMutation(api.adCreditCodes.redeemCode);
+  const checkoutAdClicks = useAction(api.adCommerceAction.checkoutAdClicks);
+  const confirmAdClickPurchase = useAction(api.adCommerceAction.confirmAdClickPurchase);
+
+  // Buy-clicks (Hercules Commerce) state
+  const [purchaseAd, setPurchaseAd] = useState<any | null>(null);
+  const [purchaseQty, setPurchaseQty] = useState<number>(50);
+  const [purchasing, setPurchasing] = useState(false);
 
   const browseAds = useMemo(() => {
     const base = debouncedSearch.length > 0 ? searchResults : approvedPage?.page || [];
@@ -113,6 +123,84 @@ export default function AdsScreen() {
 
   const onChangeRedeemCode = (value: string) => {
     setRedeemCodeInput(formatCreditCode(value));
+  };
+
+  // --- Buy clicks via Hercules Commerce hosted checkout (external browser) ---
+  const PENDING_KEY = 'pendingAdClickPurchase';
+
+  const runConfirm = useCallback(
+    async (sessionId: string, silent: boolean) => {
+      try {
+        const res: any = await confirmAdClickPurchase({ checkoutSessionId: sessionId });
+        await AsyncStorage.removeItem(PENDING_KEY);
+        if (res?.credited) {
+          Alert.alert('Payment successful', `${res.clicks} click${res.clicks === 1 ? '' : 's'} added to your ad.`);
+        } else if (!silent) {
+          Alert.alert('Already processed', 'This purchase was already confirmed.');
+        }
+      } catch (errorValue: any) {
+        // Keep the pending session so we can retry later (idempotent confirm).
+        if (!silent) {
+          Alert.alert('Could not confirm payment', errorValue?.message || 'Please reopen the app to retry.');
+        }
+      }
+    },
+    [confirmAdClickPurchase],
+  );
+
+  // If the app was closed mid-checkout, retry confirming on next mount.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const pending = await AsyncStorage.getItem(PENDING_KEY);
+      if (pending && !cancelled) {
+        await runConfirm(pending, true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [runConfirm]);
+
+  const onConfirmPurchase = async () => {
+    if (!purchaseAd || purchaseQty <= 0) return;
+    setPurchasing(true);
+    try {
+      const redirectUrl = ExpoLinking.createURL('ads/purchase-return');
+      const successUrl = `${redirectUrl}?status=success`;
+      const cancelUrl = `${redirectUrl}?status=cancel`;
+      const result: any = await checkoutAdClicks({
+        adId: purchaseAd._id,
+        quantity: purchaseQty,
+        successUrl,
+        cancelUrl,
+      });
+      const sessionId = result?.sessionId;
+      const url = result?.url;
+      if (!url || !sessionId) {
+        Alert.alert('Checkout unavailable', 'Could not start the payment session. Please try again.');
+        return;
+      }
+      // Persist the session so we can confirm even if the app is killed.
+      await AsyncStorage.setItem(PENDING_KEY, sessionId);
+      setPurchaseAd(null);
+
+      const browserResult = await WebBrowser.openAuthSessionAsync(url, redirectUrl);
+      if (browserResult.type === 'success' && browserResult.url) {
+        const { queryParams } = ExpoLinking.parse(browserResult.url);
+        if (queryParams?.status === 'cancel') {
+          await AsyncStorage.removeItem(PENDING_KEY);
+          Alert.alert('Payment cancelled', 'No clicks were purchased.');
+        } else {
+          await runConfirm(sessionId, false);
+        }
+      }
+      // Dismissed (type !== 'success'): leave pending session for the resume-on-mount retry.
+    } catch (errorValue: any) {
+      Alert.alert('Could not start checkout', errorValue?.message || 'Unknown error');
+    } finally {
+      setPurchasing(false);
+    }
   };
 
   return (
@@ -223,7 +311,7 @@ export default function AdsScreen() {
           viewMode === 'browse' ? (
             <BrowseAdCard ad={item} index={index} onPress={() => onVisitAd(item)} />
           ) : (
-            <MyAdCard ad={item} index={index} onBuyClicks={() => setRedeemModalVisible(true)} />
+            <MyAdCard ad={item} index={index} onBuyClicks={() => { setPurchaseQty(50); setPurchaseAd(item); }} />
           )
         }
         ListEmptyComponent={
@@ -259,7 +347,116 @@ export default function AdsScreen() {
         onClose={() => setRedeemModalVisible(false)}
         submitting={redeeming}
       />
+
+      <BuyClicksModal
+        ad={purchaseAd}
+        quantity={purchaseQty}
+        onChangeQuantity={setPurchaseQty}
+        onConfirm={onConfirmPurchase}
+        onClose={() => (!purchasing ? setPurchaseAd(null) : undefined)}
+        submitting={purchasing}
+      />
     </SafeAreaView>
+  );
+}
+
+const CLICK_PRICE_EUR = 0.04;
+const QTY_PRESETS = [25, 50, 100, 250, 500];
+
+function BuyClicksModal({
+  ad,
+  quantity,
+  onChangeQuantity,
+  onConfirm,
+  onClose,
+  submitting,
+}: {
+  ad: any | null;
+  quantity: number;
+  onChangeQuantity: (q: number) => void;
+  onConfirm: () => void;
+  onClose: () => void;
+  submitting: boolean;
+}) {
+  const total = (quantity * CLICK_PRICE_EUR).toFixed(2);
+  return (
+    <Modal visible={!!ad} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.modalBackdrop} onPress={onClose}>
+        <Pressable style={styles.modalCard} onPress={() => undefined} testID="buy-clicks-modal">
+          <View style={styles.modalHeaderRow}>
+            <MaterialCommunityIcons name="cursor-default-click-outline" size={22} color={Colors.primary} />
+            <Text style={styles.modalTitle}>Buy clicks</Text>
+            <View style={{ flex: 1 }} />
+            <TouchableOpacity onPress={onClose} hitSlop={10} disabled={submitting} testID="buy-clicks-close">
+              <Ionicons name="close" size={24} color={Colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+
+          {ad ? (
+            <Text style={styles.modalSubtitle} numberOfLines={1}>
+              {ad.productName}
+            </Text>
+          ) : null}
+
+          <Text style={styles.modalHelper}>€{CLICK_PRICE_EUR.toFixed(2)} per click. Choose how many to buy.</Text>
+
+          <View style={styles.qtyPresetRow}>
+            {QTY_PRESETS.map((q) => {
+              const active = q === quantity;
+              return (
+                <TouchableOpacity
+                  key={q}
+                  style={[styles.qtyChip, active ? styles.qtyChipActive : null]}
+                  onPress={() => onChangeQuantity(q)}
+                  disabled={submitting}
+                  testID={`buy-clicks-qty-${q}`}
+                >
+                  <Text style={[styles.qtyChipText, active ? styles.qtyChipTextActive : null]}>{q}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <View style={styles.qtyStepperRow}>
+            <TouchableOpacity
+              style={styles.stepperBtn}
+              onPress={() => onChangeQuantity(Math.max(1, quantity - 25))}
+              disabled={submitting}
+              testID="buy-clicks-minus"
+            >
+              <Feather name="minus" size={18} color={Colors.textPrimary} />
+            </TouchableOpacity>
+            <Text style={styles.qtyValue}>{quantity}</Text>
+            <TouchableOpacity
+              style={styles.stepperBtn}
+              onPress={() => onChangeQuantity(quantity + 25)}
+              disabled={submitting}
+              testID="buy-clicks-plus"
+            >
+              <Feather name="plus" size={18} color={Colors.textPrimary} />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.totalRow}>
+            <Text style={styles.totalLabel}>Total</Text>
+            <Text style={styles.totalValue}>€{total}</Text>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.payBtn, submitting ? styles.payBtnDisabled : null]}
+            onPress={onConfirm}
+            disabled={submitting}
+            activeOpacity={0.85}
+            testID="buy-clicks-pay"
+          >
+            <Text style={styles.payBtnText}>{submitting ? 'Opening checkout…' : `Pay €${total}`}</Text>
+          </TouchableOpacity>
+          <Text style={styles.payDisclaimer}>
+            You&apos;ll complete payment securely in your browser, then return to the app.
+          </Text>
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -495,6 +692,7 @@ function MyAdCard({ ad, index, onBuyClicks }: { ad: any; index: number; onBuyCli
 
   const clickCount = Number(ad.clickCount || 0);
   const totalCost = Number(ad.totalCostEur || 0);
+  const remainingPaid = Number(ad.remainingPaidClicks || 0);
 
   return (
     <View style={styles.card} testID={`my-ad-card-${index}`}>
@@ -541,6 +739,13 @@ function MyAdCard({ ad, index, onBuyClicks }: { ad: any; index: number; onBuyCli
         <View style={styles.statsRow}>
           <Text style={styles.statsText}>{clickCount} clicks</Text>
           <Text style={styles.statsTextRight}>€{totalCost.toFixed(2)} charged</Text>
+        </View>
+
+        <View style={styles.paidClicksRow}>
+          <MaterialCommunityIcons name="wallet-outline" size={15} color={Colors.textSecondary} />
+          <Text style={styles.paidClicksText}>
+            {remainingPaid > 0 ? `${remainingPaid} paid clicks remaining` : 'No paid clicks left'}
+          </Text>
         </View>
 
         {countries.length ? (
@@ -847,4 +1052,52 @@ const styles = StyleSheet.create({
   empty: { alignItems: 'center', paddingTop: Spacing.xxl * 2, paddingHorizontal: Spacing.lg, gap: Spacing.md },
   emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
   emptySub: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center' },
+  paidClicksRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
+  paidClicksText: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.medium },
+  modalHelper: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 4 },
+  qtyPresetRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14 },
+  qtyChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+  },
+  qtyChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  qtyChipText: { fontSize: FontSize.base, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
+  qtyChipTextActive: { color: Colors.headerBg },
+  qtyStepperRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 24, marginTop: 16 },
+  stepperBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.surface,
+  },
+  qtyValue: { fontSize: 24, fontWeight: FontWeight.bold, color: Colors.textPrimary, minWidth: 60, textAlign: 'center' },
+  totalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 18,
+    paddingTop: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.border,
+  },
+  totalLabel: { fontSize: FontSize.base, color: Colors.textSecondary },
+  totalValue: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  payBtn: {
+    marginTop: 16,
+    backgroundColor: Colors.primary,
+    borderRadius: Radius.lg,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  payBtnDisabled: { opacity: 0.6 },
+  payBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.headerBg },
+  payDisclaimer: { fontSize: FontSize.xs, color: Colors.textMuted, textAlign: 'center', marginTop: 10 },
 });
