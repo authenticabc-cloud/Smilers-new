@@ -1062,6 +1062,12 @@ function VideoViewer({
     try {
       p.loop = false;
     } catch {}
+    try {
+      // expo-video only emits `timeUpdate` when this interval is > 0. Without
+      // it the caption overlay never advances (posMs stays at 0), so the live
+      // subtitles appear frozen. ~4 updates/sec keeps them in sync smoothly.
+      p.timeUpdateEventInterval = 0.25;
+    } catch {}
   });
   const [posMs, setPosMs] = useState(0);
   const [segments, setSegments] = useState<TranscriptionSegment[] | null>(null);
