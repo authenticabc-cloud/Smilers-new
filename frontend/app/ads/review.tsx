@@ -21,7 +21,7 @@ import { api } from '../../src/convexApi';
 import { estimateClicks, formatCreditCode } from '../../src/lib/adCreditCodes';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 
-type AdminTab = 'review' | 'codes';
+type AdminTab = 'review' | 'all' | 'codes';
 
 export default function AdsReviewScreen() {
   const router = useRouter();
@@ -36,9 +36,12 @@ export default function AdsReviewScreen() {
   const [lastGenerated, setLastGenerated] = useState<{ code: string; type: 'credit' | 'lifetime' } | null>(null);
   const { data: me } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null);
   const { data: pendingAds, refetch } = useSafeConvexQuery<any[]>(api.ads.listPending, {}, []);
+  const { data: allAds, refetch: refetchAll } = useSafeConvexQuery<any[]>(api.ads.listAllAds, {}, []);
   const { data: creditCodes, refetch: refetchCodes } = useSafeConvexQuery<any[]>(api.adCreditCodes.listCodes, {}, []);
   const approve = useMutation(api.ads.approve);
   const reject = useMutation(api.ads.reject);
+  const deleteAd = useMutation(api.ads.deleteAd);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const generateCreditCode = useMutation(api.adCreditCodes.generateCreditCode);
   const generateLifetimeCode = useMutation(api.adCreditCodes.generateLifetimeCode);
   const revokeCode = useMutation(api.adCreditCodes.revokeCode);
@@ -62,6 +65,45 @@ export default function AdsReviewScreen() {
     } catch (errorValue: any) {
       Alert.alert('Could not reject', errorValue?.message || 'Unknown error');
     }
+  };
+
+  const onDeleteAd = (item: any) => {
+    const remainingPaid = Number(item?.remainingPaidClicks || 0);
+    const refundEur = (remainingPaid * 0.04).toFixed(2);
+    const refundLine =
+      remainingPaid > 0
+        ? `\n\n${remainingPaid} unused paid click${remainingPaid === 1 ? '' : 's'} (€${refundEur}) will be refunded to the advertiser as a credit code.`
+        : '';
+    Alert.alert(
+      'Delete ad',
+      `Delete "${item?.productName || 'this ad'}"? This cannot be undone.${refundLine}`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setDeletingId(item._id);
+            try {
+              const result: any = await deleteAd({ adId: item._id });
+              await Promise.all([refetchAll(), refetch()]);
+              const clicks = Number(result?.refundedClicks || 0);
+              const amount = Number(result?.refundedAmountEur || 0);
+              Alert.alert(
+                'Ad deleted',
+                clicks > 0
+                  ? `Refunded ${clicks} click${clicks === 1 ? '' : 's'} (€${amount.toFixed(2)}) to the advertiser.`
+                  : 'The ad was deleted. No paid clicks to refund.',
+              );
+            } catch (errorValue: any) {
+              Alert.alert('Could not delete ad', errorValue?.message || 'Unknown error');
+            } finally {
+              setDeletingId(null);
+            }
+          },
+        },
+      ],
+    );
   };
 
   const onGenerateCreditCode = async () => {
@@ -134,6 +176,7 @@ export default function AdsReviewScreen() {
         <View style={styles.flexOne}>
           <View style={styles.segmentWrap} testID="ads-admin-tabs">
             <SegmentButton label="Review Ads" active={adminTab === 'review'} onPress={() => setAdminTab('review')} testID="ads-admin-review-tab" />
+            <SegmentButton label="All Ads" active={adminTab === 'all'} onPress={() => setAdminTab('all')} testID="ads-admin-all-tab" />
             <SegmentButton label="Ad Codes" active={adminTab === 'codes'} onPress={() => setAdminTab('codes')} testID="ads-admin-codes-tab" />
           </View>
 
@@ -189,6 +232,53 @@ export default function AdsReviewScreen() {
                 <View style={styles.empty} testID="ads-review-empty">
                   <Feather name="check-circle" size={36} color={Colors.textMuted} />
                   <Text style={styles.emptyTitle}>No pending ads</Text>
+                </View>
+              }
+            />
+          ) : adminTab === 'all' ? (
+            <FlatList
+              data={allAds}
+              keyExtractor={(item: any) => item._id}
+              contentContainerStyle={styles.listContent}
+              renderItem={({ item, index }) => {
+                const remainingPaid = Number(item.remainingPaidClicks || 0);
+                const statusColor =
+                  item.status === 'approved' ? '#16a34a' : item.status === 'rejected' ? '#dc2626' : '#d97706';
+                return (
+                  <View style={styles.card} testID={`all-ad-card-${index}`}>
+                    {item.imageUrl ? <Image source={{ uri: item.imageUrl }} style={styles.cardImage} resizeMode="cover" /> : null}
+                    <View style={styles.allAdHeader}>
+                      <Text style={styles.cardTitle}>{item.productName}</Text>
+                      <View style={[styles.statusPill, { backgroundColor: statusColor }]}>
+                        <Text style={styles.statusPillText}>{String(item.status || '').toUpperCase()}</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.cardSub}>{item.businessName} · {item.location}</Text>
+                    <Text style={styles.cardText}>Creator: {item.creatorName || 'Unknown'}</Text>
+                    <Text style={styles.cardText}>
+                      {Number(item.clickCount || 0)} clicks · €{Number(item.totalCostEur || 0).toFixed(2)} charged
+                    </Text>
+                    <Text style={styles.cardText}>
+                      Paid clicks remaining: {remainingPaid} (refund €{(remainingPaid * 0.04).toFixed(2)})
+                    </Text>
+                    <TouchableOpacity
+                      style={[styles.actionBtn, styles.deleteBtn, deletingId === item._id && styles.disabledBtn, { marginTop: Spacing.base }]}
+                      onPress={() => onDeleteAd(item)}
+                      disabled={deletingId === item._id}
+                      testID={`delete-ad-${item._id}`}
+                    >
+                      <Feather name="trash-2" size={16} color={Colors.white} />
+                      <Text style={[styles.actionText, { marginLeft: 6 }]}>
+                        {deletingId === item._id ? 'Deleting…' : 'Delete & refund'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                );
+              }}
+              ListEmptyComponent={
+                <View style={styles.empty} testID="ads-all-empty">
+                  <Feather name="inbox" size={36} color={Colors.textMuted} />
+                  <Text style={styles.emptyTitle}>No ads yet</Text>
                 </View>
               }
             />
@@ -415,4 +505,8 @@ const styles = StyleSheet.create({
   revokeBtnText: { fontSize: FontSize.sm, color: Colors.danger, fontWeight: FontWeight.bold },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: Spacing.xxl * 2, gap: Spacing.sm },
   emptyTitle: { fontSize: FontSize.lg, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
+  allAdHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.sm },
+  statusPill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.pill },
+  statusPillText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 0.5 },
+  deleteBtn: { backgroundColor: '#dc2626', flexDirection: 'row' },
 });
