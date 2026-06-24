@@ -58,16 +58,6 @@ function getListItemId(item: any): string | null {
 // groups, and must NOT show up here. We defensively drop anything flagged as a
 // conference / ad-hoc call conversation, across the field names the backend
 // might use, while keeping every real group.
-function isRealGroup(g: any): boolean {
-  if (!g) return false;
-  if (g.isConference === true) return false;
-  if (g.conversationType === 'conference' || g.type === 'conference') return false;
-  if (g.groupType === 'call' || g.isCallGroup === true || g.isAdHoc === true) return false;
-  // A conversation that carries call metadata but no group identity is a call.
-  if ((g.callType || g.callId) && g.isGroup !== true && g.groupType !== 'group') return false;
-  return true;
-}
-
 export default function GroupsScreen() {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>('groups');
@@ -99,7 +89,7 @@ export default function GroupsScreen() {
 
   const list = useMemo(() => {
     const raw: any[] = tab === 'groups'
-      ? (Array.isArray(groups) ? groups.filter(isRealGroup) : [])
+      ? (Array.isArray(groups) ? groups : [])
       : (Array.isArray(conferences) ? conferences : []);
     const q = search.trim().toLowerCase();
     if (!q) return raw;
