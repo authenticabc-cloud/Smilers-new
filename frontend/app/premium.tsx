@@ -7,19 +7,18 @@
  *       - Premium Active (license) — gold pill with crown
  *       - Trial (N days remaining) — amber pill with clock-alert
  *       - Expired / No access — neutral pill prompting subscription
- *   • Three plan cards: Monthly €3 / 6 Months €30 / Yearly €24 (Best value, highlighted)
+ *   • Three plan cards: Monthly €3 / 6 Months €15 / Yearly €24 (Best value, highlighted)
  *   • Subscribe button → checkoutPremium action → opens Hercules Commerce URL
+ *     in an in-app browser, returns to the app via a deep link on success
  *   • License code redemption block
  *
- * Pricing: €3/month, €30/6 months, €24/year (from web app agent's spec).
+ * Pricing: €3/month, €15/6 months, €24/year (from web app agent's spec).
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Linking,
-  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -31,6 +30,8 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAction, useMutation } from 'convex/react';
+import * as WebBrowser from 'expo-web-browser';
+import * as ExpoLinking from 'expo-linking';
 import { api } from '../src/convexApi';
 import { usePremiumAccess } from '../src/hooks/usePremiumAccess';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
@@ -159,12 +160,16 @@ export default function PremiumPage() {
   const handleSubscribe = async () => {
     setCheckingOut(true);
     try {
-      const baseUrl =
-        process.env.EXPO_PUBLIC_WEB_APP_URL || 'https://smilers.online';
+      // Deep links back into the app so the subscriber returns straight here
+      // (mirrors the ad-clicks checkout). Hercules Commerce redirects the
+      // browser to these exact URLs, which the in-app browser intercepts.
+      const redirectUrl = ExpoLinking.createURL('premium-return');
+      const successUrl = `${redirectUrl}?status=success`;
+      const cancelUrl = `${redirectUrl}?status=cancel`;
       const result: any = await (checkoutAction as any)({
         variantId: selectedPlan.variantId,
-        successUrl: `${baseUrl}/premium?success=true`,
-        cancelUrl: `${baseUrl}/premium`,
+        successUrl,
+        cancelUrl,
       });
       const url =
         result?.url || result?.checkoutUrl || result?.redirectUrl || null;
@@ -175,12 +180,22 @@ export default function PremiumPage() {
         );
         return;
       }
-      const canOpen = await Linking.canOpenURL(url);
-      if (canOpen) {
-        await Linking.openURL(url);
-      } else {
-        Alert.alert('Open this URL to continue', url);
+      const browserResult = await WebBrowser.openAuthSessionAsync(url, redirectUrl);
+      if (browserResult.type === 'success' && browserResult.url) {
+        const { queryParams } = ExpoLinking.parse(browserResult.url);
+        if (queryParams?.status === 'cancel') {
+          // User backed out — no change, stay quiet.
+        } else {
+          // Activation happens server-side via Commerce; refresh to pick it up
+          // (getPremiumStatus is reactive + has a subscription re-check).
+          status.refresh();
+          Alert.alert(
+            'Premium activated',
+            'Your subscription is now active. Welcome to Premium!',
+          );
+        }
       }
+      // type 'dismiss'/'cancel' (closed the browser): leave status untouched.
     } catch (errorValue: any) {
       const message = String(errorValue?.message || errorValue || '');
       const isMissing =

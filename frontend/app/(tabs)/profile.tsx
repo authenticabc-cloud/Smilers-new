@@ -162,14 +162,29 @@ export default function ProfileScreen() {
       setUploading(true);
       try {
         const storageId = await uploadFile(convex, uri, mime);
-        // Per Smilers backend contract: `avatar` field accepts a storageId
-        // string and `getCurrentUser` auto-resolves it to a URL.
-        const payload = { avatar: storageId };
-        await safeMutation(
-          'users.updateProfile(avatar)',
-          () => updateProfile(payload),
-          payload,
-        );
+        // Smilers backend stores the profile photo as `users.avatarStorageId`
+        // (an Id<"_storage">) and exposes the resolved URL on `users.avatar`
+        // via getCurrentUser. The previous code wrote the storageId straight
+        // into the `avatar` *string* field, so the server kept a raw id that
+        // never resolved to an image — the picker "succeeded" but the photo
+        // never changed. Write the storage-id field instead.
+        try {
+          const payload = { avatarStorageId: storageId };
+          await safeMutation(
+            'users.updateProfile(avatarStorageId)',
+            () => updateProfile(payload as any),
+            payload,
+          );
+        } catch {
+          // Fallback for any backend revision that instead accepts the
+          // storageId on `avatar`. Keeps older deployments working.
+          const fallback = { avatar: storageId };
+          await safeMutation(
+            'users.updateProfile(avatar fallback)',
+            () => updateProfile(fallback as any),
+            fallback,
+          );
+        }
       } catch (errorValue: any) {
         const detail =
           errorValue?.data?.message ||
