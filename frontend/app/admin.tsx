@@ -88,6 +88,32 @@ interface ReportItem {
   _creationTime?: number;
 }
 
+// Enriched report row returned by `api.devotionals.listPendingReports`.
+// Field names are accessed defensively in the UI since the backend
+// flattens / nests the devotion differently across deploys.
+interface DevReportItem {
+  _id: string;
+  devotionalId: string;
+  reason?: string;
+  status?: 'pending' | 'accepted' | 'declined';
+  _creationTime?: number;
+  reporter?: { _id?: string; name?: string };
+  reporterName?: string;
+  devotional?: {
+    _id?: string;
+    title?: string;
+    text?: string;
+    type?: 'text' | 'voice' | 'video';
+    authorName?: string;
+  } | null;
+  // possible flattened fallbacks
+  devotionalTitle?: string;
+  devotionalText?: string;
+  devotionalType?: 'text' | 'voice' | 'video';
+  authorName?: string;
+}
+
+
 interface AdItem {
   _id: string;
   businessName?: string;
@@ -147,6 +173,11 @@ export default function AdminDashboard() {
     [],
     isAdmin,
   );
+  const {
+    data: pendingDevReports,
+    refetch: refetchDevReports,
+    loading: devReportsLoading,
+  } = useSafeConvexQuery<DevReportItem[]>(api.devotionals.listPendingReports, {}, [], isAdmin);
 
   // Mutations — iter-140b: canonical names.
   // `updateUserRole({ userId, role })` replaces the old `setRole`. The
@@ -162,6 +193,9 @@ export default function AdminDashboard() {
   const resolveReport = useMutation(api.admin.queries.dismissReport);
   const approveAd = useMutation(api.ads.approve);
   const rejectAd = useMutation(api.ads.reject);
+  const acceptDevReport = useMutation(api.devotionals.acceptReport);
+  const declineDevReport = useMutation(api.devotionals.declineReport);
+  const adminDeleteDevotion = useMutation(api.devotionals.adminDelete);
 
   const [tab, setTab] = useState<Tab>('overview');
   const [adsSubTab, setAdsSubTab] = useState<AdsSubTab>('review');
@@ -172,14 +206,18 @@ export default function AdminDashboard() {
   const [rejectModal, setRejectModal] = useState<{ adId: string; name: string } | null>(null);
   const [rejectReason, setRejectReason] = useState('');
 
+  // Delete-devotion modal state (admin direct removal with a reason).
+  const [devDeleteModal, setDevDeleteModal] = useState<{ devotionalId: string; title: string } | null>(null);
+  const [devDeleteReason, setDevDeleteReason] = useState('');
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await Promise.all([refetchStats(), refetchUsers(), refetchReports(), refetchAds()]);
+      await Promise.all([refetchStats(), refetchUsers(), refetchReports(), refetchAds(), refetchDevReports()]);
     } finally {
       setRefreshing(false);
     }
-  }, [refetchAds, refetchReports, refetchStats, refetchUsers]);
+  }, [refetchAds, refetchReports, refetchStats, refetchUsers, refetchDevReports]);
 
   // ── ACCESS GATE ─────────────────────────────────────
   if (!meLoading && !isAdmin) {
@@ -313,6 +351,62 @@ export default function AdminDashboard() {
     setRejectModal(null);
   };
 
+  // ── DEVOTIONAL MODERATION HANDLERS ──────────────────
+  const onAcceptDevReport = (r: DevReportItem) =>
+    Alert.alert(
+      'Accept report?',
+      'This removes the reported devotion and marks the report as actioned.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Accept & remove',
+          style: 'destructive',
+          onPress: () =>
+            guard(r._id, async () => {
+              await acceptDevReport({ reportId: r._id });
+              await refetchDevReports();
+            }),
+        },
+      ],
+    );
+
+  const onDeclineDevReport = (r: DevReportItem) =>
+    Alert.alert('Decline report?', 'The devotion stays published and the report is closed.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Decline',
+        onPress: () =>
+          guard(r._id, async () => {
+            await declineDevReport({ reportId: r._id });
+            await refetchDevReports();
+          }),
+      },
+    ]);
+
+  const onOpenDeleteDevotion = (r: DevReportItem) => {
+    const title =
+      r.devotional?.title ||
+      r.devotional?.text ||
+      r.devotionalTitle ||
+      r.devotionalText ||
+      'this devotion';
+    setDevDeleteModal({ devotionalId: r.devotionalId, title: String(title).slice(0, 60) });
+    setDevDeleteReason('');
+  };
+
+  const onConfirmDeleteDevotion = async () => {
+    if (!devDeleteModal) return;
+    const reason = devDeleteReason.trim();
+    await guard(devDeleteModal.devotionalId, async () => {
+      await adminDeleteDevotion({
+        devotionalId: devDeleteModal.devotionalId,
+        ...(reason ? { reason } : {}),
+      });
+      await refetchDevReports();
+    });
+    setDevDeleteModal(null);
+  };
+
   // ── RENDER ──────────────────────────────────────────
   const tabs: { key: Tab; label: string; icon: string; badge?: number }[] = [
     { key: 'overview', label: 'Overview', icon: 'speedometer-outline' },
@@ -406,6 +500,16 @@ export default function AdminDashboard() {
         ) : null}
         {tab === 'premium' ? <PremiumTab isAdmin={isAdmin} /> : null}
         {tab === 'activity' ? <ActivityTab isAdmin={isAdmin} /> : null}
+        {tab === 'devotions' ? (
+          <DevotionsTab
+            loading={devReportsLoading}
+            reports={pendingDevReports || []}
+            busyId={busyId}
+            onAccept={onAcceptDevReport}
+            onDecline={onDeclineDevReport}
+            onDelete={onOpenDeleteDevotion}
+          />
+        ) : null}
       </ScrollView>
 
       {/* Reject ad modal */}
@@ -449,6 +553,55 @@ export default function AdminDashboard() {
                   <ActivityIndicator size="small" color={Colors.white} />
                 ) : (
                   <Text style={styles.modalBtnDangerText}>Reject ad</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Delete devotion modal (admin direct removal with optional reason) */}
+      <Modal
+        visible={!!devDeleteModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => (busyId ? null : setDevDeleteModal(null))}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Delete devotion?</Text>
+            <Text style={styles.modalBody}>
+              This permanently removes “{devDeleteModal?.title}”. Add an optional reason for the
+              audit log.
+            </Text>
+            <TextInput
+              value={devDeleteReason}
+              onChangeText={setDevDeleteReason}
+              placeholder="Reason (optional) — e.g. Violates community guidelines"
+              placeholderTextColor={Colors.textMuted}
+              style={[styles.modalInput, { minHeight: 90, textAlignVertical: 'top' }]}
+              multiline
+              testID="admin-dev-delete-reason"
+            />
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.modalBtn, styles.modalBtnGhost]}
+                onPress={() => setDevDeleteModal(null)}
+                disabled={!!busyId}
+                testID="admin-dev-delete-cancel"
+              >
+                <Text style={styles.modalBtnGhostText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalBtn, styles.modalBtnDanger, busyId ? { opacity: 0.7 } : null]}
+                onPress={onConfirmDeleteDevotion}
+                disabled={!!busyId}
+                testID="admin-dev-delete-confirm"
+              >
+                {busyId ? (
+                  <ActivityIndicator size="small" color={Colors.white} />
+                ) : (
+                  <Text style={styles.modalBtnDangerText}>Delete devotion</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -734,6 +887,105 @@ function ReportsTab({
     </View>
   );
 }
+
+/* ──────────────── DEVOTIONS (MODERATION) TAB ──────────────── */
+function DevotionsTab({
+  loading,
+  reports,
+  busyId,
+  onAccept,
+  onDecline,
+  onDelete,
+}: {
+  loading: boolean;
+  reports: DevReportItem[];
+  busyId: string | null;
+  onAccept: (r: DevReportItem) => void;
+  onDecline: (r: DevReportItem) => void;
+  onDelete: (r: DevReportItem) => void;
+}) {
+  if (loading && reports.length === 0) {
+    return (
+      <View style={styles.loadingWrap}>
+        <ActivityIndicator size="small" color={Colors.primary} />
+      </View>
+    );
+  }
+  if (reports.length === 0) {
+    return (
+      <EmptyState
+        icon="book-outline"
+        title="No flagged devotions"
+        body="Reported devotions will show up here for review. 🙏"
+      />
+    );
+  }
+  return (
+    <View style={{ paddingTop: Spacing.md, paddingHorizontal: Spacing.base, gap: Spacing.sm }}>
+      {reports.map((r, idx) => {
+        const busy = busyId === r._id || busyId === r.devotionalId;
+        const devTitle = r.devotional?.title || r.devotionalTitle || '';
+        const devText = r.devotional?.text || r.devotionalText || '';
+        const devType = r.devotional?.type || r.devotionalType || 'text';
+        const authorName = r.devotional?.authorName || r.authorName || 'Unknown author';
+        const reporterName = r.reporter?.name || r.reporterName || 'Someone';
+        const preview = devTitle || devText || `(${devType} devotion)`;
+        return (
+          <View key={r._id} style={styles.reportCard} testID={`admin-devotion-report-${idx}`}>
+            <View style={styles.reportHeader}>
+              <View style={[styles.tag, { backgroundColor: '#FEE2E2' }]}>
+                <Text style={[styles.tagText, { color: Colors.danger }]}>
+                  {(r.reason || 'REPORTED').toUpperCase()}
+                </Text>
+              </View>
+              <Text style={styles.reportTime}>
+                {r._creationTime ? new Date(r._creationTime).toLocaleDateString() : '—'}
+              </Text>
+            </View>
+            <Text style={styles.reportTitle}>
+              <Text style={{ fontWeight: FontWeight.bold }}>{reporterName}</Text>
+              <Text> flagged a {devType} devotion by </Text>
+              <Text style={{ fontWeight: FontWeight.bold }}>{authorName}</Text>
+            </Text>
+            <Text style={styles.reportBody} numberOfLines={4}>
+              {preview}
+            </Text>
+            <View style={styles.reportActions}>
+              <TouchableOpacity
+                style={[styles.smallBtn, styles.smallBtnGhost, busy ? { opacity: 0.5 } : null]}
+                onPress={() => onDecline(r)}
+                disabled={busy}
+                testID={`admin-devotion-decline-${idx}`}
+              >
+                <Ionicons name="close-outline" size={16} color={Colors.textSecondary} />
+                <Text style={styles.smallBtnGhostText}>Decline</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.smallBtn, styles.smallBtnDanger, busy ? { opacity: 0.5 } : null]}
+                onPress={() => onAccept(r)}
+                disabled={busy}
+                testID={`admin-devotion-accept-${idx}`}
+              >
+                <Ionicons name="trash-outline" size={16} color={Colors.white} />
+                <Text style={styles.smallBtnDangerText}>Accept & remove</Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={[styles.devDeleteLink, busy ? { opacity: 0.5 } : null]}
+              onPress={() => onDelete(r)}
+              disabled={busy}
+              testID={`admin-devotion-delete-${idx}`}
+            >
+              <Ionicons name="warning-outline" size={14} color={Colors.danger} />
+              <Text style={styles.devDeleteLinkText}>Delete devotion with reason…</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 
 /* ──────────────── ADS TAB ──────────────── */
 function AdsTab({
@@ -1715,6 +1967,16 @@ const styles = StyleSheet.create({
   smallBtnDanger: { backgroundColor: Colors.danger },
   smallBtnDangerText: { color: Colors.white, fontWeight: FontWeight.bold, fontSize: FontSize.sm },
   smallBtnApprove: { backgroundColor: '#16A34A' },
+
+  devDeleteLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: 10,
+    paddingVertical: 6,
+  },
+  devDeleteLinkText: { color: Colors.danger, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
 
   adCard: {
     backgroundColor: Colors.surface,
