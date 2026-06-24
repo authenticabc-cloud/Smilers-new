@@ -30,6 +30,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery } from 'convex/react';
 
 import { api } from '../../src/convexApi';
+import CallBackground from '../../src/components/CallBackground';
 import { useReactiveSafeConvexQuery } from '../../src/hooks/useReactiveSafeConvexQuery';
 import { getDisplayInitials, getResolvedDisplayName } from '../../src/lib/displayName';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
@@ -253,6 +254,7 @@ export default function GroupCallScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="group-call-screen">
+      <CallBackground variant="warm" />
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Group voice call</Text>
         <Text style={styles.headerSubtitle}>

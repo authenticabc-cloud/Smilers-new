@@ -19,7 +19,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery } from 'convex/react';
 import { Camera } from 'expo-camera';
 import { setAudioModeAsync } from 'expo-audio';
-import { LinearGradient } from 'expo-linear-gradient';
+import CallBackground from '../../src/components/CallBackground';
 import { InCallAudio } from '../../src/lib/webrtc/inCallManager';
 import Animated, {
   Easing,
@@ -1787,11 +1787,6 @@ export function CallScreenInner() {
     { vibrate: !isScreenOnly && !!isIncoming },
   );
 
-  // Background gradient for non-video states (incoming/outgoing/voice/active-voice)
-  const gradientColors = isIncoming
-    ? (['#1a3b5d', '#0f1d2e'] as const) // calm blue for incoming
-    : (['#3A2608', '#1a1004'] as const); // warm dark brown for outgoing/active
-
   if (Platform.OS === 'android' && !screenReady) {
     return (
       <View style={[styles.container, styles.callLoadingScreen]} testID="call-screen-loading">
@@ -1899,7 +1894,7 @@ export function CallScreenInner() {
               <View style={styles.ringingPreviewScrim} pointerEvents="none" />
             </>
           ) : (
-            <LinearGradient colors={gradientColors as any} style={StyleSheet.absoluteFill} />
+            <CallBackground variant={isIncoming ? 'incoming' : 'warm'} />
           )}
           <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
             <View style={[styles.topArea, compactCallLayout ? styles.topAreaCompact : null]}>
