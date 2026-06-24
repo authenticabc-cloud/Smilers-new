@@ -77,6 +77,36 @@ function safeCall(fn: () => void, ctx: string) {
 }
 
 /**
+ * Ensure the Android 12+ BLUETOOTH_CONNECT *runtime* permission is granted.
+ *
+ * This MUST be granted BEFORE `InCallManager.start()` runs, because the
+ * native session-init starts the AppRTC BluetoothManager which can only
+ * enumerate/route to a paired headset when the app already holds
+ * BLUETOOTH_CONNECT. If we request it lazily (after start), the BT device
+ * never lands in the available-device list, so both auto-detect AND manual
+ * "Bluetooth" selection are silently ignored and audio stays on the
+ * speaker/earpiece — exactly the reported bug.
+ *
+ * No-op (returns true) on web, iOS, and Android < 12 where the permission
+ * isn't required at runtime.
+ */
+export async function ensureBluetoothPermission(): Promise<boolean> {
+  if (Platform.OS !== 'android' || Number(Platform.Version) < 31) return true;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { PermissionsAndroid } = require('react-native');
+    const perm = (PermissionsAndroid.PERMISSIONS as any).BLUETOOTH_CONNECT;
+    if (!perm) return true;
+    const has = await PermissionsAndroid.check(perm);
+    if (has) return true;
+    const result = await PermissionsAndroid.request(perm);
+    return result === PermissionsAndroid.RESULTS.GRANTED;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Start the InCallManager audio session.
  *
  * On Android this switches the system audio mode to MODE_IN_COMMUNICATION,
@@ -155,33 +185,18 @@ export function setSpeakerOn(on: boolean) {
 export function setBluetoothOn(media: 'audio' | 'video' = 'audio') {
   const native = getNative();
   if (!native) return;
-  // iter-193: Android 12+ requires the BLUETOOTH_CONNECT *runtime*
-  // permission before the audio service lets an app start Bluetooth SCO.
-  // It was declared in the manifest but never requested at runtime, so
-  // chooseAudioRoute('BLUETOOTH') was silently ignored — "calls work on
-  // earpiece/speaker but not Bluetooth". Request it, then route.
+  // iter-193/iter-2xx: Android 12+ requires the BLUETOOTH_CONNECT runtime
+  // permission. We now request it BEFORE the session starts (see
+  // applyAudioMode → ensureBluetoothPermission), but re-check here too in
+  // case this path is hit independently.
   void (async () => {
-    try {
-      if (Platform.OS === 'android' && Platform.Version >= 31) {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { PermissionsAndroid } = require('react-native');
-        const perm = (PermissionsAndroid.PERMISSIONS as any).BLUETOOTH_CONNECT;
-        if (perm) {
-          const has = await PermissionsAndroid.check(perm);
-          if (!has) {
-            const result = await PermissionsAndroid.request(perm);
-            if (result !== PermissionsAndroid.RESULTS.GRANTED) {
-              if (__DEV__) {
-                // eslint-disable-next-line no-console
-                console.warn('[inCallManager] BLUETOOTH_CONNECT denied — BT routing unavailable');
-              }
-              return;
-            }
-          }
-        }
+    const granted = await ensureBluetoothPermission();
+    if (!granted) {
+      if (__DEV__) {
+        // eslint-disable-next-line no-console
+        console.warn('[inCallManager] BLUETOOTH_CONNECT denied — BT routing unavailable');
       }
-    } catch {
-      /* permission API unavailable — fall through and try anyway */
+      return;
     }
     safeCall(() => {
       // 1. Ensure audio session is started — sets system audio mode to
@@ -357,6 +372,7 @@ export const InCallAudio = {
   setEarpieceOn,
   setBluetoothOn,
   setMicMuted,
+  ensureBluetoothPermission,
   onAudioRouteChange,
   isWiredHeadsetPluggedIn,
   addAudioDeviceChangedListener,

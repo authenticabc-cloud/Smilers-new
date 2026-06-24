@@ -484,6 +484,13 @@ export function CallScreenInner() {
     // audioOutput change.
     // ─────────────────────────────────────────────────────────────────────
     if (!inCallStartedRef.current && !suppressSessionStartRef.current) {
+      // iter-2xx: request BLUETOOTH_CONNECT *before* starting the native
+      // session. The native start() spins up the BluetoothManager which can
+      // only enumerate a paired headset when the app already holds this
+      // permission — requesting it lazily (after start) meant Bluetooth never
+      // appeared in the device list, so both auto-detect and manual selection
+      // were silently ignored and audio fell back to the speaker.
+      await InCallAudio.ensureBluetoothPermission();
       InCallAudio.start(callType === 'video' ? 'video' : 'audio');
       inCallStartedRef.current = true;
       callDebug.push(
@@ -507,17 +514,21 @@ export function CallScreenInner() {
     callDebug.push('AUDIO', `route=${audioOutput} mode=${callType}`);
   }, [audioOutput, callType]);
 
-  // iter-194: auto-switch audio to Bluetooth when a headset connects
-  // mid-call, and fall back (earpiece for voice / speaker for video) when
-  // it disconnects — mirrors the system dialer so users never talk into a
-  // dead route. Android-only; iOS AVAudioSession already does this.
+  // iter-194 / iter-2xx: auto-switch audio to Bluetooth whenever a headset
+  // is available (paired before the call OR connected mid-call) and the user
+  // hasn't explicitly chosen a different output. We no longer rely solely on
+  // the false→true transition, because if the headset was already connected
+  // when the session started the first device event can arrive before our
+  // listener subscribes — that race left video calls stuck on the speaker.
+  // Android-only; iOS AVAudioSession already auto-routes to Bluetooth.
   const btWasAvailableRef = useRef(false);
+  const userPickedRouteRef = useRef(false);
   useEffect(() => {
     const unsubscribe = InCallAudio.addAudioDeviceChangedListener(({ available }) => {
       const btAvailable = available.includes('BLUETOOTH');
-      if (btAvailable && !btWasAvailableRef.current) {
-        callDebug.push('AUDIO', 'Bluetooth headset connected — auto-switching route');
-        setAudioOutput('bluetooth');
+      if (btAvailable && !userPickedRouteRef.current) {
+        callDebug.push('AUDIO', 'Bluetooth available — auto-routing to headset');
+        setAudioOutput((current) => (current === 'bluetooth' ? current : 'bluetooth'));
       } else if (!btAvailable && btWasAvailableRef.current) {
         callDebug.push('AUDIO', 'Bluetooth headset disconnected — falling back');
         setAudioOutput((current) =>
@@ -1624,6 +1635,11 @@ export function CallScreenInner() {
   }, [activeCall, myUserId, callId, peerDisplayName, acceptVideoUpgrade, declineVideoUpgrade]);
 
   const handleSelectAudioOutput = useCallback((nextOutput: AudioOutputRoute) => {
+    // Mark that the user explicitly chose a route — this stops the
+    // auto-Bluetooth logic from overriding their manual choice for the rest
+    // of the call (e.g. user deliberately switches back to Speaker while a
+    // headset is still connected).
+    userPickedRouteRef.current = true;
     setAudioOutput(nextOutput);
     setAudioOutputMenuVisible(false);
   }, []);
