@@ -463,6 +463,16 @@ export default function ChatScreen() {
     [sendMessageRaw, conversationId],
   );
   const setTyping = useMutation(api.typing.setTyping);
+  const clearTyping = useMutation((api as any).typing.clearTyping);
+
+  // "typing…" indicator (read side). Web contract: api.typing.getTypingUsers
+  // returns an array of { name } for the OTHER participants currently typing.
+  const { data: typingUsersRaw } = useSafeConvexQuery<any[]>(
+    (api as any).typing.getTypingUsers,
+    { conversationId },
+    [],
+    !!conversationId,
+  );
   const markDelivered = useMutation((api as any).messages.markDelivered);
   const markRead = useMutation(api.messages.markRead);
   const toggleReaction = useMutation(api.messages.toggleReaction);
@@ -1160,6 +1170,23 @@ export default function ChatScreen() {
       setTyping({ conversationId }).catch(() => {});
     }
   };
+
+  // Stop broadcasting "typing…" the moment the composer empties — covers both
+  // manual clears AND all send paths (which call setText('') directly), so the
+  // recipient's indicator disappears immediately instead of waiting for TTL.
+  const prevTextEmptyRef = useRef(true);
+  useEffect(() => {
+    const isEmpty = text.trim().length === 0;
+    if (
+      isEmpty &&
+      !prevTextEmptyRef.current &&
+      conversationId &&
+      typingIndicatorsEnabledRef.current
+    ) {
+      clearTyping?.({ conversationId }).catch(() => {});
+    }
+    prevTextEmptyRef.current = isEmpty;
+  }, [text, conversationId, clearTyping]);
 
   /**
    * Schedule the current draft message for a future send. Mirrors the web
@@ -2499,9 +2526,24 @@ export default function ChatScreen() {
         ? 'Loading…'
         : getConversationDisplayName(hydratedConversation, me?._id ? String(me._id) : undefined, 'Chat'));
   const isMineSelected = selectedMsg && me && selectedMsg.senderId === me._id;
+  const typingLabel = useMemo(() => {
+    const list = Array.isArray(typingUsersRaw) ? typingUsersRaw : [];
+    const others = list.filter((u: any) => {
+      const uid = u?.userId || u?._id || u?.id;
+      return !uid || !me?._id || String(uid) !== String(me._id);
+    });
+    if (others.length === 0) return null;
+    const names = others.map(
+      (u: any) => u?.name || u?.userName || u?.displayName || 'Someone',
+    );
+    return names.length === 1
+      ? `${names[0]} is typing\u2026`
+      : `${names.join(', ')} are typing\u2026`;
+  }, [typingUsersRaw, me?._id]);
+
   const subtitle = isBroadcastReadOnly
     ? 'Announcement · read-only'
-    : formatPresenceSubtitle(mergedPresenceSource);
+    : (typingLabel || formatPresenceSubtitle(mergedPresenceSource));
   const avatarInitial = getDisplayInitials(title);
   // DM-only online state for the header avatar dot (mirrors web). Online if the
   // peer flag is set or they were seen within 2 min; never on groups/broadcast.

@@ -901,7 +901,7 @@ async def translate_text(payload: TranslationRequest):
             api_key=api_key,
             session_id=f"smilers-translate-{uuid.uuid4()}",
             system_message=system_message,
-        ).with_model("gemini", "gemini-3-flash-preview")
+        ).with_model("gemini", "gemini-2.5-flash")
         translated = (await chat.send_message(UserMessage(text=prompt))).strip() or text
         TRANSLATION_CACHE[cache_key] = translated
         return TranslationResponse(translated_text=translated)

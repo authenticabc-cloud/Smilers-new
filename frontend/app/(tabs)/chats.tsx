@@ -12,6 +12,7 @@ import SosButton from '../../src/components/SosButton';
 import { LoginApprovalBanner } from '../../src/components/LoginApprovalBanner';
 import { LiveLocationRequestBanner } from '../../src/components/LiveLocationRequestBanner';
 import { api } from '../../src/convexApi';
+import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName } from '../../src/lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { readCacheMeta, writeCache } from '../../src/lib/offlineCache';
@@ -489,13 +490,30 @@ function ConversationRow({ item, currentUserId, contacts, onPress }: { item: any
     contactRecord?.user?.profilePicture ||
     contactRecord?.avatar ||
     contactRecord?.user?.avatar;
+  // Live "typing…" for this row (web contract: typing.getTypingUsers → [{ name }]).
+  const { data: rowTypingRaw } = useSafeConvexQuery<any[]>(
+    (api as any).typing.getTypingUsers,
+    { conversationId: item?._id },
+    [],
+    !!item?._id,
+  );
+  const typingLabel = useMemo(() => {
+    const list = Array.isArray(rowTypingRaw) ? rowTypingRaw : [];
+    const others = list.filter((u: any) => {
+      const uid = u?.userId || u?._id || u?.id;
+      return !uid || !currentUserId || String(uid) !== String(currentUserId);
+    });
+    if (others.length === 0) return null;
+    const names = others.map((u: any) => u?.name || u?.userName || u?.displayName || 'Someone');
+    return names.length === 1 ? `${names[0]} is typing\u2026` : `${names.join(', ')} are typing\u2026`;
+  }, [rowTypingRaw, currentUserId]);
   return (
     <TouchableOpacity onPress={onPress} style={styles.row} activeOpacity={0.7} testID={`conv-${item._id}`}>
       <Avatar name={name} size={52} uri={photoUri} online={peerIsOnline(item)} />
       <View style={styles.rowMiddle}>
         <Text style={styles.rowTitle}>{name}</Text>
-        <Text style={styles.rowSubtitle} numberOfLines={1}>
-          {item.lastMessageText || 'Start chatting…'}
+        <Text style={[styles.rowSubtitle, typingLabel ? styles.rowTyping : null]} numberOfLines={1}>
+          {typingLabel || item.lastMessageText || 'Start chatting…'}
         </Text>
       </View>
       <Text style={styles.rowTime}>{relTime(item.lastMessageTime)}</Text>
@@ -587,6 +605,10 @@ const styles = StyleSheet.create({
   rowSubtitle: {
     fontSize: FontSize.sm,
     color: Colors.textSecondary,
+  },
+  rowTyping: {
+    color: Colors.primary,
+    fontStyle: 'italic',
   },
   rowTime: {
     fontSize: FontSize.xs,
