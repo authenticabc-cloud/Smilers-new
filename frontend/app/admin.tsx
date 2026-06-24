@@ -23,7 +23,7 @@ import { useAuth } from '../src/providers/AuthProvider';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
-type Tab = 'overview' | 'users' | 'reports' | 'ads' | 'premium' | 'activity';
+type Tab = 'overview' | 'users' | 'reports' | 'ads' | 'devotions' | 'premium' | 'activity';
 type AdsSubTab = 'review' | 'codes';
 
 // iter-136: canonical shape returned by `api.admin.queries.getStats`
@@ -319,6 +319,7 @@ export default function AdminDashboard() {
     { key: 'users', label: 'Users', icon: 'people-outline', badge: stats?.totalUsers },
     { key: 'reports', label: 'Reports', icon: 'flag-outline', badge: stats?.pendingReports || reports?.length },
     { key: 'ads', label: 'Ads', icon: 'megaphone-outline', badge: pendingAds?.length },
+    { key: 'devotions', label: 'Devotions', icon: 'book-outline', badge: pendingDevReports?.length },
     { key: 'premium', label: 'Premium', icon: 'star-outline' },
     { key: 'activity', label: 'Activity', icon: 'pulse-outline' },
   ];

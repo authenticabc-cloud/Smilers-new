@@ -21,8 +21,10 @@ import {
   Alert,
   FlatList,
   Image,
+  Modal,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -128,6 +130,10 @@ export default function DevotionalsFeedScreen() {
   // Mirrors the same lookup pattern used by chat/conversations.
   const devotionalContacts = useQuery(api.contacts.getContacts, me ? {} : 'skip') as any[] | undefined;
   const removeDevotional = useMutation((api as any).devotionals?.remove);
+  const reportDevotional = useMutation((api as any).devotionals?.reportDevotional);
+  const [reportTarget, setReportTarget] = useState<DevotionalItem | null>(null);
+  const [reportReason, setReportReason] = useState('');
+  const [reportSubmitting, setReportSubmitting] = useState(false);
 
   // Log feed errors so we can see them server-side without crashing the UI.
   useEffect(() => {
@@ -221,6 +227,35 @@ export default function DevotionalsFeedScreen() {
     [removeDevotional],
   );
 
+  const submitReport = useCallback(async () => {
+    if (!reportTarget) return;
+    const reason = reportReason.trim();
+    if (!reason) {
+      Alert.alert('Reason required', 'Please describe why you are reporting this devotion.');
+      return;
+    }
+    setReportSubmitting(true);
+    try {
+      await (reportDevotional as any)({ devotionalId: reportTarget._id, reason });
+      setReportTarget(null);
+      setReportReason('');
+      Alert.alert('Report submitted', 'Thanks — our admins will review this devotion.');
+    } catch (errorValue: any) {
+      const msg = String(errorValue?.data?.message || errorValue?.message || '');
+      const code = String(errorValue?.data?.code || '');
+      if (code === 'CONFLICT' || /already report/i.test(msg)) {
+        Alert.alert('Already reported', 'You have already reported this devotion. It is pending review.');
+        setReportTarget(null);
+      } else if (code === 'BAD_REQUEST' || /reason|own/i.test(msg)) {
+        Alert.alert('Could not report', msg || 'Reason is required, and you cannot report your own devotion.');
+      } else {
+        Alert.alert('Could not submit report', msg || 'Please try again.');
+      }
+    } finally {
+      setReportSubmitting(false);
+    }
+  }, [reportTarget, reportReason, reportDevotional]);
+
   const renderItem = useCallback(
     ({ item }: { item: DevotionalItem }) => {
       const isMine = me?._id && item.authorId === me._id;
@@ -301,7 +336,16 @@ export default function DevotionalsFeedScreen() {
               >
                 <Feather name="more-vertical" size={18} color={Colors.textMuted} />
               </TouchableOpacity>
-            ) : null}
+            ) : (
+              <TouchableOpacity
+                onPress={() => { setReportReason(''); setReportTarget(item); }}
+                hitSlop={12}
+                style={styles.menuBtn}
+                testID={`devotional-report-${item._id}`}
+              >
+                <Feather name="flag" size={16} color={Colors.textMuted} />
+              </TouchableOpacity>
+            )}
           </View>
 
           {item.title ? <Text style={styles.cardTitle}>{item.title}</Text> : null}
@@ -397,6 +441,54 @@ export default function DevotionalsFeedScreen() {
       >
         <Feather name="plus" size={26} color="#1F1208" />
       </TouchableOpacity>
+
+      <Modal
+        visible={!!reportTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => (!reportSubmitting ? setReportTarget(null) : undefined)}
+      >
+        <View style={styles.reportBackdrop}>
+          <View style={styles.reportCard} testID="devotional-report-modal">
+            <View style={styles.reportHeaderRow}>
+              <Feather name="flag" size={20} color={Colors.danger} />
+              <Text style={styles.reportTitle}>Report devotion</Text>
+            </View>
+            <Text style={styles.reportHelp}>
+              Tell our admins why you&apos;re reporting this. A reason is required.
+            </Text>
+            <TextInput
+              style={styles.reportInput}
+              value={reportReason}
+              onChangeText={setReportReason}
+              placeholder="Reason (e.g. inappropriate, spam, offensive)…"
+              placeholderTextColor={Colors.textMuted}
+              multiline
+              maxLength={500}
+              editable={!reportSubmitting}
+              testID="devotional-report-input"
+            />
+            <View style={styles.reportBtnRow}>
+              <TouchableOpacity
+                style={[styles.reportBtn, styles.reportCancelBtn]}
+                onPress={() => setReportTarget(null)}
+                disabled={reportSubmitting}
+                testID="devotional-report-cancel"
+              >
+                <Text style={styles.reportCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.reportBtn, styles.reportSubmitBtn, (!reportReason.trim() || reportSubmitting) && styles.reportBtnDisabled]}
+                onPress={submitReport}
+                disabled={!reportReason.trim() || reportSubmitting}
+                testID="devotional-report-submit"
+              >
+                <Text style={styles.reportSubmitText}>{reportSubmitting ? 'Submitting…' : 'Submit report'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -489,6 +581,29 @@ const styles = StyleSheet.create({
   metaIcon: { marginRight: 2 },
   sentAt: { fontSize: FontSize.xs, color: Colors.textMuted },
   menuBtn: { padding: 4, marginLeft: 4 },
+  reportBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', padding: Spacing.lg },
+  reportCard: { backgroundColor: Colors.surface, borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.sm },
+  reportHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  reportTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  reportHelp: { fontSize: FontSize.sm, color: Colors.textSecondary },
+  reportInput: {
+    minHeight: 90,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
+    padding: Spacing.base,
+    color: Colors.textPrimary,
+    fontSize: FontSize.base,
+    textAlignVertical: 'top',
+    marginTop: 4,
+  },
+  reportBtnRow: { flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.sm },
+  reportBtn: { flex: 1, paddingVertical: 12, borderRadius: Radius.md, alignItems: 'center' },
+  reportCancelBtn: { backgroundColor: Colors.borderLight },
+  reportCancelText: { fontSize: FontSize.base, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
+  reportSubmitBtn: { backgroundColor: Colors.danger },
+  reportSubmitText: { fontSize: FontSize.base, color: '#FFFFFF', fontWeight: FontWeight.bold },
+  reportBtnDisabled: { opacity: 0.5 },
   cardTitle: {
     fontSize: FontSize.base,
     fontWeight: FontWeight.bold,
