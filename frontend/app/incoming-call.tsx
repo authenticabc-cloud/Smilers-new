@@ -34,6 +34,7 @@ import { Feather } from '@expo/vector-icons';
 import { useQuery, useMutation } from 'convex/react';
 
 import { api } from '../src/convexApi';
+import CallBackground from '../src/components/CallBackground';
 import { useRingtonePlayer } from '../src/lib/ringtone/useRingtonePlayer';
 import { endTwilioCall } from '../src/lib/twilio/twilioApi';
 import { recordDiagnostic } from '../src/lib/diagnostics';
@@ -165,6 +166,7 @@ export default function IncomingCallScreen() {
   if (autoAnswer) {
     return (
       <View style={[styles.container, styles.center]}>
+        <CallBackground variant="incoming" />
         <ActivityIndicator size="large" color={Colors.primary} />
         <Text style={styles.connectingText}>Connecting…</Text>
       </View>
@@ -175,6 +177,7 @@ export default function IncomingCallScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 40 }]}>
+      <CallBackground variant="incoming" />
       <View style={styles.topArea}>
         <Text style={styles.incomingLabel}>
           {isVideo ? 'Incoming video call' : 'Incoming call'}
