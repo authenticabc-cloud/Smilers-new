@@ -1912,7 +1912,10 @@ export function CallScreenInner() {
           ) : (
             <CallBackground variant={isIncoming ? 'incoming' : 'warm'} />
           )}
-          <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+          {/* transparent so the CallBackground / camera preview behind shows
+              through — styles.container itself paints an opaque brand color
+              which would otherwise hide the animated backdrop. */}
+          <SafeAreaView style={[styles.container, styles.containerTransparent]} edges={['top', 'bottom']}>
             <View style={[styles.topArea, compactCallLayout ? styles.topAreaCompact : null]}>
               <View style={[styles.topUtilityRow, compactCallLayout ? styles.topUtilityRowCompact : null]}>
                 <View style={styles.topUtilitySide} />
@@ -2428,6 +2431,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.headerBg,
     justifyContent: 'space-between',
+  },
+  containerTransparent: {
+    backgroundColor: 'transparent',
   },
   callLoadingScreen: {
     alignItems: 'center',
