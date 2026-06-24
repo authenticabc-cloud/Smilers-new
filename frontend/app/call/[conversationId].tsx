@@ -367,6 +367,12 @@ export function CallScreenInner() {
   const [callType, setCallType] = useState<CallType>(requestedType);
   const [localStreamURL, setLocalStreamURL] = useState<string | null>(null);
   const [remoteStreamURL, setRemoteStreamURL] = useState<string | null>(null);
+  // Bumps whenever the remote stream's video-track presence changes. react-native-webrtc
+  // does NOT repaint an already-mounted <RTCView> when a video track is added to the
+  // SAME stream mid-call (e.g. a voice→video upgrade). We use this as a remount `key`
+  // so the remote view re-attaches and renders the newly-arrived camera track.
+  const [remoteVideoGen, setRemoteVideoGen] = useState(0);
+  const remoteHasVideoRef = useRef(false);
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
   const [audioOutput, setAudioOutput] = useState<AudioOutputRoute>(requestedType === 'voice' ? 'earpiece' : 'speaker');
@@ -951,6 +957,21 @@ export function CallScreenInner() {
           try {
             setRemoteStreamURL((stream as any).toURL());
           } catch {}
+          // Detect a video-track presence change on the SAME remote stream
+          // (voice→video upgrade). When it flips, bump the generation so the
+          // remote <RTCView> remounts and paints the new camera track.
+          const check = () => {
+            try {
+              const hasVideo = ((stream as any)?.getVideoTracks?.() || []).length > 0;
+              if (hasVideo !== remoteHasVideoRef.current) {
+                remoteHasVideoRef.current = hasVideo;
+                setRemoteVideoGen((g) => g + 1);
+              }
+            } catch {}
+          };
+          check();
+          // The track is sometimes appended a tick after the `track` event fires.
+          setTimeout(check, 300);
         },
         onConnectionStateChange: (state) => {
           console.log('[Call] connection state:', state);
@@ -1793,7 +1814,7 @@ export function CallScreenInner() {
         testID="mini-call-surface"
       >
         {showVideo && remoteStreamURL ? (
-          <RTCViewImpl streamURL={remoteStreamURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror={false} />
+          <RTCViewImpl key={`remote-mini-${remoteVideoGen}`} streamURL={remoteStreamURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror={false} />
         ) : (
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
             <View style={{ width: 56, height: 56, borderRadius: 28, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' }}>
@@ -1832,6 +1853,7 @@ export function CallScreenInner() {
       {showVideo && remoteStreamURL ? (
         <View style={styles.videoLayer}>
           <RTCViewImpl
+            key={`remote-${remoteVideoGen}`}
             streamURL={remoteStreamURL}
             style={StyleSheet.absoluteFill}
             objectFit="cover"
