@@ -79,6 +79,7 @@ export default function ProfileScreen() {
   const me = useQuery(api.users.getCurrentUser);
   const convex = useConvex();
   const updateProfile = useMutation(api.users.updateProfile);
+  const setAvatar = useMutation((api as any).users.setAvatar);
 
   const [uploading, setUploading] = useState(false);
   const [editingField, setEditingField] = useState<EditableField | null>(null);
@@ -162,29 +163,17 @@ export default function ProfileScreen() {
       setUploading(true);
       try {
         const storageId = await uploadFile(convex, uri, mime);
-        // Smilers backend stores the profile photo as `users.avatarStorageId`
-        // (an Id<"_storage">) and exposes the resolved URL on `users.avatar`
-        // via getCurrentUser. The previous code wrote the storageId straight
-        // into the `avatar` *string* field, so the server kept a raw id that
-        // never resolved to an image — the picker "succeeded" but the photo
-        // never changed. Write the storage-id field instead.
-        try {
-          const payload = { avatarStorageId: storageId };
-          await safeMutation(
-            'users.updateProfile(avatarStorageId)',
-            () => updateProfile(payload as any),
-            payload,
-          );
-        } catch {
-          // Fallback for any backend revision that instead accepts the
-          // storageId on `avatar`. Keeps older deployments working.
-          const fallback = { avatar: storageId };
-          await safeMutation(
-            'users.updateProfile(avatar fallback)',
-            () => updateProfile(fallback as any),
-            fallback,
-          );
-        }
+        // Web-team contract: the dedicated `users.setAvatar({ storageId })`
+        // mutation is the correct path — it sets `avatarStorageId`, backfills
+        // the legacy `avatar` URL, garbage-collects the old image, and returns
+        // { url }. (`updateProfile({ avatar })` is the legacy URL-string path
+        // and silently no-ops for a storage id.)
+        const payload = { storageId };
+        await safeMutation(
+          'users.setAvatar',
+          () => setAvatar(payload as any),
+          payload,
+        );
       } catch (errorValue: any) {
         const detail =
           errorValue?.data?.message ||
@@ -195,7 +184,7 @@ export default function ProfileScreen() {
         setUploading(false);
       }
     },
-    [convex, updateProfile],
+    [convex, setAvatar],
   );
 
   const pickFromLibrary = useCallback(async () => {
