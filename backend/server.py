@@ -864,6 +864,27 @@ async def download_frontend_zip():
     )
 
 
+@api_router.get("/download/frontend-part/{idx}")
+async def download_frontend_part(idx: str):
+    """Serve a single ~4MB chunk of the frontend zip so a flaky connection can
+    download (and retry) each part individually. Reassemble locally with:
+        cat smilers-frontend.zip.part* > smilers-frontend.zip
+    `idx` must be a two-digit part number, e.g. "00", "01", ... "05".
+    """
+    from fastapi.responses import FileResponse
+    if not (len(idx) == 2 and idx.isdigit()):
+        raise HTTPException(status_code=400, detail="Bad part index")
+    name = f"smilers-frontend.zip.part{idx}"
+    part_path = Path(__file__).parent / "downloads" / "parts" / name
+    if not part_path.exists():
+        raise HTTPException(status_code=404, detail="Part not found")
+    return FileResponse(
+        path=str(part_path),
+        media_type="application/octet-stream",
+        filename=name,
+    )
+
+
 @api_router.post("/translate", response_model=TranslationResponse)
 async def translate_text(payload: TranslationRequest):
     text = (payload.text or "").strip()
