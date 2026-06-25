@@ -840,3 +840,35 @@ verification with real airplane-mode toggling.
 
 Lint clean on all changed files; bundle compiles; Sign-In renders (smoke).
 Needs two-device verification with airplane-mode toggling.
+
+---
+
+## iter-236 — Two remaining post-test issues (delivered dot + auto-switch)
+
+**Issue 2 — green "delivered" still not showing.** The iter-235 chats-list
+markDelivered only ran while the Chats tab was mounted; if the recipient was on
+another screen (or the tab unmounted) delivered was never set, so yellow kept
+"double duty". The push received-listener only fires in the FOREGROUND and the
+background task can't run a Convex mutation. Fix: NEW global hook
+`src/hooks/useDeliveryReceipts.ts`, mounted in `app/_layout.tsx`
+(PresenceHeartbeat — inside Convex+Auth, runs on EVERY authenticated screen,
+mirrors the web client's always-on subscription). It watches
+`listConversations` and calls `messages.markDelivered({conversationId})` when a
+conversation's lastMessageTime advances. Removed the chats-tab duplicate.
+
+**Issue 1 — conference auto-switch still required tapping End.** Removing
+InteractionManager (iter-235) wasn't enough — the receiver's trigger
+(`activeCall.isConference` / `getCallInvites`) wasn't firing reliably
+(getCallInvites likely filters to invites addressed to the current user, and
+isConference may not echo promptly). Added a RELIABLE cross-device trigger in
+`app/call/[conversationId].tsx`: subscribe to
+`conference.getParticipants({callId})` — the initiator calls `joinConference`
+the instant they enter the mesh host, so the roster becomes non-empty on the
+other party's device. The upgrade watcher now fires on isConference OR invite OR
+roster>0. Navigation: initiator `setTimeout(350)` after closing the modal; the
+other party uses `requestAnimationFrame → setTimeout(0)`. Added `__DEV__`
+console.logs at the watcher + triggerMeshUpgrade entry + router.replace for
+field diagnosis.
+
+Lint clean on changed files (pre-existing require/import warnings only); bundle
+compiles; Sign-In renders. Needs two-device verification.

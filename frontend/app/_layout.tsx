@@ -192,6 +192,14 @@ function PresenceHeartbeat() {
   const { useIncomingCallListener } = require('../src/push/useIncomingCallListener');
   useIncomingCallListener();
 
+  // iter-236: GLOBAL "delivered" (GREEN dot) marker. Mounted here so it runs
+  // on EVERY authenticated screen (not just the chats tab) — mirrors the web
+  // client's always-on Convex subscription. Marks incoming messages delivered
+  // before the recipient opens the chat, so the sender sees yellow→green→blue.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { useDeliveryReceipts } = require('../src/hooks/useDeliveryReceipts');
+  useDeliveryReceipts();
+
   // iter-248 (CRITICAL): wire the notifee call-navigator BRIDGE. The Answer
   // handlers in notifeeCallWake.ts call `callNavigator(route)` to open
   // /twilio-call WITH the call's room + identity — but callNavigator was never

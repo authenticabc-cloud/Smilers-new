@@ -1782,6 +1782,21 @@ export function CallScreenInner() {
     !!callId,
   );
 
+  // iter-236 (RELIABLE TRIGGER): watch the conference roster for this call.
+  // The initiator calls `conference.joinConference({ callId })` the moment
+  // they enter the mesh host, so `getParticipants(callId)` becomes non-empty
+  // on the OTHER party's device. This is the most reliable cross-device
+  // signal — it does NOT depend on the backend flipping `isConference` or on
+  // `getCallInvites` returning invites addressed to other users (which it may
+  // filter out). During a plain 1:1 call nobody has joined a conference, so
+  // the roster stays empty and we never false-trigger.
+  const { data: conferenceRosterData } = useReactiveSafeConvexQuery<any[]>(
+    (api as any).conference.getParticipants,
+    callId ? { callId } : undefined,
+    [],
+    !!callId,
+  );
+
   // Detach the live 1:1 connection and hand off to the mesh host. Idempotent.
   // `fromModal` is true only for the INITIATOR (who has the invite-picker
   // <Modal> open). The OTHER party has no modal — and crucially must NOT use
@@ -1795,6 +1810,7 @@ export function CallScreenInner() {
     if (!callId || !conversationId) return;
     upgradedToMeshRef.current = true;
     const fromModal = opts?.fromModal === true;
+    if (__DEV__) console.log('[adhoc-upgrade] triggerMeshUpgrade', { callId, fromModal });
     if (fromModal) {
       // Close the invite sheet FIRST — on Android, router.replace() is
       // silently swallowed while a React Native <Modal> is still mounted.
@@ -1828,10 +1844,20 @@ export function CallScreenInner() {
     // Initiator: wait out the modal-dismiss animation (~350ms) so Android
     // doesn't drop the navigation. Other party: navigate immediately (no
     // modal, no InteractionManager — see comment above).
-    const delay = fromModal ? 350 : 0;
-    setTimeout(() => {
-      try { router.replace(dest); } catch {}
-    }, delay);
+    const navigate = () => {
+      if (__DEV__) console.log('[adhoc-upgrade] router.replace →', dest);
+      try { router.replace(dest); } catch (e) { if (__DEV__) console.log('[adhoc-upgrade] replace failed', e); }
+    };
+    if (fromModal) {
+      // Initiator: wait out the modal-dismiss animation so Android doesn't
+      // drop the navigation.
+      setTimeout(navigate, 350);
+    } else {
+      // Other party: next frame, then a 0ms macrotask — reliably lands the
+      // navigation without depending on InteractionManager (which never
+      // settles while the call screen animations are running).
+      requestAnimationFrame(() => setTimeout(navigate, 0));
+    }
   }, [callId, conversationId, callType, router]);
 
   const handleInvitePerson = useCallback(
@@ -1852,14 +1878,25 @@ export function CallScreenInner() {
   );
 
   // The OTHER original party (and any client that missed the direct call)
-  // upgrades when the call doc flips OR an invite appears for this call.
+  // upgrades when: the call doc flips isConference, OR an invite appears for
+  // this call, OR the conference roster becomes non-empty (most reliable —
+  // the initiator joins the mesh roster the instant they navigate over).
   useEffect(() => {
     if (upgradedToMeshRef.current) return;
     const hasInvite = Array.isArray(callInvitesData) && callInvitesData.length > 0;
-    if (activeCall?.isConference || hasInvite) {
+    const hasRoster = Array.isArray(conferenceRosterData) && conferenceRosterData.length > 0;
+    if (__DEV__) {
+      console.log('[adhoc-upgrade] watcher', {
+        callId,
+        isConference: activeCall?.isConference,
+        invites: Array.isArray(callInvitesData) ? callInvitesData.length : 'n/a',
+        roster: Array.isArray(conferenceRosterData) ? conferenceRosterData.length : 'n/a',
+      });
+    }
+    if (activeCall?.isConference || hasInvite || hasRoster) {
       triggerMeshUpgrade();
     }
-  }, [activeCall?.isConference, callInvitesData, triggerMeshUpgrade]);
+  }, [activeCall?.isConference, callInvitesData, conferenceRosterData, triggerMeshUpgrade, callId]);
 
   const topStatusChip = useMemo(() => {
     if (isOutgoingRinging) return 'Ringing....';
