@@ -1024,8 +1024,13 @@ export function usePushNotifications() {
           String((payload as any).callType ?? '').toLowerCase() === 'conference';
         if (isConferenceCall) {
           const joinCallId = toNonEmptyString((payload as any).callId);
+          const confIsVideo =
+            (payload as any).isVideo === true ||
+            String((payload as any).isVideo ?? '').toLowerCase() === 'true' ||
+            String((payload as any).isVideo ?? '') === '1' ||
+            String((payload as any).callType ?? '').toLowerCase() === 'video';
           router.push(
-            (`/group-call/${conversationId}${joinCallId ? `?callId=${encodeURIComponent(joinCallId)}` : ''}` as any),
+            (`/group-call/${conversationId}${joinCallId ? `?callId=${encodeURIComponent(joinCallId)}&video=${confIsVideo ? '1' : '0'}&adhoc=1` : ''}` as any),
           );
           return;
         }

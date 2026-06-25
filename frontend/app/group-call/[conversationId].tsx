@@ -31,6 +31,8 @@ import { useMutation, useQuery } from 'convex/react';
 
 import { api } from '../../src/convexApi';
 import CallBackground from '../../src/components/CallBackground';
+import InviteContactPicker from '../../src/components/InviteContactPicker';
+import RTCViewWrapper from '../../src/lib/webrtc/RTCViewWrapper';
 import { useReactiveSafeConvexQuery } from '../../src/hooks/useReactiveSafeConvexQuery';
 import { getDisplayInitials, getResolvedDisplayName } from '../../src/lib/displayName';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
@@ -49,9 +51,20 @@ interface RosterEntry {
 
 export default function GroupCallScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ conversationId?: string | string[]; callId?: string | string[] }>();
+  const params = useLocalSearchParams<{
+    conversationId?: string | string[];
+    callId?: string | string[];
+    video?: string | string[];
+    adhoc?: string | string[];
+  }>();
   const conversationId = Array.isArray(params.conversationId) ? params.conversationId[0] : params.conversationId;
   const paramCallId = Array.isArray(params.callId) ? params.callId[0] : params.callId;
+  const videoParam = Array.isArray(params.video) ? params.video[0] : params.video;
+  const adhocParam = Array.isArray(params.adhoc) ? params.adhoc[0] : params.adhoc;
+  // ad-hoc multiparty (upgraded 1:1) calls can carry video; formal group voice
+  // calls stay audio-only.
+  const wantsVideo = videoParam === '1' || videoParam === 'true';
+  const isAdhoc = adhocParam === '1' || adhocParam === 'true';
   const isWeb = Platform.OS === 'web';
 
   const me = useQuery(api.users.getCurrentUser, isWeb ? 'skip' : {}) as Any;
@@ -69,9 +82,16 @@ export default function GroupCallScreen() {
   const toggleSelfMute = useMutation((api as Any).conference.toggleSelfMute);
   const sendSignalM = useMutation(api.signaling.send);
   const markConsumed = useMutation(api.signaling.markConsumed);
+  const inviteToCall = useMutation((api as Any).callInvites.invite);
+  const answerInvite = useMutation((api as Any).callInvites.answerInvite);
 
   const controllerRef = useRef<MeshControllerType | null>(null);
   const joinedRef = useRef(false);
+  const answeredInviteRef = useRef(false);
+  const [remoteStreamURLs, setRemoteStreamURLs] = useState<Record<string, string>>({});
+  const [localStreamURL, setLocalStreamURL] = useState<string | null>(null);
+  const [cameraEnabled, setCameraEnabled] = useState(wantsVideo);
+  const [invitePickerVisible, setInvitePickerVisible] = useState(false);
 
   // --- Start (ring) a new group call if no callId was passed in. ---
   useEffect(() => {
@@ -79,7 +99,7 @@ export default function GroupCallScreen() {
     let cancelled = false;
     (async () => {
       try {
-        const res: Any = await initiateCall({ conversationId, callType: 'voice' });
+        const res: Any = await initiateCall({ conversationId, callType: wantsVideo ? 'video' : 'voice' });
         const id = String(res?.callId || res?._id || res || '');
         if (!cancelled) {
           if (id) setCallId(id);
@@ -109,23 +129,35 @@ export default function GroupCallScreen() {
         const controller = new MeshController({
           callId,
           myUserId,
+          video: wantsVideo,
           sendSignal: (toUserId, type, payload) => {
             void sendSignalM({ callId, toUserId, type, payload } as Any).catch(() => {});
           },
           onRemoteStreamsChanged: (streams) => {
             if (disposed) return;
             const map: Record<string, boolean> = {};
+            const urls: Record<string, string> = {};
             Object.keys(streams).forEach((id) => {
               map[id] = true;
+              try {
+                const url = streams[id]?.toURL?.();
+                if (url) urls[id] = url;
+              } catch {}
             });
             setConnectedPeers(map);
+            setRemoteStreamURLs(urls);
           },
           onError: () => {},
         });
         controllerRef.current = controller;
         await controller.start();
         try {
-          InCallAudio.start('audio');
+          const local = controller.getLocalStream?.();
+          const url = local?.toURL?.();
+          if (url && !disposed) setLocalStreamURL(url);
+        } catch {}
+        try {
+          InCallAudio.start(wantsVideo ? 'video' : 'audio');
           InCallAudio.setSpeakerOn?.(true);
         } catch {}
         if (!joinedRef.current) {
@@ -149,6 +181,29 @@ export default function GroupCallScreen() {
     !!(!isWeb && callId),
   );
   const rawParticipants = (participantsQ.data || []) as Any[];
+
+  // --- Ad-hoc invite roster (ring/answer status + auto-answer my own invite). ---
+  const callInvitesQ = useReactiveSafeConvexQuery<Any[]>(
+    (api as Any).callInvites.getCallInvites,
+    !isWeb && callId ? { callId } : undefined,
+    [],
+    !!(!isWeb && callId),
+  );
+  const callInvites = (callInvitesQ.data || []) as Any[];
+
+  // When I arrive into an ad-hoc call because I was invited, mark my invite
+  // "joined" (stops the ringing on the inviter's side + cancels auto-miss).
+  // Mesh peering itself is driven by joinConference/getParticipants above; this
+  // only updates the callInvites status the web roster UI reads.
+  useEffect(() => {
+    if (isWeb || !isAdhoc || !myUserId || answeredInviteRef.current) return;
+    const mine = callInvites.find(
+      (inv) => String(inv?.inviteeId) === myUserId && inv?.status === 'ringing',
+    );
+    if (!mine?._id) return;
+    answeredInviteRef.current = true;
+    void answerInvite({ inviteId: mine._id } as Any).catch(() => {});
+  }, [isWeb, isAdhoc, myUserId, callInvites, answerInvite]);
 
   // Feed peer ids to the controller whenever the roster changes.
   useEffect(() => {
@@ -216,9 +271,36 @@ export default function GroupCallScreen() {
       controllerRef.current?.close();
     } catch {}
     controllerRef.current = null;
-    if (callId) void leaveConference({ callId }).catch(() => {});
+    if (callId) void leaveConference({ callId } as Any).catch(() => {});
     router.back();
   }, [callId, leaveConference, router]);
+
+  const handleToggleCamera = useCallback(() => {
+    const ctrl = controllerRef.current;
+    if (!ctrl) return;
+    const next = !cameraEnabled;
+    ctrl.setVideoEnabled(next);
+    setCameraEnabled(next);
+  }, [cameraEnabled]);
+
+  const handleInvite = useCallback(
+    async (inviteeId: string, name: string) => {
+      if (!callId) return;
+      try {
+        await inviteToCall({ callId, inviteeId } as Any);
+      } catch (e: Any) {
+        Alert.alert('Could not add', e?.message || `Failed to ring ${name}.`);
+        throw e;
+      }
+    },
+    [callId, inviteToCall],
+  );
+
+  // user ids already in the call (so the picker hides them).
+  const inCallUserIds = useMemo(
+    () => rawParticipants.map((p) => String(p?.userId || p?._id || '')).filter(Boolean),
+    [rawParticipants],
+  );
 
   const roster: RosterEntry[] = useMemo(() => {
     const deviceIndex: Any = undefined;
@@ -256,10 +338,21 @@ export default function GroupCallScreen() {
     <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="group-call-screen">
       <CallBackground variant="warm" />
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Group voice call</Text>
-        <Text style={styles.headerSubtitle}>
-          {roster.length > 0 ? `${roster.length} in call` : 'Connecting…'}
-        </Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerTitle}>{wantsVideo ? 'Group video call' : 'Group voice call'}</Text>
+          <Text style={styles.headerSubtitle}>
+            {roster.length > 0 ? `${roster.length} in call` : 'Connecting…'}
+          </Text>
+        </View>
+        <TouchableOpacity
+          style={styles.addHeaderBtn}
+          onPress={() => setInvitePickerVisible(true)}
+          disabled={!callId}
+          testID="group-call-add-btn"
+        >
+          <Ionicons name="person-add" size={18} color={Colors.headerBg} />
+          <Text style={styles.addHeaderBtnText}>Add</Text>
+        </TouchableOpacity>
       </View>
 
       {fatal ? (
@@ -282,32 +375,51 @@ export default function GroupCallScreen() {
           keyExtractor={(p) => p.userId}
           numColumns={2}
           contentContainerStyle={styles.grid}
-          renderItem={({ item }) => (
-            <View style={styles.tile} testID={`group-call-tile-${item.userId}`}>
-              <View style={[styles.avatar, item.connected ? styles.avatarConnected : null]}>
-                <Text style={styles.avatarText}>{getDisplayInitials(item.name || 'U', 1)}</Text>
+          renderItem={({ item }) => {
+            const isMe = item.userId === myUserId;
+            const streamURL = isMe ? localStreamURL : remoteStreamURLs[item.userId];
+            const showTileVideo = wantsVideo && !!streamURL && (isMe ? cameraEnabled : true);
+            return (
+              <View
+                style={[styles.tile, wantsVideo ? styles.tileVideo : null]}
+                testID={`group-call-tile-${item.userId}`}
+              >
+                {showTileVideo ? (
+                  <RTCViewWrapper
+                    streamURL={streamURL}
+                    style={StyleSheet.absoluteFill}
+                    objectFit="cover"
+                    mirror={isMe}
+                  />
+                ) : (
+                  <View style={[styles.avatar, item.connected ? styles.avatarConnected : null]}>
+                    <Text style={styles.avatarText}>{getDisplayInitials(item.name || 'U', 1)}</Text>
+                  </View>
+                )}
+                <View style={wantsVideo ? styles.tileLabelOverlay : undefined}>
+                  <Text style={styles.tileName} numberOfLines={1}>
+                    {isMe ? 'You' : item.name || 'Member'}
+                  </Text>
+                  <View style={styles.tileStatusRow}>
+                    <Feather
+                      name={item.isMuted ? 'mic-off' : 'mic'}
+                      size={13}
+                      color={item.isMuted ? Colors.danger : Colors.success}
+                    />
+                    <Text style={styles.tileStatus}>
+                      {isMe
+                        ? micEnabled
+                          ? 'You'
+                          : 'Muted'
+                        : item.connected
+                          ? 'Connected'
+                          : 'Connecting…'}
+                    </Text>
+                  </View>
+                </View>
               </View>
-              <Text style={styles.tileName} numberOfLines={1}>
-                {item.userId === myUserId ? 'You' : item.name || 'Member'}
-              </Text>
-              <View style={styles.tileStatusRow}>
-                <Feather
-                  name={item.isMuted ? 'mic-off' : 'mic'}
-                  size={13}
-                  color={item.isMuted ? Colors.danger : Colors.success}
-                />
-                <Text style={styles.tileStatus}>
-                  {item.userId === myUserId
-                    ? micEnabled
-                      ? 'You'
-                      : 'Muted'
-                    : item.connected
-                      ? 'Connected'
-                      : 'Connecting…'}
-                </Text>
-              </View>
-            </View>
-          )}
+            );
+          }}
           ListEmptyComponent={
             <View style={styles.center}>
               <ActivityIndicator color={Colors.primary} />
@@ -326,6 +438,20 @@ export default function GroupCallScreen() {
           <Feather name={micEnabled ? 'mic' : 'mic-off'} size={24} color={Colors.textPrimary} />
           <Text style={styles.controlLabel}>{micEnabled ? 'Mute' : 'Unmute'}</Text>
         </TouchableOpacity>
+        {wantsVideo ? (
+          <TouchableOpacity
+            style={[styles.controlBtn, !cameraEnabled ? styles.controlBtnActive : null]}
+            onPress={handleToggleCamera}
+            testID="group-call-camera-btn"
+          >
+            <Feather
+              name={cameraEnabled ? 'video' : 'video-off'}
+              size={24}
+              color={Colors.textPrimary}
+            />
+            <Text style={styles.controlLabel}>{cameraEnabled ? 'Camera' : 'Off'}</Text>
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity
           style={[styles.controlBtn, styles.leaveBtn]}
           onPress={handleLeave}
@@ -335,15 +461,38 @@ export default function GroupCallScreen() {
           <Text style={[styles.controlLabel, { color: Colors.white }]}>Leave</Text>
         </TouchableOpacity>
       </View>
+
+      <InviteContactPicker
+        visible={invitePickerVisible}
+        onClose={() => setInvitePickerVisible(false)}
+        excludeUserIds={inCallUserIds}
+        onInvite={handleInvite}
+        title="Add to call"
+      />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.headerBg },
-  header: { paddingHorizontal: Spacing.base, paddingVertical: Spacing.md, alignItems: 'center' },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.base,
+    paddingVertical: Spacing.md,
+  },
   headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.white },
   headerSubtitle: { fontSize: FontSize.sm, color: '#E6D9B0', marginTop: 2 },
+  addHeaderBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: Spacing.md,
+    height: 38,
+    borderRadius: 19,
+  },
+  addHeaderBtnText: { color: Colors.headerBg, fontWeight: FontWeight.bold, fontSize: FontSize.sm },
   grid: { padding: Spacing.base, gap: Spacing.md },
   tile: {
     flex: 1,
@@ -353,6 +502,24 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.08)',
     alignItems: 'center',
     gap: 8,
+  },
+  tileVideo: {
+    height: 220,
+    paddingVertical: 0,
+    overflow: 'hidden',
+    justifyContent: 'flex-end',
+    backgroundColor: '#000',
+  },
+  tileLabelOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    gap: 2,
   },
   avatar: {
     width: 64,

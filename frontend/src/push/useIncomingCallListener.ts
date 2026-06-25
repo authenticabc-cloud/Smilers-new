@@ -100,7 +100,12 @@ export function useIncomingCallListener() {
         String((incomingCall as any)?.isConference ?? '') === '1' ||
         String((incomingCall as any)?.callType || '').toLowerCase() === 'conference';
       if (isConferenceCall) {
-        router.push(`/group-call/${conversationId}?callId=${encodeURIComponent(String(incomingCall._id))}` as any);
+        const confIsVideo =
+          (incomingCall as any)?.isVideo === true ||
+          String((incomingCall as any)?.callType || '').toLowerCase() === 'video';
+        router.push(
+          `/group-call/${conversationId}?callId=${encodeURIComponent(String(incomingCall._id))}&video=${confIsVideo ? '1' : '0'}&adhoc=1` as any,
+        );
         return;
       }
       const callIsVideo =

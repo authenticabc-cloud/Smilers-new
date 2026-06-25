@@ -20,6 +20,7 @@ import { useMutation, useQuery } from 'convex/react';
 import { Camera } from 'expo-camera';
 import { setAudioModeAsync } from 'expo-audio';
 import CallBackground from '../../src/components/CallBackground';
+import InviteContactPicker from '../../src/components/InviteContactPicker';
 import { InCallAudio } from '../../src/lib/webrtc/inCallManager';
 import Animated, {
   Easing,
@@ -257,6 +258,7 @@ export function CallScreenInner() {
   // hangup. See useEngagementTracker for thresholds (must connect).
   const engagement = useEngagementTracker();
   const declineCall = useMutation(api.calls.declineCall);
+  const inviteToCall = useMutation((api as any).callInvites.invite);
   const requestVideoUpgrade = useMutation((api as any).calls.requestVideoUpgrade);
   // Backend-confirmed contract (June 2025): `api.calls.heartbeat({ callId })`
   // is wired up to a 60s cron that auto-`ends` calls without a recent ping.
@@ -1744,16 +1746,48 @@ export function CallScreenInner() {
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   }, [callDurationSec]);
 
+  // ── Ad-hoc multiparty: invite someone into THIS 1:1 call. Calling
+  // `callInvites.invite` rings them and flips `calls.isConference = true`,
+  // which both parties' screens observe and then switch to the mesh engine
+  // (we navigate to the reusable /group-call mesh host with the same callId).
+  const [invitePickerVisible, setInvitePickerVisible] = useState(false);
+  const upgradedToMeshRef = useRef(false);
+
   const handleAddParticipant = useCallback(() => {
-    // Group calling is its own flow on Smilers (start a call from a group
-    // conversation → /group-call). The 1:1 WebRTC peer connection here can't
-    // host 3+ parties, so mid-call escalation isn't offered.
     setAudioOutputMenuVisible(false);
-    Alert.alert(
-      'Group calls',
-      'To call several people, start the call from a group chat. Adding someone to a 1:1 call isn’t supported.',
+    if (!callId || !isActive) {
+      Alert.alert('Add people', 'You can add people once the call is connected.');
+      return;
+    }
+    setInvitePickerVisible(true);
+  }, [callId, isActive]);
+
+  const handleInvitePerson = useCallback(
+    async (inviteeId: string, name: string) => {
+      if (!callId) return;
+      try {
+        await inviteToCall({ callId, inviteeId } as any);
+      } catch (e: any) {
+        Alert.alert('Could not add', e?.message || `Failed to ring ${name}.`);
+        throw e;
+      }
+    },
+    [callId, inviteToCall],
+  );
+
+  // When this 1:1 call becomes a conference (someone was added), hand off to
+  // the mesh host screen with the shared callId. router.replace tears down the
+  // single-peer CallSession (its unmount cleanup releases mic/camera) so the
+  // MeshController can take over cleanly.
+  useEffect(() => {
+    if (upgradedToMeshRef.current) return;
+    if (!activeCall?.isConference || !callId || !conversationId) return;
+    upgradedToMeshRef.current = true;
+    const vq = callType === 'video' ? '1' : '0';
+    router.replace(
+      `/group-call/${conversationId}?callId=${encodeURIComponent(callId)}&video=${vq}&adhoc=1` as any,
     );
-  }, []);
+  }, [activeCall?.isConference, callId, conversationId, callType, router]);
 
   const topStatusChip = useMemo(() => {
     if (isOutgoingRinging) return 'Ringing....';
@@ -1860,6 +1894,18 @@ export function CallScreenInner() {
   return (
     <View style={styles.container} testID="call-screen">
       <StatusBar style="light" />
+      <InviteContactPicker
+        visible={invitePickerVisible}
+        onClose={() => setInvitePickerVisible(false)}
+        excludeUserIds={[
+          me?._id,
+          (fetchedOtherUser as any)?._id,
+          (fetchedOtherUser as any)?.userId,
+          (conversation as any)?.otherUser?._id,
+        ].filter(Boolean) as string[]}
+        onInvite={handleInvitePerson}
+        title="Add to call"
+      />
       {/* Video layer or gradient + avatar */}
       {showVideo && remoteStreamURL ? (
         <View style={styles.videoLayer}>
