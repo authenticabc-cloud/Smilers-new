@@ -43,6 +43,9 @@ export class MeshController {
   private started = false;
   private closed = false;
   private speakingTimer: Any = null;
+  /** Adopted (handed-over 1:1) peers, protected from removal until the
+   *  conference roster catches up and includes them. */
+  private adoptedProtected = new Set<string>();
 
   constructor(opts: MeshControllerOptions) {
     this.opts = opts;
@@ -65,6 +68,58 @@ export class MeshController {
       video: this.wantsVideo ? ({ facingMode: 'user' } as Any) : false,
     });
     this.startSpeakingPoll();
+  }
+
+  /**
+   * Start the mesh by ADOPTING a live 1:1 connection (seamless upgrade). Reuses
+   * the existing local mic stream (no second getUserMedia → no audio blip) and
+   * registers the partner as an already-connected peer. Fresh peers for newly
+   * invited people are then created normally via `syncParticipants`.
+   */
+  async startWithAdoption(adopt: {
+    localStream: Any;
+    partnerUserId: string;
+    pc: Any;
+    remoteStream: Any;
+  }): Promise<void> {
+    if (this.started || this.closed) return;
+    this.started = true;
+    this.localStream = adopt.localStream;
+    // Reflect the current camera-track state for video upgrades.
+    try {
+      const hasVideo = !!this.localStream?.getVideoTracks?.()?.length;
+      if (hasVideo) this.wantsVideo = true;
+    } catch {}
+    this.startSpeakingPoll();
+    if (adopt.partnerUserId && adopt.pc) {
+      this.adoptPeer(adopt.partnerUserId, adopt.pc, adopt.remoteStream);
+    }
+  }
+
+  /** Register an already-connected peer (handed over from the 1:1 engine). */
+  adoptPeer(peerUserId: string, pc: Any, remoteStream: Any): void {
+    if (this.closed || !peerUserId || peerUserId === this.opts.myUserId) return;
+    if (this.peers.has(peerUserId)) return;
+    const peer = new MeshPeer({
+      callId: this.opts.callId,
+      myUserId: this.opts.myUserId,
+      peerUserId,
+      localStream: this.localStream,
+      sendSignal: this.opts.sendSignal,
+      onRemoteStream: (id, stream) => {
+        this.remoteStreams[id] = stream;
+        this.emitStreams();
+      },
+      onConnectionState: (id, state) => {
+        this.connStates[id] = state;
+        this.opts.onConnectionStateChanged?.({ ...this.connStates });
+      },
+    });
+    this.peers.set(peerUserId, peer);
+    this.adoptedProtected.add(peerUserId);
+    peer
+      .adoptExisting(pc, remoteStream)
+      .catch((e) => this.opts.onError?.(e instanceof Error ? e : new Error(String(e))));
   }
 
   private startSpeakingPoll(): void {
@@ -106,6 +161,9 @@ export class MeshController {
     // Remove peers who left.
     for (const peerId of Array.from(this.peers.keys())) {
       if (!next.has(peerId)) {
+        // Don't drop an adopted (handed-over) peer just because the conference
+        // roster hasn't listed it yet — it would kill the live A↔B link.
+        if (this.adoptedProtected.has(peerId)) continue;
         this.peers.get(peerId)?.close();
         this.peers.delete(peerId);
         if (this.connStates[peerId]) {
@@ -116,6 +174,9 @@ export class MeshController {
           delete this.remoteStreams[peerId];
           this.emitStreams();
         }
+      } else {
+        // Roster caught up with this adopted peer → normal lifecycle from now.
+        this.adoptedProtected.delete(peerId);
       }
     }
 

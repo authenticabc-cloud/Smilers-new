@@ -87,6 +87,34 @@ export class MeshPeer {
       /* ignore — controller guarantees a stream */
     }
 
+    this.wireHandlers(pc);
+  }
+
+  /**
+   * Adopt an ALREADY-CONNECTED peer connection (seamless 1:1 → conference
+   * handoff). The `pc` was negotiated by the 1:1 engine over the SAME
+   * `api.signaling.*` channel keyed by `callId`, so it's already live — we do
+   * NOT add tracks (they're already on it) and we do NOT create an offer.
+   * We only re-point its event handlers at the mesh transport and surface the
+   * existing remote stream + connection state. Any LATER renegotiation/ICE
+   * restart for this pair then flows over the mesh channel, per the contract.
+   */
+  async adoptExisting(pc: Any, remoteStream: Any): Promise<void> {
+    if (this.closed) return;
+    await this.getWebRTC();
+    this.pc = pc;
+    this.remoteDescriptionSet = true; // already fully negotiated
+    if (remoteStream) this.remoteStream = remoteStream;
+    this.wireHandlers(pc);
+    // Surface current state immediately so the mesh UI shows the partner.
+    if (this.remoteStream) this.opts.onRemoteStream(this.peerUserId, this.remoteStream);
+    try {
+      this.opts.onConnectionState?.(this.peerUserId, pc.connectionState || 'connected');
+    } catch {}
+  }
+
+  /** Wire ICE/track/state/negotiation handlers onto a pc (fresh or adopted). */
+  private wireHandlers(pc: Any): void {
     pc.addEventListener('icecandidate', (event: Any) => {
       if (event?.candidate && !this.closed) {
         const c = event.candidate;
@@ -101,7 +129,7 @@ export class MeshPeer {
         this.remoteStream = stream;
       } else if (event?.track) {
         // Build a stream if the remote didn't attach one.
-        if (!this.remoteStream) this.remoteStream = new webrtc.MediaStream();
+        if (!this.remoteStream) this.remoteStream = new (this.webrtc as Any).MediaStream();
         try {
           this.remoteStream.addTrack(event.track);
         } catch {}

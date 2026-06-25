@@ -33,6 +33,7 @@ import { useMutation, useQuery } from 'convex/react';
 import { api } from '../../src/convexApi';
 import CallBackground from '../../src/components/CallBackground';
 import InviteContactPicker from '../../src/components/InviteContactPicker';
+import { takeCallHandoff } from '../../src/lib/call/handoff';
 import RTCViewWrapper from '../../src/lib/webrtc/RTCViewWrapper';
 import { useReactiveSafeConvexQuery } from '../../src/hooks/useReactiveSafeConvexQuery';
 import { getDisplayInitials, getResolvedDisplayName } from '../../src/lib/displayName';
@@ -160,7 +161,20 @@ export default function GroupCallScreen() {
           onError: () => {},
         });
         controllerRef.current = controller;
-        await controller.start();
+        // SEAMLESS UPGRADE: if the 1:1 screen handed us a live connection,
+        // adopt it (reuse the existing mic + partner pc — no second
+        // getUserMedia, no audio interruption) instead of starting fresh.
+        const handoff = takeCallHandoff(callId);
+        if (handoff?.pc && handoff.localStream) {
+          await controller.startWithAdoption({
+            localStream: handoff.localStream,
+            partnerUserId: handoff.partnerUserId,
+            pc: handoff.pc,
+            remoteStream: handoff.remoteStream,
+          });
+        } else {
+          await controller.start();
+        }
         try {
           const local = controller.getLocalStream?.();
           const url = local?.toURL?.();

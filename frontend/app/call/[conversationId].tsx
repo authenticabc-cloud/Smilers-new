@@ -21,6 +21,7 @@ import { Camera } from 'expo-camera';
 import { setAudioModeAsync } from 'expo-audio';
 import CallBackground from '../../src/components/CallBackground';
 import InviteContactPicker from '../../src/components/InviteContactPicker';
+import { stashCallHandoff } from '../../src/lib/call/handoff';
 import { InCallAudio } from '../../src/lib/webrtc/inCallManager';
 import Animated, {
   Easing,
@@ -411,6 +412,9 @@ export function CallScreenInner() {
   const [CallSessionCtor, setCallSessionCtor] = useState<any>(null);
 
   const sessionRef = useRef<any>(null);
+  // The resolved remote 1:1 partner id — captured for seamless conference
+  // handoff (we hand this peer's live connection over to the mesh).
+  const partnerUserIdRef = useRef<string | null>(null);
   const initStartedRef = useRef(false);
   // iter-189 screen-share signaling queue. The sharer enters this screen
   // IMMEDIATELY after `requestScreenShare` — before the recipient accepts —
@@ -862,6 +866,7 @@ export function CallScreenInner() {
         initStartedRef.current = false;
         return;
       }
+      partnerUserIdRef.current = remoteUserId;
 
       // Request permissions
       try {
@@ -1789,6 +1794,31 @@ export function CallScreenInner() {
     if (!activeCall?.isConference || !callId || !conversationId) return;
     upgradedToMeshRef.current = true;
     const vq = callType === 'video' ? '1' : '0';
+    // SEAMLESS HANDOFF: detach the live 1:1 connection from CallSession (so its
+    // unmount cleanup won't tear it down) and stash it for the mesh host to
+    // ADOPT. This keeps the A↔B audio/video alive with zero interruption — the
+    // mesh only creates fresh connections for newly invited people. Symmetric
+    // adoption is required for web↔native interop (a rebuilt pc has a new DTLS
+    // fingerprint the adopting peer cannot accept).
+    try {
+      const session = sessionRef.current;
+      const partnerUserId = partnerUserIdRef.current;
+      if (session?.detachForHandoff && partnerUserId) {
+        const ho = session.detachForHandoff();
+        if (ho?.pc) {
+          stashCallHandoff({
+            callId,
+            partnerUserId,
+            pc: ho.pc,
+            localStream: ho.localStream,
+            remoteStream: ho.remoteStream,
+            video: callType === 'video',
+          });
+        }
+      }
+    } catch {
+      /* fall through to a plain mesh join if detach fails */
+    }
     router.replace(
       `/group-call/${conversationId}?callId=${encodeURIComponent(callId)}&video=${vq}&adhoc=1` as any,
     );
