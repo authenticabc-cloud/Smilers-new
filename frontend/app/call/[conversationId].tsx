@@ -4,6 +4,7 @@ import {
   Alert,
   AppState,
   BackHandler,
+  InteractionManager,
   Platform,
   Pressable,
   StyleSheet,
@@ -1787,6 +1788,11 @@ export function CallScreenInner() {
     if (upgradedToMeshRef.current) return;
     if (!callId || !conversationId) return;
     upgradedToMeshRef.current = true;
+    // Close the invite sheet FIRST — on Android, router.replace() is silently
+    // swallowed while a React Native <Modal> is still mounted, which is why the
+    // screen used to stay on the 1:1 call after inviting. We dismiss the modal,
+    // then navigate on the next interaction tick so the route actually changes.
+    setInvitePickerVisible(false);
     const vq = callType === 'video' ? '1' : '0';
     // SEAMLESS HANDOFF: detach the live 1:1 connection (so unmount won't tear
     // it down) and stash it for the mesh host to ADOPT — keeps A↔B audio/video
@@ -1810,9 +1816,12 @@ export function CallScreenInner() {
     } catch {
       /* fall through to a plain mesh join if detach fails */
     }
-    router.replace(
-      `/group-call/${conversationId}?callId=${encodeURIComponent(callId)}&video=${vq}&adhoc=1` as any,
-    );
+    const dest =
+      `/group-call/${conversationId}?callId=${encodeURIComponent(callId)}&video=${vq}&adhoc=1` as any;
+    // Defer past the modal-dismiss so the navigation isn't dropped.
+    InteractionManager.runAfterInteractions(() => {
+      setTimeout(() => router.replace(dest), 300);
+    });
   }, [callId, conversationId, callType, router]);
 
   const handleInvitePerson = useCallback(
