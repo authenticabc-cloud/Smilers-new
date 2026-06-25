@@ -872,3 +872,34 @@ field diagnosis.
 
 Lint clean on changed files (pre-existing require/import warnings only); bundle
 compiles; Sign-In renders. Needs two-device verification.
+
+---
+
+## iter-237 — Match web delivery dots + remove risky global hook + triage regressions
+
+USER feedback: web app itself shows GREEN for both sent & delivered and never
+shows yellow; also reported NEW regressions: photo attach stuck, delete-for-
+everyone not propagating to receiver / not corrupting.
+
+1. **Delivery dots → match web exactly** (`MediaBubble.tsx`): RED (outbox) →
+   BLUE (readBy>0, excl sender) → GREEN (on server). Removed YELLOW and the
+   delivered/read distinction entirely (green now appears as soon as the
+   message is on the server, exactly like web).
+2. **Removed `useDeliveryReceipts` global hook** (+ deleted the file, unmounted
+   from `_layout.tsx`). It is no longer needed (green = on-server) and it was
+   firing `markDelivered` mutations for EVERY conversation on every list update
+   — a plausible source of Convex client backpressure / the new instability.
+   Also removed the chats-tab variant earlier.
+3. **Regression triage (NOT changed — backend/shared-Convex coupled):**
+   - Photo attach: send path (`sendImageFromUri`/`uploadFile`) is untouched and
+     uses the same Convex storage that working text uses. Suspect stale bundle
+     or the removed global hook interfering. Needs clean reload + device logs.
+   - Delete-for-everyone: `performDelete` already silently FALLS BACK to
+     `deleteMessage({messageId})` (= delete-for-me) when `{mode:'everyone'}`
+     throws (iter-97). The cross-device delete propagation + "corrupt on
+     receiver" are BACKEND (shared Convex `messages.deleteMessage`) features —
+     if the web team changed that schema, mobile's `mode:'everyone'` may now be
+     rejected → silent delete-for-me. Requires backend/web-team confirmation.
+
+Bundle compiles; Sign-In renders. Asked user to do a CLEAN reload and re-test
+photo + delete; the removed global hook may have been the destabiliser.

@@ -198,30 +198,25 @@ export default function MediaBubble({
     );
   }
 
-  // 4-colour delivery status (sender's own messages only) — evaluated
-  // top-down per the web native-message-delivery-status-contract:
-  //   RED    → local outbox: queued offline, never reached the server
-  //   BLUE   → read   (any other participant opened the chat — readBy)
-  //   GREEN  → delivered (any other participant's device received it)
-  //   YELLOW → on server, not delivered to anyone yet (resting state)
-  // We exclude the sender's own userId from readBy/deliveredTo because the
-  // server records the sender as the original delivery target. Group chats
-  // use ANY-recipient logic (`.length > 0`).
+  // Delivery status (sender's own messages only) — matches the WEB app
+  // exactly (web shows GREEN for both sent & delivered, BLUE for read, and
+  // never shows a separate "delivered" colour):
+  //   RED   → local outbox: queued offline, never reached the server
+  //   BLUE  → read   (any other participant opened the chat — readBy)
+  //   GREEN → on the server (sent and/or delivered)
+  // We exclude the sender's own userId from readBy because the server records
+  // the sender as the original read/delivery target. Group chats use ANY-
+  // recipient logic (`.length > 0`).
   const isOutbox = msg.__outbox === true || msg.__failed === true;
   const senderUserId = msg.senderId ? String(msg.senderId) : null;
   const readByOthers = Array.isArray(msg.readBy)
     ? msg.readBy.filter((uid: any) => uid && String(uid) !== senderUserId)
     : [];
-  const deliveredToOthers = Array.isArray(msg.deliveredTo)
-    ? msg.deliveredTo.filter((uid: any) => uid && String(uid) !== senderUserId)
-    : [];
   const statusDotColor = isOutbox
     ? Colors.tickRed
     : readByOthers.length > 0
       ? Colors.tickBlue
-      : deliveredToOthers.length > 0
-        ? Colors.tickGreen
-        : Colors.tickYellow;
+      : Colors.tickGreen;
 
   const reactionSummary = useMemo(() => {
     const reactions: any[] = Array.isArray(msg.reactions) ? msg.reactions : [];
