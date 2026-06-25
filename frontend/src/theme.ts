@@ -62,6 +62,7 @@ export const Colors = {
   tickBlue: '#3b82f6',
   tickYellow: '#eab308',
   tickGreen: '#22c55e',
+  tickRed: '#ef4444',
   tickGray: '#6B7280',
 };
 
