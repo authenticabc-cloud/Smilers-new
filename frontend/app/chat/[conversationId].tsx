@@ -480,6 +480,7 @@ export default function ChatScreen() {
   // (AppState 'active'). E2EE & media messages are NOT queued — they need
   // live keys / a live upload session.
   const [outboxMsgs, setOutboxMsgs] = useState<OutboxMessage[]>([]);
+  const [isOffline, setIsOffline] = useState(false);
   const flushingRef = useRef(false);
 
   // Hydrate the queue for this conversation on mount / id change.
@@ -530,16 +531,22 @@ export default function ChatScreen() {
     }
   }, [conversationId, sendMessage]);
 
-  // Auto-flush triggers: connectivity returns + app foreground.
+  // Auto-flush triggers: connectivity returns + app foreground. Also tracks
+  // the offline state to drive the "showing saved messages" banner.
   useEffect(() => {
     if (!conversationId) return;
-    const unsubNet = NetInfo.addEventListener((state) => {
-      if (state.isConnected && state.isInternetReachable !== false) {
+    const applyState = (state: { isConnected: boolean | null; isInternetReachable: boolean | null }) => {
+      const online = !!state.isConnected && state.isInternetReachable !== false;
+      setIsOffline(!online);
+      if (online) void flushOutbox();
+    };
+    const unsubNet = NetInfo.addEventListener(applyState);
+    void NetInfo.fetch().then(applyState);
+    const appStateSub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') {
+        void NetInfo.fetch().then(applyState);
         void flushOutbox();
       }
-    });
-    const appStateSub = AppState.addEventListener('change', (next) => {
-      if (next === 'active') void flushOutbox();
     });
     // Kick a flush right away in case we mounted with a pending queue and are
     // already online.
@@ -3090,6 +3097,14 @@ export default function ChatScreen() {
             <LiveLocationSharingPill conversationId={String(conversationId || '')} />
           </View>
         ) : null}
+        {/* iter-234: offline banner — tells the user they're viewing saved
+            (cached) history while there's no connection. */}
+        {isOffline ? (
+          <View style={styles.offlineBanner} testID="chat-offline-banner">
+            <Feather name="wifi-off" size={13} color={Colors.headerBg} />
+            <Text style={styles.offlineBannerText}>No internet — showing saved messages</Text>
+          </View>
+        ) : null}
         {(conversationLoading || messagesLoading) && !hasCachedTimeline ? (
           fallbackReady && conversation === undefined ? (
             // Pending past the threshold — surface an actionable
@@ -4085,6 +4100,20 @@ const styles = StyleSheet.create({
   locationRequestBannerWrap: {
     paddingHorizontal: 12,
     paddingTop: 10,
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: Colors.tickYellow,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  offlineBannerText: {
+    fontSize: 12,
+    fontWeight: FontWeight.semibold,
+    color: Colors.headerBg,
   },
   dayChipWrap: {
     alignItems: 'center',
