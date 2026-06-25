@@ -773,3 +773,34 @@ but that `MessageBubble` is DEAD CODE — the chat timeline renders
 Verified: lint clean on changed files; bundle compiles; app renders Sign-In
 (smoke). End-to-end offline behaviour needs device/build verification (auth is
 Google OIDC + requires real network toggling — not exercisable in web preview).
+
+---
+
+## iter-234 — Offline read access to old messages (BUG FIX)
+
+**Reported:** previous agent claimed offline message access worked; it never did.
+
+**Root cause (`app/chat/[conversationId].tsx`):** the render gate was
+`{conversationLoading || messagesLoading ? <spinner> : ...}`. When offline the
+Convex `messages.list` query stays `undefined` forever → `messagesLoading`
+stayed `true` → the screen showed "Taking longer than usual"/spinner and NEVER
+rendered the FlatList, even though `cachedMessages` (iter-164 AsyncStorage cache)
+were available. The conversation object + `me` were also `undefined` offline, so
+the header showed "Loading…" and `isConversationAvailable` was false (composer
+disabled, outbox couldn't trigger).
+
+**Fix:**
+- Cache the conversation object per-id (`chat-conversation` scope) when it
+  resolves; read it back offline. Read cached `me` (`me`/`self` scope, already
+  written by the Chats tab). Added `effectiveConversation = conversation ??
+  cachedConversation` and `effectiveMe = me ?? cachedMe`.
+- `hydratedConversation`, `isConversationAvailable`, header title, and the
+  message `isMine`/`myUserId` now use the effective (cache-fallback) values.
+- Render gate now bypasses the loading spinner when `hasCachedTimeline` (cached
+  messages exist) → the FlatList renders cached history offline.
+
+Result: opening a previously-synced chat while offline shows the full cached
+timeline, correct sender alignment, and the contact name in the header. (Only
+in-flight/undelivered incoming server messages aren't shown until reconnect, as
+expected.) Lint clean; bundle compiles; Sign-In renders (smoke). Needs device
+verification with real airplane-mode toggling.

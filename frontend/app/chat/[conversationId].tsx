@@ -641,6 +641,39 @@ export default function ChatScreen() {
     }
   }, [conversationId, messagesPage]);
 
+  // iter-234 OFFLINE READ ACCESS: cache the conversation object + my own
+  // user record so a cold/offline open can fully render the chat (header
+  // name, "is mine" alignment, composer enabled) from cached messages —
+  // not just a perpetual "Taking longer than usual" spinner.
+  //   - `chat-conversation` scope is written here whenever the live
+  //     conversation resolves (rich `listConversations` row preferred).
+  //   - `me`/`self` scope is already written by the Chats tab; we only read.
+  const [cachedConversation, setCachedConversation] = useState<any | null>(null);
+  const [cachedMe, setCachedMe] = useState<any | null>(null);
+
+  useEffect(() => {
+    if (!conversationId) return;
+    let mounted = true;
+    void readCache<any>('chat-conversation', String(conversationId)).then((c) => {
+      if (mounted && c) setCachedConversation(c);
+    });
+    void readCache<any>('me', 'self').then((m) => {
+      if (mounted && m) setCachedMe(m);
+    });
+    return () => { mounted = false; };
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (!conversationId || !conversation) return;
+    void writeCache('chat-conversation', String(conversationId), conversation);
+  }, [conversationId, conversation]);
+
+  // Live value wins; cached value is the offline fallback.
+  const effectiveConversation: any | null | undefined = conversation ?? cachedConversation;
+  const effectiveMe: any = me ?? cachedMe;
+  const hasCachedTimeline = Array.isArray(cachedMessages) && cachedMessages.length > 0;
+
+
   // When the server hasn't returned yet (cold start / offline) prefer
   // the cached array so the user sees something useful immediately.
   const messagesForRender: any[] = useMemo(() => {
@@ -1146,7 +1179,7 @@ export default function ChatScreen() {
   // threshold (network / websocket stall — recoverable via Retry).
   const isConversationDefinitelyMissing =
     !canQueryConversation || (canQueryConversation && conversation === null);
-  const isConversationAvailable = !!conversation;
+  const isConversationAvailable = !!effectiveConversation;
   const composerTextColor = resolveDraftColor(draftColor) || Colors.textPrimary;
   const showComposerFormatting = showComposerFormattingPinned || composerFocused || text.trim().length > 0 || showColorPicker;
 
@@ -2530,11 +2563,11 @@ export default function ChatScreen() {
   // by fetching the other participant via `api.users.getUserById`.
   const fetchedOtherUser = useConversationOtherUser(conversation, me?._id ? String(me._id) : undefined);
   const hydratedConversation = useMemo(() => {
-    if (!conversation) return conversation;
-    if (conversation.otherUser && typeof conversation.otherUser === 'object') return conversation;
-    if (!fetchedOtherUser) return conversation;
-    return { ...conversation, otherUser: fetchedOtherUser };
-  }, [conversation, fetchedOtherUser]);
+    if (!effectiveConversation) return effectiveConversation;
+    if (effectiveConversation.otherUser && typeof effectiveConversation.otherUser === 'object') return effectiveConversation;
+    if (!fetchedOtherUser) return effectiveConversation;
+    return { ...effectiveConversation, otherUser: fetchedOtherUser };
+  }, [effectiveConversation, fetchedOtherUser]);
 
   // iter-232: canonical callee resolver for the Twilio call buttons.
   // The header call/video buttons previously read ONLY `otherUser.userId`,
@@ -2623,7 +2656,7 @@ export default function ChatScreen() {
     ? 'Smilers'
     : deviceTitle ||
       savedContactTitle ||
-      (conversationLoading
+      (conversationLoading && !hydratedConversation
         ? 'Loading…'
         : getConversationDisplayName(hydratedConversation, me?._id ? String(me._id) : undefined, 'Chat'));
   const isMineSelected = selectedMsg && me && selectedMsg.senderId === me._id;
@@ -3057,7 +3090,7 @@ export default function ChatScreen() {
             <LiveLocationSharingPill conversationId={String(conversationId || '')} />
           </View>
         ) : null}
-        {conversationLoading || messagesLoading ? (
+        {(conversationLoading || messagesLoading) && !hasCachedTimeline ? (
           fallbackReady && conversation === undefined ? (
             // Pending past the threshold — surface an actionable
             // "transient unavailable" screen instead of an endless spinner.
@@ -3183,8 +3216,8 @@ export default function ChatScreen() {
                   >
                     <MediaBubble
                       msg={item}
-                      isMine={item.senderId === me?._id}
-                      myUserId={me?._id}
+                      isMine={item.senderId === effectiveMe?._id}
+                      myUserId={effectiveMe?._id}
                       parentMsg={(() => {
                         // Backend field name normalisation (iter-101):
                         // Smilers Convex stores the parent reference under
