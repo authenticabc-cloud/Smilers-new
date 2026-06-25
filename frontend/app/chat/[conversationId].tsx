@@ -49,6 +49,7 @@ import {
   assertUploadSize,
 } from '../../src/lib/dataFriendlyDefaults';
 import { readCache, writeCache } from '../../src/lib/offlineCache';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 import NetInfo from '@react-native-community/netinfo';
 import {
   loadOutbox,
@@ -121,6 +122,40 @@ function formatPresenceSubtitle(conversation: any) {
   }
   return formatLastSeenLabel(conversation);
 }
+
+/**
+ * Read fileName + fileSize for a local media URI. The web app's
+ * `messages.send` includes `fileName`, `fileSize` and `mimeType` for ALL
+ * media (image/video/audio/file); the mobile image/video sends were omitting
+ * fileName + fileSize, which the (strict) Convex backend rejected — the photo
+ * stayed stuck in the composer and videos sent with broken metadata. This
+ * derives both so mobile matches the web send signature exactly.
+ */
+async function getMediaMeta(
+  uri: string,
+  mime: string,
+  fallbackBase: string,
+): Promise<{ fileName: string; fileSize: number }> {
+  let fileSize = 0;
+  try {
+    const info: any = await LegacyFileSystem.getInfoAsync(uri, { size: true } as any);
+    if (info?.exists && typeof info.size === 'number') fileSize = info.size;
+  } catch {
+    /* size best-effort */
+  }
+  let fileName = '';
+  try {
+    fileName = (uri.split('/').pop() || '').split('?')[0];
+  } catch {
+    /* ignore */
+  }
+  if (!fileName) {
+    const ext = (mime.split('/')[1] || 'bin').split(';')[0];
+    fileName = `${fallbackBase}.${ext}`;
+  }
+  return { fileName, fileSize };
+}
+
 
 export default function ChatScreen() {
   const router = useRouter();
@@ -568,8 +603,15 @@ export default function ChatScreen() {
     [],
     !!conversationId,
   );
-  const markDelivered = useMutation((api as any).messages.markDelivered);
   const markRead = useMutation(api.messages.markRead);
+  // Incoming "delete for everyone" requests addressed to me (as the sender of
+  // the message). Mirrors the web app: getPendingDeletionRequests + a banner
+  // with Delete / Decline → respondToDeletionRequest({ requestId, accept }).
+  const pendingDeletionRequests = useQuery(
+    (api as any).messages.getPendingDeletionRequests,
+    isAuthenticated ? {} : 'skip',
+  ) as any[] | undefined;
+  const respondToDeletionRequest = useMutation((api as any).messages.respondToDeletionRequest);
   const toggleReaction = useMutation(api.messages.toggleReaction);
   const deleteMessage = useMutation(api.messages.deleteMessage);
   // Optional edit mutations — different Convex deployments expose this under
@@ -1041,12 +1083,11 @@ export default function ChatScreen() {
     }
   }, [displayMessages, deleteMessage]);
 
-  useEffect(() => {
-    if (conversationId && visibleMessages.length > 0) {
-      markDelivered({ conversationId }).catch(() => {});
-    }
-  }, [conversationId, visibleMessages.length, markDelivered]);
-
+  // NOTE: in-chat markDelivered was removed (iter-240) — it fired at the same
+  // moment as markRead on chat open, making the sender's dot jump yellow→blue
+  // and skip green. Delivery is now marked globally by useDeliveryReceipts
+  // (watches getUnreadCounts), exactly like the web app. markRead still fires
+  // here when messages are visible on screen.
   useEffect(() => {
     if (conversationId && visibleMessages.length > 0) {
       markRead({ conversationId }).catch(() => {});
@@ -1659,15 +1700,18 @@ export default function ChatScreen() {
 
       try {
         const storageId = await uploadFile(convex, uri, mimeType || 'image/jpeg');
+        const meta = await getMediaMeta(uri, mimeType || 'image/jpeg', 'image');
         await sendMessage({
           conversationId,
           type: 'image',
           text: formattedCaption,
           storageId,
-          // The backend's messages.send requires `mimeType` for media (the
-          // web app and our video path both send it); omitting it on images
-          // made strict validation reject the send → the photo stayed stuck
-          // in the composer. Match the web signature.
+          // Match the web app's media send signature exactly: the backend's
+          // messages.send requires fileName + fileSize + mimeType for media.
+          // Omitting fileName/fileSize made strict validation reject the send
+          // → the photo stayed stuck in the composer.
+          fileName: meta.fileName,
+          fileSize: meta.fileSize,
           mimeType: mimeType || 'image/jpeg',
           ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
         });
@@ -1806,7 +1850,8 @@ export default function ChatScreen() {
     try {
       const mime = asset.mimeType || 'video/mp4';
       const storageId = await uploadFile(convex, asset.uri, mime);
-      const sentVideoId: any = await sendMessage({ conversationId, type: 'video', storageId, mimeType: mime });
+      const vmeta = await getMediaMeta(asset.uri, mime, 'video');
+      const sentVideoId: any = await sendMessage({ conversationId, type: 'video', storageId, fileName: (asset as any)?.fileName || vmeta.fileName, fileSize: (asset as any)?.fileSize || vmeta.fileSize, mimeType: mime });
       await refetchMessages();
       const messageId = typeof sentVideoId === 'string'
         ? sentVideoId
@@ -2514,6 +2559,28 @@ export default function ChatScreen() {
     setDeleteTarget(msg);
   }, [selectedMsg]);
 
+  const respondToDeletion = useCallback(
+    async (requestId: string, accept: boolean) => {
+      try {
+        await respondToDeletionRequest({ requestId, accept });
+      } catch (e: any) {
+        Alert.alert('Action failed', e?.message || 'Could not respond to the request.');
+      }
+    },
+    [respondToDeletionRequest],
+  );
+
+  // Pending "delete for everyone" requests the OTHER party sent me about a
+  // message I own, scoped to this conversation when the backend provides it.
+  const deletionRequestsForChat = useMemo(() => {
+    if (!Array.isArray(pendingDeletionRequests)) return [];
+    return pendingDeletionRequests.filter((r: any) => {
+      if (!r) return false;
+      const rc = r.conversationId ? String(r.conversationId) : null;
+      return rc ? rc === String(conversationId) : true;
+    });
+  }, [pendingDeletionRequests, conversationId]);
+
   const performDelete = useCallback(
     async (mode: 'me' | 'receiver' | 'everyone' | 'request_everyone') => {
       const msg = deleteTarget;
@@ -3113,6 +3180,36 @@ export default function ChatScreen() {
           <View style={styles.locationRequestBannerWrap}>
             <LiveLocationRequestBanner conversationId={String(conversationId || '')} />
             <LiveLocationSharingPill conversationId={String(conversationId || '')} />
+          </View>
+        ) : null}
+        {/* iter-240: incoming "delete for everyone" requests — the message
+            owner sees Delete / Decline, mirroring the web app. */}
+        {deletionRequestsForChat.length > 0 ? (
+          <View style={styles.deletionReqBanner} testID="deletion-request-banner">
+            <View style={styles.deletionReqInfo}>
+              <Feather name="trash-2" size={15} color={Colors.tickRed} />
+              <Text style={styles.deletionReqText} numberOfLines={2}>
+                {deletionRequestsForChat.length === 1
+                  ? `Asked you to delete a message${deletionRequestsForChat[0]?.messageText ? `: "${String(deletionRequestsForChat[0].messageText).slice(0, 40)}"` : ''}`
+                  : `${deletionRequestsForChat.length} requests to delete messages for everyone`}
+              </Text>
+            </View>
+            <View style={styles.deletionReqActions}>
+              <TouchableOpacity
+                style={[styles.deletionReqBtn, styles.deletionReqDecline]}
+                onPress={() => respondToDeletion(String(deletionRequestsForChat[0]._id), false)}
+                testID="deletion-decline-btn"
+              >
+                <Text style={styles.deletionReqDeclineText}>Decline</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.deletionReqBtn, styles.deletionReqDelete]}
+                onPress={() => respondToDeletion(String(deletionRequestsForChat[0]._id), true)}
+                testID="deletion-delete-btn"
+              >
+                <Text style={styles.deletionReqDeleteText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         ) : null}
         {/* iter-234: offline banner — tells the user they're viewing saved
@@ -4118,6 +4215,60 @@ const styles = StyleSheet.create({
   locationRequestBannerWrap: {
     paddingHorizontal: 12,
     paddingTop: 10,
+  },
+  deletionReqBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    backgroundColor: '#FFF1F0',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#FFD6D2',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  deletionReqInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+  },
+  deletionReqText: {
+    flex: 1,
+    fontSize: 12.5,
+    fontWeight: FontWeight.medium,
+    color: Colors.textPrimary,
+  },
+  deletionReqActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  deletionReqBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: Radius.md,
+    minHeight: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deletionReqDecline: {
+    backgroundColor: 'transparent',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.border,
+  },
+  deletionReqDeclineText: {
+    fontSize: 12.5,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textSecondary,
+  },
+  deletionReqDelete: {
+    backgroundColor: Colors.tickRed,
+  },
+  deletionReqDeleteText: {
+    fontSize: 12.5,
+    fontWeight: FontWeight.bold,
+    color: '#fff',
   },
   offlineBanner: {
     flexDirection: 'row',

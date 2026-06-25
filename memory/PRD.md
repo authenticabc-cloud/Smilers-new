@@ -966,3 +966,37 @@ to get EXACT signatures instead of guessing.
 
 Lint clean on changed files (pre-existing MediaBubble rules-of-hooks + _layout
 require-style warnings only); bundle compiles; Sign-In renders.
+
+---
+
+## iter-240 — Media metadata, deletion-request prompt, delivered fix, conf logs
+
+Verified all contracts against the deployed web bundle (smilers-app.onhercules.app).
+
+1. **Photo attach stuck + video sends bad metadata** — web `messages.send`
+   includes fileName + fileSize + mimeType for ALL media. Mobile image send
+   omitted fileName/fileSize (and previously mimeType); video sends omitted
+   fileName/fileSize. Added a `getMediaMeta(uri,mime,base)` helper
+   (expo-file-system getInfoAsync) and now send fileName+fileSize+mimeType on
+   image + both video paths. This is why photos stayed stuck in the composer
+   and the deleted video left a broken frame (bad metadata → couldn't render).
+
+2. **"Ask sender to delete" prompt (NEW feature)** — web uses
+   `getPendingDeletionRequests({})` + `respondToDeletionRequest({requestId:_id,
+   accept})`. Added a red in-chat banner (Decline / Delete) shown to the
+   message owner, scoped to the conversation when the request carries
+   conversationId.
+
+3. **Green delivered dot** — removed the in-chat markDelivered (it fired with
+   markRead on open → yellow skipped straight to blue). Delivery is now marked
+   only by the global useDeliveryReceipts hook (getUnreadCounts increase),
+   exactly like web's Ure() component.
+
+4. **Conference auto-switch diagnostics (Step 1)** — the watcher now reads and
+   logs `error` from getCallInvites + getParticipants safe-queries so a real
+   device build's Metro logs show whether those backend fns error
+   (CouldNotFindFunction) vs return empty. NOTE: mesh/group-call is native-only
+   and won't populate the roster in Expo Go — must test on an EAS build.
+
+Lint clean; bundle compiles; Sign-In renders. Most of these need a real device
+build (Expo Go can't run mesh; push is dead in Expo Go).

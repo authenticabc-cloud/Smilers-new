@@ -1775,7 +1775,7 @@ export function CallScreenInner() {
   // Reactive watch: as soon as ANY invite exists for this call, it's a
   // conference — used to move BOTH original parties to the mesh host even if
   // `getActiveCall` doesn't echo `isConference` back promptly.
-  const { data: callInvitesData } = useReactiveSafeConvexQuery<any[]>(
+  const { data: callInvitesData, error: callInvitesError } = useReactiveSafeConvexQuery<any[]>(
     (api as any).callInvites.getCallInvites,
     callId ? { callId } : undefined,
     [],
@@ -1790,7 +1790,7 @@ export function CallScreenInner() {
   // `getCallInvites` returning invites addressed to other users (which it may
   // filter out). During a plain 1:1 call nobody has joined a conference, so
   // the roster stays empty and we never false-trigger.
-  const { data: conferenceRosterData } = useReactiveSafeConvexQuery<any[]>(
+  const { data: conferenceRosterData, error: conferenceRosterError } = useReactiveSafeConvexQuery<any[]>(
     (api as any).conference.getParticipants,
     callId ? { callId } : undefined,
     [],
@@ -1891,6 +1891,11 @@ export function CallScreenInner() {
         isConference: activeCall?.isConference,
         invites: Array.isArray(callInvitesData) ? callInvitesData.length : 'n/a',
         roster: Array.isArray(conferenceRosterData) ? conferenceRosterData.length : 'n/a',
+        // Surface backend query failures so we can tell whether
+        // getCallInvites / getParticipants are erroring on the receiver
+        // (e.g. CouldNotFindFunction) rather than silently returning empty.
+        invitesError: callInvitesError ? String((callInvitesError as any)?.message || callInvitesError) : null,
+        rosterError: conferenceRosterError ? String((conferenceRosterError as any)?.message || conferenceRosterError) : null,
       });
     }
     if (activeCall?.isConference || hasInvite || hasRoster) {
