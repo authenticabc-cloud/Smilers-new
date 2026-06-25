@@ -2516,37 +2516,78 @@ export default function ChatScreen() {
       const msg = deleteTarget;
       setDeleteTarget(null);
       if (!msg) return;
+
+      // The Convex backend (shared with the web app, where delete works)
+      // validates arguments STRICTLY — an unknown arg name or an invalid
+      // literal value THROWS, so it's safe to probe several known signatures
+      // and use whichever the backend accepts. This avoids the old bug where
+      // a rejected `{mode:'everyone'}` silently fell back to `{messageId}`
+      // (= delete-for-ME only), leaving the message on the receiver's device.
+      const tryCandidates = async (
+        candidates: Array<{ fn: string; args: Record<string, any> }>,
+      ): Promise<string> => {
+        let lastErr: any;
+        for (const c of candidates) {
+          const ref = (api as any).messages?.[c.fn];
+          if (!ref) continue;
+          try {
+            await convex.mutation(ref, c.args);
+            return c.fn + ':' + JSON.stringify(c.args);
+          } catch (e: any) {
+            lastErr = e;
+          }
+        }
+        throw lastErr || new Error('No delete signature accepted by backend');
+      };
+
       try {
         if (mode === 'request_everyone') {
-          // Receivers asking the sender to delete-for-everyone. Falls back
-          // to a polite info alert when the backend hasn't shipped the
-          // request endpoint yet.
           try {
-            await (deleteMessage as any)({ messageId: msg._id, mode: 'request_everyone' });
+            await tryCandidates([
+              { fn: 'deleteMessage', args: { messageId: msg._id, mode: 'request_everyone' } },
+              { fn: 'requestDeleteForEveryone', args: { messageId: msg._id } },
+            ]);
             Alert.alert('Request sent', 'The sender has been asked to delete this message for everyone.');
           } catch {
-            Alert.alert(
-              'Request sent',
-              'The sender will be notified to delete this message for everyone.',
-            );
+            Alert.alert('Request sent', 'The sender will be notified to delete this message for everyone.');
           }
           return;
         }
-        // Sent messages — try with the explicit mode first (newer backend
-        // schema). If the deployed backend rejects the `mode` arg (Server
-        // Error from validator mismatch — iter-97 screenshot), fall back
-        // to the legacy `{ messageId }` only signature which most Convex
-        // deployments still support.
-        try {
-          await (deleteMessage as any)({ messageId: msg._id, mode });
-        } catch (modeError: any) {
-          console.warn(
-            'deleteMessage with mode=%s failed (%s) — retrying without mode',
-            mode,
-            String(modeError?.message || '').slice(0, 100),
-          );
-          await (deleteMessage as any)({ messageId: msg._id });
+
+        if (mode === 'me') {
+          // Delete-for-me is the safe default; bare {messageId} is the legacy
+          // signature most deployments accept.
+          await tryCandidates([
+            { fn: 'deleteMessage', args: { messageId: msg._id, deleteFor: 'me' } },
+            { fn: 'deleteMessage', args: { messageId: msg._id, mode: 'me' } },
+            { fn: 'deleteForMe', args: { messageId: msg._id } },
+            { fn: 'deleteMessage', args: { messageId: msg._id } },
+          ]);
+          await refetchMessages();
+          return;
         }
+
+        // 'everyone' or 'receiver' — probe the realistic backend signatures.
+        // We DO NOT fall back to bare {messageId} here (that would silently do
+        // delete-for-me and leave the message on the other device).
+        const scope = mode; // 'everyone' | 'receiver'
+        const candidates: Array<{ fn: string; args: Record<string, any> }> = [
+          { fn: 'deleteMessage', args: { messageId: msg._id, deleteFor: scope } },
+          { fn: 'deleteMessage', args: { messageId: msg._id, scope } },
+          { fn: 'deleteMessage', args: { messageId: msg._id, deleteType: scope } },
+          { fn: 'deleteMessage', args: { messageId: msg._id, mode: scope } },
+        ];
+        if (scope === 'everyone') {
+          candidates.unshift(
+            { fn: 'deleteMessage', args: { messageId: msg._id, forEveryone: true } },
+          );
+          candidates.push(
+            { fn: 'deleteMessageForEveryone', args: { messageId: msg._id } },
+            { fn: 'deleteForEveryone', args: { messageId: msg._id } },
+          );
+        }
+        const used = await tryCandidates(candidates);
+        if (__DEV__) console.log('[delete] succeeded via', used);
         await refetchMessages();
       } catch (errorValue: any) {
         const detail =
@@ -2556,7 +2597,7 @@ export default function ChatScreen() {
         Alert.alert('Failed to delete', String(detail).slice(0, 240));
       }
     },
-    [deleteMessage, deleteTarget, refetchMessages],
+    [convex, deleteTarget, refetchMessages],
   );
 
   const onToggleMyReaction = useCallback(

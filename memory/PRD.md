@@ -903,3 +903,31 @@ everyone not propagating to receiver / not corrupting.
 
 Bundle compiles; Sign-In renders. Asked user to do a CLEAN reload and re-test
 photo + delete; the removed global hook may have been the destabiliser.
+
+---
+
+## iter-238 — Delete-for-everyone/receiver: probe correct backend signature
+
+USER: delete-for-everyone/receiver work on WEB (tombstone "This message was
+deleted" shown) but NOT on mobile. Root cause: mobile sent
+`deleteMessage({messageId, mode:'everyone'})`; the shared Convex backend (which
+the web app uses successfully) validates args strictly and rejects that shape,
+so the old code silently fell back to `deleteMessage({messageId})` = delete-for-
+ME only → message gone for sender, still on receiver.
+
+Fix (`performDelete` in chat): probe the realistic Convex signatures and use
+whichever the backend ACCEPTS (strict validation makes wrong shapes throw
+safely, so no accidental wrong-delete):
+  everyone → tries forEveryone:true, deleteFor:'everyone', scope, deleteType,
+             mode, then deleteMessageForEveryone()/deleteForEveryone().
+  receiver → tries deleteFor/scope/deleteType/mode:'receiver'.
+  me       → deleteFor:'me' / mode:'me' / deleteForMe() / bare {messageId}.
+CRUCIALLY removed the silent bare-{messageId} fallback for everyone/receiver
+(that was the delete-for-me masking). `__DEV__` logs which signature succeeded.
+
+NOTE: exact web signature unknown (Convex backend lives in web repo; mobile uses
+anyApi). If the probe still misses, need the web team's `messages.deleteMessage`
+arg schema to lock it in. File-corruption-on-receiver is a separate backend
+feature.
+
+Lint clean; bundle compiles.
