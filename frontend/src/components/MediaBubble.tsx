@@ -199,24 +199,27 @@ export default function MediaBubble({
   }
 
   // Delivery status (sender's own messages only) — matches the WEB app
-  // exactly (web shows GREEN for both sent & delivered, BLUE for read, and
-  // never shows a separate "delivered" colour):
-  //   RED   → local outbox: queued offline, never reached the server
-  //   BLUE  → read   (any other participant opened the chat — readBy)
-  //   GREEN → on the server (sent and/or delivered)
-  // We exclude the sender's own userId from readBy because the server records
-  // the sender as the original read/delivery target. Group chats use ANY-
-  // recipient logic (`.length > 0`).
+  // EXACTLY (verified from the deployed web bundle, chat/page.tsx:3205-3208):
+  //   RED    → local outbox: queued offline, never reached the server
+  //   BLUE   → read      (readBy, excl. sender, length > 0)        "Read"
+  //   GREEN  → delivered (deliveredTo, excl. sender, length > 0)   "Delivered"
+  //   YELLOW → sent, not yet delivered to anyone                   "Sent"
+  // Group chats use ANY-recipient logic (`.length > 0`).
   const isOutbox = msg.__outbox === true || msg.__failed === true;
   const senderUserId = msg.senderId ? String(msg.senderId) : null;
   const readByOthers = Array.isArray(msg.readBy)
     ? msg.readBy.filter((uid: any) => uid && String(uid) !== senderUserId)
     : [];
+  const deliveredToOthers = Array.isArray(msg.deliveredTo)
+    ? msg.deliveredTo.filter((uid: any) => uid && String(uid) !== senderUserId)
+    : [];
   const statusDotColor = isOutbox
     ? Colors.tickRed
     : readByOthers.length > 0
       ? Colors.tickBlue
-      : Colors.tickGreen;
+      : deliveredToOthers.length > 0
+        ? Colors.tickGreen
+        : Colors.tickYellow;
 
   const reactionSummary = useMemo(() => {
     const reactions: any[] = Array.isArray(msg.reactions) ? msg.reactions : [];

@@ -931,3 +931,38 @@ arg schema to lock it in. File-corruption-on-receiver is a separate backend
 feature.
 
 Lint clean; bundle compiles.
+
+---
+
+## iter-239 — Root-caused 3 issues from the WEB BUNDLE (definitive)
+
+Inspected the deployed web bundle (smilers-app.onhercules.app/assets/index-*.js)
+to get EXACT signatures instead of guessing.
+
+1. **Delete for everyone/receiver** — web uses:
+   `messages.deleteMessage({ messageId, forEveryone: true })` (everyone),
+   `messages.deleteMessage({ messageId, forReceiver: true })` (receiver),
+   `messages.deleteMessage({ messageId, forEveryone: false })` (me),
+   `messages.requestDeletion({ messageId })` (request).
+   Mobile was sending `{mode:'everyone'}` → strict-validation reject → silent
+   delete-for-me. Rewrote `performDelete` + the media auto-purge to the exact
+   web args. Removed the silent fallback.
+
+2. **Delivery dots** — web logic (chat/page.tsx:3205-3208) is:
+   read→`bg-blue-500`, else delivered→`bg-green-500`, else→`bg-yellow-500`.
+   So my iter-237 "green=sent, no yellow" was WRONG. Restored proper 4-state in
+   MediaBubble: RED(outbox)→BLUE(read)→GREEN(delivered)→YELLOW(sent).
+   Re-added the global delivery hook as an EXACT port of the web's `Ure()`
+   component: subscribe `messages.getUnreadCounts`, and call
+   `markDelivered({conversationId})` whenever a conversation's unread count
+   INCREASES. Mounted in _layout (PresenceHeartbeat). This populates
+   `deliveredTo` so the sender actually sees green (was stuck on yellow).
+
+3. **Photo attach stuck** — web image send includes `mimeType` (+fileName,
+   fileSize); the mobile VIDEO send already sends `mimeType` (works) but the
+   IMAGE send omitted it. Backend `messages.send` requires `mimeType` for media
+   → image send rejected → "Upload failed" / photo stayed in composer. Added
+   `mimeType` to `sendImageFromUri`'s send (matches web + the working video path).
+
+Lint clean on changed files (pre-existing MediaBubble rules-of-hooks + _layout
+require-style warnings only); bundle compiles; Sign-In renders.
