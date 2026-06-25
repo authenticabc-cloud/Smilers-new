@@ -1755,12 +1755,17 @@ export function CallScreenInner() {
 
   const handleAddParticipant = useCallback(() => {
     setAudioOutputMenuVisible(false);
-    if (!callId || !isActive) {
-      Alert.alert('Add people', 'You can add people once the call is connected.');
+    // Match web: "Add" is allowed while the call is LIVE (ringing or active),
+    // not strictly connected. The backend also rejects invites on
+    // ended/declined calls (BAD_REQUEST "Call has ended"), which we surface
+    // gracefully in handleInvitePerson.
+    const isCallLive = activeCall?.status === 'ringing' || activeCall?.status === 'active';
+    if (!callId || !isCallLive) {
+      Alert.alert('Add people', 'You can add people while the call is ringing or connected.');
       return;
     }
     setInvitePickerVisible(true);
-  }, [callId, isActive]);
+  }, [callId, activeCall?.status]);
 
   const handleInvitePerson = useCallback(
     async (inviteeId: string, name: string) => {
