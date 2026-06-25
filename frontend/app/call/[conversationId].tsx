@@ -4,7 +4,6 @@ import {
   Alert,
   AppState,
   BackHandler,
-  InteractionManager,
   Platform,
   Pressable,
   StyleSheet,
@@ -1784,15 +1783,23 @@ export function CallScreenInner() {
   );
 
   // Detach the live 1:1 connection and hand off to the mesh host. Idempotent.
-  const triggerMeshUpgrade = useCallback(() => {
+  // `fromModal` is true only for the INITIATOR (who has the invite-picker
+  // <Modal> open). The OTHER party has no modal — and crucially must NOT use
+  // InteractionManager.runAfterInteractions, because the call screen runs
+  // continuous animations (CallBackground orbs / ringing pulse) that keep an
+  // interaction handle open forever, so the queued navigation never fired
+  // until the user tapped something (e.g. End). That was the "have to tap End
+  // to see the conference screen" bug. We now navigate directly.
+  const triggerMeshUpgrade = useCallback((opts?: { fromModal?: boolean }) => {
     if (upgradedToMeshRef.current) return;
     if (!callId || !conversationId) return;
     upgradedToMeshRef.current = true;
-    // Close the invite sheet FIRST — on Android, router.replace() is silently
-    // swallowed while a React Native <Modal> is still mounted, which is why the
-    // screen used to stay on the 1:1 call after inviting. We dismiss the modal,
-    // then navigate on the next interaction tick so the route actually changes.
-    setInvitePickerVisible(false);
+    const fromModal = opts?.fromModal === true;
+    if (fromModal) {
+      // Close the invite sheet FIRST — on Android, router.replace() is
+      // silently swallowed while a React Native <Modal> is still mounted.
+      setInvitePickerVisible(false);
+    }
     const vq = callType === 'video' ? '1' : '0';
     // SEAMLESS HANDOFF: detach the live 1:1 connection (so unmount won't tear
     // it down) and stash it for the mesh host to ADOPT — keeps A↔B audio/video
@@ -1818,10 +1825,13 @@ export function CallScreenInner() {
     }
     const dest =
       `/group-call/${conversationId}?callId=${encodeURIComponent(callId)}&video=${vq}&adhoc=1` as any;
-    // Defer past the modal-dismiss so the navigation isn't dropped.
-    InteractionManager.runAfterInteractions(() => {
-      setTimeout(() => router.replace(dest), 300);
-    });
+    // Initiator: wait out the modal-dismiss animation (~350ms) so Android
+    // doesn't drop the navigation. Other party: navigate immediately (no
+    // modal, no InteractionManager — see comment above).
+    const delay = fromModal ? 350 : 0;
+    setTimeout(() => {
+      try { router.replace(dest); } catch {}
+    }, delay);
   }, [callId, conversationId, callType, router]);
 
   const handleInvitePerson = useCallback(
@@ -1831,8 +1841,8 @@ export function CallScreenInner() {
         await inviteToCall({ callId, inviteeId, hideNumber } as any);
         // The initiator moves to the group screen immediately so they can
         // watch the invitee's ring status (don't wait for the isConference
-        // round-trip).
-        triggerMeshUpgrade();
+        // round-trip). fromModal=true → close the picker first + brief delay.
+        triggerMeshUpgrade({ fromModal: true });
       } catch (e: any) {
         Alert.alert('Could not add', e?.message || `Failed to ring ${name}.`);
         throw e;

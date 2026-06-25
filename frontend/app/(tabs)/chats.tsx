@@ -1,10 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Modal, Pressable, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Swipeable, RectButton } from 'react-native-gesture-handler';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useQuery, useConvex } from 'convex/react';
+import { useQuery, useConvex, useMutation } from 'convex/react';
 import Header from '../../src/components/Header';
 import Avatar from '../../src/components/Avatar';
 import FabStack from '../../src/components/FabStack';
@@ -52,6 +52,8 @@ export default function ChatsScreen() {
   // carries no isArchived flag, so we fetch the archived id set and
   // filter client-side — exactly how the web app does it.
   const convex = useConvex();
+  const markDelivered = useMutation((api as any).messages.markDelivered);
+  const deliveredSigRef = useRef<Map<string, number>>(new Map());
   const archivedIds = useQuery((api as any).archives.getArchivedIds, {}) as string[] | undefined;
 
   // iter 160 (offline persistence): hydrate the conversation list from
@@ -147,6 +149,24 @@ export default function ChatsScreen() {
   useEffect(() => {
     if (me?._id) void writeCache('me', 'self', me);
   }, [me]);
+
+  // iter-235: mark incoming messages DELIVERED from the chats list so the
+  // sender sees the GREEN dot (delivered) before the recipient opens the
+  // chat (which would jump straight to BLUE/read). Runs only on live data
+  // (online); re-marks a conversation whenever its last-message time
+  // changes. markDelivered excludes the sender, so calling it for my own
+  // conversations is a harmless no-op.
+  useEffect(() => {
+    if (!Array.isArray(conversations)) return;
+    conversations.forEach((c: any) => {
+      const id = String(c?._id || c?.id || '');
+      if (!id) return;
+      const t = Number(c?.lastMessageTime || c?.lastMessageAt || c?.updatedAt || 0);
+      if (deliveredSigRef.current.get(id) === t) return;
+      deliveredSigRef.current.set(id, t);
+      markDelivered({ conversationId: id }).catch(() => {});
+    });
+  }, [conversations, markDelivered]);
 
   // Prefer live data; fall back to cache while loading.
   const liveList: any[] | null = Array.isArray(conversations) ? conversations : null;

@@ -1264,6 +1264,21 @@ export default function ChatScreen() {
           });
         }
       } else {
+        if (isOffline) {
+          // OFFLINE: Convex mutations don't reject when there's no
+          // connection — the promise just hangs until reconnect, so the
+          // catch below never runs and the message would silently vanish
+          // from the UI (the bug the user reported). Queue it immediately
+          // → shows in the timeline with a RED dot and auto-sends on
+          // reconnect (matches WhatsApp's pending-clock behaviour).
+          const next = await enqueueOutbox(String(conversationId), {
+            senderId: String(effectiveMe?._id || ''),
+            text: formattedValue,
+            ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
+          });
+          setOutboxMsgs(next);
+          return;
+        }
         await sendMessage({
           conversationId,
           type: 'text',

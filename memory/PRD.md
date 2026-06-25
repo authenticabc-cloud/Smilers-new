@@ -804,3 +804,39 @@ timeline, correct sender alignment, and the contact name in the header. (Only
 in-flight/undelivered incoming server messages aren't shown until reconnect, as
 expected.) Lint clean; bundle compiles; Sign-In renders (smoke). Needs device
 verification with real airplane-mode toggling.
+
+---
+
+## iter-235 — Post-test fixes (3 user-reported items)
+
+1. **Call auto-switch to conference (Issue 1).** Root cause: the other party's
+   `triggerMeshUpgrade` deferred navigation with
+   `InteractionManager.runAfterInteractions(...)`. The call screen runs
+   continuous animations (CallBackground orbs / ringing pulse) which keep an
+   interaction handle open, so the queued `router.replace` never fired until
+   the user tapped something (e.g. End). Fix (`app/call/[conversationId].tsx`):
+   `triggerMeshUpgrade({ fromModal })` — initiator closes the picker <Modal>
+   then `setTimeout(replace, 350)`; the other party navigates immediately via
+   `setTimeout(replace, 0)` with NO InteractionManager. Removed the now-unused
+   InteractionManager import.
+
+2. **Green "delivered" dot never showed (Issue 2).** Root cause: `markDelivered`
+   and `markRead` both fired only when the recipient OPENED the chat → jumped
+   straight to BLUE; GREEN was never observable. Fix (`app/(tabs)/chats.tsx`):
+   from the chats list, call `api.messages.markDelivered({conversationId})` for
+   each conversation whenever its `lastMessageTime` changes (live/online only,
+   deduped via a ref). Now the sender sees GREEN once the recipient's app syncs
+   the list, then BLUE when they open the chat. (markDelivered excludes the
+   sender, so own-conversation calls are no-ops.)
+
+3. **Offline message vanished instead of showing as not-sent (Issue 3).** Root
+   cause: Convex mutations DON'T reject when offline — `await sendMessage(...)`
+   just hangs until reconnect, so the try/catch outbox-enqueue never ran and the
+   message disappeared from the UI until reconnect. Fix
+   (`app/chat/[conversationId].tsx`): in `handleSend`, when `isOffline`, enqueue
+   to the outbox immediately (RED dot, WhatsApp-style pending) and skip the
+   hanging mutation; auto-sends on reconnect. (Avoids duplicates since the
+   mutation is never queued by Convex.)
+
+Lint clean on all changed files; bundle compiles; Sign-In renders (smoke).
+Needs two-device verification with airplane-mode toggling.
