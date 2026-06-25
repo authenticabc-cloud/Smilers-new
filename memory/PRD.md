@@ -742,3 +742,34 @@ Verified: all four touched files babel-transform clean; app bundles + renders
 Sign-In (smoke). Needs device verification (authenticated flows behind OIDC).
 Backend `repeat: 'yearly'/'hourly'` assumed supported by Convex (web edit already
 offers Yearly → shared backend).
+
+---
+
+## iter-233 — 4-colour delivery dots (real component) + Offline Outbox
+
+**Problem found:** the prior fork edited `src/components/chat/MessageBubble.tsx`,
+but that `MessageBubble` is DEAD CODE — the chat timeline renders
+`src/components/MediaBubble.tsx`. MediaBubble still had the old 3-colour mapping
+(Blue/Yellow/Green, no RED, and GREEN/YELLOW swapped vs the web contract).
+
+**Fixes:**
+1. **MediaBubble.tsx** — status dot now evaluated top-down per the web
+   `native-message-delivery-status-contract`: RED (`__outbox`/`__failed`) →
+   BLUE (`readBy.length>0` excl. sender) → GREEN (`deliveredTo.length>0` excl.
+   sender) → YELLOW (on server, no delivery yet). Group chats use ANY-recipient
+   `.length>0`.
+2. **NEW `src/lib/outbox.ts`** — AsyncStorage per-conversation queue
+   (`smilers:outbox:v1:<id>`): load/enqueue/remove/markFailed for plain-text only.
+3. **`app/chat/[conversationId].tsx`**:
+   - Fresh text send that FAILS (offline/Convex unreachable) is queued to the
+     outbox and rendered immediately in the timeline with a RED dot (no Alert).
+     Edits and media keep the old "not sent" alert (not queued).
+   - `flushOutbox()` auto-sends the queue on NetInfo reconnect + AppState
+     'active' + on mount. Tap / long-press a RED message also retries.
+   - Outbox entries merged into the `timeline` memo; swipe-to-reply disabled for
+     them (no server id yet).
+   - Installed `@react-native-community/netinfo` (11.4.1).
+
+Verified: lint clean on changed files; bundle compiles; app renders Sign-In
+(smoke). End-to-end offline behaviour needs device/build verification (auth is
+Google OIDC + requires real network toggling — not exercisable in web preview).

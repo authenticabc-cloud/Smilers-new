@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   FlatList,
   Image,
   InteractionManager,
@@ -48,6 +49,14 @@ import {
   assertUploadSize,
 } from '../../src/lib/dataFriendlyDefaults';
 import { readCache, writeCache } from '../../src/lib/offlineCache';
+import NetInfo from '@react-native-community/netinfo';
+import {
+  loadOutbox,
+  enqueueOutbox,
+  removeFromOutbox,
+  markOutboxFailed,
+  type OutboxMessage,
+} from '../../src/lib/outbox';
 import { shareMessage } from '../../src/lib/messageMedia';
 import { appendDiaryEntry, chatMessageToDiaryEntry } from '../../src/lib/diaryStore';
 import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
@@ -462,6 +471,85 @@ export default function ChatScreen() {
     },
     [sendMessageRaw, conversationId],
   );
+
+  // ── Offline outbox (web-parity) ──────────────────────────────────────────
+  // Plain-text messages that fail to reach the server (device offline /
+  // Convex unreachable) are queued in AsyncStorage and shown immediately in
+  // the timeline with a RED delivery dot. The queue auto-flushes when
+  // connectivity returns (NetInfo) or the app returns to the foreground
+  // (AppState 'active'). E2EE & media messages are NOT queued — they need
+  // live keys / a live upload session.
+  const [outboxMsgs, setOutboxMsgs] = useState<OutboxMessage[]>([]);
+  const flushingRef = useRef(false);
+
+  // Hydrate the queue for this conversation on mount / id change.
+  useEffect(() => {
+    if (!conversationId) {
+      setOutboxMsgs([]);
+      return;
+    }
+    let mounted = true;
+    void loadOutbox(String(conversationId)).then((list) => {
+      if (mounted) setOutboxMsgs(list);
+    });
+    return () => { mounted = false; };
+  }, [conversationId]);
+
+  // Attempt to send every queued message. On success the local entry is
+  // removed (the real server message arrives via the reactive query); on
+  // failure it is marked __failed and stays RED for the next flush.
+  const flushOutbox = useCallback(async () => {
+    if (!conversationId || flushingRef.current) return;
+    flushingRef.current = true;
+    try {
+      const queue = await loadOutbox(String(conversationId));
+      if (queue.length === 0) {
+        setOutboxMsgs([]);
+        return;
+      }
+      for (const item of queue) {
+        try {
+          await sendMessage({
+            conversationId,
+            type: 'text',
+            text: item.text,
+            ...(item.replyToId ? { replyToId: item.replyToId } : {}),
+          });
+          const next = await removeFromOutbox(String(conversationId), item._id);
+          setOutboxMsgs(next);
+        } catch (err) {
+          // Still offline / failed — keep it RED and stop the run; we'll
+          // retry on the next connectivity / foreground event.
+          const next = await markOutboxFailed(String(conversationId), item._id);
+          setOutboxMsgs(next);
+          break;
+        }
+      }
+    } finally {
+      flushingRef.current = false;
+    }
+  }, [conversationId, sendMessage]);
+
+  // Auto-flush triggers: connectivity returns + app foreground.
+  useEffect(() => {
+    if (!conversationId) return;
+    const unsubNet = NetInfo.addEventListener((state) => {
+      if (state.isConnected && state.isInternetReachable !== false) {
+        void flushOutbox();
+      }
+    });
+    const appStateSub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') void flushOutbox();
+    });
+    // Kick a flush right away in case we mounted with a pending queue and are
+    // already online.
+    void flushOutbox();
+    return () => {
+      unsubNet();
+      appStateSub.remove();
+    };
+  }, [conversationId, flushOutbox]);
+
   const setTyping = useMutation(api.typing.setTyping);
   const clearTyping = useMutation((api as any).typing.clearTyping);
 
@@ -731,8 +819,15 @@ export default function ChatScreen() {
   // duration, and a "Recorded" badge if applicable. Tagged with __kind:'call'
   // so the renderItem branch knows to render a CallPill, not a MediaBubble.
   const timeline = useMemo(() => {
+    // Local offline-outbox entries (RED dot) are appended so the user sees
+    // their queued messages inline in the timeline. They carry a Date.now()
+    // _creationTime so they naturally sort to the bottom.
+    const outbox = outboxMsgs;
     if (!Array.isArray(callLogsForConvo) || callLogsForConvo.length === 0) {
-      return displayMessages;
+      if (outbox.length === 0) return displayMessages;
+      return [...displayMessages, ...outbox].sort(
+        (a: any, b: any) => Number(a?._creationTime || 0) - Number(b?._creationTime || 0),
+      );
     }
     const myId = me?._id ? String(me._id) : '';
     // iter-180: `startedAt` may arrive as an ISO string (backend convention
@@ -768,10 +863,10 @@ export default function ChatScreen() {
         isConference: !!c?.isConference,
       };
     });
-    return [...displayMessages, ...pills].sort(
+    return [...displayMessages, ...pills, ...outbox].sort(
       (a: any, b: any) => Number(a?._creationTime || 0) - Number(b?._creationTime || 0),
     );
-  }, [displayMessages, callLogsForConvo, me?._id]);
+  }, [displayMessages, callLogsForConvo, me?._id, outboxMsgs]);
 
   const msgById = useMemo(() => {
     const map = new Map<string, any>();
@@ -1145,20 +1240,26 @@ export default function ChatScreen() {
       await refetchMessages();
     } catch (e: any) {
       console.warn('send failed:', e?.message);
-      // Restore the composer so the user can retry. If this was an edit,
-      // also restore the editing context so the next Send tries again.
-      setText(value);
       if (editTargetId) {
+        // EDIT failure — restore the composer + editing context so the next
+        // Send retries the edit. Edits are never queued to the outbox.
+        setText(value);
         setEditingMessageId(editTargetId);
+        if (replyToMessageId && replyTo) {
+          setReplyTo(replyTo);
+        }
+        Alert.alert('Message not sent', 'Something went wrong while sending. Please tap Send to try again.');
+      } else {
+        // Offline outbox (web-parity): a fresh plain-text send that failed
+        // (offline / Convex unreachable) is queued locally and shown in the
+        // timeline with a RED dot. It auto-sends on reconnect / foreground.
+        const next = await enqueueOutbox(String(conversationId), {
+          senderId: String(me?._id || ''),
+          text: formattedValue,
+          ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
+        });
+        setOutboxMsgs(next);
       }
-      // iter-185: also restore the reply banner (it was silently dropped
-      // before, leaving the user staring at an unsent message with no
-      // explanation) and SAY that the send failed. `replyTo` here is the
-      // closure-captured ORIGINAL object from before setReplyTo(null).
-      if (replyToMessageId && replyTo) {
-        setReplyTo(replyTo);
-      }
-      Alert.alert('Message not sent', 'Something went wrong while sending. Please tap Send to try again.');
     } finally {
       setSending(false);
     }
@@ -3074,7 +3175,7 @@ export default function ChatScreen() {
                     // iter-185 WhatsApp-style swipe-to-reply. Disabled in
                     // multi-select mode (pan conflicts with tap-to-toggle),
                     // for suspended viewers, and on deleted messages.
-                    enabled={!viewerSuspension && !isBroadcastReadOnly && !multiSelectIds && !item.deletedAt && isConversationAvailable}
+                    enabled={!viewerSuspension && !isBroadcastReadOnly && !multiSelectIds && !item.deletedAt && !item.__outbox && isConversationAvailable}
                     onReply={() => {
                       setReplyTo(item);
                       messageInputRef.current?.focus();
@@ -3104,9 +3205,22 @@ export default function ChatScreen() {
                           onToggleMultiSelect(String(item._id));
                           return;
                         }
+                        // Local outbox (RED) messages aren't on the server yet —
+                        // the action sheet's server ops don't apply. Long-press
+                        // retries the send instead.
+                        if (item.__outbox) {
+                          void flushOutbox();
+                          return;
+                        }
                         onLongPressMessage(item);
                       }}
-                      onPress={multiSelectIds ? () => onToggleMultiSelect(String(item._id)) : undefined}
+                      onPress={
+                        item.__outbox
+                          ? () => { void flushOutbox(); }
+                          : multiSelectIds
+                            ? () => onToggleMultiSelect(String(item._id))
+                            : undefined
+                      }
                       multiSelected={multiSelectIds ? multiSelectIds.includes(String(item._id)) : undefined}
                       searchTerm={searchTermNorm || null}
                       isActiveSearchMatch={activeMatchTimelineIdx >= 0 && index === activeMatchTimelineIdx}

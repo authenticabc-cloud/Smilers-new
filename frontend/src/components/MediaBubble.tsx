@@ -198,12 +198,16 @@ export default function MediaBubble({
     );
   }
 
-  // Delivery status indicator (sender's own messages only) — per web spec:
-  //   green  → sent (server received, not delivered yet)
-  //   yellow → delivered (reached recipient device, not opened)
-  //   blue   → read (recipient opened the chat)
-  // We must exclude the sender's own userId from readBy/deliveredTo because
-  // the server records the sender as the original delivery target.
+  // 4-colour delivery status (sender's own messages only) — evaluated
+  // top-down per the web native-message-delivery-status-contract:
+  //   RED    → local outbox: queued offline, never reached the server
+  //   BLUE   → read   (any other participant opened the chat — readBy)
+  //   GREEN  → delivered (any other participant's device received it)
+  //   YELLOW → on server, not delivered to anyone yet (resting state)
+  // We exclude the sender's own userId from readBy/deliveredTo because the
+  // server records the sender as the original delivery target. Group chats
+  // use ANY-recipient logic (`.length > 0`).
+  const isOutbox = msg.__outbox === true || msg.__failed === true;
   const senderUserId = msg.senderId ? String(msg.senderId) : null;
   const readByOthers = Array.isArray(msg.readBy)
     ? msg.readBy.filter((uid: any) => uid && String(uid) !== senderUserId)
@@ -211,12 +215,13 @@ export default function MediaBubble({
   const deliveredToOthers = Array.isArray(msg.deliveredTo)
     ? msg.deliveredTo.filter((uid: any) => uid && String(uid) !== senderUserId)
     : [];
-  const statusDotColor =
-    readByOthers.length > 0
+  const statusDotColor = isOutbox
+    ? Colors.tickRed
+    : readByOthers.length > 0
       ? Colors.tickBlue
       : deliveredToOthers.length > 0
-        ? Colors.tickYellow
-        : Colors.tickGreen;
+        ? Colors.tickGreen
+        : Colors.tickYellow;
 
   const reactionSummary = useMemo(() => {
     const reactions: any[] = Array.isArray(msg.reactions) ? msg.reactions : [];
