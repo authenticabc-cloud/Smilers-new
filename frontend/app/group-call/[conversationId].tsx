@@ -19,6 +19,7 @@ import {
   Alert,
   FlatList,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -39,6 +40,15 @@ import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 import type { MeshController as MeshControllerType } from '../../src/lib/call/mesh/MeshController';
 
 type Any = any;
+
+// Visual mapping for ad-hoc invite statuses shown in the live invite strip.
+const INVITE_STATUS_META: Record<string, { label: string; color: string }> = {
+  ringing: { label: 'Ringing…', color: '#E4B53B' },
+  joined: { label: 'Joined', color: '#34C759' },
+  declined: { label: 'Declined', color: '#FF3B30' },
+  missed: { label: 'No answer', color: '#9CA3AF' },
+  left: { label: 'Left', color: '#9CA3AF' },
+};
 
 interface RosterEntry {
   userId: string;
@@ -355,6 +365,34 @@ export default function GroupCallScreen() {
         </TouchableOpacity>
       </View>
 
+      {callInvites.length > 0 ? (
+        <View style={styles.inviteStrip} testID="group-call-invite-strip">
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.inviteStripContent}
+          >
+            {callInvites.map((inv) => {
+              const status = String(inv?.status || 'ringing');
+              const meta = INVITE_STATUS_META[status] || INVITE_STATUS_META.ringing;
+              return (
+                <View
+                  key={inv._id}
+                  style={styles.inviteChip}
+                  testID={`group-call-invite-chip-${inv.inviteeId}`}
+                >
+                  <View style={[styles.inviteDot, { backgroundColor: meta.color }]} />
+                  <Text style={styles.inviteChipName} numberOfLines={1}>
+                    {inv?.name || 'Invited'}
+                  </Text>
+                  <Text style={[styles.inviteChipStatus, { color: meta.color }]}>{meta.label}</Text>
+                </View>
+              );
+            })}
+          </ScrollView>
+        </View>
+      ) : null}
+
       {fatal ? (
         <View style={styles.center}>
           <Ionicons name="alert-circle-outline" size={42} color={Colors.danger} />
@@ -493,6 +531,32 @@ const styles = StyleSheet.create({
     borderRadius: 19,
   },
   addHeaderBtnText: { color: Colors.headerBg, fontWeight: FontWeight.bold, fontSize: FontSize.sm },
+
+  inviteStrip: {
+    paddingBottom: Spacing.sm,
+    paddingTop: 2,
+  },
+  inviteStripContent: {
+    paddingHorizontal: Spacing.base,
+    gap: 8,
+  },
+  inviteChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  inviteDot: { width: 8, height: 8, borderRadius: 4 },
+  inviteChipName: {
+    color: Colors.white,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    maxWidth: 120,
+  },
+  inviteChipStatus: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   grid: { padding: Spacing.base, gap: Spacing.md },
   tile: {
     flex: 1,
