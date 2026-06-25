@@ -296,7 +296,14 @@ export default function GroupCallScreen() {
     } catch {}
     controllerRef.current = null;
     if (callId) void leaveConference({ callId } as Any).catch(() => {});
-    router.back();
+    void import('../../src/lib/webrtc/inCallManager')
+      .then((m) => m.InCallAudio.stop())
+      .catch(() => {});
+    // We arrived here via router.replace() (seamless upgrade) so there's often
+    // no back stack — router.back() would no-op and leave the last participant
+    // stuck on a spinning screen. Fall back to a guaranteed home route.
+    if (router.canGoBack()) router.back();
+    else router.replace('/(tabs)/chats' as any);
   }, [callId, leaveConference, router]);
 
   const handleToggleCamera = useCallback(() => {
@@ -308,10 +315,10 @@ export default function GroupCallScreen() {
   }, [cameraEnabled]);
 
   const handleInvite = useCallback(
-    async (inviteeId: string, name: string) => {
+    async (inviteeId: string, name: string, hideNumber: boolean) => {
       if (!callId) return;
       try {
-        await inviteToCall({ callId, inviteeId } as Any);
+        await inviteToCall({ callId, inviteeId, hideNumber } as Any);
       } catch (e: Any) {
         Alert.alert('Could not add', e?.message || `Failed to ring ${name}.`);
         throw e;

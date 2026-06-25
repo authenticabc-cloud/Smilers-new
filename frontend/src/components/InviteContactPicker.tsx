@@ -11,6 +11,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Modal,
   Platform,
@@ -58,7 +59,7 @@ export default function InviteContactPicker({
   visible: boolean;
   onClose: () => void;
   excludeUserIds: string[];
-  onInvite: (userId: string, name: string) => Promise<void> | void;
+  onInvite: (userId: string, name: string, hideNumber: boolean) => Promise<void> | void;
   title?: string;
 }) {
   const isWeb = Platform.OS === 'web';
@@ -93,13 +94,11 @@ export default function InviteContactPicker({
     );
   }, [eligible, search]);
 
-  const handleTap = useCallback(
-    async (item: Any) => {
-      const id = getContactUserId(item);
-      if (!id || pending[id] || invited[id]) return;
+  const doInvite = useCallback(
+    async (id: string, name: string, hideNumber: boolean) => {
       setPending((p) => ({ ...p, [id]: true }));
       try {
-        await onInvite(id, item?.name || item?.fullName || 'Contact');
+        await onInvite(id, name, hideNumber);
         setInvited((i) => ({ ...i, [id]: true }));
       } catch {
         // surface nothing here — caller alerts on failure
@@ -107,7 +106,28 @@ export default function InviteContactPicker({
         setPending((p) => ({ ...p, [id]: false }));
       }
     },
-    [onInvite, pending, invited],
+    [onInvite],
+  );
+
+  const handleTap = useCallback(
+    (item: Any) => {
+      const id = getContactUserId(item);
+      if (!id || pending[id] || invited[id]) return;
+      const name = item?.name || item?.fullName || 'Contact';
+      // Per the contract, each invite carries a `hideNumber` privacy choice.
+      // Ask the inviter whether the new participant and the others should see
+      // each other's phone numbers.
+      Alert.alert(
+        `Add ${name}?`,
+        'Choose whether participants can see each other’s phone numbers in this call.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Hide numbers', onPress: () => void doInvite(id, name, true) },
+          { text: 'Show numbers', onPress: () => void doInvite(id, name, false) },
+        ],
+      );
+    },
+    [pending, invited, doInvite],
   );
 
   return (

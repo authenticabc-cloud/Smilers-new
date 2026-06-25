@@ -1772,34 +1772,25 @@ export function CallScreenInner() {
     setInvitePickerVisible(true);
   }, [callId, activeCall?.status]);
 
-  const handleInvitePerson = useCallback(
-    async (inviteeId: string, name: string) => {
-      if (!callId) return;
-      try {
-        await inviteToCall({ callId, inviteeId } as any);
-      } catch (e: any) {
-        Alert.alert('Could not add', e?.message || `Failed to ring ${name}.`);
-        throw e;
-      }
-    },
-    [callId, inviteToCall],
+  // Reactive watch: as soon as ANY invite exists for this call, it's a
+  // conference — used to move BOTH original parties to the mesh host even if
+  // `getActiveCall` doesn't echo `isConference` back promptly.
+  const { data: callInvitesData } = useReactiveSafeConvexQuery<any[]>(
+    (api as any).callInvites.getCallInvites,
+    callId ? { callId } : undefined,
+    [],
+    !!callId,
   );
 
-  // When this 1:1 call becomes a conference (someone was added), hand off to
-  // the mesh host screen with the shared callId. router.replace tears down the
-  // single-peer CallSession (its unmount cleanup releases mic/camera) so the
-  // MeshController can take over cleanly.
-  useEffect(() => {
+  // Detach the live 1:1 connection and hand off to the mesh host. Idempotent.
+  const triggerMeshUpgrade = useCallback(() => {
     if (upgradedToMeshRef.current) return;
-    if (!activeCall?.isConference || !callId || !conversationId) return;
+    if (!callId || !conversationId) return;
     upgradedToMeshRef.current = true;
     const vq = callType === 'video' ? '1' : '0';
-    // SEAMLESS HANDOFF: detach the live 1:1 connection from CallSession (so its
-    // unmount cleanup won't tear it down) and stash it for the mesh host to
-    // ADOPT. This keeps the A↔B audio/video alive with zero interruption — the
-    // mesh only creates fresh connections for newly invited people. Symmetric
-    // adoption is required for web↔native interop (a rebuilt pc has a new DTLS
-    // fingerprint the adopting peer cannot accept).
+    // SEAMLESS HANDOFF: detach the live 1:1 connection (so unmount won't tear
+    // it down) and stash it for the mesh host to ADOPT — keeps A↔B audio/video
+    // alive with zero interruption; only newly invited people get fresh peers.
     try {
       const session = sessionRef.current;
       const partnerUserId = partnerUserIdRef.current;
@@ -1822,7 +1813,34 @@ export function CallScreenInner() {
     router.replace(
       `/group-call/${conversationId}?callId=${encodeURIComponent(callId)}&video=${vq}&adhoc=1` as any,
     );
-  }, [activeCall?.isConference, callId, conversationId, callType, router]);
+  }, [callId, conversationId, callType, router]);
+
+  const handleInvitePerson = useCallback(
+    async (inviteeId: string, name: string, hideNumber: boolean) => {
+      if (!callId) return;
+      try {
+        await inviteToCall({ callId, inviteeId, hideNumber } as any);
+        // The initiator moves to the group screen immediately so they can
+        // watch the invitee's ring status (don't wait for the isConference
+        // round-trip).
+        triggerMeshUpgrade();
+      } catch (e: any) {
+        Alert.alert('Could not add', e?.message || `Failed to ring ${name}.`);
+        throw e;
+      }
+    },
+    [callId, inviteToCall, triggerMeshUpgrade],
+  );
+
+  // The OTHER original party (and any client that missed the direct call)
+  // upgrades when the call doc flips OR an invite appears for this call.
+  useEffect(() => {
+    if (upgradedToMeshRef.current) return;
+    const hasInvite = Array.isArray(callInvitesData) && callInvitesData.length > 0;
+    if (activeCall?.isConference || hasInvite) {
+      triggerMeshUpgrade();
+    }
+  }, [activeCall?.isConference, callInvitesData, triggerMeshUpgrade]);
 
   const topStatusChip = useMemo(() => {
     if (isOutgoingRinging) return 'Ringing....';
