@@ -1022,3 +1022,20 @@ build (Expo Go can't run mesh; push is dead in Expo Go).
 
 Lint clean (pre-existing MediaBubble rules-of-hooks + chats dup-import warnings
 only); bundle compiles; Sign-In renders.
+
+## iter-242 — WebRTC signaling race fixes (from device call log)
+
+CallSession.ts (native 1:1 engine):
+1. **"handle answer failed: Called in wrong state: stable"** — two answers
+   arrived back-to-back; the first connected (→stable), the second tried
+   setRemoteDescription(answer) in stable state and threw. Fix: handleRemoteAnswer
+   now skips any answer when signalingState is not 'have-local-offer'/
+   'have-remote-pranswer', and marks lastAppliedAnswerPayload BEFORE the await so
+   a concurrent identical answer is caught by the dup guard.
+2. **"handleRemoteOffer: pc is null" / "Peer connection not initialized"** — on
+   answering, the offer raced ahead of pc construction and was thrown away. Fix:
+   handleRemoteOffer now stashes the early offer (pendingOfferPayload) instead of
+   throwing; the pc-creation path replays it the moment the pc exists.
+
+Lint clean (pre-existing RTCSessionDescription unused-type warning only); bundle
+compiles; Sign-In renders. Native-only — verify on EAS device build.
