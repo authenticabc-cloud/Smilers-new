@@ -11,6 +11,7 @@ import FabStack from '../../src/components/FabStack';
 import SosButton from '../../src/components/SosButton';
 import { LoginApprovalBanner } from '../../src/components/LoginApprovalBanner';
 import { LiveLocationRequestBanner } from '../../src/components/LiveLocationRequestBanner';
+import { PhotoSaveRequestBanner } from '../../src/components/PhotoSaveRequestBanner';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName } from '../../src/lib/displayName';
@@ -314,6 +315,8 @@ export default function ChatsScreen() {
             <LoginApprovalBanner />
             {/* Incoming live-location requests — tap to confirm & share. */}
             <LiveLocationRequestBanner />
+            {/* Incoming profile-photo save requests — approve/decline. */}
+            <PhotoSaveRequestBanner />
             <PinnedRow
               iconBg={Colors.aiBadge}
               iconBgDark={Colors.aiBadgeDark}

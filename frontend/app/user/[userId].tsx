@@ -146,6 +146,13 @@ export default function UserProfileScreen() {
   // iter-226: tap the profile photo → enlarge; save respects the owner's policy.
   const [avatarViewerOpen, setAvatarViewerOpen] = useState(false);
   const [savingPhoto, setSavingPhoto] = useState(false);
+  // Photo-save approval flow (iter-276): non-trustees who can't save directly
+  // send the owner an approve/decline request. Local optimistic state; the
+  // owner's decision syncs back via the reactive `canSavePhoto` (granted →
+  // Save button reappears). See /app/PHOTO_SAVE_REQUEST_BACKEND_SPEC.md.
+  const [saveRequested, setSaveRequested] = useState(false);
+  const [requestingSave, setRequestingSave] = useState(false);
+  const requestPhotoSave = useMutation((api as any).photoSaveRequests?.request);
 
   // Block screenshots / screen-recording WHILE the enlarged profile photo is
   // open. Toggled by viewer state (instead of whole-screen) so the rest of the
@@ -197,6 +204,30 @@ export default function UserProfileScreen() {
       Alert.alert('Could not save', 'Something went wrong. Please try again.');
     } finally {
       setSavingPhoto(false);
+    }
+  };
+
+  // Non-trustee request to save the owner's profile photo → owner approves/declines.
+  const handleRequestPhotoSave = async () => {
+    if (requestingSave || saveRequested || !hasValidUserId) return;
+    setRequestingSave(true);
+    try {
+      await requestPhotoSave?.({ ownerId: String(userId) } as any);
+      setSaveRequested(true);
+      Alert.alert(
+        'Request sent',
+        `${displayName} will be asked to approve saving their photo. You can save it once they accept.`,
+      );
+    } catch (e: any) {
+      const msg = e?.data?.message || e?.message || '';
+      // Backend not deployed yet → graceful message instead of a crash.
+      if (/CouldNotFindPublicFunction|FunctionNotFound|not a function|undefined/i.test(String(msg))) {
+        Alert.alert('Not available yet', 'Saving by approval will be enabled soon.');
+      } else {
+        Alert.alert('Could not send request', msg || 'Please try again.');
+      }
+    } finally {
+      setRequestingSave(false);
     }
   };
   const aboutText =
@@ -578,11 +609,28 @@ export default function UserProfileScreen() {
               )}
               <Text style={styles.avatarSaveText}>{savingPhoto ? 'Saving…' : 'Save to gallery'}</Text>
             </TouchableOpacity>
-          ) : (
+          ) : saveRequested ? (
             <View style={[styles.avatarSaveBtn, styles.avatarSaveDisabled, { bottom: Math.max(insets.bottom, 16) + 24 }]}>
-              <Feather name="lock" size={16} color={Colors.white} />
-              <Text style={styles.avatarSaveText}>Saving disabled by {displayName}</Text>
+              <Feather name="clock" size={16} color={Colors.white} />
+              <Text style={styles.avatarSaveText}>Awaiting {displayName}&apos;s approval</Text>
             </View>
+          ) : (
+            <TouchableOpacity
+              style={[styles.avatarSaveBtn, { bottom: Math.max(insets.bottom, 16) + 24 }]}
+              onPress={handleRequestPhotoSave}
+              activeOpacity={0.85}
+              disabled={requestingSave}
+              testID="user-avatar-viewer-request"
+            >
+              {requestingSave ? (
+                <ActivityIndicator size="small" color={Colors.white} />
+              ) : (
+                <Feather name="lock" size={16} color={Colors.white} />
+              )}
+              <Text style={styles.avatarSaveText}>
+                {requestingSave ? 'Sending…' : 'Request to save'}
+              </Text>
+            </TouchableOpacity>
           )}
         </View>
       </Modal>
