@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Modal, Pressable, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Swipeable, RectButton } from 'react-native-gesture-handler';
@@ -137,10 +137,16 @@ export default function ChatsScreen() {
   }, [userKey]);
   useEffect(() => {
     if (Array.isArray(conversations)) {
-      void writeCache('conversations', userKey, conversations);
-      setCachedTs(Date.now());
+      // Don't clobber a known-good cached list with an empty live result
+      // (the transient empty-resolve during re-auth that caused the "No chats
+      // yet" lockout). Only persist when live has rows, or when we have no
+      // cached rows yet (legitimately-empty accounts still cache []).
+      if (conversations.length > 0 || !(Array.isArray(cachedList) && cachedList.length > 0)) {
+        void writeCache('conversations', userKey, conversations);
+        setCachedTs(Date.now());
+      }
     }
-  }, [conversations, userKey]);
+  }, [conversations, userKey, cachedList]);
   // iter-191: persist a copy of `me` under a FIXED key so screens that can
   // mount while Convex is still (re)authenticating — the share sheet — can
   // resolve the correct per-user cache key instead of falling back to 'anon'.
@@ -150,8 +156,31 @@ export default function ChatsScreen() {
 
   // Prefer live data; fall back to cache while loading.
   const liveList: any[] | null = Array.isArray(conversations) ? conversations : null;
-  const list: any[] = liveList ?? cachedList ?? [];
-  const showOfflineBanner = !liveList && Array.isArray(cachedList) && cachedList.length > 0;
+  // iter-241 ("No chats yet" lockout fix): when the live query resolves to an
+  // EMPTY array (which happens transiently during a Convex re-auth / socket
+  // handshake, or when the identity token in SecureStore goes stale) we must
+  // NOT blow away a known-good list. Prefer live only when it actually has
+  // rows; otherwise fall back to the cached list. This is what kept users
+  // stuck on "No chats yet" until a full reinstall.
+  const liveHasRows = Array.isArray(liveList) && liveList.length > 0;
+  const cacheHasRows = Array.isArray(cachedList) && cachedList.length > 0;
+  const list: any[] = liveHasRows ? liveList! : cacheHasRows ? cachedList! : liveList ?? cachedList ?? [];
+  const showOfflineBanner = (!liveList || (!liveHasRows && cacheHasRows)) && cacheHasRows;
+
+  // If live came back empty but we DO have cached chats, the session/socket is
+  // almost certainly in a bad state — actively recover by forcing a Convex
+  // reconnect (once per empty-resolve) instead of leaving the user stranded.
+  const recoveredEmptyRef = useRef(false);
+  useEffect(() => {
+    if (liveResolved && !liveHasRows && cacheHasRows) {
+      if (!recoveredEmptyRef.current) {
+        recoveredEmptyRef.current = true;
+        void forceConvexReconnect('chats-empty-with-cache');
+      }
+    } else if (liveHasRows) {
+      recoveredEmptyRef.current = false;
+    }
+  }, [liveResolved, liveHasRows, cacheHasRows]);
 
   // iter-213: archived chats — filter them out of the main list and keep
   // a count for the "Archived" pinned row (shown only when count > 0).

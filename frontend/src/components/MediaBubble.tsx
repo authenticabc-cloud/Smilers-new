@@ -269,10 +269,12 @@ export default function MediaBubble({
       : timeStr;
   const isEdited = !!editedAtMs || msg.edited === true || msg.isEdited === true;
 
-  if (msg.deletedAt) {
-    // Web-app parity for deleted messages: faded bubble (opacity), italic
-    // text "This message was deleted", and timestamp on the right —
-    // matching the screenshot the user shared in iter-98.
+  if (msg.deletedAt || msg.isDeleted === true) {
+    // Web-app parity: the web uses a unified `isDeleted` boolean (set
+    // per-viewer for delete-for-me / delete-for-receiver, and globally for
+    // delete-for-everyone). Mobile previously only checked `deletedAt`, so
+    // per-user deletes (and some media deletes) never showed the tombstone.
+    // Faded bubble, italic "This message was deleted", timestamp on the right.
     const deletedTimeMs =
       typeof msg.deletedAt === 'number'
         ? msg.deletedAt

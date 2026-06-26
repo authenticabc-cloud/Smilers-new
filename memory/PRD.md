@@ -1000,3 +1000,25 @@ Verified all contracts against the deployed web bundle (smilers-app.onhercules.a
 
 Lint clean; bundle compiles; Sign-In renders. Most of these need a real device
 build (Expo Go can't run mesh; push is dead in Expo Go).
+
+## iter-241 — "No chats yet" lockout + per-user delete tombstone (isDeleted)
+
+1. **"No chats yet" lockout (only reinstall fixed it)** — `chats.tsx` did
+   `list = liveList ?? cachedList ?? []`, so when `listConversations` resolved
+   to an EMPTY array (transient during Convex re-auth / stale SecureStore
+   identity) the UI showed empty AND `writeCache` overwrote the good cache with
+   `[]` — persisting the lockout (APK update kept storage; only reinstall
+   cleared it). Fixes: prefer live ONLY when it has rows, else fall back to
+   cached; guard writeCache to never clobber a non-empty cache with `[]`; and
+   when live==empty but cache has rows, force ONE Convex reconnect to recover.
+   (Root cause is a backend/auth session glitch returning empty — this makes
+   the app self-heal instead of requiring reinstall.)
+
+2. **Delete tombstone for me/receiver + video** — the web uses a unified
+   `isDeleted` boolean (set per-viewer for forReceiver:true / forEveryone:false,
+   globally for forEveryone:true). Mobile only checked `deletedAt`, so per-user
+   deletes (and some media deletes) never showed "This message was deleted".
+   MediaBubble now renders the tombstone for `deletedAt || isDeleted===true`.
+
+Lint clean (pre-existing MediaBubble rules-of-hooks + chats dup-import warnings
+only); bundle compiles; Sign-In renders.
