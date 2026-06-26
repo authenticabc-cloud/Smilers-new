@@ -60,10 +60,14 @@ When false, it shows "Request to save".
   ("Your save request was approved").
 - `accept:false` → set `status:'declined'`.
 
-### (optional) `photoSaveRequests.getOutgoingStatus` (query)
+### `photoSaveRequests.getOutgoingStatus` (query) — REQUIRED for the live-approval UX
 - Args: `{ ownerId }` → `{ status: 'none'|'pending'|'approved'|'declined' }`
-- Lets the requester's button reflect the live status. Mobile currently tracks
-  this optimistically; this query would make it exact across devices.
+  (a bare string is also accepted by mobile).
+- Caller = the requester (from `ctx.auth`); returns the status of the caller's
+  own request to that owner.
+- Mobile subscribes to this on the profile-photo viewer: when it flips to
+  `approved` the Save button enables instantly + a one-time "approved" alert
+  shows; `declined` shows a declined state; `pending` shows "Awaiting approval".
 
 ## Notes
 - Trustee membership already exists (`trustees.getMyTrustees` etc.). The

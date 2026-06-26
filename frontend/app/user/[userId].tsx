@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { allowScreenCaptureAsync, preventScreenCaptureAsync } from 'expo-screen-capture';
 import {
@@ -193,6 +193,41 @@ export default function UserProfileScreen() {
     typeof user?.canSavePhoto === 'boolean'
       ? user.canSavePhoto
       : photoSavePolicy === 'everyone' || (photoSavePolicy === 'contacts' && isContact !== false);
+
+  // Live status of MY outgoing save-request to this owner (web-synced). Lets the
+  // requester's screen react the instant the owner approves/declines — without
+  // re-tapping. Enabled only while a direct save isn't already allowed.
+  const { data: outgoingStatusData } = useSafeConvexQuery<any>(
+    (api as any).photoSaveRequests?.getOutgoingStatus,
+    hasValidUserId ? { ownerId: String(userId) } : {},
+    null,
+    hasValidUserId && !canSavePhoto,
+  );
+  const outgoingStatus: string =
+    (typeof outgoingStatusData === 'string' && outgoingStatusData) ||
+    (typeof outgoingStatusData?.status === 'string' && outgoingStatusData.status) ||
+    'none';
+  // canSavePhoto already folds in the backend's one-time grant; treat an
+  // explicit 'approved' status as save-enabled too (covers the brief window
+  // before the profile query refetches canSavePhoto).
+  const photoApproved = canSavePhoto || outgoingStatus === 'approved';
+  const photoDeclined = outgoingStatus === 'declined';
+  const prevStatusRef = useRef<string>('none');
+
+  // One-time alert when the owner approves while the viewer is on this screen.
+  useEffect(() => {
+    if (outgoingStatus === prevStatusRef.current) return;
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = outgoingStatus;
+    if (prev === 'pending' && outgoingStatus === 'approved') {
+      setSaveRequested(false);
+      Alert.alert('Approved', `${displayName} approved your request — you can now save the photo.`);
+    } else if (prev === 'pending' && outgoingStatus === 'declined') {
+      setSaveRequested(false);
+    }
+    // displayName is stable enough for an alert message; status is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outgoingStatus]);
 
   const saveAvatarPhoto = async () => {
     if (!avatarUri || savingPhoto) return;
@@ -594,7 +629,7 @@ export default function UserProfileScreen() {
           >
             <Feather name="x" size={26} color={Colors.white} />
           </TouchableOpacity>
-          {canSavePhoto ? (
+          {photoApproved ? (
             <TouchableOpacity
               style={[styles.avatarSaveBtn, { bottom: Math.max(insets.bottom, 16) + 24 }]}
               onPress={saveAvatarPhoto}
@@ -609,7 +644,12 @@ export default function UserProfileScreen() {
               )}
               <Text style={styles.avatarSaveText}>{savingPhoto ? 'Saving…' : 'Save to gallery'}</Text>
             </TouchableOpacity>
-          ) : saveRequested ? (
+          ) : photoDeclined ? (
+            <View style={[styles.avatarSaveBtn, styles.avatarSaveDisabled, { bottom: Math.max(insets.bottom, 16) + 24 }]}>
+              <Feather name="slash" size={16} color={Colors.white} />
+              <Text style={styles.avatarSaveText}>{displayName} declined saving</Text>
+            </View>
+          ) : saveRequested || outgoingStatus === 'pending' ? (
             <View style={[styles.avatarSaveBtn, styles.avatarSaveDisabled, { bottom: Math.max(insets.bottom, 16) + 24 }]}>
               <Feather name="clock" size={16} color={Colors.white} />
               <Text style={styles.avatarSaveText}>Awaiting {displayName}&apos;s approval</Text>
