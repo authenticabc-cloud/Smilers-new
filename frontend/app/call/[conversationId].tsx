@@ -1847,7 +1847,10 @@ export function CallScreenInner() {
     // modal, no InteractionManager — see comment above).
     const navigate = () => {
       if (__DEV__) console.log('[adhoc-upgrade] router.replace →', dest);
-      try { router.replace(dest); } catch (e) { if (__DEV__) console.log('[adhoc-upgrade] replace failed', e); }
+      callDebug.push('CALL', `[adhoc-upgrade] router.replace → group-call (fromModal=${fromModal})`);
+      try { router.replace(dest); } catch (e) {
+        callDebug.push('ERR', `[adhoc-upgrade] replace failed: ${String((e as any)?.message || e)}`);
+      }
     };
     if (fromModal) {
       // Initiator: wait out the modal-dismiss animation so Android doesn't
@@ -1865,12 +1868,14 @@ export function CallScreenInner() {
     async (inviteeId: string, name: string, hideNumber: boolean) => {
       if (!callId) return;
       try {
+        callDebug.push('CALL', `[adhoc-upgrade] invite sent → ${name} (hideNumber=${hideNumber})`);
         await inviteToCall({ callId, inviteeId, hideNumber } as any);
         // The initiator moves to the group screen immediately so they can
         // watch the invitee's ring status (don't wait for the isConference
         // round-trip). fromModal=true → close the picker first + brief delay.
         triggerMeshUpgrade({ fromModal: true });
       } catch (e: any) {
+        callDebug.push('ERR', `[adhoc-upgrade] inviteToCall failed: ${String(e?.message || e).slice(0, 60)}`);
         Alert.alert('Could not add', e?.message || `Failed to ring ${name}.`);
         throw e;
       }
