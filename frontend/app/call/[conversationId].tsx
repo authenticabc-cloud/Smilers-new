@@ -1811,6 +1811,7 @@ export function CallScreenInner() {
     upgradedToMeshRef.current = true;
     const fromModal = opts?.fromModal === true;
     if (__DEV__) console.log('[adhoc-upgrade] triggerMeshUpgrade', { callId, fromModal });
+    callDebug.push('CALL', `[adhoc-upgrade] triggerMeshUpgrade fromModal=${fromModal}`);
     if (fromModal) {
       // Close the invite sheet FIRST — on Android, router.replace() is
       // silently swallowed while a React Native <Modal> is still mounted.
@@ -1885,21 +1886,21 @@ export function CallScreenInner() {
     if (upgradedToMeshRef.current) return;
     const hasInvite = Array.isArray(callInvitesData) && callInvitesData.length > 0;
     const hasRoster = Array.isArray(conferenceRosterData) && conferenceRosterData.length > 0;
-    if (__DEV__) {
-      console.log('[adhoc-upgrade] watcher', {
-        callId,
-        isConference: activeCall?.isConference,
-        invites: Array.isArray(callInvitesData) ? callInvitesData.length : 'n/a',
-        roster: Array.isArray(conferenceRosterData) ? conferenceRosterData.length : 'n/a',
-        // Surface backend query failures so we can tell whether
-        // getCallInvites / getParticipants are erroring on the receiver
-        // (e.g. CouldNotFindFunction) rather than silently returning empty.
-        invitesError: callInvitesError ? String((callInvitesError as any)?.message || callInvitesError) : null,
-        rosterError: conferenceRosterError ? String((conferenceRosterError as any)?.message || conferenceRosterError) : null,
-      });
-    }
     if (activeCall?.isConference || hasInvite || hasRoster) {
+      callDebug.push('CALL', `[adhoc-upgrade] FIRING: conf=${!!activeCall?.isConference} invite=${hasInvite} roster=${hasRoster}`);
       triggerMeshUpgrade();
+    } else {
+      // Routed through callDebug (not __DEV__ console.log) so it shows in the
+      // in-app Diagnostic Logs export even on a production APK — this is how
+      // we tell whether the backend signals reach the existing participant.
+      callDebug.push(
+        'CALL',
+        `[adhoc-upgrade] waiting: conf=${activeCall?.isConference ?? 'n/a'} ` +
+          `invites=${Array.isArray(callInvitesData) ? callInvitesData.length : 'n/a'} ` +
+          `roster=${Array.isArray(conferenceRosterData) ? conferenceRosterData.length : 'n/a'} ` +
+          `invErr=${callInvitesError ? String((callInvitesError as any)?.message || callInvitesError).slice(0, 40) : 'none'} ` +
+          `rosErr=${conferenceRosterError ? String((conferenceRosterError as any)?.message || conferenceRosterError).slice(0, 40) : 'none'}`,
+      );
     }
   }, [activeCall?.isConference, callInvitesData, conferenceRosterData, triggerMeshUpgrade, callId]);
 
