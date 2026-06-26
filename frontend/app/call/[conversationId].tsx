@@ -1863,7 +1863,7 @@ export function CallScreenInner() {
       // group-call screen underneath, which adopts the handoff. Defer one
       // tick so router.replace commits first (no flash of the chat list).
       setTimeout(() => {
-        try { callHost.end(); } catch (e) {
+        try { callHost.end(); callDebug.push('CALL', `[adhoc-upgrade] callHost.end() done (fromModal=${fromModal})`); } catch (e) {
           callDebug.push('ERR', `[adhoc-upgrade] callHost.end failed: ${String((e as any)?.message || e)}`);
         }
       }, 60);

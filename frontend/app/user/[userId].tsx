@@ -1,4 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Platform } from 'react-native';
+import { allowScreenCaptureAsync, preventScreenCaptureAsync } from 'expo-screen-capture';
 import {
   ActivityIndicator,
   Alert,
@@ -144,6 +146,26 @@ export default function UserProfileScreen() {
   // iter-226: tap the profile photo → enlarge; save respects the owner's policy.
   const [avatarViewerOpen, setAvatarViewerOpen] = useState(false);
   const [savingPhoto, setSavingPhoto] = useState(false);
+
+  // Block screenshots / screen-recording WHILE the enlarged profile photo is
+  // open. Toggled by viewer state (instead of whole-screen) so the rest of the
+  // profile remains screenshottable. Native-only (FLAG_SECURE on Android, blank
+  // capture on iOS); no-op on web.
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    if (!avatarViewerOpen) return;
+    let cancelled = false;
+    (async () => {
+      try { await preventScreenCaptureAsync('profile-photo'); } catch {}
+    })();
+    return () => {
+      cancelled = true;
+      void cancelled;
+      (async () => {
+        try { await allowScreenCaptureAsync('profile-photo'); } catch {}
+      })();
+    };
+  }, [avatarViewerOpen]);
 
   // --- Derived ------------------------------------------------------------
   const displayName = getDisplayNameFromUser(user, 'Smilers user');
