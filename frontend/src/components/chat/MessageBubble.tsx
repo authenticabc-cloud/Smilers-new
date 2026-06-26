@@ -187,10 +187,10 @@ export function MessageBubble({
     );
   }
 
-  if (msg.deletedAt) {
-    // Web-app parity (iter-98 screenshot): "This message was deleted"
-    // italic + timestamp on the right inside a faded bubble. Mirrors the
-    // identical pattern in MediaBubble's deleted branch.
+  if (msg.deletedAt || msg.isDeleted === true) {
+    // Web-app parity (iter-98 + iter-243): show the tombstone for both global
+    // delete-for-everyone (deletedAt) AND per-viewer deletes (isDeleted —
+    // delete-for-me / delete-for-receiver), matching MediaBubble.
     const deletedTimeMs =
       typeof msg.deletedAt === 'number'
         ? msg.deletedAt

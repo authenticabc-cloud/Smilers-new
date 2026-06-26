@@ -1807,7 +1807,8 @@ export default function ChatScreen() {
       for (const asset of assets) {
         const mime = asset.mimeType || 'video/mp4';
         const storageId = await uploadFile(convex, asset.uri, mime);
-        const sentVideoId: any = await sendMessage({ conversationId, type: 'video', storageId, mimeType: mime });
+        const vmeta = await getMediaMeta(asset.uri, mime, 'video');
+        const sentVideoId: any = await sendMessage({ conversationId, type: 'video', storageId, fileName: (asset as any)?.fileName || vmeta.fileName, fileSize: (asset as any)?.fileSize || vmeta.fileSize, mimeType: mime });
         const messageId = typeof sentVideoId === 'string'
           ? sentVideoId
           : (sentVideoId?._id || sentVideoId?.id || '');

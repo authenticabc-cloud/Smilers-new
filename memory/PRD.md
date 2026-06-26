@@ -1039,3 +1039,9 @@ CallSession.ts (native 1:1 engine):
 
 Lint clean (pre-existing RTCSessionDescription unused-type warning only); bundle
 compiles; Sign-In renders. Native-only — verify on EAS device build.
+
+## iter-243 — text tombstone, gallery-video metadata, receiver media purge
+- MessageBubble.tsx: tombstone now fires on deletedAt || isDeleted (text per-viewer delete).
+- pickVideo (gallery) now sends fileName+fileSize via getMediaMeta (was missed; only recordVideo had it).
+- MediaBubble receiver purge now triggers on isDeleted too (local file corruption on delete-for-everyone).
+- Backend Server Errors noted (NOT mobile): conference:toggleSelfMute, messages:setTranscription — web-team Convex fns.

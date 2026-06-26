@@ -175,11 +175,11 @@ export default function MediaBubble({
   // we previously saved for this message. Idempotent + best-effort.
   useEffect(() => {
     if (Platform.OS === 'web') return;
-    if (!msg?.deletedAt) return;
+    if (!msg?.deletedAt && msg?.isDeleted !== true) return;
     const id = String(msg?._id || '');
     if (!id) return;
     purgeMessageMedia(id).catch(() => {});
-  }, [msg?.deletedAt, msg?._id]);
+  }, [msg?.deletedAt, msg?.isDeleted, msg?._id]);
 
   // iter-166 system-message renderer (Identity Rework).
   // Backend per canonical contract emits:
