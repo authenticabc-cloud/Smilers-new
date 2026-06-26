@@ -189,10 +189,17 @@ export default function UserProfileScreen() {
   // iter-227: the backend now returns a server-computed `canSavePhoto` that
   // already accounts for the policy + contact relationship — trust it when
   // present; otherwise fall back to the client-side derivation.
+  // iter-227: the backend returns a server-computed, per-viewer `canSavePhoto`.
+  // iter-277: the profile-photo save model is now TRUSTEE-GATED — only the
+  // owner, the owner's trustees, or a viewer the owner has explicitly approved
+  // may save. Everyone else must request. So when the server flag is absent
+  // (loading / unauthenticated) we DEFAULT TO FALSE and show "Request to save"
+  // — we must NOT fall back to the old everyone/contacts policy (that let
+  // non-trustees save). Viewing your OWN profile is always allowed.
+  const isSelf =
+    !!me && !!userId && String(me?._id || me?.id) === String(userId);
   const canSavePhoto =
-    typeof user?.canSavePhoto === 'boolean'
-      ? user.canSavePhoto
-      : photoSavePolicy === 'everyone' || (photoSavePolicy === 'contacts' && isContact !== false);
+    isSelf || (typeof user?.canSavePhoto === 'boolean' ? user.canSavePhoto : false);
 
   // Live status of MY outgoing save-request to this owner (web-synced). Lets the
   // requester's screen react the instant the owner approves/declines — without

@@ -5,6 +5,7 @@ import * as SecureStore from 'expo-secure-store';
 import * as WebBrowser from 'expo-web-browser';
 import { sentry } from '../lib/sentry';
 import { setDiagnosticUser } from '../lib/diagnostics';
+import { callDebug } from '../lib/callDebugLog';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -239,6 +240,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // We do NOT bounce them to /index here.
           setIdToken(storedIdToken);
           setUserInfo(parseJwt(storedIdToken));
+          callDebug.push('AUTH', 'restore: cached id_token found → optimistic session');
+        } else if (!cancelled) {
+          callDebug.push('AUTH', 'restore: NO cached id_token → signed out');
         }
       } catch (e) {
         console.warn('Restore session error:', e);
@@ -463,21 +467,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // share sheet). Wait up to 5s for discovery (live or cached) so the
       // refresh can actually happen.
       if (!discoveryReadyRef.current && !cachedDiscoveryRef.current) {
+        callDebug.push('AUTH', `getFreshIdToken: token expired, waiting for discovery…`);
         for (let i = 0; i < 20; i += 1) {
           await new Promise((resolve) => setTimeout(resolve, 250));
           if (discoveryReadyRef.current || cachedDiscoveryRef.current) break;
         }
       }
+      const haveDisco = discoveryReadyRef.current || !!cachedDiscoveryRef.current;
       const refreshed = await refreshTokensRef.current(refreshToken);
-      if (refreshed) return refreshed;
+      if (refreshed) {
+        callDebug.push('AUTH', `getFreshIdToken: refresh OK (disco=${haveDisco})`);
+        return refreshed;
+      }
       // Refresh failed (network blip etc) — fall through and return the
       // cached id_token. Convex may 401 a few times until our background
       // retry succeeds; the user stays signed in.
+      callDebug.push('ERR', `AUTH getFreshIdToken: refresh FAILED (disco=${haveDisco}, hasRefresh=${!!refreshToken}) → returning ${idToken ? 'STALE id_token' : 'null'}`);
     }
     // IMPORTANT: Convex validates the ID token (JWT) for user identity.
     // The access token does not contain the OIDC claims Convex needs (iss/sub),
     // so returning it here causes ctx.auth.getUserIdentity() to be null inside
     // queries/mutations/actions. Always return the ID token.
+    if (!idToken) callDebug.push('ERR', 'AUTH getFreshIdToken: NO id_token in storage → unauthenticated');
     return idToken;
   }, [refreshTokens]);
 

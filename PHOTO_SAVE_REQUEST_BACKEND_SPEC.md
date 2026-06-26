@@ -22,14 +22,19 @@ Return a **server-computed, per-viewer** boolean:
 canSavePhoto: boolean
 ```
 True when ANY of:
+- the viewer **is the owner** (viewing their own profile), OR
 - viewer is a **trustee** of this profile's owner, OR
-- owner's `photoSavePolicy === 'everyone'`, OR
-- owner's `photoSavePolicy === 'contacts'` AND viewer is a contact, OR
-- the owner has **already approved** a pending save request from this viewer
+- the owner has **approved** a (still-valid) save request from this viewer
   (one-time grant — see below).
 
-Mobile already reads `user.canSavePhoto` and, when true, allows a direct save.
-When false, it shows "Request to save".
+❗ Do **NOT** make `canSavePhoto` true based on the legacy `photoSavePolicy`
+(`everyone` / `contacts`). The old policy must be **ignored** for profile
+photos — otherwise non-trustees can still save (this was the bug: the owner's
+policy defaulted to `everyone`, so everyone could save and no request was ever
+sent). Trustees save freely; **everyone else must request**.
+
+Mobile reads `user.canSavePhoto` and, when true, allows a direct save.
+When false (or absent), it shows "Request to save".
 
 ## 2) New module `photoSaveRequests`
 
