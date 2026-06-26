@@ -1851,6 +1851,22 @@ export function CallScreenInner() {
       try { router.replace(dest); } catch (e) {
         callDebug.push('ERR', `[adhoc-upgrade] replace failed: ${String((e as any)?.message || e)}`);
       }
+      // CRITICAL (iter-275): this call screen is NOT a real route — it's
+      // rendered by the root-mounted <CallHost/> overlay driven by the
+      // `callHost` store (iter-261). `router.replace` only swaps the
+      // UNDERLYING expo-router screen to /group-call; the 1:1 overlay stays
+      // mounted ON TOP because the store still holds its params, so BOTH
+      // parties keep seeing the 1:1 screen until they tap End (which calls
+      // callHost.end()). That was the "must tap End to reach the conference"
+      // bug. The live PC/streams were already detached + stashed above, so
+      // ending the overlay here will NOT drop the call — it just reveals the
+      // group-call screen underneath, which adopts the handoff. Defer one
+      // tick so router.replace commits first (no flash of the chat list).
+      setTimeout(() => {
+        try { callHost.end(); } catch (e) {
+          callDebug.push('ERR', `[adhoc-upgrade] callHost.end failed: ${String((e as any)?.message || e)}`);
+        }
+      }, 60);
     };
     if (fromModal) {
       // Initiator: wait out the modal-dismiss animation so Android doesn't

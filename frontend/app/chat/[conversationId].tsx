@@ -41,6 +41,7 @@ import { useSafeConvexQuery, useSafeConvexSubscription } from '../../src/hooks/u
 import { useScreenCaptureProtection } from '../../src/hooks/useScreenCaptureProtection';
 import { useEngagementTracker } from '../../src/hooks/useEngagementTracker';
 import { recordDiagnostic } from '../../src/lib/diagnostics';
+import { callDebug } from '../../src/lib/callDebugLog';
 import { errorToMessage } from '../../src/lib/safeString';
 import { scanMessage as scanMessageDeep } from '../../src/lib/messageSecurityScanner';
 import {
@@ -1689,7 +1690,11 @@ export default function ChatScreen() {
 
   const sendImageFromUri = useCallback(
     async (uri: string, mimeType?: string, captionOverride?: string): Promise<boolean> => {
-      if (!conversationId || !isConversationAvailable) return false;
+      if (!conversationId || !isConversationAvailable) {
+        callDebug.push('IMG', `send aborted: convId=${!!conversationId} available=${isConversationAvailable}`);
+        Alert.alert('Cannot send photo', 'This conversation is still loading. Please reopen the chat and try again.');
+        return false;
+      }
 
       setUploading(true);
       const caption = (captionOverride ?? text).trim();
@@ -1698,9 +1703,12 @@ export default function ChatScreen() {
         : '';
       const replyToMessageId = replyTo?._id;
 
+      callDebug.push('IMG', `send start mime=${mimeType || 'image/jpeg'} uri=${String(uri).slice(-32)}`);
       try {
         const storageId = await uploadFile(convex, uri, mimeType || 'image/jpeg');
+        callDebug.push('IMG', `upload OK storageId=${String(storageId).slice(0, 10)}…`);
         const meta = await getMediaMeta(uri, mimeType || 'image/jpeg', 'image');
+        callDebug.push('IMG', `meta name=${meta.fileName} size=${meta.fileSize}`);
         await sendMessage({
           conversationId,
           type: 'image',
@@ -1715,6 +1723,7 @@ export default function ChatScreen() {
           mimeType: mimeType || 'image/jpeg',
           ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
         });
+        callDebug.push('IMG', 'messages.send OK');
         // Single-image path clears the composer here; the multi-image
         // album path (captionOverride provided) clears once in handleSend.
         if (captionOverride === undefined) {
@@ -1725,7 +1734,9 @@ export default function ChatScreen() {
         await refetchMessages();
         return true;
       } catch (errorValue: any) {
-        Alert.alert('Upload failed', errorValue?.message || 'Unable to send image right now.');
+        const detail = errorValue?.data?.message || errorValue?.message || String(errorValue);
+        callDebug.push('ERR', `IMG send failed: ${String(detail).slice(0, 120)}`);
+        Alert.alert('Upload failed', detail || 'Unable to send image right now.');
         return false;
       } finally {
         setUploading(false);
