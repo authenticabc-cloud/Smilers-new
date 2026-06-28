@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   AppState,
   BackHandler,
   Platform,
@@ -408,6 +409,32 @@ export function CallScreenInner() {
   const [callDurationSec, setCallDurationSec] = useState(0);
   const [audioModeReady, setAudioModeReady] = useState(false);
   const [screenReady, setScreenReady] = useState(Platform.OS !== 'android');
+
+  // ── Immersive video: auto-hide call controls ───────────────────────────
+  // During a connected video call the top info bar + bottom controls fade out
+  // after a few seconds of no interaction, and reappear on a screen tap.
+  const CONTROLS_AUTO_HIDE_MS = 4000;
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const controlsOpacity = useRef(new Animated.Value(1)).current;
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearHideTimer = useCallback(() => {
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+  }, []);
+  const fadeControls = useCallback(
+    (toVisible: boolean) => {
+      setControlsVisible(toVisible);
+      Animated.timing(controlsOpacity, {
+        toValue: toVisible ? 1 : 0,
+        duration: 220,
+        useNativeDriver: true,
+      }).start();
+    },
+    [controlsOpacity],
+  );
+
   const [RTCViewImpl, setRTCViewImpl] = useState<any>(null);
   const [CallSessionCtor, setCallSessionCtor] = useState<any>(null);
 
@@ -1945,6 +1972,39 @@ export function CallScreenInner() {
 
   const showVideo = callType === 'video' && isActive && RTCViewImpl != null;
 
+  // Reveal controls and (re)start the auto-hide countdown. Tap on the video
+  // surface toggles them; while connected video keeps playing they fade out
+  // again after CONTROLS_AUTO_HIDE_MS of no interaction.
+  const revealControls = useCallback(() => {
+    clearHideTimer();
+    fadeControls(true);
+    hideTimerRef.current = setTimeout(() => {
+      fadeControls(false);
+    }, CONTROLS_AUTO_HIDE_MS);
+  }, [clearHideTimer, fadeControls]);
+
+  const toggleControls = useCallback(() => {
+    if (controlsVisible) {
+      clearHideTimer();
+      fadeControls(false);
+    } else {
+      revealControls();
+    }
+  }, [controlsVisible, clearHideTimer, fadeControls, revealControls]);
+
+  // Start auto-hide once the video is live; keep controls pinned (visible) for
+  // voice calls and any non-active state so nothing ever disappears there.
+  useEffect(() => {
+    if (showVideo) {
+      revealControls();
+    } else {
+      clearHideTimer();
+      fadeControls(true);
+    }
+    return clearHideTimer;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showVideo]);
+
   // iter-107: during an OUTGOING VIDEO call that's still ringing, show the
   // local camera feed as a full-screen background instead of the static
   // gradient + initial-letter avatar. Matches WhatsApp / FaceTime UX —
@@ -2053,9 +2113,17 @@ export function CallScreenInner() {
             objectFit="cover"
             mirror={false}
           />
+          {/* Full-screen tap catcher — toggles the auto-hiding controls.
+              Sits above the remote video but below the PiP/overlays so the
+              control buttons keep their own taps. */}
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={toggleControls}
+            testID="video-tap-catcher"
+          />
           {/* Local picture-in-picture */}
           {localStreamURL && !cameraOff ? (
-            <View style={styles.pipWrap}>
+            <View style={styles.pipWrap} pointerEvents="none">
               <RTCViewImpl
                 streamURL={localStreamURL}
                 style={StyleSheet.absoluteFill}
@@ -2064,17 +2132,27 @@ export function CallScreenInner() {
               />
             </View>
           ) : null}
-          {/* Top overlay: name + duration */}
-          <SafeAreaView edges={['top']} style={styles.videoTopOverlay} pointerEvents="none">
-            <Text style={styles.videoName} numberOfLines={1} ellipsizeMode="tail">
-              {otherName}
-            </Text>
-            <Text style={styles.videoStatus}>{isActive ? durationLabel : statusText}</Text>
-          </SafeAreaView>
-          {/* Bottom controls overlay */}
-          <SafeAreaView edges={['bottom']} style={styles.videoControlsOverlay}>
-            {renderControls()}
-          </SafeAreaView>
+          {/* Top overlay: name + duration (fades with controls) */}
+          <Animated.View
+            style={[styles.videoTopOverlayAnim, { opacity: controlsOpacity }]}
+            pointerEvents="none"
+          >
+            <SafeAreaView edges={['top']} style={styles.videoTopOverlay} pointerEvents="none">
+              <Text style={styles.videoName} numberOfLines={1} ellipsizeMode="tail">
+                {otherName}
+              </Text>
+              <Text style={styles.videoStatus}>{isActive ? durationLabel : statusText}</Text>
+            </SafeAreaView>
+          </Animated.View>
+          {/* Bottom controls overlay (fades + auto-hides) */}
+          <Animated.View
+            style={[styles.videoControlsOverlayAnim, { opacity: controlsOpacity }]}
+            pointerEvents={controlsVisible ? 'box-none' : 'none'}
+          >
+            <SafeAreaView edges={['bottom']} style={styles.videoControlsOverlay}>
+              {renderControls()}
+            </SafeAreaView>
+          </Animated.View>
         </View>
       ) : (
         <View style={StyleSheet.absoluteFill}>
@@ -2943,6 +3021,14 @@ const styles = StyleSheet.create({
     right: 0,
     alignItems: 'center',
     paddingHorizontal: Spacing.lg,
+  },
+  // iter-278: full-screen wrappers so the auto-hide fade (opacity) can be
+  // animated without disturbing the absolute anchoring of the inner overlays.
+  videoTopOverlayAnim: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  videoControlsOverlayAnim: {
+    ...StyleSheet.absoluteFillObject,
   },
   videoControlsOverlay: {
     position: 'absolute',
