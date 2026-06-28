@@ -17,8 +17,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   FlatList,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -103,6 +105,58 @@ export default function GroupCallScreen() {
   const [localStreamURL, setLocalStreamURL] = useState<string | null>(null);
   const [cameraEnabled, setCameraEnabled] = useState(wantsVideo);
   const [invitePickerVisible, setInvitePickerVisible] = useState(false);
+
+  // ── Immersive video: auto-hide header + controls ───────────────────────
+  // In a group VIDEO call the header and bottom controls fade out after a few
+  // seconds of no interaction and reappear when the user taps a video tile or
+  // the background. Voice calls keep their controls pinned.
+  const CONTROLS_AUTO_HIDE_MS = 4000;
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const controlsOpacity = useRef(new Animated.Value(1)).current;
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearHideTimer = useCallback(() => {
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+  }, []);
+  const fadeControls = useCallback(
+    (toVisible: boolean) => {
+      setControlsVisible(toVisible);
+      Animated.timing(controlsOpacity, {
+        toValue: toVisible ? 1 : 0,
+        duration: 220,
+        useNativeDriver: true,
+      }).start();
+    },
+    [controlsOpacity],
+  );
+  const revealControls = useCallback(() => {
+    clearHideTimer();
+    fadeControls(true);
+    hideTimerRef.current = setTimeout(() => fadeControls(false), CONTROLS_AUTO_HIDE_MS);
+  }, [clearHideTimer, fadeControls]);
+  const toggleControls = useCallback(() => {
+    if (!wantsVideo) return; // voice calls: controls always visible
+    if (controlsVisible) {
+      clearHideTimer();
+      fadeControls(false);
+    } else {
+      revealControls();
+    }
+  }, [wantsVideo, controlsVisible, clearHideTimer, fadeControls, revealControls]);
+
+  const videoActive = wantsVideo && !!callId && !starting && !fatal;
+  useEffect(() => {
+    if (videoActive) {
+      revealControls();
+    } else {
+      clearHideTimer();
+      fadeControls(true);
+    }
+    return clearHideTimer;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoActive]);
 
   // --- Start (ring) a new group call if no callId was passed in. ---
   useEffect(() => {
@@ -368,7 +422,18 @@ export default function GroupCallScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="group-call-screen">
       <CallBackground variant="warm" />
-      <View style={styles.header}>
+      {/* Background tap-catcher — toggles auto-hiding controls in video mode. */}
+      {videoActive ? (
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={toggleControls}
+          testID="group-call-tap-catcher"
+        />
+      ) : null}
+      <Animated.View
+        style={[styles.header, { opacity: controlsOpacity }]}
+        pointerEvents={controlsVisible ? 'auto' : 'none'}
+      >
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>{wantsVideo ? 'Group video call' : 'Group voice call'}</Text>
           <Text style={styles.headerSubtitle}>
@@ -384,7 +449,7 @@ export default function GroupCallScreen() {
           <Ionicons name="person-add" size={18} color={Colors.headerBg} />
           <Text style={styles.addHeaderBtnText}>Add</Text>
         </TouchableOpacity>
-      </View>
+      </Animated.View>
 
       {callInvites.length > 0 ? (
         <View style={styles.inviteStrip} testID="group-call-invite-strip">
@@ -439,8 +504,9 @@ export default function GroupCallScreen() {
             const streamURL = isMe ? localStreamURL : remoteStreamURLs[item.userId];
             const showTileVideo = wantsVideo && !!streamURL && (isMe ? cameraEnabled : true);
             return (
-              <View
+              <Pressable
                 style={[styles.tile, wantsVideo ? styles.tileVideo : null]}
+                onPress={toggleControls}
                 testID={`group-call-tile-${item.userId}`}
               >
                 {showTileVideo ? (
@@ -476,7 +542,7 @@ export default function GroupCallScreen() {
                     </Text>
                   </View>
                 </View>
-              </View>
+              </Pressable>
             );
           }}
           ListEmptyComponent={
@@ -488,7 +554,10 @@ export default function GroupCallScreen() {
         />
       )}
 
-      <View style={styles.controls}>
+      <Animated.View
+        style={[styles.controls, { opacity: controlsOpacity }]}
+        pointerEvents={controlsVisible ? 'box-none' : 'none'}
+      >
         <TouchableOpacity
           style={[styles.controlBtn, !micEnabled ? styles.controlBtnActive : null]}
           onPress={handleToggleMute}
@@ -519,7 +588,7 @@ export default function GroupCallScreen() {
           <Feather name="phone-off" size={24} color={Colors.white} />
           <Text style={[styles.controlLabel, { color: Colors.white }]}>Leave</Text>
         </TouchableOpacity>
-      </View>
+      </Animated.View>
 
       <InviteContactPicker
         visible={invitePickerVisible}
