@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
-  Animated,
+  Animated as RNAnimated,
   AppState,
   BackHandler,
   Platform,
