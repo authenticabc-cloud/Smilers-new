@@ -23,6 +23,39 @@ const TRANSCRIBE_UPLOAD_ENDPOINT = `${process.env.EXPO_PUBLIC_BACKEND_URL || ''}
  *  of whether Convex's sendMessage returned the new message id or not. */
 const TRANSCRIPT_CACHE_PREFIX = 'smilers_transcript_';
 
+/** Persisted index of the arg-shape that `messages.setTranscription` last
+ *  accepted. Convex arg validators reject unknown fields with a SERVER-SIDE
+ *  error that shows up in the backend logs. The brute-force retry loop below
+ *  discovers the accepted shape, but if we re-discover on EVERY voice message
+ *  we spam the Convex logs with validation errors. Caching the working index
+ *  collapses that to (at most) a one-time discovery per device. */
+const SET_TRANSCRIPTION_SHAPE_KEY = 'smilers_settranscription_shape_idx';
+let cachedSetTranscriptionShapeIdx: number | null = null;
+
+async function loadSetTranscriptionShapeIdx(): Promise<number | null> {
+  if (cachedSetTranscriptionShapeIdx !== null) return cachedSetTranscriptionShapeIdx;
+  try {
+    const value = (await readStoredJson(SET_TRANSCRIPTION_SHAPE_KEY, null)) as number | null;
+    if (typeof value === 'number' && value >= 0) {
+      cachedSetTranscriptionShapeIdx = value;
+      return value;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+async function saveSetTranscriptionShapeIdx(idx: number): Promise<void> {
+  if (cachedSetTranscriptionShapeIdx === idx) return;
+  cachedSetTranscriptionShapeIdx = idx;
+  try {
+    await writeStoredJson(SET_TRANSCRIPTION_SHAPE_KEY, idx);
+  } catch {
+    /* ignore */
+  }
+}
+
 export interface TranscriptionSegment {
   start: number; // seconds
   end: number;   // seconds
@@ -245,10 +278,21 @@ export async function triggerTranscription(args: TriggerArgs): Promise<void> {
         { messageId, transcription },
       ];
       let persisted = false;
-      for (const attemptArgs of attempts) {
+      // Start from the previously-discovered working shape (if any) so we
+      // don't re-trigger Convex arg-validation errors — which are logged
+      // SERVER-SIDE — on every single voice message. Fall back to brute-force
+      // discovery (and persist the winner) only when no cache exists or the
+      // cached shape stops working (e.g. backend schema changed).
+      const cachedIdx = await loadSetTranscriptionShapeIdx();
+      const order =
+        cachedIdx !== null && cachedIdx < attempts.length
+          ? [cachedIdx, ...attempts.map((_, i) => i).filter((i) => i !== cachedIdx)]
+          : attempts.map((_, i) => i);
+      for (const idx of order) {
         try {
-          await convex.mutation((api as any).messages.setTranscription, attemptArgs);
+          await convex.mutation((api as any).messages.setTranscription, attempts[idx]);
           persisted = true;
+          await saveSetTranscriptionShapeIdx(idx);
           break;
         } catch {
           // try the next, smaller arg set
