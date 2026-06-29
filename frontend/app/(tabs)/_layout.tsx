@@ -183,6 +183,16 @@ export default function TabsLayout() {
     return <Redirect href="/phone-verify" />;
   }
 
+  // iter-295: if the refresh token was TERMINALLY rejected (invalid_grant /
+  // "session not found"), the session can't be silently renewed — surface the
+  // recovery screen IMMEDIATELY rather than spinning on "Opening Smilers…".
+  // This must come BEFORE the meLoading spinner gate below, otherwise a brief
+  // me=undefined window (e.g. during a Convex reconnect after the token dies)
+  // would show the infinite spinner instead of the actionable recovery UI.
+  if (sessionExpired && isAuthenticated && !me) {
+    return <AuthRecovery onSignIn={signOut} />;
+  }
+
   if ((meLoading || syncingUser) && !meGateTimedOut) {
     return <AuthGateLoading label="Opening Smilers…" />;
   }

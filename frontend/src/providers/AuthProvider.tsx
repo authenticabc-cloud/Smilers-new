@@ -332,8 +332,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       if (tokens.refreshToken) {
         await storage.setItem(STORAGE_KEYS.REFRESH_TOKEN, tokens.refreshToken);
+      } else {
+        // iter-296 CRITICAL: a fresh login that does NOT carry a new refresh
+        // token must DISCARD any refresh token left over from a previous
+        // session. Otherwise getFreshIdToken later refreshes against that
+        // stale token whose server session is gone → `invalid_grant: session
+        // not found` → we mark the session dead and bounce the user even
+        // though they JUST signed in (the "chats flash for 2s then spin
+        // forever" bug). With no refresh token we simply use the freshly
+        // issued id_token until it genuinely expires.
+        await storage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
       }
       await storage.setItem(STORAGE_KEYS.TOKEN_EXPIRY, expiryTime.toString());
+
+      // Fresh login → clear any terminal-failure state from a prior session.
+      refreshTokenDeadRef.current = false;
+      lastRefreshErrorRef.current = null;
+      setSessionExpired(false);
 
       setIdToken(tokens.idToken);
       setUserInfo(parseJwt(tokens.idToken));
@@ -422,6 +437,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (isTerminal) {
             refreshTokenDeadRef.current = true;
             setSessionExpired(true);
+            // Purge the dead refresh token so we don't keep retrying it
+            // (every retry re-logs the same `session not found` and spams the
+            // OIDC endpoint). hasRefresh becomes false → getFreshIdToken stops
+            // attempting refresh and the recovery UI is shown once.
+            try {
+              await storage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
+            } catch {
+              /* ignore */
+            }
           }
           callDebug.push(
             'ERR',

@@ -24,6 +24,7 @@ import CallBackground from '../../src/components/CallBackground';
 import InviteContactPicker from '../../src/components/InviteContactPicker';
 import { stashCallHandoff } from '../../src/lib/call/handoff';
 import { InCallAudio } from '../../src/lib/webrtc/inCallManager';
+import { useKeepAwake } from 'expo-keep-awake';
 import Animated, {
   Easing,
   cancelAnimation,
@@ -136,6 +137,11 @@ export default function CallScreen() {
 
 export function CallScreenInner() {
   const router = useRouter();
+  // iter-296: keep the screen awake for the whole call (belt-and-suspenders
+  // alongside InCallManager.setKeepScreenOn — on some Android devices the
+  // native wake-lock alone wasn't holding, so the device kept auto-locking
+  // mid-call). This Activity-level FLAG_KEEP_SCREEN_ON releases on unmount.
+  useKeepAwake();
   const { height: windowHeight } = useWindowDimensions();
   const { isAuthenticated } = useAuth();
   // Params now come from the callHost store (this component is rendered by
