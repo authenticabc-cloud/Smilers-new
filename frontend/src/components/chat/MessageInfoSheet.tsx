@@ -14,7 +14,7 @@
  * deployed the extended fields yet, so it never blocks on the web team.
  */
 import React, { useMemo } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeConvexQuery } from '../../hooks/useSafeConvexQuery';
 import { api } from '../../convexApi';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../theme';
@@ -132,11 +132,7 @@ export default function MessageInfoSheet({ visible, message, recipientCount, onC
                 <Text style={styles.sectionTitle}>{readSubtitle}</Text>
               </View>
               {readUsers.length > 0 ? (
-                readUsers.map((u, i) => (
-                  <Text key={u?._id || i} style={styles.personRow} numberOfLines={1}>
-                    {nameOf(u)}
-                  </Text>
-                ))
+                readUsers.map((u, i) => <PersonRow key={u?._id || i} user={u} />)
               ) : (
                 <Text style={styles.emptyRow}>No one has read this message yet</Text>
               )}
@@ -150,11 +146,7 @@ export default function MessageInfoSheet({ visible, message, recipientCount, onC
                   <Text style={styles.sectionTitle}>{consumeSubtitle}</Text>
                 </View>
                 {consumedUsers.length > 0 ? (
-                  consumedUsers.map((u, i) => (
-                    <Text key={u?._id || i} style={styles.personRow} numberOfLines={1}>
-                      {nameOf(u)}
-                    </Text>
-                  ))
+                  consumedUsers.map((u, i) => <PersonRow key={u?._id || i} user={u} />)
                 ) : (
                   <Text style={styles.emptyRow}>{`Not ${verb.toLowerCase()} by anyone yet`}</Text>
                 )}
@@ -176,6 +168,33 @@ function InfoRow({ label, value }: { label: string; value: string }) {
     <View style={styles.infoRow}>
       <Text style={styles.infoLabel}>{label}</Text>
       <Text style={styles.infoValue}>{value}</Text>
+    </View>
+  );
+}
+
+/** A single recipient row with a small avatar (photo or initials) + name. */
+function PersonRow({ user }: { user: AnyUser }) {
+  const photo = (user as any)?.photoUrl || (user as any)?.avatarUrl || (user as any)?.photo || (user as any)?.image || (user as any)?.profilePhoto || null;
+  const name = nameOf(user);
+  const initials = name
+    .split(' ')
+    .map((p) => p.charAt(0))
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+  return (
+    <View style={styles.personRow}>
+      {photo ? (
+        <Image source={{ uri: photo }} style={styles.personAvatar} />
+      ) : (
+        <View style={[styles.personAvatar, styles.personAvatarFallback]}>
+          <Text style={styles.personInitials}>{initials || '?'}</Text>
+        </View>
+      )}
+      <Text style={styles.personName} numberOfLines={1}>
+        {name}
+      </Text>
     </View>
   );
 }
@@ -215,7 +234,11 @@ const styles = StyleSheet.create({
   sectionHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.sm },
   dot: { width: 10, height: 10, borderRadius: 5, marginRight: Spacing.sm },
   sectionTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold as any, color: Colors.textPrimary },
-  personRow: { fontSize: FontSize.sm, color: Colors.textPrimary, paddingVertical: 3, paddingLeft: 18 },
+  personRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 5, paddingLeft: 18 },
+  personAvatar: { width: 28, height: 28, borderRadius: 14, marginRight: Spacing.sm, backgroundColor: Colors.border },
+  personAvatarFallback: { alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.primary },
+  personInitials: { fontSize: 11, fontWeight: FontWeight.bold as any, color: Colors.white },
+  personName: { flex: 1, fontSize: FontSize.sm, color: Colors.textPrimary },
   emptyRow: { fontSize: FontSize.sm, color: Colors.textSecondary, fontStyle: 'italic', paddingLeft: 18 },
   closeBtn: {
     marginTop: Spacing.lg,
