@@ -385,6 +385,35 @@ export default function MediaBubble({
           <Text style={[styles.encryptedText, { color: isOutgoing ? '#F6FFF9' : Colors.primary }]}>Encrypted</Text>
         </View>
 
+        {/* iter-293: status-reply indicator. When a DM was sent as a reply to
+            someone's status, show a small banner so BOTH sender & receiver can
+            see it references a status (not a normal DM). Reads the
+            `replyToStatusId` link (web-parity field) and any status preview
+            the backend echoes back. */}
+        {(msg.replyToStatusId || msg.replyStatusId || msg.statusReplyTo) ? (
+          <View style={[styles.statusReplyBanner, { borderLeftColor: isOutgoing ? '#F6FFF9' : Colors.primary }]}>
+            <Ionicons
+              name="ellipse"
+              size={10}
+              color={isOutgoing ? '#F6FFF9' : Colors.primary}
+              style={styles.statusReplyDot}
+            />
+            <View style={styles.flexOne}>
+              <Text style={[styles.statusReplyLabel, { color: isOutgoing ? '#F6FFF9' : Colors.primary }]} numberOfLines={1}>
+                {isMine ? 'You replied to a status' : 'Replied to your status'}
+              </Text>
+              {(msg.replyToStatusText || msg.statusReplyText || msg.replyToStatusCaption) ? (
+                <Text
+                  style={[styles.statusReplyPreview, { color: isOutgoing ? 'rgba(246,255,249,0.85)' : Colors.textSecondary }]}
+                  numberOfLines={1}
+                >
+                  {msg.replyToStatusText || msg.statusReplyText || msg.replyToStatusCaption}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
+
         {parentMsg ? (
           <TouchableOpacity
             activeOpacity={0.7}
@@ -1907,6 +1936,17 @@ const styles = StyleSheet.create({
   quoteAccent: { width: 3, borderRadius: 2, backgroundColor: Colors.primary },
   quoteName: { fontSize: 12, fontWeight: FontWeight.bold, color: Colors.primary },
   quoteText: { fontSize: 13, lineHeight: 18, color: Colors.textSecondary },
+  statusReplyBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderLeftWidth: 2,
+    paddingLeft: 7,
+    marginBottom: 6,
+    gap: 6,
+  },
+  statusReplyDot: { marginRight: 2 },
+  statusReplyLabel: { fontSize: 11.5, fontWeight: FontWeight.semibold },
+  statusReplyPreview: { fontSize: 12, lineHeight: 16 },
   imageWrap: { position: 'relative' },
   image: { width: IMG_W, height: IMG_W, borderRadius: Radius.md, backgroundColor: Colors.borderLight },
   imagePlaceholder: { width: IMG_W, height: IMG_W, borderRadius: Radius.md, backgroundColor: Colors.borderLight, alignItems: 'center', justifyContent: 'center' },

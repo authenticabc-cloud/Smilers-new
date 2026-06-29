@@ -34,6 +34,7 @@ import EmojiPickerSheet from '../../src/components/EmojiPickerSheet';
 import GiphyPicker, { GiphyAsset } from '../../src/components/GiphyPicker';
 import MediaBubble from '../../src/components/MediaBubble';
 import MessageInfoSheet from '../../src/components/chat/MessageInfoSheet';
+import { applyAutoNumberingOnNewline } from '../../src/lib/autoNumbering';
 import { LiveLocationRequestBanner } from '../../src/components/LiveLocationRequestBanner';
 import { LiveLocationSharingPill } from '../../src/components/LiveLocationSharingPill';
 import PollComposer from '../../src/components/PollComposer';
@@ -1400,7 +1401,10 @@ export default function ChatScreen() {
   };
 
   const handleTyping = (val: string) => {
-    setText(val);
+    // iter-293: continuous auto-numbering — when Enter is pressed at the end of
+    // a list line ("1. ", "a) ", "- ", …), auto-insert the next marker.
+    const augmented = applyAutoNumberingOnNewline(text, val);
+    setText(augmented);
     if (conversationId && val.length > 0 && typingIndicatorsEnabledRef.current) {
       setTyping({ conversationId }).catch(() => {});
     }

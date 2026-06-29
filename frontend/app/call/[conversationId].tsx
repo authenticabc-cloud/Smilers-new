@@ -415,7 +415,7 @@ export function CallScreenInner() {
   // after a few seconds of no interaction, and reappear on a screen tap.
   const CONTROLS_AUTO_HIDE_MS = 4000;
   const [controlsVisible, setControlsVisible] = useState(true);
-  const controlsOpacity = useRef(new Animated.Value(1)).current;
+  const controlsOpacity = useRef(new RNAnimated.Value(1)).current;
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearHideTimer = useCallback(() => {
     if (hideTimerRef.current) {
@@ -426,7 +426,7 @@ export function CallScreenInner() {
   const fadeControls = useCallback(
     (toVisible: boolean) => {
       setControlsVisible(toVisible);
-      Animated.timing(controlsOpacity, {
+      RNAnimated.timing(controlsOpacity, {
         toValue: toVisible ? 1 : 0,
         duration: 220,
         useNativeDriver: true,
@@ -2133,7 +2133,7 @@ export function CallScreenInner() {
             </View>
           ) : null}
           {/* Top overlay: name + duration (fades with controls) */}
-          <Animated.View
+          <RNAnimated.View
             style={[styles.videoTopOverlayAnim, { opacity: controlsOpacity }]}
             pointerEvents="none"
           >
@@ -2143,16 +2143,16 @@ export function CallScreenInner() {
               </Text>
               <Text style={styles.videoStatus}>{isActive ? durationLabel : statusText}</Text>
             </SafeAreaView>
-          </Animated.View>
+          </RNAnimated.View>
           {/* Bottom controls overlay (fades + auto-hides) */}
-          <Animated.View
+          <RNAnimated.View
             style={[styles.videoControlsOverlayAnim, { opacity: controlsOpacity }]}
             pointerEvents={controlsVisible ? 'box-none' : 'none'}
           >
             <SafeAreaView edges={['bottom']} style={styles.videoControlsOverlay}>
               {renderControls()}
             </SafeAreaView>
-          </Animated.View>
+          </RNAnimated.View>
         </View>
       ) : (
         <View style={StyleSheet.absoluteFill}>

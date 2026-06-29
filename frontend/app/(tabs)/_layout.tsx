@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, AppState, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, AppState, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Redirect, Tabs, useRootNavigationState } from 'expo-router';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
@@ -15,7 +15,7 @@ export default function TabsLayout() {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { useSafeAreaInsets } = require('react-native-safe-area-context');
   const insets = useSafeAreaInsets();
-  const { isLoading, isAuthenticated } = useAuth();
+  const { isLoading, isAuthenticated, signOut } = useAuth();
   const updateCurrentUser = useMutation(api.users.updateCurrentUser);
   // Reactive subscription: changes from verifyOtp/savePhoneVerified propagate instantly.
   const meQuery = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip');
@@ -187,6 +187,17 @@ export default function TabsLayout() {
     return <AuthGateLoading label="Opening Smilers…" />;
   }
 
+  // iter-293 RESUME/AUTH RECOVERY: if the me-query gate has timed out and we
+  // STILL have no user despite being "authenticated", the session token was
+  // almost certainly rejected (the diagnostics show
+  // `getFreshIdToken: refresh FAILED → returning STALE id_token`). Previously
+  // this left the user on an infinite "Opening Smilers…" spinner that only a
+  // cache-clear could fix. Instead, surface an actionable recovery screen so
+  // the user can re-authenticate in-app without reinstalling.
+  if (meGateTimedOut && !me && !syncingUser) {
+    return <AuthRecovery onSignIn={signOut} />;
+  }
+
   // If the me query resolved to null (or hung past the gate) but the user has the
   // local install verification marker, NEVER bounce back to phone-verify — that
   // would race the phone-verify "go to chats" redirect and cause a flicker/shake loop.
@@ -284,6 +295,42 @@ function AuthGateLoading({ label }) {
   );
 }
 
+// iter-293: shown when the session token was rejected and we couldn't load the
+// user — lets the user re-authenticate in-app instead of being stuck on an
+// infinite spinner that only a cache-clear could resolve.
+function AuthRecovery({ onSignIn }: { onSignIn: () => Promise<void> | void }) {
+  const [busy, setBusy] = React.useState(false);
+  const handle = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await onSignIn();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <View style={styles.loadingWrap} testID="tabs-auth-recovery-screen">
+      <Text style={styles.recoveryTitle}>Couldn&apos;t verify your session</Text>
+      <Text style={styles.recoveryBody}>
+        Your sign-in session expired or couldn&apos;t be refreshed. Please sign in again to continue.
+      </Text>
+      <TouchableOpacity
+        style={[styles.recoveryBtn, busy && styles.recoveryBtnDisabled]}
+        onPress={handle}
+        disabled={busy}
+        testID="tabs-auth-recovery-signin"
+      >
+        {busy ? (
+          <ActivityIndicator color={Colors.white} />
+        ) : (
+          <Text style={styles.recoveryBtnText}>Sign in again</Text>
+        )}
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   loadingWrap: {
     flex: 1,
@@ -297,4 +344,29 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     fontWeight: FontWeight.medium,
   },
+  recoveryTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+    textAlign: 'center',
+    paddingHorizontal: 32,
+  },
+  recoveryBody: {
+    fontSize: FontSize.base,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    paddingHorizontal: 40,
+    lineHeight: 22,
+  },
+  recoveryBtn: {
+    marginTop: 8,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 32,
+    paddingVertical: 14,
+    borderRadius: 12,
+    minWidth: 200,
+    alignItems: 'center',
+  },
+  recoveryBtnDisabled: { opacity: 0.6 },
+  recoveryBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.white },
 });
