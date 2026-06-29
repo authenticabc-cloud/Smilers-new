@@ -55,6 +55,34 @@ import { usePhoneMessageActions, findPhoneMatches } from '../lib/usePhoneMessage
 import { useAutoDownloadMedia } from '../lib/mediaAutoDownload';
 import { purgeMessageMedia } from '../lib/deletedMediaPurge';
 
+// iter-292 MEDIA CONSUMPTION TRACKING.
+// Records when a RECIPIENT actually plays / watches / opens / views an
+// incoming media message, so the sender's "Message Info" sheet can show
+// "Played/Watched/Viewed/Opened by …" separately from "Read by …".
+// Self-contained per media component (no prop threading): each player calls
+// the returned `markConsumed()` on its first real interaction.
+//   • Only fires for INCOMING media (`!isMine`).
+//   • Idempotent — guarded by a per-instance ref so repeated plays don't spam.
+//   • Fully graceful: if the backend hasn't deployed `messages.markConsumed`
+//     yet, the call rejects and is swallowed (UI never breaks).
+function useMarkConsumedOnce(msg: any, isMine: boolean): () => void {
+  const markConsumed = useMutation((api as any).messages?.markConsumed);
+  const firedRef = useRef(false);
+  return useCallback(() => {
+    if (firedRef.current) return;
+    if (isMine) return;
+    const messageId = msg?._id;
+    if (!messageId || typeof markConsumed !== 'function') return;
+    firedRef.current = true;
+    try {
+      void Promise.resolve(markConsumed({ messageId })).catch(() => {});
+    } catch {
+      /* backend mutation not deployed — ignore */
+    }
+  }, [msg?._id, isMine, markConsumed]);
+}
+
+
 // Module-level "currently playing" audio singleton — guarantees only one
 // voice message plays at a time. Uses expo-audio's AudioPlayer (expo-av
 // has been deprecated in SDK 54).
@@ -694,6 +722,7 @@ function ImageMessage({ msg, timeStr, textStyle, e2eeStatus, isMine }: { msg: an
   const [open, setOpen] = useState(false);
   const { url: src, loading, error } = useDecryptedMediaUrl(msg, e2eeStatus);
   useAutoDownloadMedia({ msg, isMine, src, mediaType: 'image' });
+  const markConsumed = useMarkConsumedOnce(msg, isMine);
 
   if (!src) {
     return (
@@ -709,7 +738,7 @@ function ImageMessage({ msg, timeStr, textStyle, e2eeStatus, isMine }: { msg: an
 
   return (
     <>
-      <TouchableOpacity activeOpacity={0.9} onPress={() => setOpen(true)} testID="image-bubble" disabled={loading}>
+      <TouchableOpacity activeOpacity={0.9} onPress={() => { markConsumed(); setOpen(true); }} testID="image-bubble" disabled={loading}>
         <View style={styles.imageWrap}>
           <Image source={{ uri: src }} style={styles.image} resizeMode="cover" />
           <View style={styles.imageTimeOverlay}>
@@ -895,6 +924,7 @@ function VideoMessage({
 }) {
   const { url: src, loading, error } = useDecryptedMediaUrl(msg, e2eeStatus);
   useAutoDownloadMedia({ msg, isMine, src, mediaType: 'video' });
+  const markConsumed = useMarkConsumedOnce(msg, isMine);
   // expo-video: useVideoPlayer creates the player and the setup callback runs
   // once. We start PAUSED (videos in chat don't auto-play; user taps Play).
   const player = useVideoPlayer(
@@ -988,6 +1018,12 @@ function VideoMessage({
     } catch {}
   }, [src, player]);
 
+  // Mark this incoming video as "Watched" the first time the recipient plays it.
+  const handleTogglePlay = useCallback(() => {
+    if (player && !player.playing) markConsumed();
+    void togglePlay();
+  }, [player, togglePlay, markConsumed]);
+
   if (!src) {
     return (
       <View style={[styles.videoPlaceholder]} testID="video-bubble-loading">
@@ -1010,7 +1046,7 @@ function VideoMessage({
   return (
     <>
       <View>
-        <TouchableOpacity activeOpacity={0.9} onPress={togglePlay} testID="video-bubble" style={styles.videoWrap}>
+        <TouchableOpacity activeOpacity={0.9} onPress={handleTogglePlay} testID="video-bubble" style={styles.videoWrap}>
           <VideoView
             player={player}
             style={styles.videoPlayer}
@@ -1203,6 +1239,7 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
   const totalSec = getMessageDurationSec(msg);
   const { url: src, error: srcError } = useDecryptedMediaUrl(msg, e2eeStatus);
   useAutoDownloadMedia({ msg, isMine, src, mediaType: msg?.type === 'audio' ? 'audio' : 'voice' });
+  const markConsumed = useMarkConsumedOnce(msg, isMine);
 
   // expo-audio: AudioPlayer instance for THIS voice bubble's playback.
   const playerRef = useRef<AudioPlayer | null>(null);
@@ -1245,6 +1282,7 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
   const toggle = async () => {
     if (!src) return;
     try {
+      markConsumed();
       stopOtherSounds();
       let player = playerRef.current;
       if (!player) {
@@ -1518,6 +1556,7 @@ function PollMessage({ msg }: { msg: any }) {
 function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e2eeStatus: E2EEStatus | null }) {
   const { url: src, error: srcError } = useDecryptedMediaUrl(msg, e2eeStatus);
   useAutoDownloadMedia({ msg, isMine, src, mediaType: 'document' });
+  const markConsumed = useMarkConsumedOnce(msg, isMine);
 
   // iter-179: APKs are allowed (WhatsApp-style policy) but received ones
   // carry an explicit caution so less tech-savvy users don't sideload
@@ -1527,6 +1566,7 @@ function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e
 
   const onOpen = async () => {
     if (!src) return;
+    markConsumed();
     try {
       await Linking.openURL(src);
     } catch {}

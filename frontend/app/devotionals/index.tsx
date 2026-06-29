@@ -131,9 +131,17 @@ export default function DevotionalsFeedScreen() {
   const devotionalContacts = useQuery(api.contacts.getContacts, me ? {} : 'skip') as any[] | undefined;
   const removeDevotional = useMutation((api as any).devotionals?.remove);
   const reportDevotional = useMutation((api as any).devotionals?.reportDevotional);
+  // iter-292: admins can delete ANY devotion directly from the feed (no report
+  // needed), with an OPTIONAL reason — mirroring the web app's moderation.
+  const adminDeleteDevotional = useMutation((api as any).devotionals?.adminDelete);
   const [reportTarget, setReportTarget] = useState<DevotionalItem | null>(null);
   const [reportReason, setReportReason] = useState('');
   const [reportSubmitting, setReportSubmitting] = useState(false);
+  // iter-292: admin-delete-any-devotion modal state.
+  const [adminTarget, setAdminTarget] = useState<DevotionalItem | null>(null);
+  const [adminReason, setAdminReason] = useState('');
+  const [adminSubmitting, setAdminSubmitting] = useState(false);
+  const isAdmin = !!(me && ((me as any).role === 'admin' || (me as any).isAdmin === true));
 
   // Log feed errors so we can see them server-side without crashing the UI.
   useEffect(() => {
@@ -256,6 +264,29 @@ export default function DevotionalsFeedScreen() {
     }
   }, [reportTarget, reportReason, reportDevotional]);
 
+  // iter-292: admin deletes ANY devotion (reason optional). Backend
+  // `devotionals.adminDelete` is trustee/admin-gated server-side, so this is
+  // safe even though we also hide the UI behind `isAdmin`.
+  const submitAdminDelete = useCallback(async () => {
+    if (!adminTarget) return;
+    setAdminSubmitting(true);
+    try {
+      const reason = adminReason.trim();
+      await (adminDeleteDevotional as any)({
+        devotionalId: adminTarget._id,
+        ...(reason ? { reason } : {}),
+      });
+      setAdminTarget(null);
+      setAdminReason('');
+      Alert.alert('Devotion deleted', 'The devotion has been removed for everyone.');
+    } catch (errorValue: any) {
+      const msg = String(errorValue?.data?.message || errorValue?.message || '');
+      Alert.alert('Could not delete', msg || 'Please try again.');
+    } finally {
+      setAdminSubmitting(false);
+    }
+  }, [adminTarget, adminReason, adminDeleteDevotional]);
+
   const renderItem = useCallback(
     ({ item }: { item: DevotionalItem }) => {
       const isMine = me?._id && item.authorId === me._id;
@@ -338,12 +369,28 @@ export default function DevotionalsFeedScreen() {
               </TouchableOpacity>
             ) : (
               <TouchableOpacity
-                onPress={() => { setReportReason(''); setReportTarget(item); }}
+                onPress={() => {
+                  if (isAdmin) {
+                    // Admin: choose between reporting or deleting outright.
+                    Alert.alert('Devotion options', undefined, [
+                      { text: 'Report', onPress: () => { setReportReason(''); setReportTarget(item); } },
+                      {
+                        text: 'Delete (Admin)',
+                        style: 'destructive',
+                        onPress: () => { setAdminReason(''); setAdminTarget(item); },
+                      },
+                      { text: 'Cancel', style: 'cancel' },
+                    ]);
+                  } else {
+                    setReportReason('');
+                    setReportTarget(item);
+                  }
+                }}
                 hitSlop={12}
                 style={styles.menuBtn}
                 testID={`devotional-report-${item._id}`}
               >
-                <Feather name="flag" size={16} color={Colors.textMuted} />
+                <Feather name={isAdmin ? 'more-vertical' : 'flag'} size={isAdmin ? 18 : 16} color={Colors.textMuted} />
               </TouchableOpacity>
             )}
           </View>
@@ -375,7 +422,7 @@ export default function DevotionalsFeedScreen() {
         </View>
       );
     },
-    [me, noTranslateLangs, onDelete, preferredLanguage, devotionalContacts],
+    [me, noTranslateLangs, onDelete, preferredLanguage, devotionalContacts, isAdmin],
   );
 
   return (
@@ -484,6 +531,55 @@ export default function DevotionalsFeedScreen() {
                 testID="devotional-report-submit"
               >
                 <Text style={styles.reportSubmitText}>{reportSubmitting ? 'Submitting…' : 'Submit report'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* iter-292: admin delete-any-devotion modal (reason optional). */}
+      <Modal
+        visible={!!adminTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => (!adminSubmitting ? setAdminTarget(null) : undefined)}
+      >
+        <View style={styles.reportBackdrop}>
+          <View style={styles.reportCard} testID="devotional-admin-delete-modal">
+            <View style={styles.reportHeaderRow}>
+              <Feather name="trash-2" size={20} color={Colors.danger} />
+              <Text style={styles.reportTitle}>Delete devotion (Admin)</Text>
+            </View>
+            <Text style={styles.reportHelp}>
+              This removes the devotion from everyone&apos;s feed. A reason is optional.
+            </Text>
+            <TextInput
+              style={styles.reportInput}
+              value={adminReason}
+              onChangeText={setAdminReason}
+              placeholder="Reason (optional)…"
+              placeholderTextColor={Colors.textMuted}
+              multiline
+              maxLength={500}
+              editable={!adminSubmitting}
+              testID="devotional-admin-delete-input"
+            />
+            <View style={styles.reportBtnRow}>
+              <TouchableOpacity
+                style={[styles.reportBtn, styles.reportCancelBtn]}
+                onPress={() => setAdminTarget(null)}
+                disabled={adminSubmitting}
+                testID="devotional-admin-delete-cancel"
+              >
+                <Text style={styles.reportCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.reportBtn, styles.reportSubmitBtn, adminSubmitting && styles.reportBtnDisabled]}
+                onPress={submitAdminDelete}
+                disabled={adminSubmitting}
+                testID="devotional-admin-delete-submit"
+              >
+                <Text style={styles.reportSubmitText}>{adminSubmitting ? 'Deleting…' : 'Delete'}</Text>
               </TouchableOpacity>
             </View>
           </View>

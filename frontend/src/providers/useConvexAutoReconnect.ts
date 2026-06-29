@@ -277,6 +277,18 @@ export function useConvexAutoReconnect(client: ConvexReactClient) {
       const prev = appStateRef.current;
       appStateRef.current = next;
       if (next === 'active' && prev !== 'active') {
+        // iter-292 RESUME-FIX: the SETTLE_WINDOW that prevents the FATAL
+        // "Base version … doesn't match …" desync was only armed at MOUNT,
+        // so it protected cold-start but NOT resume-from-background. On
+        // resume, AuthProvider ALSO fires an AppState 'active' listener that
+        // refreshes the OIDC token → setIdToken → Convex re-auth handshake.
+        // If our reconnect runs concurrently with that re-auth, the socket
+        // desyncs → sync permanently dies → infinite "Opening Smilers…" until
+        // the user clears app storage. Re-arming the settle window on EVERY
+        // foreground transition lets the token re-auth complete before we
+        // touch the socket. Convex's own internal backoff still reconnects in
+        // the meantime; our heartbeat assists once the window elapses.
+        mountedAtRef.current = Date.now();
         // Give the OS a moment to actually restore network access
         // before evaluating — iOS in particular is async about
         // WiFi resume.

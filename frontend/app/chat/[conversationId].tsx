@@ -33,6 +33,7 @@ import { SharedContactBubble } from '../../src/components/chat/SharedContactBubb
 import EmojiPickerSheet from '../../src/components/EmojiPickerSheet';
 import GiphyPicker, { GiphyAsset } from '../../src/components/GiphyPicker';
 import MediaBubble from '../../src/components/MediaBubble';
+import MessageInfoSheet from '../../src/components/chat/MessageInfoSheet';
 import { LiveLocationRequestBanner } from '../../src/components/LiveLocationRequestBanner';
 import { LiveLocationSharingPill } from '../../src/components/LiveLocationSharingPill';
 import PollComposer from '../../src/components/PollComposer';
@@ -206,6 +207,9 @@ export default function ChatScreen() {
   // the highlight is visible; a timer clears it after a short interval.
   const [jumpHighlightId, setJumpHighlightId] = useState<string | null>(null);
   const jumpHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // iter-292: message selected for the rich "Message Info" sheet (Read by +
+  // media consumption rows). null = sheet closed.
+  const [infoMsg, setInfoMsg] = useState<any | null>(null);
   const [selectedMsg, setSelectedMsg] = useState<any | null>(null);
   // Tri-state delete-mode sheet: when set, prompts WhatsApp-style "Delete for me /
   // for receiver / for everyone" (sent) or "Delete for me / ask sender" (received).
@@ -2338,7 +2342,9 @@ export default function ChatScreen() {
     if (readAt) rows.push(`Read: ${readAt}`);
     else if (deliveredAt) rows.push('Read: —');
     if (editedAt) rows.push(`Edited: ${editedAt}`);
-    Alert.alert('Message info', rows.join('\n'));
+    // iter-292: show the rich Message Info sheet (Read by + media
+    // consumption: Played/Watched/Viewed/Opened by) instead of a plain Alert.
+    setInfoMsg(msg);
   }, [selectedMsg]);
 
   const onPin = useCallback(async () => {
@@ -3909,6 +3915,15 @@ export default function ChatScreen() {
         onMoreReactions={onMoreReactions}
         onMessageInfo={onMessageInfo}
         onDelete={onDelete}
+      />
+
+      {/* iter-292: rich Message Info sheet — Read by + media consumption
+          (Played/Watched/Viewed/Opened by), mirroring the web app. */}
+      <MessageInfoSheet
+        visible={!!infoMsg}
+        message={infoMsg}
+        recipientCount={Math.max(0, (conversation?.participants?.length || conversation?.memberCount || 2) - 1)}
+        onClose={() => setInfoMsg(null)}
       />
 
       {/* Tri-state delete-mode sheet (WhatsApp-style). For sent messages we
