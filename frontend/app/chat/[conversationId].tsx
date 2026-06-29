@@ -34,7 +34,7 @@ import EmojiPickerSheet from '../../src/components/EmojiPickerSheet';
 import GiphyPicker, { GiphyAsset } from '../../src/components/GiphyPicker';
 import MediaBubble from '../../src/components/MediaBubble';
 import MessageInfoSheet from '../../src/components/chat/MessageInfoSheet';
-import { applyAutoNumberingOnNewline } from '../../src/lib/autoNumbering';
+import { processComposerChange } from '../../src/lib/autoNumbering';
 import { LiveLocationRequestBanner } from '../../src/components/LiveLocationRequestBanner';
 import { LiveLocationSharingPill } from '../../src/components/LiveLocationSharingPill';
 import PollComposer from '../../src/components/PollComposer';
@@ -188,6 +188,12 @@ export default function ChatScreen() {
   // when chatting from the native client).
   const engagement = useEngagementTracker();
   const [text, setText] = useState('');
+  // iter-294: caret tracking for cursor-aware auto-numbering (mid-list Enter
+  // + renumber). `composerSelectionRef` mirrors the live caret; `forcedSelection`
+  // is a one-shot controlled selection we set only after programmatically
+  // moving the caret (then released on the next selection change).
+  const composerSelectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
+  const [forcedSelection, setForcedSelection] = useState<{ start: number; end: number } | undefined>(undefined);
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [replyTo, setReplyTo] = useState<any | null>(null);
@@ -1401,10 +1407,17 @@ export default function ChatScreen() {
   };
 
   const handleTyping = (val: string) => {
-    // iter-293: continuous auto-numbering — when Enter is pressed at the end of
-    // a list line ("1. ", "a) ", "- ", …), auto-insert the next marker.
-    const augmented = applyAutoNumberingOnNewline(text, val);
-    setText(augmented);
+    // iter-294: cursor-aware continuous auto-numbering + renumbering.
+    // Handles Enter anywhere in a list (insert next marker at caret) and keeps
+    // ordered lists sequential after inserts/deletes. Within-line edits pass
+    // through untouched.
+    const prevCursor = composerSelectionRef.current?.start ?? text.length;
+    const result = processComposerChange(text, val, prevCursor);
+    setText(result.text);
+    if (result.selection) {
+      composerSelectionRef.current = result.selection;
+      setForcedSelection(result.selection);
+    }
     if (conversationId && val.length > 0 && typingIndicatorsEnabledRef.current) {
       setTyping({ conversationId }).catch(() => {});
     }
@@ -3721,6 +3734,14 @@ export default function ChatScreen() {
                   draftBold ? styles.inputBold : null,
                 ]}
                 multiline
+                selection={pendingImages.length > 0 ? undefined : forcedSelection}
+                onSelectionChange={(e) => {
+                  const sel = e.nativeEvent.selection;
+                  composerSelectionRef.current = sel;
+                  // Release the one-shot controlled selection once applied so
+                  // the user can move the caret freely afterwards.
+                  if (forcedSelection) setForcedSelection(undefined);
+                }}
                 editable={isConversationAvailable && !sending && !uploading}
                 onFocus={() => setComposerFocused(true)}
                 onBlur={() => setComposerFocused(false)}
