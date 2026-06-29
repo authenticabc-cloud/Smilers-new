@@ -15,7 +15,7 @@ export default function TabsLayout() {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { useSafeAreaInsets } = require('react-native-safe-area-context');
   const insets = useSafeAreaInsets();
-  const { isLoading, isAuthenticated, signOut } = useAuth();
+  const { isLoading, isAuthenticated, sessionExpired, signOut } = useAuth();
   const updateCurrentUser = useMutation(api.users.updateCurrentUser);
   // Reactive subscription: changes from verifyOtp/savePhoneVerified propagate instantly.
   const meQuery = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip');
@@ -195,6 +195,12 @@ export default function TabsLayout() {
   // cache-clear could fix. Instead, surface an actionable recovery screen so
   // the user can re-authenticate in-app without reinstalling.
   if (meGateTimedOut && !me && !syncingUser) {
+    return <AuthRecovery onSignIn={signOut} />;
+  }
+
+  // iter-295: surface recovery INSTANTLY (no 10s wait) when the refresh token
+  // was terminally rejected — the session can't be silently renewed.
+  if (sessionExpired && isAuthenticated && !me) {
     return <AuthRecovery onSignIn={signOut} />;
   }
 

@@ -63,6 +63,10 @@ interface AuthContextValue {
   isLoading: boolean;
   isSignInReady: boolean;
   isAuthenticated: boolean;
+  // iter-295: true when the refresh token is terminally rejected
+  // (invalid_grant etc.) — the session can't be silently renewed and the user
+  // must re-authenticate. Lets the UI surface recovery instantly.
+  sessionExpired: boolean;
   authMode: 'direct' | 'webview';
   idToken: string | null;
   lastError: string | null;
@@ -140,6 +144,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // re-auth; a transient failure should keep the cached session and retry.
   const lastRefreshErrorRef = useRef<string | null>(null);
   const refreshTokenDeadRef = useRef<boolean>(false);
+  // State mirror of refreshTokenDeadRef so the UI re-renders and can surface
+  // the recovery screen the instant a terminal refresh failure happens.
+  const [sessionExpired, setSessionExpired] = useState(false);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const discoveryReadyRef = useRef(false);
   // iter-191: persisted copy of the OIDC discovery document. On a cold start
@@ -412,7 +419,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             code === 'invalid_token' ||
             code === 'unauthorized_client' ||
             code === 'invalid_client';
-          if (isTerminal) refreshTokenDeadRef.current = true;
+          if (isTerminal) {
+            refreshTokenDeadRef.current = true;
+            setSessionExpired(true);
+          }
           callDebug.push(
             'ERR',
             `AUTH refreshAsync threw: code=${code || '?'} terminal=${isTerminal} msg=${String(desc).slice(0, 140)}`,
@@ -441,6 +451,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIdToken(null);
     setUserInfo(null);
     setLastError(null);
+    refreshTokenDeadRef.current = false;
+    setSessionExpired(false);
   };
 
   const signIn = useCallback(async () => {
@@ -632,6 +644,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         isSignInReady: !!request && !!discovery,
         isAuthenticated: !!idToken,
+        sessionExpired,
         authMode: AUTH_MODE,
         idToken,
         lastError,
