@@ -201,6 +201,11 @@ export default function ChatScreen() {
   // message list stays visible; matches are highlighted in place.
   const [searchActivePos, setSearchActivePos] = useState(0);
   const searchInitTermRef = useRef<string | null>(null);
+  // iter-291: tapping a reply's quoted preview jumps to the original message
+  // and briefly flashes it. `jumpHighlightId` holds the target message id while
+  // the highlight is visible; a timer clears it after a short interval.
+  const [jumpHighlightId, setJumpHighlightId] = useState<string | null>(null);
+  const jumpHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selectedMsg, setSelectedMsg] = useState<any | null>(null);
   // Tri-state delete-mode sheet: when set, prompts WhatsApp-style "Delete for me /
   // for receiver / for everyone" (sent) or "Delete for me / ask sender" (received).
@@ -1043,6 +1048,34 @@ export default function ChatScreen() {
       return (p + 1) % n;
     });
   }, [searchMatchPositions.length]);
+
+  // iter-291: jump to the original message a reply references. Scrolls it to
+  // the centre of the viewport and briefly flashes it so the user can see
+  // exactly which message the reply was about (WhatsApp-style).
+  const jumpToMessage = useCallback(
+    (messageId: string | null | undefined) => {
+      if (!messageId) return;
+      const idx = timeline.findIndex((it: any) => String(it?._id) === String(messageId));
+      if (idx < 0) return; // parent not loaded in the current timeline window
+      try {
+        listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
+      } catch {}
+      if (jumpHighlightTimerRef.current) clearTimeout(jumpHighlightTimerRef.current);
+      setJumpHighlightId(String(messageId));
+      jumpHighlightTimerRef.current = setTimeout(() => {
+        setJumpHighlightId(null);
+        jumpHighlightTimerRef.current = null;
+      }, 1800);
+    },
+    [timeline],
+  );
+
+  useEffect(
+    () => () => {
+      if (jumpHighlightTimerRef.current) clearTimeout(jumpHighlightTimerRef.current);
+    },
+    [],
+  );
 
 
   // iter-164 auto-delete for malicious links/files.
@@ -3356,20 +3389,23 @@ export default function ChatScreen() {
                       messageInputRef.current?.focus();
                     }}
                   >
+                    {(() => {
+                      // Backend field name normalisation (iter-101):
+                      // Smilers Convex stores the parent reference under
+                      // `replyToId` per the public spec, but the mobile
+                      // client historically wrote `replyToMessageId`.
+                      // Look up by either to be robust against both
+                      // historical AND fresh messages.
+                      const parentId = item.replyToId || item.replyToMessageId;
+                      const parentMsg = parentId ? msgById.get(parentId) : undefined;
+                      return (
                     <MediaBubble
                       msg={item}
                       isMine={item.senderId === effectiveMe?._id}
                       myUserId={effectiveMe?._id}
-                      parentMsg={(() => {
-                        // Backend field name normalisation (iter-101):
-                        // Smilers Convex stores the parent reference under
-                        // `replyToId` per the public spec, but the mobile
-                        // client historically wrote `replyToMessageId`.
-                        // Look up by either to be robust against both
-                        // historical AND fresh messages.
-                        const parentId = item.replyToId || item.replyToMessageId;
-                        return parentId ? msgById.get(parentId) : undefined;
-                      })()}
+                      parentMsg={parentMsg}
+                      onPressParent={parentMsg ? () => jumpToMessage(parentId) : undefined}
+                      isJumpHighlighted={jumpHighlightId === String(item._id)}
                       appearance={chatAppearance}
                       e2eeStatus={e2eeStatus}
                       onLongPress={viewerSuspension || isBroadcastReadOnly ? () => {} : () => {
@@ -3405,6 +3441,8 @@ export default function ChatScreen() {
                           : (emoji) => onToggleMyReaction(item._id, emoji)
                       }
                     />
+                      );
+                    })()}
                   </SwipeToReply>
                 </>
               );

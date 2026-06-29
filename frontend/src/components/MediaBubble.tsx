@@ -149,6 +149,12 @@ interface BubbleProps {
   // highlight + a subtle outline so it stands out among the other matches).
   searchTerm?: string | null;
   isActiveSearchMatch?: boolean;
+  // iter-291: tapping the quoted reply preview jumps to (and highlights) the
+  // original message it references. `onPressParent` is wired only when a
+  // parent message exists. `isJumpHighlighted` briefly flashes this bubble
+  // when it is the target of such a jump.
+  onPressParent?: () => void;
+  isJumpHighlighted?: boolean;
 }
 
 export default function MediaBubble({
@@ -164,6 +170,8 @@ export default function MediaBubble({
   multiSelected,
   searchTerm,
   isActiveSearchMatch,
+  onPressParent,
+  isJumpHighlighted,
 }: BubbleProps) {
   const time = msg._creationTime ? new Date(msg._creationTime) : new Date();
   const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -332,6 +340,7 @@ export default function MediaBubble({
           // tint when this bubble is in the selection set.
           multiSelected ? styles.bubbleMultiSelected : null,
           isActiveSearchMatch ? styles.bubbleActiveSearchMatch : null,
+          isJumpHighlighted ? styles.bubbleJumpHighlight : null,
         ]}
         testID={`message-bubble-${msg._id}`}
       >
@@ -349,7 +358,13 @@ export default function MediaBubble({
         </View>
 
         {parentMsg ? (
-          <View style={styles.quoteBlock}>
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={onPressParent}
+            disabled={!onPressParent}
+            style={styles.quoteBlock}
+            testID={`reply-quote-${msg._id}`}
+          >
             <View style={styles.quoteAccent} />
             <View style={styles.flexOne}>
               <Text style={styles.quoteName}>
@@ -359,7 +374,7 @@ export default function MediaBubble({
                 {stripRichTextTags(parentMsg.text) || `[${parentMsg.type}]`}
               </Text>
             </View>
-          </View>
+          </TouchableOpacity>
         ) : null}
 
         <BubbleBody msg={msg} timeStr={timeStr} textStyle={[bubbleTextStyle, { color: messageTextColor }]} isMine={isMine} e2eeStatus={e2eeStatus || null} searchTerm={searchTerm} isActiveSearchMatch={isActiveSearchMatch} />
@@ -2064,6 +2079,7 @@ const styles = StyleSheet.create({
   searchHighlightActive: { backgroundColor: '#FACC15', color: '#1A1A1A', fontWeight: FontWeight.bold },
   phoneLink: { textDecorationLine: 'underline', fontWeight: FontWeight.bold },
   bubbleActiveSearchMatch: { borderWidth: 2, borderColor: '#F59E0B' },
+  bubbleJumpHighlight: { borderWidth: 2, borderColor: Colors.primary, opacity: 0.92 },
   deletedBubble: { opacity: 0.55 },
   // bubbleMultiSelected — visual feedback when this bubble is in the
   // multi-select forwarding set (iter-99). Light green tint + a
