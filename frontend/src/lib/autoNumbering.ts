@@ -315,3 +315,55 @@ function renumberKeepingCaret(text: string, caret: number): { text: string; sele
   return { text: renumbered, selection: { start: clamped, end: clamped } };
 }
 
+
+/**
+ * One-tap list toggle for a composer toolbar button. Applies (or removes) a
+ * numbered or bulleted list across the lines spanned by the current selection
+ * (or the caret's line when there's no selection). Toggling is smart: if every
+ * affected non-empty line is already the requested list type, it strips the
+ * markers; otherwise it applies them (replacing any existing list marker).
+ * Returns the new text and a selection covering the affected block.
+ */
+export function toggleListFormat(
+  text: string,
+  selection: { start: number; end: number } | undefined,
+  kind: 'numeric' | 'bullet',
+): { text: string; selection: { start: number; end: number } } {
+  const selStart = selection ? Math.min(selection.start, selection.end) : text.length;
+  const selEnd = selection ? Math.max(selection.start, selection.end) : selStart;
+
+  const blockStart = text.lastIndexOf('\n', selStart - 1) + 1;
+  const nlAfter = text.indexOf('\n', selEnd);
+  const blockEnd = nlAfter === -1 ? text.length : nlAfter;
+
+  const block = text.slice(blockStart, blockEnd);
+  const lines = block.split('\n');
+
+  const stripMarker = (line: string): string => {
+    const indent = (line.match(/^(\s*)/) || ['', ''])[1];
+    const rest = line.slice(indent.length);
+    const m = rest.match(/^(?:\d+[.)]|[A-Za-z]+[.)]|[-*•])\s+(.*)$/);
+    return m ? indent + m[1] : line;
+  };
+  const hasKind = (line: string): boolean => {
+    const rest = line.replace(/^\s*/, '');
+    return kind === 'bullet' ? /^[-*•]\s+/.test(rest) : /^\d+[.)]\s+/.test(rest);
+  };
+
+  const nonEmpty = lines.filter((l) => l.trim().length > 0);
+  const allAlready = nonEmpty.length > 0 && nonEmpty.every(hasKind);
+
+  let counter = 0;
+  const newLines = lines.map((line) => {
+    if (line.trim().length === 0) return line; // leave blank lines as-is
+    const bare = stripMarker(line);
+    if (allAlready) return bare; // toggle OFF
+    if (kind === 'bullet') return `- ${bare}`;
+    counter += 1;
+    return `${counter}. ${bare}`;
+  });
+
+  const newBlock = newLines.join('\n');
+  const newText = text.slice(0, blockStart) + newBlock + text.slice(blockEnd);
+  return { text: newText, selection: { start: blockStart, end: blockStart + newBlock.length } };
+}

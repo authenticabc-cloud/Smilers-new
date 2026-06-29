@@ -34,7 +34,7 @@ import EmojiPickerSheet from '../../src/components/EmojiPickerSheet';
 import GiphyPicker, { GiphyAsset } from '../../src/components/GiphyPicker';
 import MediaBubble from '../../src/components/MediaBubble';
 import MessageInfoSheet from '../../src/components/chat/MessageInfoSheet';
-import { processComposerChange } from '../../src/lib/autoNumbering';
+import { processComposerChange, toggleListFormat } from '../../src/lib/autoNumbering';
 import { LiveLocationRequestBanner } from '../../src/components/LiveLocationRequestBanner';
 import { LiveLocationSharingPill } from '../../src/components/LiveLocationSharingPill';
 import PollComposer from '../../src/components/PollComposer';
@@ -1404,6 +1404,17 @@ export default function ChatScreen() {
     } finally {
       setSending(false);
     }
+  };
+
+  // iter-294: one-tap list button — apply/remove a numbered or bulleted list
+  // across the selected lines (or current line) and select the result.
+  const applyListFormat = (kind: 'numeric' | 'bullet') => {
+    const sel = composerSelectionRef.current;
+    const result = toggleListFormat(text, sel, kind);
+    setText(result.text);
+    composerSelectionRef.current = result.selection;
+    setForcedSelection(result.selection);
+    messageInputRef.current?.focus();
   };
 
   const handleTyping = (val: string) => {
@@ -3676,6 +3687,22 @@ export default function ChatScreen() {
                   <Text style={[styles.composerToolText, draftBold ? styles.composerToolTextActive : null]}>B</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
+                  style={styles.composerToolBtn}
+                  onPress={() => applyListFormat('numeric')}
+                  testID="composer-numbered-list"
+                >
+                  <Ionicons name="list-outline" size={20} color={Colors.textSecondary} />
+                  <Text style={styles.composerToolBadge}>1.</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.composerToolBtn}
+                  onPress={() => applyListFormat('bullet')}
+                  testID="composer-bullet-list"
+                >
+                  <Ionicons name="ellipse" size={8} color={Colors.textSecondary} style={styles.composerBulletDot} />
+                  <Ionicons name="list-outline" size={20} color={Colors.textSecondary} />
+                </TouchableOpacity>
+                <TouchableOpacity
                   style={[styles.composerToolBtn, showColorPicker ? styles.composerToolBtnActive : null]}
                   onPress={() => setShowColorPicker((current) => !current)}
                   testID="composer-palette-toggle"
@@ -4560,6 +4587,16 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
+    flexDirection: 'row',
+  },
+  composerToolBadge: {
+    fontSize: 10,
+    fontWeight: FontWeight.bold,
+    color: Colors.textSecondary,
+    marginLeft: 1,
+  },
+  composerBulletDot: {
+    marginRight: 1,
   },
   composerToolBtnActive: {
     backgroundColor: '#FFF7DE',
