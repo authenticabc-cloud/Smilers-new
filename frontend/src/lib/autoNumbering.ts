@@ -352,10 +352,14 @@ export function toggleListFormat(
 
   const nonEmpty = lines.filter((l) => l.trim().length > 0);
   const allAlready = nonEmpty.length > 0 && nonEmpty.every(hasKind);
+  // Starting fresh on an empty line / empty composer → seed the first marker
+  // so the user can begin a list without typing "1." or "-" themselves.
+  const startingFresh = nonEmpty.length === 0;
 
   let counter = 0;
   const newLines = lines.map((line) => {
-    if (line.trim().length === 0) return line; // leave blank lines as-is
+    const isBlank = line.trim().length === 0;
+    if (isBlank && !startingFresh) return line; // leave separator blanks as-is
     const bare = stripMarker(line);
     if (allAlready) return bare; // toggle OFF
     if (kind === 'bullet') return `- ${bare}`;
