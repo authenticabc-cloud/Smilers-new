@@ -316,12 +316,25 @@ function StatusViewScreenInner() {
       const conversationId = typeof conversation === 'string' ? conversation : conversation?._id || conversation?.conversationId;
       if (!conversationId) throw new Error('No conversation');
 
-      await sendMessage({
-        conversationId,
-        type: 'text',
-        text,
-        replyToStatusId: current?._id,
-      } as any);
+      // Try to send with the status-link metadata first. Some deployed
+      // `messages:send` validators reject the optional `replyToStatusId`
+      // field outright (Server Error / Called by client) — in that case we
+      // retry as a plain text DM so the reply ALWAYS lands. The status link
+      // is a nice-to-have, not a hard requirement for delivery.
+      try {
+        await sendMessage({
+          conversationId,
+          type: 'text',
+          text,
+          replyToStatusId: current?._id,
+        } as any);
+      } catch {
+        await sendMessage({
+          conversationId,
+          type: 'text',
+          text,
+        } as any);
+      }
       Alert.alert('Reply sent', 'Your reply was sent as a direct message.');
     } catch (errorValue: any) {
       Alert.alert('Failed to reply', errorValue?.message || 'Unknown error');
