@@ -34,7 +34,7 @@ import EmojiPickerSheet from '../../src/components/EmojiPickerSheet';
 import GiphyPicker, { GiphyAsset } from '../../src/components/GiphyPicker';
 import MediaBubble from '../../src/components/MediaBubble';
 import MessageInfoSheet from '../../src/components/chat/MessageInfoSheet';
-import { processComposerChange, toggleListFormat } from '../../src/lib/autoNumbering';
+import { processComposerChange, toggleListFormat, currentLineListKind } from '../../src/lib/autoNumbering';
 import { LiveLocationRequestBanner } from '../../src/components/LiveLocationRequestBanner';
 import { LiveLocationSharingPill } from '../../src/components/LiveLocationSharingPill';
 import PollComposer from '../../src/components/PollComposer';
@@ -194,6 +194,8 @@ export default function ChatScreen() {
   // moving the caret (then released on the next selection change).
   const composerSelectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
   const [forcedSelection, setForcedSelection] = useState<{ start: number; end: number } | undefined>(undefined);
+  // iter-294: highlight the active list button when the caret sits in a list.
+  const [activeListKind, setActiveListKind] = useState<'ordered' | 'bullet' | null>(null);
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [replyTo, setReplyTo] = useState<any | null>(null);
@@ -1414,6 +1416,7 @@ export default function ChatScreen() {
     setText(result.text);
     composerSelectionRef.current = result.selection;
     setForcedSelection(result.selection);
+    setActiveListKind(currentLineListKind(result.text, result.selection.start));
     messageInputRef.current?.focus();
   };
 
@@ -1429,6 +1432,7 @@ export default function ChatScreen() {
       composerSelectionRef.current = result.selection;
       setForcedSelection(result.selection);
     }
+    setActiveListKind(currentLineListKind(result.text, result.selection?.start ?? prevCursor));
     if (conversationId && val.length > 0 && typingIndicatorsEnabledRef.current) {
       setTyping({ conversationId }).catch(() => {});
     }
@@ -3687,20 +3691,20 @@ export default function ChatScreen() {
                   <Text style={[styles.composerToolText, draftBold ? styles.composerToolTextActive : null]}>B</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={styles.composerToolBtn}
+                  style={[styles.composerToolBtn, activeListKind === 'ordered' ? styles.composerToolBtnActive : null]}
                   onPress={() => applyListFormat('numeric')}
                   testID="composer-numbered-list"
                 >
-                  <Ionicons name="list-outline" size={20} color={Colors.textSecondary} />
-                  <Text style={styles.composerToolBadge}>1.</Text>
+                  <Ionicons name="list-outline" size={20} color={activeListKind === 'ordered' ? Colors.primary : Colors.textSecondary} />
+                  <Text style={[styles.composerToolBadge, activeListKind === 'ordered' ? styles.composerToolTextActive : null]}>1.</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={styles.composerToolBtn}
+                  style={[styles.composerToolBtn, activeListKind === 'bullet' ? styles.composerToolBtnActive : null]}
                   onPress={() => applyListFormat('bullet')}
                   testID="composer-bullet-list"
                 >
-                  <Ionicons name="ellipse" size={8} color={Colors.textSecondary} style={styles.composerBulletDot} />
-                  <Ionicons name="list-outline" size={20} color={Colors.textSecondary} />
+                  <Ionicons name="ellipse" size={8} color={activeListKind === 'bullet' ? Colors.primary : Colors.textSecondary} style={styles.composerBulletDot} />
+                  <Ionicons name="list-outline" size={20} color={activeListKind === 'bullet' ? Colors.primary : Colors.textSecondary} />
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.composerToolBtn, showColorPicker ? styles.composerToolBtnActive : null]}
@@ -3765,6 +3769,7 @@ export default function ChatScreen() {
                 onSelectionChange={(e) => {
                   const sel = e.nativeEvent.selection;
                   composerSelectionRef.current = sel;
+                  setActiveListKind(currentLineListKind(text, sel.start));
                   // Release the one-shot controlled selection once applied so
                   // the user can move the caret freely afterwards.
                   if (forcedSelection) setForcedSelection(undefined);

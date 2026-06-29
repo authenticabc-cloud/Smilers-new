@@ -367,3 +367,19 @@ export function toggleListFormat(
   const newText = text.slice(0, blockStart) + newBlock + text.slice(blockEnd);
   return { text: newText, selection: { start: blockStart, end: blockStart + newBlock.length } };
 }
+
+/**
+ * Returns the list type of the line the caret sits on — used to highlight the
+ * matching composer toolbar button. 'ordered' covers numeric/alpha/roman.
+ */
+export function currentLineListKind(text: string, cursor: number): 'ordered' | 'bullet' | null {
+  const c = Math.max(0, Math.min(cursor, text.length));
+  const lineStart = text.lastIndexOf('\n', c - 1) + 1;
+  let lineEnd = text.indexOf('\n', c);
+  if (lineEnd === -1) lineEnd = text.length;
+  const line = text.slice(lineStart, lineEnd);
+  const rest = line.replace(/^\s*/, '');
+  if (/^[-*•]\s+/.test(rest)) return 'bullet';
+  if (/^(?:\d+|[A-Za-z]+)[.)]\s+/.test(rest)) return 'ordered';
+  return null;
+}
