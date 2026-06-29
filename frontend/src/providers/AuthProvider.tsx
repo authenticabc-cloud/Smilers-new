@@ -133,6 +133,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // background refresh attempts so we don't hammer the OIDC endpoint.
   const lastRefreshAtRef = useRef<number>(0);
   const refreshInFlightRef = useRef<Promise<string | null> | null>(null);
+  // iter-295: remember the LAST refresh failure reason so we can (a) surface it
+  // in diagnostics and (b) distinguish a TERMINAL revocation (invalid_grant)
+  // from a transient/network blip. A terminal failure means the refresh token
+  // is dead (rotated-token reuse, revoked, or absolute-expiry) → the user must
+  // re-auth; a transient failure should keep the cached session and retry.
+  const lastRefreshErrorRef = useRef<string | null>(null);
+  const refreshTokenDeadRef = useRef<boolean>(false);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const discoveryReadyRef = useRef(false);
   // iter-191: persisted copy of the OIDC discovery document. On a cold start
@@ -372,6 +379,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           );
           await storeTokens(tokenResult);
           lastRefreshAtRef.current = Date.now();
+          // Refresh succeeded — clear any prior failure state.
+          refreshTokenDeadRef.current = false;
+          lastRefreshErrorRef.current = null;
           const anyResult = tokenResult as any;
           return (anyResult.idToken || anyResult.id_token || null) as string | null;
         } catch (errorValue: any) {
@@ -386,8 +396,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // until the next refresh succeeds, but the user is NEVER kicked
           // out of the app. They can keep navigating, viewing cached data,
           // queueing messages, etc.
-          const message = errorValue instanceof Error ? errorValue.message : String(errorValue);
-          console.warn('Refresh failed (keeping cached session alive):', message);
+          //
+          // iter-295: capture the REAL provider error so diagnostics show WHY
+          // refresh failed, and classify terminal revocation vs transient.
+          const code = String(errorValue?.code || errorValue?.error || '').toLowerCase();
+          const desc =
+            errorValue?.description || errorValue?.error_description || errorValue?.message || String(errorValue);
+          lastRefreshErrorRef.current = code || desc;
+          // OAuth terminal errors: the refresh token is no longer usable
+          // (revoked, expired, or a rotated-token reuse was detected). Retrying
+          // only hammers the endpoint — mark it dead so callers stop looping
+          // and the UI can route to re-auth.
+          const isTerminal =
+            code === 'invalid_grant' ||
+            code === 'invalid_token' ||
+            code === 'unauthorized_client' ||
+            code === 'invalid_client';
+          if (isTerminal) refreshTokenDeadRef.current = true;
+          callDebug.push(
+            'ERR',
+            `AUTH refreshAsync threw: code=${code || '?'} terminal=${isTerminal} msg=${String(desc).slice(0, 140)}`,
+          );
+          console.warn('Refresh failed (keeping cached session alive):', code || desc);
           return null;
         } finally {
           refreshInFlightRef.current = null;
@@ -482,7 +512,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Refresh failed (network blip etc) — fall through and return the
       // cached id_token. Convex may 401 a few times until our background
       // retry succeeds; the user stays signed in.
-      callDebug.push('ERR', `AUTH getFreshIdToken: refresh FAILED (disco=${haveDisco}, hasRefresh=${!!refreshToken}) → returning ${idToken ? 'STALE id_token' : 'null'}`);
+      callDebug.push('ERR', `AUTH getFreshIdToken: refresh FAILED (disco=${haveDisco}, hasRefresh=${!!refreshToken}, reason=${lastRefreshErrorRef.current || '?'}, terminal=${refreshTokenDeadRef.current}) → returning ${idToken ? 'STALE id_token' : 'null'}`);
     }
     // IMPORTANT: Convex validates the ID token (JWT) for user identity.
     // The access token does not contain the OIDC claims Convex needs (iss/sub),
