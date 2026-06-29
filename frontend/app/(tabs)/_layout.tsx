@@ -6,6 +6,7 @@ import { useMutation, useQuery } from 'convex/react';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { api } from '../../src/convexApi';
 import { PHONE_VERIFIED_INSTALL_KEY, readStoredString } from '../../src/lib/settingsStorage';
+import { callDebug } from '../../src/lib/callDebugLog';
 import { Colors, FontSize, FontWeight } from '../../src/theme';
 
 export default function TabsLayout() {
@@ -25,6 +26,7 @@ export default function TabsLayout() {
   const [syncingUser, setSyncingUser] = useState(false);
   const [bootstrapAttempted, setBootstrapAttempted] = useState(false);
   const [meGateTimedOut, setMeGateTimedOut] = useState(false);
+  const [bootGateTimedOut, setBootGateTimedOut] = useState(false);
 
   // Real-time foreground incoming-call detection is now mounted globally in
   // app/_layout.tsx (PresenceHeartbeat) so it fires on every authenticated
@@ -136,7 +138,40 @@ export default function TabsLayout() {
     return () => clearTimeout(timeoutId);
   }, [hasVerifiedInstall, isAuthenticated, me, meGateTimedOut]);
 
-  if (!rootNavigationState?.key || isLoading || !installVerificationChecked) {
+  // iter-279: hard safety net + diagnostics for the FIRST boot gate (the only
+  // one without a timeout). The "Opening Smilers…" hang users reported maps to
+  // isLoading / installVerificationChecked / rootNavigationState never
+  // resolving (often downstream of a Convex sync crash). Log the stuck flags
+  // to the diagnostics export every 3s, and after 15s release isLoading /
+  // install-check so the UI can proceed to the normal auth-determination path
+  // instead of spinning forever.
+  const firstGateBlocked =
+    !rootNavigationState?.key || isLoading || !installVerificationChecked;
+  useEffect(() => {
+    if (!firstGateBlocked || bootGateTimedOut) return;
+    const started = Date.now();
+    const tick = setInterval(() => {
+      callDebug.push(
+        'BOOT',
+        `gate stuck ${Math.round((Date.now() - started) / 1000)}s: nav=${!!rootNavigationState?.key} authLoading=${isLoading} installChecked=${installVerificationChecked} meLoading=${meLoading} syncing=${syncingUser} auth=${isAuthenticated}`,
+      );
+    }, 3000);
+    const release = setTimeout(() => {
+      callDebug.push('ERR', 'BOOT gate hard-timeout (15s) → releasing first gate');
+      setBootGateTimedOut(true);
+    }, 15000);
+    return () => {
+      clearInterval(tick);
+      clearTimeout(release);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstGateBlocked, bootGateTimedOut]);
+
+  // First gate: wait for nav + auth + install check — but never past the 15s
+  // hard timeout above. Note: we still require rootNavigationState before
+  // rendering <Tabs/>; if only nav is missing the timeout simply lets the
+  // subsequent checks run (they will redirect appropriately).
+  if (firstGateBlocked && !bootGateTimedOut) {
     return <AuthGateLoading label="Opening Smilers…" />;
   }
 

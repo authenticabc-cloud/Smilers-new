@@ -180,7 +180,7 @@ function StatusViewScreenInner() {
 
   const markViewed = useMutation(api.statuses.markViewed);
   const sendMessage = useMutation(api.messages.send);
-  const getOrCreateDM = useMutation(api.conversations.getOrCreateDirectConversation);
+  const getOrCreateDM = useMutation(api.conversations.getOrCreateDirect);
 
   const [idx, setIdx] = useState(0);
   const [paused, setPaused] = useState(false);
