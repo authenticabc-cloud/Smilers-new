@@ -1060,6 +1060,8 @@ export default function ChatScreen() {
       try {
         listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
       } catch {}
+      // Light haptic so the "found it" moment feels responsive on-device.
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
       if (jumpHighlightTimerRef.current) clearTimeout(jumpHighlightTimerRef.current);
       setJumpHighlightId(String(messageId));
       jumpHighlightTimerRef.current = setTimeout(() => {
