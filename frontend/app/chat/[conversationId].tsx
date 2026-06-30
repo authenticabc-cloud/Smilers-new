@@ -53,7 +53,15 @@ import {
 } from '../../src/lib/dataFriendlyDefaults';
 import { readCache, writeCache } from '../../src/lib/offlineCache';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import NetInfo from '@react-native-community/netinfo';
+
+// iter-301: tag used to keep the screen awake ONLY while a voice note is
+// being recorded. If the screen turns off mid-record, Android can suspend
+// the app and wipe the recorder's temp file in /cache/Audio — which produced
+// the "holes"/loop on playback and the
+// "Directory …/cache/Audio/recording-….m4a doesn't exist" upload failure.
+const VOICE_REC_KEEP_AWAKE_TAG = 'smilers-voice-rec';
 import {
   loadOutbox,
   enqueueOutbox,
@@ -2132,6 +2140,23 @@ export default function ChatScreen() {
       setRecDuration(0);
       recDurationMsRef.current = 0;
       recStartMsRef.current = Date.now();
+      // iter-301: keep the screen ON for the whole recording. A screen-off
+      // mid-record let Android suspend the app and clear the recorder's temp
+      // file → audio "holes"/loop on playback. Best-effort; never blocks.
+      try {
+        await activateKeepAwakeAsync(VOICE_REC_KEEP_AWAKE_TAG);
+      } catch {}
+      // iter-301: make sure the cache "Audio" directory the recorder writes to
+      // actually exists before we start (it can be missing after the OS clears
+      // the cache), otherwise the later upload fails with
+      // "Directory …/cache/Audio/… doesn't exist".
+      try {
+        const audioDir = `${LegacyFileSystem.cacheDirectory}Audio`;
+        const dirInfo: any = await LegacyFileSystem.getInfoAsync(audioDir);
+        if (!dirInfo?.exists) {
+          await LegacyFileSystem.makeDirectoryAsync(audioDir, { intermediates: true });
+        }
+      } catch {}
       await setAudioModeAsync({
         allowsRecording: true,
         playsInSilentMode: true,
@@ -2173,9 +2198,40 @@ export default function ChatScreen() {
           return;
         }
         if (!conversationId) return;
+        // iter-301: copy the recorded clip out of the volatile /cache/Audio dir
+        // into a stable app-document path BEFORE uploading. If the OS cleared
+        // the cache while the screen was off, the original uri may be gone;
+        // copying immediately after stop (and verifying it's non-empty)
+        // prevents both the "Directory …/cache/Audio/… doesn't exist" upload
+        // crash and the corrupted/looping playback from a half-written file.
+        let playableUri = uri;
+        try {
+          const destDir = `${LegacyFileSystem.documentDirectory}voice-notes`;
+          const destInfo: any = await LegacyFileSystem.getInfoAsync(destDir);
+          if (!destInfo?.exists) {
+            await LegacyFileSystem.makeDirectoryAsync(destDir, { intermediates: true });
+          }
+          const dest = `${destDir}/vn-${Date.now()}.m4a`;
+          await LegacyFileSystem.copyAsync({ from: uri, to: dest });
+          const copied: any = await LegacyFileSystem.getInfoAsync(dest, { size: true } as any);
+          if (copied?.exists && Number(copied?.size || 0) > 0) {
+            playableUri = dest;
+          }
+        } catch (copyErr: any) {
+          console.warn('[voice-send] stable-copy failed, using original uri:', copyErr?.message);
+        }
+        // Final guard: make sure we actually have a non-empty file to upload.
+        const srcInfo: any = await LegacyFileSystem.getInfoAsync(playableUri, { size: true } as any);
+        if (!srcInfo?.exists || Number(srcInfo?.size || 0) === 0) {
+          Alert.alert(
+            'Recording lost',
+            'The voice note could not be saved. Please keep the screen on while recording and try again.',
+          );
+          return;
+        }
         setUploading(true);
         const mime = 'audio/m4a';
-        const storageId = await uploadFile(convex, uri, mime);
+        const storageId = await uploadFile(convex, playableUri, mime);
 
         // Per backend contract: type='voice', duration in seconds, storageId
         // The backend auto-resolves storageId to mediaUrl on messages.list.
@@ -2209,7 +2265,7 @@ export default function ChatScreen() {
             messageId: String(messageId),
             storageId,
             conversationId,
-            localFileUri: uri,
+            localFileUri: playableUri,
             fileName: 'voice.m4a',
           }).catch(() => {});
         }
@@ -2218,6 +2274,9 @@ export default function ChatScreen() {
         console.error('[voice-send] failed:', detail, errorValue);
         Alert.alert('Failed to send voice note', detail);
       } finally {
+        try {
+          deactivateKeepAwake(VOICE_REC_KEEP_AWAKE_TAG);
+        } catch {}
         setAudioModeAsync({
           allowsRecording: false,
           playsInSilentMode: true,
@@ -2259,6 +2318,9 @@ export default function ChatScreen() {
     return () => {
       if (recTimer.current) clearInterval(recTimer.current);
       audioRecorder.stop().catch(() => {});
+      try {
+        deactivateKeepAwake(VOICE_REC_KEEP_AWAKE_TAG);
+      } catch {}
     };
   }, [audioRecorder]);
 
