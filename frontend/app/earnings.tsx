@@ -29,6 +29,7 @@ import {
   Share,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -205,6 +206,43 @@ function EarningsScreenInner() {
     [],
     isAuthenticated && tab === 'referrals',
   );
+  // iter-298: referral state drives the manual-entry card — a user may enter
+  // someone's code ONLY if they haven't already been referred (one ever).
+  const { data: referralState } = useSafeConvexQuery<any>(
+    api.earnings.getMyReferralState,
+    {},
+    null,
+    isAuthenticated && tab === 'referrals',
+  );
+  const trackReferralM = useMutation((api as any).earnings?.trackReferral);
+  const [redeemInput, setRedeemInput] = useState('');
+  const [redeeming, setRedeeming] = useState(false);
+  const [redeemMsg, setRedeemMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const hasReferrer = referralState?.hasReferrer === true;
+
+  const handleRedeem = async () => {
+    const code = redeemInput.trim().toUpperCase();
+    if (!code || redeeming) return;
+    setRedeeming(true);
+    setRedeemMsg(null);
+    try {
+      const result: any = await trackReferralM({ referralCode: code });
+      const status = typeof result === 'string' ? result : result?.status;
+      const map: Record<string, { ok: boolean; text: string }> = {
+        applied: { ok: true, text: 'Referral applied! Your inviter has been credited. 🎉' },
+        already_referred: { ok: false, text: "You've already used a referral code." },
+        invalid_code: { ok: false, text: "That code doesn't exist. Double-check and try again." },
+        self_referral: { ok: false, text: "You can't use your own referral code." },
+        not_authenticated: { ok: false, text: 'Please try again in a moment.' },
+      };
+      setRedeemMsg(map[status] || { ok: true, text: 'Referral submitted.' });
+      if (status === 'applied') setRedeemInput('');
+    } catch (errorValue: any) {
+      setRedeemMsg({ ok: false, text: errorValue?.message || 'Something went wrong. Try again.' });
+    } finally {
+      setRedeeming(false);
+    }
+  };
   const { data: transactions } = useSafeConvexQuery<any[]>(
     api.earnings.getMyTransactions,
     { limit: 50 },
@@ -547,7 +585,48 @@ function EarningsScreenInner() {
         ) : null}
 
         {tab === 'referrals' ? (
-          <ReferralsList list={referrals || []} />
+          <>
+            {!hasReferrer ? (
+              <View style={styles.redeemCard}>
+                <Text style={styles.redeemTitle}>Have a referral code?</Text>
+                <Text style={styles.redeemHelp}>
+                  Enter a friend&apos;s code to credit them. You can only do this once.
+                </Text>
+                <View style={styles.redeemRow}>
+                  <TextInput
+                    style={styles.redeemInput}
+                    value={redeemInput}
+                    onChangeText={(t) => setRedeemInput(t.toUpperCase())}
+                    placeholder="ENTER CODE"
+                    placeholderTextColor={Colors.textMuted}
+                    autoCapitalize="characters"
+                    autoCorrect={false}
+                    maxLength={8}
+                    editable={!redeeming}
+                    testID="referral-redeem-input"
+                  />
+                  <TouchableOpacity
+                    style={[styles.redeemBtn, (!redeemInput.trim() || redeeming) && styles.redeemBtnDisabled]}
+                    onPress={handleRedeem}
+                    disabled={!redeemInput.trim() || redeeming}
+                    testID="referral-redeem-submit"
+                  >
+                    {redeeming ? (
+                      <ActivityIndicator color={Colors.white} size="small" />
+                    ) : (
+                      <Text style={styles.redeemBtnText}>Apply</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+                {redeemMsg ? (
+                  <Text style={[styles.redeemMsg, { color: redeemMsg.ok ? Colors.success : Colors.danger }]}>
+                    {redeemMsg.text}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+            <ReferralsList list={referrals || []} />
+          </>
         ) : null}
 
         {tab === 'history' ? (
@@ -967,6 +1046,42 @@ const styles = StyleSheet.create({
   },
   refCopyText: { color: '#3D2A00', fontWeight: FontWeight.bold, fontSize: FontSize.sm },
   refHint: { fontSize: FontSize.sm, color: Colors.textSecondary },
+  redeemCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    marginBottom: Spacing.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.border,
+  },
+  redeemTitle: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  redeemHelp: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2, marginBottom: Spacing.md },
+  redeemRow: { flexDirection: 'row', gap: Spacing.sm, alignItems: 'center' },
+  redeemInput: {
+    flex: 1,
+    height: 46,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md,
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.bold,
+    letterSpacing: 2,
+    color: Colors.textPrimary,
+    backgroundColor: Colors.background,
+  },
+  redeemBtn: {
+    height: 46,
+    paddingHorizontal: Spacing.lg,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 80,
+  },
+  redeemBtnDisabled: { opacity: 0.5 },
+  redeemBtnText: { color: Colors.white, fontWeight: FontWeight.bold, fontSize: FontSize.base },
+  redeemMsg: { marginTop: Spacing.sm, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
 
   // Level requirements
   levelsList: { gap: 12 },
