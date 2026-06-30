@@ -885,6 +885,21 @@ async def download_frontend_part(idx: str):
     )
 
 
+@api_router.get("/download/freelancer-handover")
+async def download_freelancer_handover():
+    """Serve the call-notifications handover document (Markdown) so it can be
+    downloaded and attached/shared with the native freelancer."""
+    from fastapi.responses import FileResponse
+    doc_path = Path(__file__).parent / "downloads" / "Smilers-Call-Notifications-Handover.md"
+    if not doc_path.exists():
+        raise HTTPException(status_code=404, detail="Handover doc not found")
+    return FileResponse(
+        path=str(doc_path),
+        media_type="text/markdown",
+        filename="Smilers-Call-Notifications-Handover.md",
+    )
+
+
 @api_router.post("/translate", response_model=TranslationResponse)
 async def translate_text(payload: TranslationRequest):
     text = (payload.text or "").strip()
