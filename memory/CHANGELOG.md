@@ -1,5 +1,26 @@
 # Smilers Native — Changelog
 
+## iter-300 (Jun 2026): "Chats flash then Opening Smilers forever" fix + Referral QR
+**Problem (P0, build-only regression):** On app launch the Chats list rendered for
+~2-3s, then the full-screen "Opening Smilers…" spinner took over permanently. Did NOT
+happen on web.
+**Root cause:** `AuthProvider`'s background token refresh fires shortly after boot →
+`setIdToken(newToken)` → `ConvexProviderWithAuth` re-authenticates the socket → the live
+`api.users.getCurrentUser` query transiently resets to `undefined` → the `meLoading` gate
+in `app/(tabs)/_layout.tsx` re-showed the "Opening Smilers…" spinner, and if the re-auth
+handshake stalled (the known "Base version" desync) it spun to eternity.
+**Fix:** added an `everReady` latch in `app/(tabs)/_layout.tsx`. Once `me` resolves with
+the install verified, the full-screen spinner gate (and the meGate-timeout recovery gate)
+are permanently disabled — a transient `me=undefined` after the first successful boot just
+keeps the already-rendered tabs on screen (Convex retains cached data; per-screen queries
+tolerate null). Terminal `sessionExpired` still routes to the actionable recovery screen.
+Note: timing-sensitive — true validation is on the next real EAS build.
+**Also:** finished the Referral screen (`app/earnings.tsx`): fixed a missing
+`buildInviteUrl` import (was a ReferenceError crash risk), added a green "✓ Copied" toast,
+and added a scannable QR code (`react-native-qrcode-svg`) encoding the Play Store invite
+URL so friends can install with the referral code baked in.
+
+
 ## iter-222 (Feb 2026): Screen wake-up for calls (final pre-build item)
 **Problem:** incoming calls rang but the screen did not turn on over the lock screen.
 **Root cause:** the correct config plugin `plugins/withCallWakeScreen.js` (injects
