@@ -23,7 +23,7 @@ import { useConvex, useMutation, useQuery } from 'convex/react';
 import { forceConvexReconnect } from '../../src/providers/useConvexAutoReconnect';
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
-import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
+import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
@@ -310,6 +310,21 @@ export default function ChatScreen() {
   const typingIndicatorsEnabledRef = useRef(true);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(audioRecorder, 200);
+
+  // iter-304: voice-note REVIEW-before-send. After the user stops a recording
+  // we stage it here (instead of sending immediately) so they can listen back
+  // and re-record if it sounds off. `reviewUri` points at the stable copy.
+  const [reviewUri, setReviewUri] = useState<string | null>(null);
+  const [reviewDurationSec, setReviewDurationSec] = useState(0);
+  const [reviewReplyToId, setReviewReplyToId] = useState<string | undefined>(undefined);
+  const reviewSource = useMemo(() => (reviewUri ? { uri: reviewUri } : null), [reviewUri]);
+  const reviewPlayer = useAudioPlayer(reviewSource);
+  const reviewStatus = useAudioPlayerStatus(reviewPlayer);
+  const reviewPlaying = !!reviewStatus?.playing;
+  const reviewProgress =
+    reviewStatus && reviewStatus.duration > 0
+      ? Math.min(1, (reviewStatus.currentTime || 0) / reviewStatus.duration)
+      : 0;
   const hasValidConversationId =
     typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
   const canQueryConversation = !!conversationId && hasValidConversationId && isAuthenticated;
@@ -2229,50 +2244,16 @@ export default function ChatScreen() {
           );
           return;
         }
-        setUploading(true);
-        const mime = 'audio/m4a';
-        const storageId = await uploadFile(convex, playableUri, mime);
-
-        // Per backend contract: type='voice', duration in seconds, storageId
-        // The backend auto-resolves storageId to mediaUrl on messages.list.
-        const sentVoiceId: any = await sendMessage({
-          conversationId,
-          type: 'voice',
-          storageId,
-          mimeType: mime,
-          duration: totalSec,
-          ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
-        });
-
-        setReplyTo(null);
-        await refetchMessages();
-        // iter-137 engagement tracking — voice notes need >= 5 seconds
-        // to qualify (the hook enforces this). Fire-and-forget so a
-        // tracking failure never affects the chat UX.
-        void engagement.voiceNote(totalSec, { isReceived: false });
-
-        // Kick off OpenAI Whisper transcription in the background — the
-        // transcription pill on the voice bubble updates via Convex realtime
-        // once Whisper returns. Failure here never blocks the message send.
-        const messageId = typeof sentVoiceId === 'string'
-          ? sentVoiceId
-          : (sentVoiceId?._id || sentVoiceId?.id || '');
-        if (messageId) {
-          // Pass the LOCAL file URI explicitly — Whisper must see the plaintext
-          // m4a bytes, not the E2EE ciphertext that Convex storage would serve.
-          triggerTranscription({
-            convex,
-            messageId: String(messageId),
-            storageId,
-            conversationId,
-            localFileUri: playableUri,
-            fileName: 'voice.m4a',
-          }).catch(() => {});
-        }
+        // iter-304: stage the clip for REVIEW instead of sending immediately.
+        // The user can play it back and then Send or Discard from the review
+        // bar (handled by sendReviewedVoice / discardReview below).
+        setReviewUri(playableUri);
+        setReviewDurationSec(totalSec);
+        setReviewReplyToId(replyToMessageId);
       } catch (errorValue: any) {
         const detail = errorValue?.data?.message || errorValue?.message || 'Unknown error';
-        console.error('[voice-send] failed:', detail, errorValue);
-        Alert.alert('Failed to send voice note', detail);
+        console.error('[voice-send] stop failed:', detail, errorValue);
+        Alert.alert('Recording failed', detail);
       } finally {
         try {
           deactivateKeepAwake(VOICE_REC_KEEP_AWAKE_TAG);
@@ -2283,16 +2264,100 @@ export default function ChatScreen() {
           interruptionMode: 'duckOthers',
           shouldRouteThroughEarpiece: false,
         }).catch(() => {});
+      }
+    },
+    [audioRecorder, conversationId, recorderState.durationMillis, replyTo]
+  );
+
+  // iter-304: actually upload + send a (reviewed) voice note.
+  const uploadAndSendVoice = useCallback(
+    async (uri: string, totalSec: number, replyToMessageId?: string) => {
+      if (!conversationId) return;
+      try {
+        setUploading(true);
+        const mime = 'audio/m4a';
+        const storageId = await uploadFile(convex, uri, mime);
+        const sentVoiceId: any = await sendMessage({
+          conversationId,
+          type: 'voice',
+          storageId,
+          mimeType: mime,
+          duration: totalSec,
+          ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
+        });
+        setReplyTo(null);
+        await refetchMessages();
+        void engagement.voiceNote(totalSec, { isReceived: false });
+        const messageId =
+          typeof sentVoiceId === 'string' ? sentVoiceId : sentVoiceId?._id || sentVoiceId?.id || '';
+        if (messageId) {
+          triggerTranscription({
+            convex,
+            messageId: String(messageId),
+            storageId,
+            conversationId,
+            localFileUri: uri,
+            fileName: 'voice.m4a',
+          }).catch(() => {});
+        }
+      } catch (errorValue: any) {
+        const detail = errorValue?.data?.message || errorValue?.message || 'Unknown error';
+        console.error('[voice-send] failed:', detail, errorValue);
+        Alert.alert('Failed to send voice note', detail);
+      } finally {
         setUploading(false);
       }
     },
-    [audioRecorder, conversationId, convex, recorderState.durationMillis, refetchMessages, replyTo, sendMessage]
+    [conversationId, convex, refetchMessages, sendMessage],
   );
 
   const cancelRecording = useCallback(() => {
     recCancelledRef.current = true;
     finishRecording('cancel');
   }, [finishRecording]);
+
+  // iter-304: review-bar actions.
+  const toggleReviewPlay = useCallback(() => {
+    if (!reviewPlayer) return;
+    try {
+      if (reviewStatus?.playing) {
+        reviewPlayer.pause();
+      } else {
+        const dur = reviewStatus?.duration || 0;
+        const cur = reviewStatus?.currentTime || 0;
+        if (reviewStatus?.didJustFinish || (dur > 0 && cur >= dur - 0.05)) {
+          reviewPlayer.seekTo(0);
+        }
+        reviewPlayer.play();
+      }
+    } catch {}
+  }, [reviewPlayer, reviewStatus]);
+
+  const clearReviewState = useCallback(() => {
+    try {
+      reviewPlayer?.pause?.();
+    } catch {}
+    setReviewUri(null);
+    setReviewDurationSec(0);
+    setReviewReplyToId(undefined);
+  }, [reviewPlayer]);
+
+  const sendReviewedVoice = useCallback(async () => {
+    if (!reviewUri) return;
+    const uri = reviewUri;
+    const sec = reviewDurationSec;
+    const reply = reviewReplyToId;
+    clearReviewState();
+    await uploadAndSendVoice(uri, sec, reply);
+  }, [reviewUri, reviewDurationSec, reviewReplyToId, clearReviewState, uploadAndSendVoice]);
+
+  const discardReview = useCallback(() => {
+    const uri = reviewUri;
+    clearReviewState();
+    if (uri) {
+      LegacyFileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+    }
+  }, [reviewUri, clearReviewState]);
 
   const pauseRecording = useCallback(async () => {
     if (!isRecording || isRecordingPaused) return;
@@ -3780,7 +3845,48 @@ export default function ChatScreen() {
           ) : null}
 
           <View style={styles.inputBar}>
-          {isRecording ? (
+          {reviewUri ? (
+            <View style={styles.recordingRow}>
+              <TouchableOpacity style={styles.recCancelBtn} onPress={discardReview} testID="review-discard">
+                <Feather name="trash-2" size={20} color={Colors.danger} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.recPauseBtn}
+                onPress={toggleReviewPlay}
+                testID="review-play-toggle"
+              >
+                <Feather name={reviewPlaying ? 'pause' : 'play'} size={20} color={Colors.textPrimary} />
+              </TouchableOpacity>
+              <View style={styles.recIndicator}>
+                <View style={styles.recWaveWrap}>
+                  {[10, 16, 22, 14, 20, 26, 18, 12, 24, 15, 21, 13, 17, 23, 11].map((height, index, arr) => {
+                    const filled = index / arr.length <= reviewProgress;
+                    return (
+                      <View
+                        key={`rwave-${index}`}
+                        style={[
+                          styles.recWaveBar,
+                          { height },
+                          filled ? null : styles.recWaveBarPaused,
+                        ]}
+                      />
+                    );
+                  })}
+                </View>
+                <Text style={styles.recTimer}>
+                  {`${Math.floor(reviewDurationSec / 60)}:${(reviewDurationSec % 60).toString().padStart(2, '0')}`}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.recSendBtn}
+                onPress={sendReviewedVoice}
+                testID="review-send"
+                disabled={uploading}
+              >
+                <Feather name="send" size={20} color={Colors.white} />
+              </TouchableOpacity>
+            </View>
+          ) : isRecording ? (
             <View style={styles.recordingRow}>
               <TouchableOpacity style={styles.recCancelBtn} onPress={cancelRecording} testID="rec-cancel">
                 <Feather name="x" size={22} color={Colors.danger} />

@@ -30,6 +30,8 @@ import { useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../src/lib/deviceContactIndex';
+import { getResolvedDisplayName } from '../src/lib/displayName';
 import ScreenErrorBoundary from '../src/components/ScreenErrorBoundary';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
@@ -75,6 +77,19 @@ function GroupsCreateScreenInner() {
     [],
   );
   const { data: me } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null);
+  const deviceIndex = useDeviceContactIndex();
+
+  // iter-303: device address-book name wins over the Smilers/Google name.
+  const displayNameFor = useCallback(
+    (obj: any): string =>
+      getResolvedDisplayName(
+        obj,
+        deviceIndex,
+        lookupDeviceContactName,
+        obj?.name || obj?.displayName || obj?.email || obj?.phone || 'Contact',
+      ),
+    [deviceIndex],
+  );
 
   const [step, setStep] = useState<Step>('participants');
   const [search, setSearch] = useState('');
@@ -95,9 +110,9 @@ function GroupsCreateScreenInner() {
     const q = search.trim().toLowerCase();
     if (!q) return eligibleContacts;
     return eligibleContacts.filter((item: any) =>
-      `${item?.name || ''} ${item?.phone || ''} ${item?.email || ''}`.toLowerCase().includes(q),
+      `${displayNameFor(item)} ${item?.phone || ''} ${item?.email || ''}`.toLowerCase().includes(q),
     );
-  }, [eligibleContacts, search]);
+  }, [eligibleContacts, search, displayNameFor]);
 
   const selectedContacts = useMemo(() => {
     return selectedIds
@@ -210,14 +225,14 @@ function GroupsCreateScreenInner() {
                       {contact?.avatarUrl ? (
                         <Image source={{ uri: contact.avatarUrl }} style={styles.chipAvatarImg} />
                       ) : (
-                        <Text style={styles.chipAvatarText}>{getInitials(contact?.name)}</Text>
+                        <Text style={styles.chipAvatarText}>{getInitials(displayNameFor(contact))}</Text>
                       )}
                       <View style={styles.chipRemove}>
                         <Feather name="x" size={11} color={Colors.white} />
                       </View>
                     </View>
                     <Text style={styles.chipLabel} numberOfLines={1}>
-                      {contact?.name?.split(' ')[0] || 'Contact'}
+                      {displayNameFor(contact).split(' ')[0] || 'Contact'}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -254,7 +269,7 @@ function GroupsCreateScreenInner() {
                 <Feather name="users" size={32} color={Colors.textMuted} />
                 <Text style={styles.emptyTitle}>No Smilers contacts</Text>
                 <Text style={styles.emptyBody}>
-                  Invite friends from the Contacts tab first — once they accept they'll appear here.
+                  Invite friends from the Contacts tab first — once they accept they&apos;ll appear here.
                 </Text>
               </View>
             }
@@ -273,11 +288,11 @@ function GroupsCreateScreenInner() {
                     {item?.avatarUrl ? (
                       <Image source={{ uri: item.avatarUrl }} style={styles.rowAvatarImg} />
                     ) : (
-                      <Text style={styles.rowAvatarText}>{getInitials(item?.name)}</Text>
+                      <Text style={styles.rowAvatarText}>{getInitials(displayNameFor(item))}</Text>
                     )}
                   </View>
                   <View style={styles.rowBody}>
-                    <Text style={styles.rowName} numberOfLines={1}>{item?.name || 'Unnamed'}</Text>
+                    <Text style={styles.rowName} numberOfLines={1}>{displayNameFor(item)}</Text>
                     <Text style={styles.rowSub} numberOfLines={1}>
                       {item?.bio || item?.statusMessage || 'Hey there! I am using Smilers.'}
                     </Text>
@@ -377,11 +392,11 @@ function GroupsCreateScreenInner() {
                   {contact?.avatarUrl ? (
                     <Image source={{ uri: contact.avatarUrl }} style={styles.participantChipAvatarImg} />
                   ) : (
-                    <Text style={styles.participantChipAvatarText}>{getInitials(contact?.name)}</Text>
+                    <Text style={styles.participantChipAvatarText}>{getInitials(displayNameFor(contact))}</Text>
                   )}
                 </View>
                 <Text style={styles.participantChipLabel} numberOfLines={1}>
-                  {contact?.name || 'Contact'}
+                  {displayNameFor(contact)}
                 </Text>
               </View>
             );

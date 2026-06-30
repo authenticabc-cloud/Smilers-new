@@ -234,8 +234,15 @@ export default function TrusteesScreen() {
 
   const onRemove = useCallback(
     (trustee: Trustee) => {
+      const displayName =
+        getResolvedDisplayName(
+          trustee,
+          deviceIndex,
+          lookupDeviceContactName,
+          trustee.name || 'this trustee',
+        ) || 'this trustee';
       Alert.alert(
-        `Remove ${trustee.name || 'this trustee'}?`,
+        `Remove ${displayName}?`,
         'They will no longer be notified in an emergency.',
         [
           { text: 'Cancel', style: 'cancel' },
@@ -262,7 +269,7 @@ export default function TrusteesScreen() {
         ],
       );
     },
-    [refetch, removeTrustee],
+    [refetch, removeTrustee, deviceIndex],
   );
 
   return (
@@ -288,14 +295,23 @@ export default function TrusteesScreen() {
           </View>
         ) : (
           <View style={styles.cardsWrap} testID="trustees-cards-wrap">
-            {trusteeList.map((trustee, index) => (
+            {trusteeList.map((trustee, index) => {
+              // iter-303: device address-book name wins on the saved cards too.
+              const resolvedName =
+                getResolvedDisplayName(
+                  trustee,
+                  deviceIndex,
+                  lookupDeviceContactName,
+                  trustee.name || 'Trustee',
+                ) || 'Trustee';
+              return (
               <View key={trustee._id} style={styles.trusteeCard} testID={`trustees-card-${index}`}>
                 <View style={styles.trusteeBadgeCircle}>
                   <Ionicons name="shield-checkmark-outline" size={26} color={Colors.primary} />
                 </View>
                 <View style={styles.trusteeTextWrap}>
                   <Text style={styles.trusteeName} numberOfLines={1} testID={`trustees-name-${index}`}>
-                    {(trustee.name || 'Trustee').toUpperCase()}
+                    {resolvedName.toUpperCase()}
                   </Text>
                   <Text style={styles.trusteeMeta} numberOfLines={1} testID={`trustees-meta-${index}`}>
                     {trustee.phone || trustee.email || 'Smilers Contact'}
@@ -314,7 +330,8 @@ export default function TrusteesScreen() {
                   )}
                 </TouchableOpacity>
               </View>
-            ))}
+              );
+            })}
 
             {!atCap ? (
               <TouchableOpacity style={styles.addTrusteeCard} onPress={openAdd} testID="trustees-add-card">

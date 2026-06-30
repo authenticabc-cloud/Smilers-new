@@ -39,6 +39,7 @@ import { takeCallHandoff } from '../../src/lib/call/handoff';
 import RTCViewWrapper from '../../src/lib/webrtc/RTCViewWrapper';
 import { useReactiveSafeConvexQuery } from '../../src/hooks/useReactiveSafeConvexQuery';
 import { getDisplayInitials, getResolvedDisplayName } from '../../src/lib/displayName';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 import type { MeshController as MeshControllerType } from '../../src/lib/call/mesh/MeshController';
 import { useKeepAwake } from 'expo-keep-awake';
@@ -87,6 +88,7 @@ export default function GroupCallScreen() {
   const isWeb = Platform.OS === 'web';
 
   const me = useQuery(api.users.getCurrentUser, isWeb ? 'skip' : {}) as Any;
+  const deviceIndex = useDeviceContactIndex();
   const myUserId: string = me?._id || '';
 
   const [callId, setCallId] = useState<string | null>(paramCallId || null);
@@ -266,6 +268,25 @@ export default function GroupCallScreen() {
   );
   const rawParticipants = (participantsQ.data || []) as Any[];
 
+  // iter-303: contacts (by userId) → recover phone numbers so the roster can
+  // show device address-book names instead of Smilers/Google account names.
+  const contactsQ = useReactiveSafeConvexQuery<Any[]>(
+    (api as Any).contacts.getContacts,
+    isWeb ? undefined : {},
+    [],
+    !isWeb,
+  );
+  const contactByUserId = useMemo(() => {
+    const map = new Map<string, Any>();
+    for (const c of (contactsQ.data || []) as Any[]) {
+      const id = String(
+        c?.userId || c?.user?._id || c?.user?.userId || c?.contactUserId || c?._id || '',
+      );
+      if (id && !map.has(id)) map.set(id, c);
+    }
+    return map;
+  }, [contactsQ.data]);
+
   // --- Ad-hoc invite roster (ring/answer status + auto-answer my own invite). ---
   const callInvitesQ = useReactiveSafeConvexQuery<Any[]>(
     (api as Any).callInvites.getCallInvites,
@@ -394,13 +415,18 @@ export default function GroupCallScreen() {
   );
 
   const roster: RosterEntry[] = useMemo(() => {
-    const deviceIndex: Any = undefined;
     return rawParticipants.map((p) => {
       const userId = String(p?.userId || p?._id || '');
+      // iter-303: resolve to the phone's address-book name. Conference
+      // participants may not carry a phone, so cross-reference the user's
+      // contacts (by userId) to recover the phone before the device lookup.
+      const contact = contactByUserId.get(userId);
+      const phone =
+        p?.phone || p?.phoneE164 || contact?.phone || contact?.phoneE164 || contact?.user?.phone;
       const name = getResolvedDisplayName(
-        { _id: userId, name: p?.name || p?.userName, phone: p?.phone },
+        { _id: userId, name: p?.name || p?.userName, phone },
         deviceIndex,
-        null,
+        lookupDeviceContactName,
       );
       return {
         userId,
@@ -411,7 +437,7 @@ export default function GroupCallScreen() {
         connected: userId === myUserId ? true : !!connectedPeers[userId],
       };
     });
-  }, [rawParticipants, connectedPeers, myUserId]);
+  }, [rawParticipants, connectedPeers, myUserId, deviceIndex, contactByUserId]);
 
   if (isWeb) {
     return (

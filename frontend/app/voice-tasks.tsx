@@ -22,6 +22,8 @@ import {
   readStoredJson,
   writeStoredJson,
 } from '../src/lib/settingsStorage';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../src/lib/deviceContactIndex';
+import { getResolvedDisplayName } from '../src/lib/displayName';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
 const POSITIONS: number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -121,6 +123,20 @@ function VoiceTasksScreen() {
   const router = useRouter();
   const convex = useConvex();
   const { isAuthenticated } = useAuth();
+  const deviceIndex = useDeviceContactIndex();
+
+  // iter-303: prefer the name saved in THIS phone's address book over the
+  // contact's Smilers/Google account name, everywhere on this screen.
+  const displayNameFor = useCallback(
+    (obj: any): string =>
+      getResolvedDisplayName(
+        obj,
+        deviceIndex,
+        lookupDeviceContactName,
+        obj?.name || obj?.displayName || obj?.email || obj?.phone || 'Contact',
+      ),
+    [deviceIndex],
+  );
 
   const contacts = useQuery(
     api.contacts.getContacts,
@@ -240,12 +256,12 @@ function VoiceTasksScreen() {
     const trimmed = pickerQuery.trim().toLowerCase();
     if (!trimmed) return list;
     return list.filter((c: any) => {
-      const name = String(c?.name || c?.displayName || '').toLowerCase();
+      const name = displayNameFor(c).toLowerCase();
       const phone = String(c?.phone || '').toLowerCase();
       const email = String(c?.email || '').toLowerCase();
       return name.includes(trimmed) || phone.includes(trimmed) || email.includes(trimmed);
     });
-  }, [contacts, pickerQuery]);
+  }, [contacts, pickerQuery, displayNameFor]);
 
   return (
     <View style={styles.container} testID="voice-tasks-screen">
@@ -297,7 +313,8 @@ function VoiceTasksScreen() {
         ) : (
           POSITIONS.map((position) => {
             const a = assignments[position];
-            const initial = a ? (a.name.charAt(0) || '?').toUpperCase() : '+';
+            const aName = a ? displayNameFor(a) : '';
+            const initial = a ? (aName.charAt(0) || '?').toUpperCase() : '+';
             return (
               <Pressable
                 key={position}
@@ -306,7 +323,7 @@ function VoiceTasksScreen() {
                   if (a) {
                     Alert.alert(
                       `Position ${position}`,
-                      `Remove ${a.name}?`,
+                      `Remove ${aName}?`,
                       [
                         { text: 'Cancel', style: 'cancel' },
                         {
@@ -339,7 +356,7 @@ function VoiceTasksScreen() {
                     style={a ? styles.rowAssignedName : styles.rowPlaceholderText}
                     numberOfLines={1}
                   >
-                    {a ? a.name : `Tap to assign position #${position}`}
+                    {a ? aName : `Tap to assign position #${position}`}
                   </Text>
                   {a?.phone ? (
                     <Text style={styles.rowAssignedPhone} numberOfLines={1}>
@@ -419,7 +436,7 @@ function VoiceTasksScreen() {
                 </View>
               }
               renderItem={({ item }) => {
-                const name = item.name || item.displayName || 'Unknown';
+                const name = displayNameFor(item);
                 const subtitle = item.phone || item.email || '';
                 const init = (name.charAt(0) || '?').toUpperCase();
                 return (
