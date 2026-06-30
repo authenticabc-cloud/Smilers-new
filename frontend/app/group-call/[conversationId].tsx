@@ -42,6 +42,7 @@ import { getDisplayInitials, getResolvedDisplayName } from '../../src/lib/displa
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 import type { MeshController as MeshControllerType } from '../../src/lib/call/mesh/MeshController';
 import { useKeepAwake } from 'expo-keep-awake';
+import { callActivity } from '../../src/lib/callActivity';
 
 type Any = any;
 
@@ -67,6 +68,8 @@ export default function GroupCallScreen() {
   const router = useRouter();
   // iter-296: keep the screen awake for the whole group call (see 1:1 note).
   useKeepAwake();
+  // iter-297: suppress "lock when leaving" PIN re-lock during the group call.
+  useEffect(() => callActivity.enter(), []);
   const params = useLocalSearchParams<{
     conversationId?: string | string[];
     callId?: string | string[];

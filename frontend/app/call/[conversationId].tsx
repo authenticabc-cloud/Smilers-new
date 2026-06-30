@@ -25,6 +25,7 @@ import InviteContactPicker from '../../src/components/InviteContactPicker';
 import { stashCallHandoff } from '../../src/lib/call/handoff';
 import { InCallAudio } from '../../src/lib/webrtc/inCallManager';
 import { useKeepAwake } from 'expo-keep-awake';
+import { callActivity } from '../../src/lib/callActivity';
 import Animated, {
   Easing,
   cancelAnimation,
@@ -142,6 +143,9 @@ export function CallScreenInner() {
   // native wake-lock alone wasn't holding, so the device kept auto-locking
   // mid-call). This Activity-level FLAG_KEEP_SCREEN_ON releases on unmount.
   useKeepAwake();
+  // iter-297: suppress the "lock when leaving" PIN re-lock while a call is on
+  // screen (WebRTC's frequent background/active flips were re-locking the app).
+  useEffect(() => callActivity.enter(), []);
   const { height: windowHeight } = useWindowDimensions();
   const { isAuthenticated } = useAuth();
   // Params now come from the callHost store (this component is rendered by
