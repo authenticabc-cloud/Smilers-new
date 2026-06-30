@@ -35,7 +35,8 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { buildInviteMessage } from '../src/lib/inviteLink';
+import QRCode from 'react-native-qrcode-svg';
+import { buildInviteMessage, buildInviteUrl } from '../src/lib/inviteLink';
 import {
   Feather,
   Ionicons,
@@ -510,9 +511,34 @@ function EarningsScreenInner() {
                   <Feather name="share-2" size={18} color={Colors.danger} />
                 </TouchableOpacity>
               </View>
+              {copied ? (
+                <View style={styles.copiedToast} testID="earnings-copied-toast">
+                  <Feather name="check" size={14} color={Colors.white} />
+                  <Text style={styles.copiedToastText}>Copied</Text>
+                </View>
+              ) : null}
               <Text style={styles.refHint}>
                 Each referral who registers = 2 engagements
               </Text>
+
+              {/* iter-300: scannable QR so friends can install Smilers with
+                  your referral code baked in — no typing required. Encodes the
+                  full Play Store invite URL (with the ?referrer=ref=CODE). */}
+              {(referralCode as any)?.code || referralCode ? (
+                <View style={styles.qrWrap} testID="earnings-referral-qr">
+                  <View style={styles.qrCard}>
+                    <QRCode
+                      value={inviteUrl}
+                      size={148}
+                      backgroundColor="#FFFFFF"
+                      color="#1A1207"
+                    />
+                  </View>
+                  <Text style={styles.qrCaption}>
+                    Scan to install Smilers with your code
+                  </Text>
+                </View>
+              ) : null}
             </View>
 
             {/* Level requirements card */}
@@ -1053,6 +1079,26 @@ const styles = StyleSheet.create({
   },
   refCopyText: { color: '#3D2A00', fontWeight: FontWeight.bold, fontSize: FontSize.sm },
   refHint: { fontSize: FontSize.sm, color: Colors.textSecondary },
+  copiedToast: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 6,
+    backgroundColor: '#16A34A',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: Radius.pill,
+  },
+  copiedToastText: { color: Colors.white, fontWeight: FontWeight.bold, fontSize: FontSize.sm },
+  qrWrap: { alignItems: 'center', gap: 10, marginTop: 4 },
+  qrCard: {
+    padding: 14,
+    backgroundColor: '#FFFFFF',
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: '#EBE5D5',
+  },
+  qrCaption: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center' },
   redeemCard: {
     backgroundColor: Colors.surface,
     borderRadius: Radius.lg,

@@ -27,6 +27,20 @@ export default function TabsLayout() {
   const [bootstrapAttempted, setBootstrapAttempted] = useState(false);
   const [meGateTimedOut, setMeGateTimedOut] = useState(false);
   const [bootGateTimedOut, setBootGateTimedOut] = useState(false);
+  // iter-300: "chats flash then Opening Smilers forever" fix.
+  // Once the app has successfully reached the tabs with a resolved user at
+  // least once, we must NEVER drop back to the full-screen "Opening Smilers…"
+  // spinner. The trigger was: AuthProvider's background token refresh fires
+  // ~2-3s after boot → setIdToken → ConvexProviderWithAuth re-auths the socket
+  // → live `getCurrentUser` query transiently resets to `undefined` → the
+  // meLoading gate below re-shows the spinner, and if the re-auth handshake
+  // stalls it spins to eternity. With this latch, a transient me=undefined
+  // after the first successful boot just keeps the already-rendered tabs on
+  // screen (Convex retains the cached data; per-screen queries tolerate null),
+  // exactly as the web app behaves. Terminal session expiry (sessionExpired)
+  // still routes to the recovery screen — that's an actionable state, not a
+  // spinner.
+  const [everReady, setEverReady] = useState(false);
 
   // Real-time foreground incoming-call detection is now mounted globally in
   // app/_layout.tsx (PresenceHeartbeat) so it fires on every authenticated
@@ -122,13 +136,23 @@ export default function TabsLayout() {
     };
   }, [isAuthenticated]);
 
+  // iter-300: latch "we successfully booted into the tabs once". Set the
+  // instant `me` resolves to a real user with the install verified — from
+  // then on the spinner gate is disabled so a background-refresh re-auth
+  // can't yank the user back to "Opening Smilers…".
+  useEffect(() => {
+    if (isAuthenticated && hasVerifiedInstall && me && !everReady) {
+      setEverReady(true);
+    }
+  }, [isAuthenticated, hasVerifiedInstall, me, everReady]);
+
   // Safety timeout: if Convex me query hangs after auth/phone-verify, don't lock the user on "Opening Smilers" forever.
   useEffect(() => {
     if (!isAuthenticated || !hasVerifiedInstall) {
       setMeGateTimedOut(false);
       return;
     }
-    if (me || meGateTimedOut) {
+    if (me || meGateTimedOut || everReady) {
       return;
     }
     const timeoutId = setTimeout(() => {
@@ -136,7 +160,7 @@ export default function TabsLayout() {
       setMeGateTimedOut(true);
     }, 10000);
     return () => clearTimeout(timeoutId);
-  }, [hasVerifiedInstall, isAuthenticated, me, meGateTimedOut]);
+  }, [hasVerifiedInstall, isAuthenticated, me, meGateTimedOut, everReady]);
 
   // iter-279: hard safety net + diagnostics for the FIRST boot gate (the only
   // one without a timeout). The "Opening Smilers…" hang users reported maps to
@@ -193,7 +217,7 @@ export default function TabsLayout() {
     return <AuthRecovery onSignIn={signOut} />;
   }
 
-  if ((meLoading || syncingUser) && !meGateTimedOut) {
+  if ((meLoading || syncingUser) && !meGateTimedOut && !everReady) {
     return <AuthGateLoading label="Opening Smilers…" />;
   }
 
@@ -204,7 +228,7 @@ export default function TabsLayout() {
   // this left the user on an infinite "Opening Smilers…" spinner that only a
   // cache-clear could fix. Instead, surface an actionable recovery screen so
   // the user can re-authenticate in-app without reinstalling.
-  if (meGateTimedOut && !me && !syncingUser) {
+  if (meGateTimedOut && !me && !syncingUser && !everReady) {
     return <AuthRecovery onSignIn={signOut} />;
   }
 
