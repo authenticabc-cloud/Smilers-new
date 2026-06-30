@@ -219,6 +219,10 @@ function EarningsScreenInner() {
   const [redeeming, setRedeeming] = useState(false);
   const [redeemMsg, setRedeemMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const hasReferrer = referralState?.hasReferrer === true;
+  const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current); }, []);
+  const inviteUrl = buildInviteUrl((referralCode as any)?.code || referralCode || '');
 
   const handleRedeem = async () => {
     const code = redeemInput.trim().toUpperCase();
@@ -288,7 +292,10 @@ function EarningsScreenInner() {
     }
     try {
       await Clipboard.setStringAsync(String(code));
-      Alert.alert('Copied', 'Referral code copied to clipboard.');
+      // iter-299: lightweight inline "✓ Copied" toast instead of a blocking alert.
+      setCopied(true);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = setTimeout(() => setCopied(false), 1800);
     } catch {
       Alert.alert('Copy failed', 'Please long-press the code to copy.');
     }
