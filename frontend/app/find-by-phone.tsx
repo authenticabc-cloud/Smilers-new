@@ -28,6 +28,7 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -37,9 +38,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import * as Clipboard from 'expo-clipboard';
 import { useConvex, useMutation } from 'convex/react';
 import { api } from '../src/convexApi';
 import { useAuth } from '../src/providers/AuthProvider';
+import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+import { buildInviteMessage, buildInviteUrl } from '../src/lib/inviteLink';
 import Header from '../src/components/Header';
 import {
   lookupUserByPhone,
@@ -61,6 +65,71 @@ export default function FindByPhoneScreen() {
   const { isAuthenticated } = useAuth();
 
   const getOrCreateDirect = useMutation(api.conversations.getOrCreateDirect);
+
+  // iter-302: referral code for the invite link/share on the empty state.
+  // Same robust pattern as the Earnings screen — read it off the profile, and
+  // create one on the fly if the account doesn't have one yet, so every invite
+  // carries a code that CREDITS THE INVITER when the invitee signs up.
+  const { data: earningsProfile } = useSafeConvexQuery<any | null>(
+    api.earnings.getMyProfile,
+    {},
+    null,
+    isAuthenticated,
+  );
+  const generateCodeM = useMutation((api as any).earnings?.getOrCreateReferralCode);
+  const [localCode, setLocalCode] = useState<string | null>(null);
+  const profileCode = (earningsProfile as any)?.referralCode || null;
+  const triedCreateRef = useRef(false);
+  useEffect(() => {
+    if (!isAuthenticated || !earningsProfile || profileCode || triedCreateRef.current) return;
+    if (typeof generateCodeM !== 'function') return;
+    triedCreateRef.current = true;
+    (async () => {
+      try {
+        const result: any = await (generateCodeM as any)({});
+        const value =
+          typeof result === 'string' ? result : result?.code || result?.referralCode || '';
+        if (value) setLocalCode(String(value));
+      } catch {
+        /* non-fatal — the invite link still works without a code */
+      }
+    })();
+  }, [isAuthenticated, earningsProfile, profileCode, generateCodeM]);
+  const referralCode = profileCode || localCode;
+  const inviteUrl = useMemo(() => buildInviteUrl(referralCode), [referralCode]);
+
+  const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    },
+    [],
+  );
+
+  const handleCopyInvite = useCallback(async () => {
+    try {
+      await Clipboard.setStringAsync(inviteUrl);
+      setCopied(true);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = setTimeout(() => setCopied(false), 1800);
+    } catch {
+      Alert.alert('Copy failed', 'Please long-press to copy the link.');
+    }
+  }, [inviteUrl]);
+
+  const handleShareInvite = useCallback(async () => {
+    try {
+      await Share.share({
+        message: buildInviteMessage(referralCode),
+        title: 'Invite to Smilers',
+      });
+    } catch (errorValue: any) {
+      if (!String(errorValue?.message || '').toLowerCase().includes('cancel')) {
+        Alert.alert('Could not share', errorValue?.message || 'Please try again.');
+      }
+    }
+  }, [referralCode]);
 
   const [input, setInput] = useState('');
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
@@ -241,11 +310,49 @@ export default function FindByPhoneScreen() {
                       ? 'No Smilers account with that number'
                       : 'Keep typing to search'}
                   </Text>
-                  <Text style={styles.emptySub}>
-                    {parsedE164
-                      ? 'Invite them to Smilers from the Contacts tab.'
-                      : 'Numbers must start with the + country code.'}
-                  </Text>
+                  {parsedE164 ? (
+                    <>
+                      <Text style={styles.emptySub}>
+                        Invite them to join you on Smilers — you earn 2 engagements when they
+                        sign up with your link.
+                      </Text>
+                      <View style={styles.inviteActions}>
+                        <TouchableOpacity
+                          style={styles.inviteShareBtn}
+                          onPress={handleShareInvite}
+                          activeOpacity={0.85}
+                          testID="find-phone-invite-share"
+                        >
+                          <Feather name="share-2" size={18} color={Colors.white} />
+                          <Text style={styles.inviteShareText}>Share invite link</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.inviteCopyBtn}
+                          onPress={handleCopyInvite}
+                          activeOpacity={0.85}
+                          testID="find-phone-invite-copy"
+                        >
+                          <Feather
+                            name={copied ? 'check' : 'copy'}
+                            size={18}
+                            color={copied ? Colors.success : Colors.primary}
+                          />
+                          <Text
+                            style={[
+                              styles.inviteCopyText,
+                              copied ? { color: Colors.success } : null,
+                            ]}
+                          >
+                            {copied ? 'Copied' : 'Copy invite link'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </>
+                  ) : (
+                    <Text style={styles.emptySub}>
+                      Numbers must start with the + country code.
+                    </Text>
+                  )}
                 </View>
               ) : null
             }
@@ -350,5 +457,41 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     textAlign: 'center',
     lineHeight: 18,
+  },
+  inviteActions: {
+    marginTop: 18,
+    width: '100%',
+    gap: 10,
+    paddingHorizontal: 8,
+  },
+  inviteShareBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: Colors.primary,
+    paddingVertical: 13,
+    borderRadius: Radius.lg,
+  },
+  inviteShareText: {
+    color: Colors.white,
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.bold,
+  },
+  inviteCopyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingVertical: 13,
+    borderRadius: Radius.lg,
+  },
+  inviteCopyText: {
+    color: Colors.primary,
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.semibold,
   },
 });
