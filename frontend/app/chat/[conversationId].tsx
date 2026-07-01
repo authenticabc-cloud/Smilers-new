@@ -295,6 +295,9 @@ export default function ChatScreen() {
   const recStartMsRef = useRef(0);
   // iter-307: disposer for the "recording in progress" lock-suppression signal.
   const recActivityDisposeRef = useRef<null | (() => void)>(null);
+  // iter-310: heartbeat interval id for broadcasting the "recording…" activity
+  // to the other participant (must re-send < 5s or the indicator expires).
+  const recBroadcastTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recDurationMsRef = useRef(0);
   const listRef = useRef<FlatList<any>>(null);
   // iter-231: track whether the user is near the bottom so we only auto-scroll
@@ -1481,6 +1484,31 @@ export default function ChatScreen() {
     prevTextEmptyRef.current = isEmpty;
   }, [text, conversationId, clearTyping]);
 
+  // iter-310: broadcast the "recording audio…" activity to the other
+  // participant while a voice note is being recorded. Contract:
+  // setTyping({ conversationId, kind: 'recording_voice' }) must be re-sent
+  // < 5s (indicator TTL), so we heartbeat every 3s and clearTyping on stop.
+  // Gated behind the same "typing indicators" privacy setting as typing.
+  useEffect(() => {
+    if (recBroadcastTimerRef.current) {
+      clearInterval(recBroadcastTimerRef.current);
+      recBroadcastTimerRef.current = null;
+    }
+    if (isRecording && conversationId && typingIndicatorsEnabledRef.current) {
+      const beat = () =>
+        setTyping({ conversationId, kind: 'recording_voice' } as any).catch(() => {});
+      beat();
+      recBroadcastTimerRef.current = setInterval(beat, 3000);
+      return () => {
+        if (recBroadcastTimerRef.current) {
+          clearInterval(recBroadcastTimerRef.current);
+          recBroadcastTimerRef.current = null;
+        }
+        if (conversationId) clearTyping?.({ conversationId }).catch(() => {});
+      };
+    }
+  }, [isRecording, conversationId, setTyping, clearTyping]);
+
   /**
    * Schedule the current draft message for a future send. Mirrors the web
    * app's bottom sheet — chosen datetime + optional recurring frequency are
@@ -1949,8 +1977,21 @@ export default function ChatScreen() {
       return;
     }
 
+    // iter-310: broadcast "recording video…" while the camera is open. Note:
+    // this uses the OS camera (launchCameraAsync), so JS timers are paused
+    // while it's foregrounded — we can't heartbeat, so the indicator naturally
+    // clears after the ~5s TTL and again explicitly when the camera returns.
+    if (conversationId && typingIndicatorsEnabledRef.current) {
+      setTyping({ conversationId, kind: 'recording_video' } as any).catch(() => {});
+    }
+
     // iter-164 data-friendly: 60s cap + reduced quality.
-    const result = await ImagePicker.launchCameraAsync(VIDEO_PICKER_OPTIONS_CHAT);
+    let result: any;
+    try {
+      result = await ImagePicker.launchCameraAsync(VIDEO_PICKER_OPTIONS_CHAT);
+    } finally {
+      if (conversationId) clearTyping?.({ conversationId }).catch(() => {});
+    }
 
     if (result.canceled || !result.assets?.[0]?.uri || !conversationId) return;
     const asset = result.assets[0];
@@ -1980,7 +2021,7 @@ export default function ChatScreen() {
     } finally {
       setUploading(false);
     }
-  }, [conversationId, convex, refetchMessages, sendMessage]);
+  }, [conversationId, convex, refetchMessages, sendMessage, setTyping, clearTyping]);
 
   const shareLocation = useCallback(async () => {
     if (!conversationId || !isConversationAvailable) return;
@@ -3001,9 +3042,15 @@ export default function ChatScreen() {
       return !uid || !me?._id || String(uid) !== String(me._id);
     });
     if (others.length === 0) return null;
-    const names = others.map(
-      (u: any) => u?.name || u?.userName || u?.displayName || 'Someone',
-    );
+    const nameOf = (u: any) => u?.name || u?.userName || u?.displayName || 'Someone';
+    // iter-310: recording activity takes precedence over "typing…".
+    // Backend contract: getTypingUsers returns { userId, name, kind } where
+    // kind ∈ "typing" | "recording_voice" | "recording_video".
+    const voiceRec = others.find((u: any) => u?.kind === 'recording_voice');
+    if (voiceRec) return `${nameOf(voiceRec)} is recording audio\u2026`;
+    const videoRec = others.find((u: any) => u?.kind === 'recording_video');
+    if (videoRec) return `${nameOf(videoRec)} is recording video\u2026`;
+    const names = others.map(nameOf);
     return names.length === 1
       ? `${names[0]} is typing\u2026`
       : `${names.join(', ')} are typing\u2026`;
