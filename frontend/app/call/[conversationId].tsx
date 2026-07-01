@@ -252,18 +252,6 @@ export function CallScreenInner() {
       shouldQueryActiveCall,
     );
   const activeCall = activeCallData as any | null;
-  // iter-309: reflect the web-side recording state. Capture is done by the web
-  // client (MediaRecorder) — mobile can't capture — but when ANY party is
-  // recording, the backend sets the call's `recordingActive` flag, and every
-  // participant (incl. mobile) must show the "being recorded" notice. We only
-  // DISPLAY it; we never flip the indicator from mobile (that would be an
-  // untrue notice since mobile isn't capturing).
-  const isCallRecording = !!(
-    activeCall &&
-    ((activeCall as any).recordingActive ||
-      (activeCall as any).isRecording ||
-      (activeCall as any).recording)
-  );
   const activeCallLoading = shouldQueryActiveCall && activeCallLoadingRaw;
   const contacts = useQuery(api.contacts.getContacts, isAuthenticated ? {} : 'skip') as any[] | undefined;
 
@@ -2244,13 +2232,6 @@ export function CallScreenInner() {
                 <View style={styles.topUtilitySide} />
               </View>
 
-              {isCallRecording ? (
-                <View style={styles.recordingNotice} testID="call-recording-notice">
-                  <View style={styles.recordingNoticeDot} />
-                  <Text style={styles.recordingNoticeText}>Call is being recorded</Text>
-                </View>
-              ) : null}
-
               <View style={[styles.heroContent, compactCallLayout ? styles.heroContentCompact : null]}>
                 <RingingAvatar
                   name={otherName}
@@ -2820,28 +2801,6 @@ const styles = StyleSheet.create({
   statusChipSpacer: {
     width: 146,
     height: 54,
-  },
-  recordingNotice: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'center',
-    gap: 7,
-    backgroundColor: 'rgba(220,38,38,0.92)',
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 999,
-    marginTop: 8,
-  },
-  recordingNoticeDot: {
-    width: 9,
-    height: 9,
-    borderRadius: 5,
-    backgroundColor: '#FFFFFF',
-  },
-  recordingNoticeText: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: FontWeight.bold,
   },
   statusChipText: {
     color: '#FFD34E',
