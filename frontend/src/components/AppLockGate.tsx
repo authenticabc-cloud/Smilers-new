@@ -26,6 +26,7 @@ import {
 } from '../lib/settingsStorage';
 import { registerAppLockHandlers } from '../lib/appLockController';
 import { callActivity } from '../lib/callActivity';
+import { recordingActivity } from '../lib/recordingActivity';
 import { useAuth } from '../providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../theme';
 
@@ -181,7 +182,7 @@ export default function AppLockGate({ children }: AppLockGateProps) {
         // calls fire frequent background/inactive/active transitions (audio
         // route, proximity, in-call notification), which with "Lock when
         // leaving" was re-locking the app every few seconds during a call.
-        if (callActivity.isActive()) {
+        if (callActivity.isActive() || recordingActivity.isActive()) {
           backgroundedAtRef.current = null;
           return;
         }

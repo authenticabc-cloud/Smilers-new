@@ -21,6 +21,7 @@ import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useConvex, useMutation, useQuery } from 'convex/react';
 import { forceConvexReconnect } from '../../src/providers/useConvexAutoReconnect';
+import { recordingActivity } from '../../src/lib/recordingActivity';
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
 import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
@@ -292,6 +293,8 @@ export default function ChatScreen() {
   const recTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const recCancelledRef = useRef(false);
   const recStartMsRef = useRef(0);
+  // iter-307: disposer for the "recording in progress" lock-suppression signal.
+  const recActivityDisposeRef = useRef<null | (() => void)>(null);
   const recDurationMsRef = useRef(0);
   const listRef = useRef<FlatList<any>>(null);
   // iter-231: track whether the user is near the bottom so we only auto-scroll
@@ -2142,10 +2145,24 @@ export default function ChatScreen() {
 
   const startRecording = useCallback(async () => {
     if (isRecording) return;
+    // iter-307: suppress "Lock when leaving" for the whole recording. The audio
+    // session change (and the mic-permission prompt) can flip AppState, and on
+    // return-to-active AppLockGate was locking the app mid-recording → the chat
+    // screen unmounted, the recorder was torn down, and the user saw a
+    // "Recording failed" error. Register recording activity BEFORE any of that.
+    if (recActivityDisposeRef.current) {
+      recActivityDisposeRef.current();
+      recActivityDisposeRef.current = null;
+    }
+    recActivityDisposeRef.current = recordingActivity.enter();
     try {
       const permission = await requestRecordingPermissionsAsync();
       if (!permission.granted) {
         Alert.alert('Permission required', 'Please allow microphone access to record voice notes.');
+        if (recActivityDisposeRef.current) {
+          recActivityDisposeRef.current();
+          recActivityDisposeRef.current = null;
+        }
         return;
       }
       try {
@@ -2186,6 +2203,10 @@ export default function ChatScreen() {
     } catch (errorValue: any) {
       setIsRecording(false);
       setIsRecordingPaused(false);
+      if (recActivityDisposeRef.current) {
+        recActivityDisposeRef.current();
+        recActivityDisposeRef.current = null;
+      }
       Alert.alert('Recording failed', errorValue?.message || 'Could not start recording');
     }
   }, [audioRecorder, isRecording]);
@@ -2258,6 +2279,11 @@ export default function ChatScreen() {
         try {
           deactivateKeepAwake(VOICE_REC_KEEP_AWAKE_TAG);
         } catch {}
+        // iter-307: recording is over — allow App Lock to work normally again.
+        if (recActivityDisposeRef.current) {
+          recActivityDisposeRef.current();
+          recActivityDisposeRef.current = null;
+        }
         setAudioModeAsync({
           allowsRecording: false,
           playsInSilentMode: true,
@@ -2386,6 +2412,10 @@ export default function ChatScreen() {
       try {
         deactivateKeepAwake(VOICE_REC_KEEP_AWAKE_TAG);
       } catch {}
+      if (recActivityDisposeRef.current) {
+        recActivityDisposeRef.current();
+        recActivityDisposeRef.current = null;
+      }
     };
   }, [audioRecorder]);
 
