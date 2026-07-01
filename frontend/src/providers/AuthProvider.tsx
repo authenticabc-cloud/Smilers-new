@@ -73,7 +73,7 @@ interface AuthContextValue {
   userInfo: { email?: string; name?: string; picture?: string; sub?: string } | null;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
-  getFreshIdToken: () => Promise<string | null>;
+  getFreshIdToken: (force?: boolean) => Promise<string | null>;
   acceptTokens: (tokens: {
     idToken: string;
     accessToken?: string;
@@ -519,21 +519,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refreshTokensRef.current = refreshTokens;
   }, [refreshTokens]);
 
-  const getFreshIdToken = useCallback(async (): Promise<string | null> => {
+  const getFreshIdToken = useCallback(async (force = false): Promise<string | null> => {
     const expiryStr = await storage.getItem(STORAGE_KEYS.TOKEN_EXPIRY);
     const expiry = expiryStr ? parseInt(expiryStr, 10) : 0;
     const refreshToken = await storage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
     const idToken = await storage.getItem(STORAGE_KEYS.ID_TOKEN);
 
-    if (Date.now() > expiry - 60000 && refreshToken) {
+    const nearExpiry = Date.now() > expiry - 60000;
+    // iter-306: honor Convex's `forceRefreshToken`. When Convex is handed our
+    // id_token and the server REJECTS it, Convex re-requests a token with
+    // force=true — i.e. "that one was bad, give me a genuinely fresh one".
+    // Previously we ignored force and only refreshed on near-expiry, then on
+    // any failure returned the SAME stale id_token. Result: Convex stayed
+    // permanently unauthenticated on that device (getCurrentUser → null, so
+    // name shows only from cache, no photo loads, chats resolve empty →
+    // "No chats yet" / "feels offline"), recoverable ONLY by a manual
+    // sign-out/in. Honoring force lets the session self-heal by actually
+    // rotating the token. We skip when the refresh token is already known
+    // dead (terminal) so we don't hammer the endpoint — that path routes to
+    // the re-auth screen instead.
+    if ((force || nearExpiry) && refreshToken && !refreshTokenDeadRef.current) {
       // iter-191: on a cold start Convex asks for a token within ~100ms,
       // long before `useAutoDiscovery` has fetched the OIDC endpoints.
-      // Returning the EXPIRED cached id_token here made Convex run
-      // unauthenticated for the whole session (empty contacts/chats in the
-      // share sheet). Wait up to 5s for discovery (live or cached) so the
-      // refresh can actually happen.
+      // Wait up to 5s for discovery (live or cached) so the refresh can
+      // actually happen instead of returning an expired id_token.
       if (!discoveryReadyRef.current && !cachedDiscoveryRef.current) {
-        callDebug.push('AUTH', `getFreshIdToken: token expired, waiting for discovery…`);
+        callDebug.push('AUTH', `getFreshIdToken: refresh needed (force=${force}), waiting for discovery…`);
         for (let i = 0; i < 20; i += 1) {
           await new Promise((resolve) => setTimeout(resolve, 250));
           if (discoveryReadyRef.current || cachedDiscoveryRef.current) break;
@@ -542,13 +553,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const haveDisco = discoveryReadyRef.current || !!cachedDiscoveryRef.current;
       const refreshed = await refreshTokensRef.current(refreshToken);
       if (refreshed) {
-        callDebug.push('AUTH', `getFreshIdToken: refresh OK (disco=${haveDisco})`);
+        callDebug.push('AUTH', `getFreshIdToken: refresh OK (disco=${haveDisco}, force=${force})`);
         return refreshed;
       }
       // Refresh failed (network blip etc) — fall through and return the
       // cached id_token. Convex may 401 a few times until our background
       // retry succeeds; the user stays signed in.
-      callDebug.push('ERR', `AUTH getFreshIdToken: refresh FAILED (disco=${haveDisco}, hasRefresh=${!!refreshToken}, reason=${lastRefreshErrorRef.current || '?'}, terminal=${refreshTokenDeadRef.current}) → returning ${idToken ? 'STALE id_token' : 'null'}`);
+      callDebug.push('ERR', `AUTH getFreshIdToken: refresh FAILED (force=${force}, disco=${haveDisco}, hasRefresh=${!!refreshToken}, reason=${lastRefreshErrorRef.current || '?'}, terminal=${refreshTokenDeadRef.current}) → returning ${idToken ? 'STALE id_token' : 'null'}`);
     }
     // IMPORTANT: Convex validates the ID token (JWT) for user identity.
     // The access token does not contain the OIDC claims Convex needs (iss/sub),

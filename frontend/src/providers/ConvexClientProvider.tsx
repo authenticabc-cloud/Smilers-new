@@ -15,7 +15,12 @@ function useAuthForConvex() {
       isLoading,
       isAuthenticated,
       fetchAccessToken: async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
-        const token = await getFreshIdToken();
+        // iter-306: pass Convex's force flag through. When Convex rejects our
+        // id_token it re-asks with forceRefreshToken=true; we MUST rotate the
+        // token then (not return the same stale one), otherwise the session is
+        // stuck unauthenticated → empty chats / "No chats yet" until a manual
+        // sign-out/in.
+        const token = await getFreshIdToken(forceRefreshToken);
         return token;
       },
     }),
