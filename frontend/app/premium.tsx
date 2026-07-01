@@ -218,6 +218,16 @@ export default function PremiumPage() {
       Alert.alert('Enter a code', 'Paste your PRE-XXX-XXX code to continue.');
       return;
     }
+    // If Premium is already active, the backend rejects a re-redeem with a raw
+    // server error. Short-circuit with a friendly message instead.
+    if (status.hasAccess) {
+      Alert.alert(
+        'Premium already active',
+        'Your account already has Premium, so there\u2019s nothing more to redeem. Enjoy!',
+      );
+      setRedeemCodeInput('');
+      return;
+    }
     setRedeeming(true);
     try {
       const result: any = await (redeemLicense as any)({ code });
@@ -237,15 +247,28 @@ export default function PremiumPage() {
       }
     } catch (errorValue: any) {
       const message = String(errorValue?.message || errorValue || '');
+      const lower = message.toLowerCase();
       const isMissing =
-        message.includes('CouldNotFindFunction') ||
-        message.toLowerCase().includes('not found');
-      Alert.alert(
-        'Could not redeem code',
-        isMissing
-          ? 'The Convex `premium.redeemLicenseCode` mutation hasn\u2019t been deployed yet. Once the web team ships it, this redemption flow will validate your code.'
-          : message.slice(0, 200),
-      );
+        message.includes('CouldNotFindFunction') || lower.includes('not found');
+      const isAlreadyUsed =
+        lower.includes('already') || lower.includes('redeemed') || lower.includes('used');
+      const isInvalid = lower.includes('invalid') || lower.includes('expired');
+      let friendly: string;
+      if (isMissing) {
+        friendly =
+          'The Convex `premium.redeemLicenseCode` mutation hasn\u2019t been deployed yet. Once the web team ships it, this redemption flow will validate your code.';
+      } else if (isAlreadyUsed) {
+        friendly =
+          'This code has already been redeemed. If your Premium is active, you\u2019re all set \u2014 no need to redeem again.';
+      } else if (isInvalid) {
+        friendly = 'This code is invalid or has expired. Please double-check it and try again.';
+      } else {
+        // Raw Convex "Server Error" (e.g. code already used) — hide the noisy
+        // request-id trace behind a clean, reassuring message.
+        friendly =
+          'We couldn\u2019t redeem this code. It may already have been used or is no longer valid. If your Premium is already active, you\u2019re all set.';
+      }
+      Alert.alert('Could not redeem code', friendly);
     } finally {
       setRedeeming(false);
     }
@@ -416,23 +439,26 @@ export default function PremiumPage() {
           />
         </View>
 
-        {/* Redeem code block */}
-        <TouchableOpacity
-          style={styles.redeemHeader}
-          onPress={() => setShowRedeem((v) => !v)}
-          activeOpacity={0.85}
-          testID="premium-redeem-toggle"
-        >
-          <Feather name="gift" size={20} color={Colors.primary} />
-          <Text style={styles.redeemHeaderText}>Have a code? Redeem here</Text>
-          <Feather
-            name={showRedeem ? 'chevron-up' : 'chevron-down'}
-            size={20}
-            color={Colors.textSecondary}
-          />
-        </TouchableOpacity>
+        {/* Redeem code block — hidden once Premium is already active, since a
+            re-redeem always fails on the backend. */}
+        {!status.hasAccess ? (
+          <TouchableOpacity
+            style={styles.redeemHeader}
+            onPress={() => setShowRedeem((v) => !v)}
+            activeOpacity={0.85}
+            testID="premium-redeem-toggle"
+          >
+            <Feather name="gift" size={20} color={Colors.primary} />
+            <Text style={styles.redeemHeaderText}>Have a code? Redeem here</Text>
+            <Feather
+              name={showRedeem ? 'chevron-up' : 'chevron-down'}
+              size={20}
+              color={Colors.textSecondary}
+            />
+          </TouchableOpacity>
+        ) : null}
 
-        {showRedeem ? (
+        {!status.hasAccess && showRedeem ? (
           <View style={styles.redeemForm}>
             <TextInput
               style={styles.redeemInput}
