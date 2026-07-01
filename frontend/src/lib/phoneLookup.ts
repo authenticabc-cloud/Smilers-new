@@ -117,8 +117,8 @@ export async function lookupUsersByPhones(
   phones: Array<string | null | undefined>,
 ): Promise<Map<string, BatchPhoneMatch>> {
   const out = new Map<string, BatchPhoneMatch>();
+  if (!convex || !Array.isArray(phones) || phones.length === 0) return out;
   const fn = (api as any).users?.lookupByPhones;
-  if (!fn || !convex || !Array.isArray(phones) || phones.length === 0) return out;
 
   // Dedupe by last-10 (keep a representative raw string per key), drop numbers
   // with too few digits, and cap so a huge address book can't fire dozens of
@@ -133,29 +133,76 @@ export async function lookupUsersByPhones(
   const unique = Array.from(byKey.values()).slice(0, 1000);
   if (unique.length === 0) return out;
 
-  const CHUNK = 200;
-  for (let i = 0; i < unique.length; i += CHUNK) {
-    const batch = unique.slice(i, i + CHUNK);
-    try {
-      const res: any = await convex.query(fn, { phones: batch });
-      if (Array.isArray(res)) {
-        for (const r of res) {
-          if (r && r.onSmilers && r.userId) {
-            const key = last10Digits(r.input);
-            if (key.length >= 7) {
-              out.set(key, {
-                userId: String(r.userId),
-                displayName: typeof r.displayName === 'string' ? r.displayName : undefined,
-                avatarUrl: typeof r.avatarUrl === 'string' ? r.avatarUrl : undefined,
-              });
+  if (fn) {
+    const CHUNK = 200;
+    for (let i = 0; i < unique.length; i += CHUNK) {
+      const batch = unique.slice(i, i + CHUNK);
+      try {
+        const res: any = await convex.query(fn, { phones: batch });
+        if (Array.isArray(res)) {
+          for (const r of res) {
+            if (r && r.onSmilers && r.userId) {
+              const key = last10Digits(r.input);
+              if (key.length >= 7) {
+                out.set(key, {
+                  userId: String(r.userId),
+                  displayName: typeof r.displayName === 'string' ? r.displayName : undefined,
+                  avatarUrl: typeof r.avatarUrl === 'string' ? r.avatarUrl : undefined,
+                });
+              }
             }
           }
         }
+      } catch {
+        /* ignore a failed chunk — others may still resolve */
       }
-    } catch {
-      /* ignore a failed chunk — others may still resolve */
     }
   }
+
+  // iter-311 FIX: the batch `users.lookupByPhones` query was never shipped on
+  // the backend, so classification always came back empty and EVERY device
+  // contact — including registered users (e.g. Sarah Asare) — was wrongly
+  // listed under "Invite to Smilers". The single-number `users.getByPhone`
+  // query IS shipped/verified (it powers Find-by-phone), so when the batch
+  // path is unavailable or matched nothing, probe each unique number with it
+  // (capped + concurrency-limited) so registered contacts are correctly
+  // recognised as "on Smilers".
+  if (out.size === 0) {
+    const single = (api as any).users?.getByPhone;
+    if (single) {
+      const candidates = Array.from(byKey.values()).slice(0, 300);
+      const CONC = 8;
+      for (let i = 0; i < candidates.length; i += CONC) {
+        const slice = candidates.slice(i, i + CONC);
+        const results = await Promise.all(
+          slice.map(async (raw) => {
+            const e164 = toE164(raw) || (raw.startsWith('+') ? raw.replace(/\s+/g, '') : null);
+            if (!e164) return null;
+            try {
+              const r: any = await convex.query(single, { phoneE164: e164 });
+              if (r && r._id) {
+                return {
+                  key: last10Digits(e164),
+                  userId: String(r._id),
+                  displayName: typeof r.displayName === 'string' ? r.displayName : undefined,
+                  avatarUrl: typeof r.avatarUrl === 'string' ? r.avatarUrl : undefined,
+                };
+              }
+            } catch {
+              /* ignore a single miss */
+            }
+            return null;
+          }),
+        );
+        for (const m of results) {
+          if (m && m.key.length >= 7) {
+            out.set(m.key, { userId: m.userId, displayName: m.displayName, avatarUrl: m.avatarUrl });
+          }
+        }
+      }
+    }
+  }
+
   return out;
 }
 

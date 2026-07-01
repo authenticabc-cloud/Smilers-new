@@ -92,7 +92,7 @@ function GroupInfoInner() {
     null,
     !!conversationId,
   );
-  const { data: members } = useSafeConvexQuery<any[]>(
+  const { data: members, refetch: refetchMembers } = useSafeConvexQuery<any[]>(
     api.conversations.getGroupMembers,
     conversationId ? { conversationId } : {},
     [],
@@ -136,6 +136,81 @@ function GroupInfoInner() {
   );
   const chiefAdminId = adminInfo?.chiefAdmin ? String(adminInfo.chiefAdmin) : null;
   const memberCount = adminInfo?.memberCount ?? (Array.isArray(members) ? members.length : 0);
+
+  // iter-311: Add Members picker (replaces the old "Picker coming next" stub).
+  const { data: myContacts } = useSafeConvexQuery<any[]>(
+    api.contacts.getContacts,
+    {},
+    [],
+    !!conversationId,
+  );
+  const memberIdSet = useMemo(
+    () =>
+      new Set<string>(
+        (Array.isArray(members) ? members : []).map((m: any) =>
+          String(m?.userId || m?._id || m?.user?._id || ''),
+        ),
+      ),
+    [members],
+  );
+  const [addMembersOpen, setAddMembersOpen] = useState(false);
+  const [addSearch, setAddSearch] = useState('');
+  const [selectedAdd, setSelectedAdd] = useState<Set<string>>(new Set());
+  const addableContacts = useMemo(() => {
+    const q = addSearch.trim().toLowerCase();
+    return (Array.isArray(myContacts) ? myContacts : []).filter((c: any) => {
+      const uid = String(c?.userId || c?.user?._id || c?._id || '');
+      if (!uid || memberIdSet.has(uid)) return false;
+      if (!q) return true;
+      return `${c?.name || ''} ${c?.phone || ''} ${c?.email || ''}`.toLowerCase().includes(q);
+    });
+  }, [myContacts, memberIdSet, addSearch]);
+
+  const toggleAddSelect = useCallback((userId: string) => {
+    setSelectedAdd((prev) => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId);
+      else next.add(userId);
+      return next;
+    });
+  }, []);
+
+  const openAddMembers = useCallback(() => {
+    setAddSearch('');
+    setSelectedAdd(new Set());
+    setAddMembersOpen(true);
+  }, []);
+
+  const confirmAddMembers = useCallback(async () => {
+    if (!conversationId || selectedAdd.size === 0 || !addGroupMemberM) {
+      setAddMembersOpen(false);
+      return;
+    }
+    setBusy('addMembers');
+    let added = 0;
+    let failed = 0;
+    for (const userId of Array.from(selectedAdd)) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await addGroupMemberM({ conversationId, userId });
+        added += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    setBusy(null);
+    setAddMembersOpen(false);
+    setSelectedAdd(new Set());
+    void refetchMembers?.();
+    void refetchAdmin?.();
+    if (failed > 0) {
+      Alert.alert(
+        'Some members not added',
+        `${added} added, ${failed} could not be added. They may already be in the group or an admin restriction applies.`,
+      );
+    }
+  }, [conversationId, selectedAdd, addGroupMemberM, refetchMembers, refetchAdmin]);
+
   const currentAdminCount = adminInfo?.currentAdminCount ?? 1;
   const maxAdmins = adminInfo?.maxAdmins ?? Math.max(1, Math.floor(memberCount * 0.2));
   const messageApprovalEnabled = !!adminInfo?.messageApprovalEnabled;
@@ -408,7 +483,7 @@ function GroupInfoInner() {
             <ActionRow
               icon="user-plus"
               label="Add Members"
-              onPress={() => Alert.alert('Add Members', 'Picker coming next — use Contacts for now.')}
+              onPress={openAddMembers}
               testID="group-info-add-members"
             />
             <ToggleRow
