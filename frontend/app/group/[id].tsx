@@ -45,6 +45,21 @@ import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
+import { getResolvedDisplayName } from '../../src/lib/displayName';
+
+/** Resolve the registered Smilers user id for a contact row, mirroring groups-create. */
+function getContactUserId(item: any): string | null {
+  const value =
+    item?.userId ||
+    item?.user?._id ||
+    item?.user?.userId ||
+    item?.contactUserId ||
+    item?.linkedUserId ||
+    item?._id ||
+    item?.id;
+  return value ? String(value) : null;
+}
 
 type SuspendDuration = '1h' | '6h' | '24h' | '7d' | '30d' | 'permanent';
 
@@ -144,6 +159,17 @@ function GroupInfoInner() {
     [],
     !!conversationId,
   );
+  const deviceIndex = useDeviceContactIndex();
+  const displayNameForContact = useCallback(
+    (obj: any): string =>
+      getResolvedDisplayName(
+        obj,
+        deviceIndex,
+        lookupDeviceContactName,
+        obj?.name || obj?.displayName || obj?.email || obj?.phone || 'Contact',
+      ),
+    [deviceIndex],
+  );
   const memberIdSet = useMemo(
     () =>
       new Set<string>(
@@ -159,12 +185,16 @@ function GroupInfoInner() {
   const addableContacts = useMemo(() => {
     const q = addSearch.trim().toLowerCase();
     return (Array.isArray(myContacts) ? myContacts : []).filter((c: any) => {
-      const uid = String(c?.userId || c?.user?._id || c?._id || '');
+      const uid = getContactUserId(c);
+      // Only registered Smilers users (with a resolvable user id) that aren't
+      // already in the group can be added.
       if (!uid || memberIdSet.has(uid)) return false;
       if (!q) return true;
-      return `${c?.name || ''} ${c?.phone || ''} ${c?.email || ''}`.toLowerCase().includes(q);
+      return `${displayNameForContact(c)} ${c?.phone || ''} ${c?.email || ''}`
+        .toLowerCase()
+        .includes(q);
     });
-  }, [myContacts, memberIdSet, addSearch]);
+  }, [myContacts, memberIdSet, addSearch, displayNameForContact]);
 
   const toggleAddSelect = useCallback((userId: string) => {
     setSelectedAdd((prev) => {
@@ -799,6 +829,86 @@ function GroupInfoInner() {
                 testID="group-info-suspend-confirm"
               >
                 <Text style={styles.modalSaveText}>Suspend</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ----- Add Members Modal ----- */}
+      <Modal visible={addMembersOpen} transparent animationType="slide" onRequestClose={() => setAddMembersOpen(false)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setAddMembersOpen(false)}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <Text style={styles.modalTitle}>➕ Add Members</Text>
+            <Text style={styles.modalBody}>Pick Smilers contacts to add to this group.</Text>
+            <TextInput
+              value={addSearch}
+              onChangeText={setAddSearch}
+              placeholder="Search contacts"
+              placeholderTextColor={Colors.textMuted}
+              style={styles.modalInput}
+              autoCorrect={false}
+              testID="group-info-add-search"
+            />
+            {addableContacts.length === 0 ? (
+              <View style={styles.emptyModal}>
+                <Text style={styles.emptyModalTitle}>No contacts to add</Text>
+                <Text style={styles.emptyModalBody}>
+                  {addSearch.trim()
+                    ? 'No matching Smilers contacts found.'
+                    : 'All your Smilers contacts are already in this group.'}
+                </Text>
+              </View>
+            ) : (
+              <FlatList
+                data={addableContacts}
+                keyExtractor={(c: any) => getContactUserId(c) || String(Math.random())}
+                style={{ maxHeight: 340 }}
+                keyboardShouldPersistTaps="handled"
+                renderItem={({ item }) => {
+                  const uid = getContactUserId(item) as string;
+                  const name = displayNameForContact(item);
+                  const avatar = item?.avatar || item?.avatarUrl || item?.user?.avatar;
+                  const checked = selectedAdd.has(uid);
+                  return (
+                    <TouchableOpacity
+                      style={styles.transferRow}
+                      onPress={() => toggleAddSelect(uid)}
+                      testID={`group-info-add-contact-${uid}`}
+                    >
+                      <View style={styles.memberAvatar}>
+                        {avatar ? (
+                          <Image source={{ uri: avatar }} style={styles.memberAvatarImg} />
+                        ) : (
+                          <Text style={styles.memberAvatarText}>{getInitials(name)}</Text>
+                        )}
+                      </View>
+                      <Text style={styles.transferName} numberOfLines={1}>
+                        {name}
+                      </Text>
+                      <Feather
+                        name={checked ? 'check-circle' : 'circle'}
+                        size={22}
+                        color={checked ? Colors.primary : Colors.textMuted}
+                      />
+                    </TouchableOpacity>
+                  );
+                }}
+              />
+            )}
+            <View style={styles.modalActions}>
+              <TouchableOpacity onPress={() => setAddMembersOpen(false)} style={styles.modalCancel}>
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={confirmAddMembers}
+                style={[styles.modalSave, selectedAdd.size === 0 && { opacity: 0.5 }]}
+                disabled={selectedAdd.size === 0 || busy === 'addMembers'}
+                testID="group-info-add-confirm"
+              >
+                <Text style={styles.modalSaveText}>
+                  {selectedAdd.size > 0 ? `Add ${selectedAdd.size}` : 'Add'}
+                </Text>
               </TouchableOpacity>
             </View>
           </Pressable>
