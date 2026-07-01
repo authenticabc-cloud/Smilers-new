@@ -1444,6 +1444,11 @@ export function CallScreenInner() {
   }, [answerCall, callId]);
 
   // If remote ends the call, also tear down locally
+  const wasLiveRef = useRef(false);
+  useEffect(() => {
+    if (isActive) wasLiveRef.current = true;
+  }, [isActive]);
+
   useEffect(() => {
     if (isIncoming) {
       incomingCallSeenRef.current = true;
@@ -1454,24 +1459,51 @@ export function CallScreenInner() {
       incomingCallAnsweredRef.current = true;
     }
 
-    if (
-      activeCall &&
-      (activeCall.status === 'ended' || activeCall.status === 'declined') &&
-      sessionRef.current
-    ) {
-      sessionRef.current.close();
-      sessionRef.current = null;
+    const teardownLocalSession = () => {
+      if (sessionRef.current) {
+        try {
+          sessionRef.current.close();
+        } catch {}
+        sessionRef.current = null;
+      }
       initStartedRef.current = false;
       if (inCallStartedRef.current) {
         InCallAudio.stop();
         inCallStartedRef.current = false;
         callDebug.push('AUDIO', 'InCallManager.stop() (remote-ended)');
       }
+    };
+
+    // Case 1: backend explicitly reports the call ended/declined.
+    // iter-308: no longer gated on `sessionRef.current` — the survivor must
+    // exit even if their peer connection had already dropped.
+    if (activeCall && (activeCall.status === 'ended' || activeCall.status === 'declined')) {
+      teardownLocalSession();
+      wasLiveRef.current = false;
       // Give the user 700ms to see the "Call ended" state before popping
       const timeoutId = setTimeout(() => callHost.end(), 700);
       return () => clearTimeout(timeoutId);
     }
-  }, [activeCall, isActive, isIncoming, router]);
+
+    // Case 2 (iter-308): the call was LIVE and the active-call doc has now
+    // DISAPPEARED (getActiveCall → null). The backend clears/ends the call the
+    // instant the OTHER participant hangs up, so the survivor never sees
+    // status='ended' — just an empty result. Previously mobile had no handler
+    // for this, stranding the survivor on the call screen until they also hung
+    // up. This is the reported bug. Debounce ~2.5s so a brief query blip during
+    // a network reconnect (ICE restart) can't kill a call that's still live.
+    if (Platform.OS !== 'web' && wasLiveRef.current && !activeCallLoading && !activeCall) {
+      const timeoutId = setTimeout(() => {
+        if (!activeCallLoading && !activeCall && wasLiveRef.current) {
+          callDebug.push('CALL', 'active-call doc cleared while live → remote hung up, exiting');
+          teardownLocalSession();
+          wasLiveRef.current = false;
+          callHost.end();
+        }
+      }, 2500);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [activeCall, activeCallLoading, isActive, isIncoming]);
 
   useEffect(() => {
     if (!activeCall || isActive || !incomingCallSeenRef.current || incomingCallAnsweredRef.current) {
