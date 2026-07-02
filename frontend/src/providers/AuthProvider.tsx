@@ -393,66 +393,100 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (refreshInFlightRef.current) {
         return refreshInFlightRef.current;
       }
+      // Perform ONE refresh round-trip with the given token, persisting the
+      // rotated tokens on success. Throws the provider error on failure.
+      const attempt = async (token: string): Promise<string | null> => {
+        const tokenResult = await AuthSession.refreshAsync(
+          { clientId: OIDC_CLIENT_ID, refreshToken: token },
+          disco
+        );
+        await storeTokens(tokenResult);
+        lastRefreshAtRef.current = Date.now();
+        refreshTokenDeadRef.current = false;
+        lastRefreshErrorRef.current = null;
+        const anyResult = tokenResult as any;
+        return (anyResult.idToken || anyResult.id_token || null) as string | null;
+      };
+
+      const classify = (errorValue: any) => {
+        const code = String(errorValue?.code || errorValue?.error || '').toLowerCase();
+        const desc =
+          errorValue?.description || errorValue?.error_description || errorValue?.message || String(errorValue);
+        // OAuth terminal errors: the refresh token is no longer usable
+        // (revoked, expired, or a rotated-token reuse was detected).
+        const isTerminal =
+          code === 'invalid_grant' ||
+          code === 'invalid_token' ||
+          code === 'unauthorized_client' ||
+          code === 'invalid_client';
+        return { code, desc, isTerminal };
+      };
+
       const promise = (async () => {
         try {
-          const tokenResult = await AuthSession.refreshAsync(
-            { clientId: OIDC_CLIENT_ID, refreshToken },
-            disco
-          );
-          await storeTokens(tokenResult);
-          lastRefreshAtRef.current = Date.now();
-          // Refresh succeeded — clear any prior failure state.
-          refreshTokenDeadRef.current = false;
-          lastRefreshErrorRef.current = null;
-          const anyResult = tokenResult as any;
-          return (anyResult.idToken || anyResult.id_token || null) as string | null;
-        } catch (errorValue: any) {
-          // IMPORTANT — historical bug: this used to call `clearTokens()` and
-          // log the user out on the first transient failure (e.g. flaky wifi,
-          // VPN flap, server hiccup). That meant a single bad ping forced the
-          // user back through OIDC sign-in.
-          //
-          // New behaviour: swallow the error and KEEP the cached session
-          // alive locally. Convex will continue to use the cached id_token;
-          // if that's truly expired, individual queries may temporarily 401
-          // until the next refresh succeeds, but the user is NEVER kicked
-          // out of the app. They can keep navigating, viewing cached data,
-          // queueing messages, etc.
-          //
-          // iter-295: capture the REAL provider error so diagnostics show WHY
-          // refresh failed, and classify terminal revocation vs transient.
-          const code = String(errorValue?.code || errorValue?.error || '').toLowerCase();
-          const desc =
-            errorValue?.description || errorValue?.error_description || errorValue?.message || String(errorValue);
-          lastRefreshErrorRef.current = code || desc;
-          // OAuth terminal errors: the refresh token is no longer usable
-          // (revoked, expired, or a rotated-token reuse was detected). Retrying
-          // only hammers the endpoint — mark it dead so callers stop looping
-          // and the UI can route to re-auth.
-          const isTerminal =
-            code === 'invalid_grant' ||
-            code === 'invalid_token' ||
-            code === 'unauthorized_client' ||
-            code === 'invalid_client';
-          if (isTerminal) {
-            refreshTokenDeadRef.current = true;
-            setSessionExpired(true);
-            // Purge the dead refresh token so we don't keep retrying it
-            // (every retry re-logs the same `session not found` and spams the
-            // OIDC endpoint). hasRefresh becomes false → getFreshIdToken stops
-            // attempting refresh and the recovery UI is shown once.
-            try {
-              await storage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
-            } catch {
-              /* ignore */
+          // iter-312 RACE FIX: re-read the FRESHEST refresh token from storage
+          // INSIDE the single-flight critical section. On resume-from-idle
+          // (overnight) several subsystems ask for a token at once; the caller
+          // may have read `refreshToken` moments before a concurrent refresh
+          // rotated it. Submitting that stale token → `invalid_grant` → we used
+          // to mark the session terminally dead → "No chats yet" until manual
+          // sign-out/in. Always submit the latest stored token instead.
+          const latest = (await storage.getItem(STORAGE_KEYS.REFRESH_TOKEN)) || refreshToken;
+          try {
+            return await attempt(latest);
+          } catch (firstErr: any) {
+            const first = classify(firstErr);
+            lastRefreshErrorRef.current = first.code || first.desc;
+            if (first.isTerminal) {
+              // A concurrent refresher may have rotated the token between our
+              // read and submit. Re-read; if it changed, this was a rotation
+              // RACE (not a real revocation) → retry ONCE with the new token
+              // before declaring the session dead.
+              const newer = await storage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
+              if (newer && newer !== latest) {
+                try {
+                  const recovered = await attempt(newer);
+                  callDebug.push('AUTH', 'refresh recovered via rotated token (race resolved)');
+                  return recovered;
+                } catch (retryErr: any) {
+                  const second = classify(retryErr);
+                  lastRefreshErrorRef.current = second.code || second.desc;
+                  if (second.isTerminal) {
+                    refreshTokenDeadRef.current = true;
+                    setSessionExpired(true);
+                    try {
+                      await storage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
+                    } catch {
+                      /* ignore */
+                    }
+                  }
+                  callDebug.push(
+                    'ERR',
+                    `AUTH refresh retry failed: code=${second.code || '?'} terminal=${second.isTerminal}`,
+                  );
+                  return null;
+                }
+              }
+              // No newer token in storage → genuine terminal revocation/expiry.
+              // Purge the dead token so we stop retrying and surface re-auth.
+              refreshTokenDeadRef.current = true;
+              setSessionExpired(true);
+              try {
+                await storage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
+              } catch {
+                /* ignore */
+              }
             }
+            // Non-terminal (network blip etc.) → KEEP the cached session alive;
+            // Convex may 401 briefly until a later refresh succeeds, but the
+            // user is never kicked out.
+            callDebug.push(
+              'ERR',
+              `AUTH refreshAsync threw: code=${first.code || '?'} terminal=${first.isTerminal} msg=${String(first.desc).slice(0, 140)}`,
+            );
+            console.warn('Refresh failed (keeping cached session alive):', first.code || first.desc);
+            return null;
           }
-          callDebug.push(
-            'ERR',
-            `AUTH refreshAsync threw: code=${code || '?'} terminal=${isTerminal} msg=${String(desc).slice(0, 140)}`,
-          );
-          console.warn('Refresh failed (keeping cached session alive):', code || desc);
-          return null;
         } finally {
           refreshInFlightRef.current = null;
         }
