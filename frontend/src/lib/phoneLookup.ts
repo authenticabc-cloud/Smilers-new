@@ -166,41 +166,41 @@ export async function lookupUsersByPhones(
     }
   }
 
-  // iter-311/iter-315 FIX: the batch `users.lookupByPhones` query was never
-  // shipped on the backend, so classification came back empty and EVERY device
-  // contact — including registered users (e.g. Sarah Asare) — was wrongly
-  // listed under "Invite to Smilers". The single-number `users.getByPhone`
-  // query IS shipped/verified, so when the batch path is unavailable or matched
-  // nothing, probe each unique E.164 with it (capped + concurrency-limited).
-  if (out.size === 0) {
-    const single = (api as any).users?.getByPhone;
-    if (single) {
-      const candidates = unique.slice(0, 400);
-      const CONC = 8;
-      for (let i = 0; i < candidates.length; i += CONC) {
-        const slice = candidates.slice(i, i + CONC);
-        const results = await Promise.all(
-          slice.map(async (e164) => {
-            try {
-              const r: any = await convex.query(single, { phoneE164: e164 });
-              if (r && r._id) {
-                return {
-                  key: e164,
-                  userId: String(r._id),
-                  displayName: typeof r.displayName === 'string' ? r.displayName : undefined,
-                  avatarUrl: typeof r.avatarUrl === 'string' ? r.avatarUrl : undefined,
-                };
-              }
-            } catch {
-              /* ignore a single miss */
+  // iter-311/iter-315/iter-317 FIX: the batch `users.lookupByPhones` query is
+  // unreliable (it may be undeployed, or its own server-side matching misses
+  // some numbers — e.g. Ghana locals where last-10 digits differ). The
+  // single-number `users.getByPhone` query IS shipped/verified. So we probe —
+  // via getByPhone — EVERY unique E.164 that the batch did NOT already resolve
+  // (not just when the batch found nothing). This guarantees registered users
+  // like Sarah Asare are recognised even if the batch skipped them.
+  const single = (api as any).users?.getByPhone;
+  const unmatched = unique.filter((e164) => !out.has(e164));
+  if (single && unmatched.length > 0) {
+    const candidates = unmatched.slice(0, 600);
+    const CONC = 10;
+    for (let i = 0; i < candidates.length; i += CONC) {
+      const slice = candidates.slice(i, i + CONC);
+      const results = await Promise.all(
+        slice.map(async (e164) => {
+          try {
+            const r: any = await convex.query(single, { phoneE164: e164 });
+            if (r && r._id) {
+              return {
+                key: e164,
+                userId: String(r._id),
+                displayName: typeof r.displayName === 'string' ? r.displayName : undefined,
+                avatarUrl: typeof r.avatarUrl === 'string' ? r.avatarUrl : undefined,
+              };
             }
-            return null;
-          }),
-        );
-        for (const m of results) {
-          if (m && m.key) {
-            out.set(m.key, { userId: m.userId, displayName: m.displayName, avatarUrl: m.avatarUrl });
+          } catch {
+            /* ignore a single miss */
           }
+          return null;
+        }),
+      );
+      for (const m of results) {
+        if (m && m.key) {
+          out.set(m.key, { userId: m.userId, displayName: m.displayName, avatarUrl: m.avatarUrl });
         }
       }
     }

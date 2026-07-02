@@ -181,6 +181,36 @@ function StatusViewScreenInner() {
   const markViewed = useMutation(api.statuses.markViewed);
   const sendMessage = useMutation(api.messages.send);
   const getOrCreateDM = useMutation(api.conversations.getOrCreateDirect);
+  // Delete-my-status. Backend mutation `statuses.remove` is pending on the web
+  // team; this wiring activates automatically once it ships and fails softly
+  // (friendly message, no crash) until then.
+  const removeStatus = useMutation((api as any).statuses.remove);
+  const onDeleteStatus = useCallback(() => {
+    if (!isMine || !current?._id) return;
+    Alert.alert('Delete status?', 'This status will be removed for everyone who can see it.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await (removeStatus as any)({ statusId: current._id });
+            router.back();
+          } catch (errorValue: any) {
+            const msg = String(errorValue?.message || '');
+            if (msg.includes('CouldNotFindFunction') || msg.toLowerCase().includes('not found')) {
+              Alert.alert(
+                'Not available yet',
+                'Deleting a status needs a small backend update that hasn\u2019t shipped yet. It will work automatically once the web team deploys it.',
+              );
+            } else {
+              Alert.alert('Could not delete', msg || 'Please try again.');
+            }
+          }
+        },
+      },
+    ]);
+  }, [isMine, current, removeStatus, router]);
 
   const [idx, setIdx] = useState(0);
   const [paused, setPaused] = useState(false);
@@ -398,6 +428,16 @@ function StatusViewScreenInner() {
           <Text style={styles.authorName}>{author.name}</Text>
           <Text style={styles.authorTime}>{timeAgo(current._creationTime || Date.now())}</Text>
         </View>
+        {isMine ? (
+          <TouchableOpacity
+            onPress={onDeleteStatus}
+            hitSlop={12}
+            style={{ marginRight: 18 }}
+            testID="status-delete"
+          >
+            <Feather name="trash-2" size={22} color="#FFFFFF" />
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity onPress={() => router.back()} hitSlop={12} testID="status-close">
           <Feather name="x" size={26} color="#FFFFFF" />
         </TouchableOpacity>
