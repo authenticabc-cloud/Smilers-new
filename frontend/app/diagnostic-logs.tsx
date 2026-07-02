@@ -124,6 +124,7 @@ export default function DiagnosticLogsScreen() {
     (api as any).voiceTaskContacts?.getMyVoiceTaskContacts,
     {},
   ) as any[] | undefined;
+  const conversationsList = useQuery(api.conversations.listConversations, {}) as any[] | undefined;
   const [localVoiceTasks, setLocalVoiceTasks] = useState<Record<string, any> | null>(null);
   useEffect(() => {
     (async () => {
@@ -185,9 +186,32 @@ export default function DiagnosticLogsScreen() {
         `  #${r?.position}: stored="${stored}" phone=${phone} → resolved="${resolved}"${changed}`,
       );
     }
+    lines.push('');
+    lines.push('--- Contact phone-match (device index) ---');
+    const cs = Array.isArray(contacts) ? contacts : [];
+    lines.push(`total contacts: ${cs.length}`);
+    let matched = 0;
+    const shown = cs.slice(0, 40);
+    for (const c of shown) {
+      const phone = c?.phoneE164 || c?.phone || '';
+      const smil = c?.name || c?.displayName || '';
+      const nm = getResolvedDisplayName(c, deviceIndex, lookupDeviceContactName, smil || 'Contact');
+      const isDev = !!phone && nm !== smil && nm !== 'Contact';
+      if (isDev) matched++;
+      lines.push(`  ${phone || '(no phone)'} → "${nm}"${isDev ? ' [device✓]' : ''}`);
+    }
+    lines.push(`device-matched: ${matched}/${shown.length} shown`);
+    lines.push('');
+    lines.push('--- Group detection (listConversations) ---');
+    const convs = Array.isArray(conversationsList) ? conversationsList : [];
+    const groups = convs.filter((c: any) => c && (c.isGroup === true || c.type === 'group'));
+    lines.push(`conversations: ${convs.length} · detected groups: ${groups.length}`);
+    for (const g of groups.slice(0, 20)) {
+      lines.push(`  "${g?.name || '(no name)'}" isGroup=${g?.isGroup} type=${g?.type}`);
+    }
     lines.push('==================================');
     return lines.join('\n');
-  }, [contacts, deviceIndex, localVoiceTasks, voiceTasksConvex]);
+  }, [contacts, conversationsList, deviceIndex, localVoiceTasks, voiceTasksConvex]);
 
   const handleCopySnapshot = useCallback(async () => {
     try {
@@ -488,6 +512,9 @@ export default function DiagnosticLogsScreen() {
         </Text>
         <Text style={styles.snapshotLine}>
           Smilers contacts: {Array.isArray(contacts) ? contacts.length : '…'} · Voice tasks: {Array.isArray(voiceTasksConvex) ? voiceTasksConvex.length : '…'}
+        </Text>
+        <Text style={styles.snapshotLine}>
+          Groups detected: {Array.isArray(conversationsList) ? conversationsList.filter((c: any) => c && (c.isGroup === true || c.type === 'group')).length : '…'} / {Array.isArray(conversationsList) ? conversationsList.length : '…'} convos
         </Text>
         <Text style={styles.snapshotLine}>
           Keyboard KAV: {Platform.OS === 'ios' ? 'padding' : 'height'} · edge-to-edge: {String((Constants?.expoConfig?.android as any)?.edgeToEdgeEnabled)}
