@@ -18,6 +18,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery } from 'convex/react';
+import * as Clipboard from 'expo-clipboard';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../../src/providers/AuthProvider';
@@ -299,6 +300,45 @@ export default function UserProfileScreen() {
         0,
     ) || 0;
 
+  // iter-313: contact phone number (web parity with own-profile). Prefer the
+  // registered Convex profile number; fall back to the locally-saved contact
+  // row. Show the verification pill and a copy affordance.
+  const matchedContact = useMemo(
+    () =>
+      Array.isArray(myContacts)
+        ? myContacts.find((c: any) => String(c?._id || c?.userId) === String(userId))
+        : null,
+    [myContacts, userId],
+  );
+  const contactPhone: string = String(
+    user?.phone ||
+      user?.phoneE164 ||
+      matchedContact?.phone ||
+      matchedContact?.phoneE164 ||
+      '',
+  ).trim();
+  const contactPhoneVerified = Boolean(
+    (user as any)?.phoneVerified ?? (user as any)?.isPhoneVerified,
+  );
+  const [phoneCopied, setPhoneCopied] = useState(false);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyPhone = async () => {
+    if (!contactPhone) return;
+    try {
+      await Clipboard.setStringAsync(contactPhone);
+      setPhoneCopied(true);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => setPhoneCopied(false), 1600);
+    } catch {
+      /* clipboard unavailable — no-op */
+    }
+  };
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
+
   // --- Actions ------------------------------------------------------------
   const openChat = async () => {
     if (hasValidConversationId) {
@@ -504,6 +544,46 @@ export default function UserProfileScreen() {
             {aboutText || 'No bio yet.'}
           </Text>
         </View>
+
+        {/* PHONE NUMBER (web parity — visible with verification + copy) */}
+        {contactPhone ? (
+          <>
+            <View style={styles.sectionDivider} />
+            <View style={styles.section}>
+              <View style={styles.phoneLabelRow}>
+                <Feather name="phone" size={13} color={Colors.primary} />
+                <Text style={styles.sectionLabel}>PHONE NUMBER</Text>
+              </View>
+              <View style={styles.phoneRow}>
+                <Text style={styles.phoneNumber} numberOfLines={1} testID="user-profile-phone">
+                  {contactPhone}
+                </Text>
+                {contactPhoneVerified ? (
+                  <View style={styles.verifiedPill} testID="user-profile-phone-verified">
+                    <MaterialCommunityIcons name="shield-check" size={13} color="#15803D" />
+                    <Text style={styles.verifiedText}>Verified</Text>
+                  </View>
+                ) : null}
+                <View style={{ flex: 1 }} />
+                <TouchableOpacity
+                  onPress={copyPhone}
+                  hitSlop={8}
+                  style={styles.copyBtn}
+                  testID="user-profile-phone-copy"
+                >
+                  <Feather
+                    name={phoneCopied ? 'check' : 'copy'}
+                    size={16}
+                    color={phoneCopied ? '#15803D' : Colors.primary}
+                  />
+                  <Text style={[styles.copyText, phoneCopied ? { color: '#15803D' } : null]}>
+                    {phoneCopied ? 'Copied' : 'Copy'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </>
+        ) : null}
 
         {/* GROUPS IN COMMON */}
         <View style={styles.sectionDivider} />
@@ -1040,6 +1120,25 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     fontStyle: 'italic',
   },
+  phoneLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
+  phoneRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  phoneNumber: {
+    fontSize: FontSize.lg,
+    color: Colors.textPrimary,
+    fontWeight: FontWeight.semibold,
+  },
+  verifiedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: Radius.pill,
+  },
+  verifiedText: { fontSize: 12, color: '#15803D', fontWeight: FontWeight.bold },
+  copyBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 4 },
+  copyText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.semibold },
 
   // Groups in common
   groupsList: { gap: 18 },

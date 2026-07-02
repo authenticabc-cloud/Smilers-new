@@ -17,6 +17,7 @@ import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName } from '../../src/lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { readCacheMeta, writeCache } from '../../src/lib/offlineCache';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import OfflineBanner from '../../src/components/OfflineBanner';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 // iter-220: pull-to-refresh now forces a Convex socket reconnect — the
@@ -45,9 +46,39 @@ function relTime(iso?: string) {
 export default function ChatsScreen() {
   const router = useRouter();
   const [showMenu, setShowMenu] = useState(false);
+  // iter-313: pin Voice Task contacts to the top of the chat list, in their
+  // assigned 1..10 order. Off by default (chats stay time-ordered); persisted
+  // locally so the choice survives restarts.
+  const [pinVoiceTasks, setPinVoiceTasks] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const v = await AsyncStorage.getItem('smilers_pin_voice_task_chats');
+        if (alive && v === '1') setPinVoiceTasks(true);
+      } catch {}
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const togglePinVoiceTasks = useCallback(() => {
+    setShowMenu(false);
+    setPinVoiceTasks((prev) => {
+      const next = !prev;
+      AsyncStorage.setItem('smilers_pin_voice_task_chats', next ? '1' : '0').catch(() => {});
+      return next;
+    });
+  }, []);
   const me = useQuery(api.users.getCurrentUser, {});
   const contacts = useQuery(api.contacts.getContacts, {});
   const conversations = useQuery(api.conversations.listConversations);
+  // Voice Task roster (positions 1..10) — used to optionally pin those
+  // contacts' chats to the top in the same order they occupy in Voice Tasks.
+  const voiceTaskRows = useQuery(
+    (api as any).voiceTaskContacts?.getMyVoiceTaskContacts,
+    {},
+  ) as any[] | undefined;
   // iter-213: archived chats sync against the shared Convex backend
   // (api.archives.*). The main list does NOT exclude archived rows and
   // carries no isArchived flag, so we fetch the archived id set and
@@ -195,6 +226,40 @@ export default function ChatsScreen() {
   );
   const archivedCount = archivedIds?.length ?? 0;
 
+  // iter-313: map each Voice Task contact's user id → its position (1..10),
+  // then (when the pin toggle is on) sort matching conversations to the top in
+  // that order. Non-voice-task chats keep their normal recency order below.
+  const voiceTaskOrder = useMemo(() => {
+    const map = new Map<string, number>();
+    (Array.isArray(voiceTaskRows) ? voiceTaskRows : []).forEach((r: any) => {
+      const uid = String(r?.contactId || r?.userId || '');
+      const pos = Number(r?.position);
+      if (uid && pos >= 1 && pos <= 10) map.set(uid, pos);
+    });
+    return map;
+  }, [voiceTaskRows]);
+
+  const orderedList = useMemo(() => {
+    if (!pinVoiceTasks || voiceTaskOrder.size === 0) return visibleList;
+    const peerId = (c: any): string =>
+      String(
+        c?.otherUserId ||
+          c?.otherParticipant?._id ||
+          c?.otherUser?._id ||
+          c?.otherParticipantId ||
+          '',
+      );
+    const pinned: any[] = [];
+    const rest: any[] = [];
+    visibleList.forEach((c: any) => {
+      const pos = voiceTaskOrder.get(peerId(c));
+      if (pos) pinned.push({ c, pos });
+      else rest.push(c);
+    });
+    pinned.sort((a, b) => a.pos - b.pos);
+    return [...pinned.map((p) => p.c), ...rest];
+  }, [pinVoiceTasks, voiceTaskOrder, visibleList]);
+
   const handleArchive = useCallback(
     async (conversationId: string) => {
       try {
@@ -288,6 +353,27 @@ export default function ChatsScreen() {
               onPress={() => handleMenuPress('/archived')}
               testID="menu-archived"
             />
+            <TouchableOpacity
+              style={menuStyles.row}
+              onPress={togglePinVoiceTasks}
+              activeOpacity={0.6}
+              testID="menu-pin-voice-tasks"
+            >
+              <View style={menuStyles.iconWrap}>
+                <MaterialCommunityIcons
+                  name={pinVoiceTasks ? 'pin' : 'pin-outline'}
+                  size={20}
+                  color={pinVoiceTasks ? Colors.primary : Colors.textPrimary}
+                />
+              </View>
+              <Text style={menuStyles.label}>Pin Voice Task chats</Text>
+              <View style={{ flex: 1 }} />
+              <Feather
+                name={pinVoiceTasks ? 'check-circle' : 'circle'}
+                size={18}
+                color={pinVoiceTasks ? Colors.primary : Colors.textMuted}
+              />
+            </TouchableOpacity>
             <MenuItem
               icon={<Feather name="lock" size={20} color={Colors.textPrimary} />}
               label="Encryption"
@@ -306,7 +392,7 @@ export default function ChatsScreen() {
       </Modal>
 
       <FlatList
-        data={visibleList}
+        data={orderedList}
         keyExtractor={(item: any) => item._id}
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
