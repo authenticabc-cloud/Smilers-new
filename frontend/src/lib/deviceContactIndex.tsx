@@ -217,6 +217,16 @@ export function DeviceContactProvider({
               if (suffix && !byDigits.has(suffix)) {
                 byDigits.set(suffix, rawName);
               }
+              // iter-315: also index the last 9 digits (national significant
+              // number for GH/NG/most of Africa & EU). A device-local number
+              // like "0206145050" and the stored "+233206145050" share the
+              // last 9 digits ("206145050") but NOT the last 10 — the leading
+              // 0 vs country code shifts the 10-digit window. This 9-digit
+              // fallback is what makes Ghana/African numbers resolve.
+              const suffix9 = digitSuffix(digits, 9);
+              if (suffix9 && suffix9.length === 9 && !byDigits.has(suffix9)) {
+                byDigits.set(suffix9, rawName);
+              }
               // Also store full digit string for exact matches.
               if (!byDigits.has(digits)) {
                 byDigits.set(digits, rawName);
@@ -296,11 +306,17 @@ export function lookupDeviceContactName(
   const exact = index.byDigits.get(digits);
   if (exact) return exact;
   // Suffix match: device stored without country code OR user record has
-  // country code. Compare the last 10 digits.
+  // country code. Compare the last 10 digits, then the last 9 (national
+  // significant number) so "0206145050" ↔ "+233206145050" resolves.
   const suffix = digitSuffix(digits, 10);
   if (suffix) {
     const hit = index.byDigits.get(suffix);
     if (hit) return hit;
+  }
+  const suffix9 = digitSuffix(digits, 9);
+  if (suffix9 && suffix9.length === 9) {
+    const hit9 = index.byDigits.get(suffix9);
+    if (hit9) return hit9;
   }
   return null;
 }

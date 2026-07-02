@@ -120,7 +120,13 @@ export default function UserProfileScreen() {
   // getGroupMembers and reports back through `reportMembership`.
   const candidateGroups = useMemo(() => {
     if (!Array.isArray(conversationsList)) return [];
-    return conversationsList.filter((c: any) => c && c.type === 'group');
+    // iter-315: `listConversations` marks groups with EITHER `isGroup: true`
+    // OR `type: 'group'` depending on the row source (mirrors trustees.tsx).
+    // Filtering on `type` alone dropped groups like "NOAS FAMILY" that only
+    // carry `isGroup`, so Groups-in-Common showed 0 while the web showed 1.
+    return conversationsList.filter(
+      (c: any) => c && (c.isGroup === true || c.type === 'group'),
+    );
   }, [conversationsList]);
   const [memberVerified, setMemberVerified] = useState<Record<string, boolean>>({});
   const reportMembership = useCallback((convId: string, isMember: boolean) => {

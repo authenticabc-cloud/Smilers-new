@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   TextInput,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
   Alert,
   FlatList,
@@ -267,6 +268,23 @@ function StatusViewScreenInner() {
   const [paused, setPaused] = useState(false);
   const [reply, setReply] = useState('');
   const [showViewers, setShowViewers] = useState(false);
+  // iter-315: KeyboardAvoidingView is unreliable on Android edge-to-edge (the
+  // window doesn't resize) and breaks with the Modals rendered here, so the
+  // reply box stayed hidden behind the keyboard. Track the keyboard height via
+  // the Keyboard API and lift the reply bar deterministically instead.
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvt, (e: any) => {
+      setKeyboardHeight(e?.endCoordinates?.height || 0);
+    });
+    const hideSub = Keyboard.addListener(hideEvt, () => setKeyboardHeight(0));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
   const progress = useRef(new Animated.Value(0)).current;
   const animRef = useRef<Animated.CompositeAnimation | null>(null);
   const videoPlayerRef = useRef<VideoPlayer | null>(null);
@@ -450,10 +468,8 @@ function StatusViewScreenInner() {
   const viewsCount = current.views?.length || current.viewCount || 0;
 
   return (
-    <KeyboardAvoidingView
+    <View
       style={[styles.container, { backgroundColor: bg }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={0}
       testID="status-view-screen"
     >
       <View style={styles.progressWrap}>
@@ -531,7 +547,7 @@ function StatusViewScreenInner() {
       </View>
 
       {!isMine ? (
-        <View style={styles.replyBar}>
+        <View style={[styles.replyBar, { marginBottom: keyboardHeight }]}>
           <TextInput
             value={reply}
             onChangeText={(value) => {
@@ -676,7 +692,7 @@ function StatusViewScreenInner() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
