@@ -41,7 +41,7 @@ export interface PhonePrefixMatch {
  * null if the input can't be parsed as a valid phone number. Pure local
  * call — no network roundtrip.
  */
-export function toE164(input: string): string | null {
+export function toE164(input: string, defaultCountry?: string | null): string | null {
   if (!input) return null;
   const trimmed = input.trim();
   // Already E.164 looking? Quick path.
@@ -50,7 +50,10 @@ export function toE164(input: string): string | null {
     const parsed = parsePhoneNumberFromString(compact);
     return parsed && parsed.isValid() ? parsed.number : null;
   }
-  const parsed = parsePhoneNumberFromString(trimmed);
+  // Parse with the viewer's region so LOCAL numbers (e.g. Ghana "0559424764")
+  // resolve to full E.164 ("+233559424764"). Without the region hint local
+  // numbers fail to parse and registered contacts get mis-flagged as "Invite".
+  const parsed = parsePhoneNumberFromString(trimmed, (defaultCountry || undefined) as any);
   return parsed && parsed.isValid() ? parsed.number : null;
 }
 
@@ -91,11 +94,6 @@ export interface BatchPhoneMatch {
   avatarUrl?: string;
 }
 
-/** Last 10 digits of a phone number — the backend's country-code-agnostic key. */
-function last10Digits(value: string | null | undefined): string {
-  return String(value || '').replace(/\D+/g, '').slice(-10);
-}
-
 /**
  * Batch reverse-lookup: given many phone numbers, return ONLY those that map
  * to a (verified) Smilers account. Powers the Device-Contacts tab so it can
@@ -115,22 +113,27 @@ function last10Digits(value: string | null | undefined): string {
 export async function lookupUsersByPhones(
   convex: any,
   phones: Array<string | null | undefined>,
+  defaultRegion?: string | null,
 ): Promise<Map<string, BatchPhoneMatch>> {
+  // Keyed by full E.164 (e.g. "+233559424764"). E.164 is the only reliable
+  // key: last-10-digits matching breaks for countries whose national number
+  // isn't 10 digits (e.g. Ghana), where "+233559424764" and local
+  // "0559424764" share NO common 10-digit tail.
   const out = new Map<string, BatchPhoneMatch>();
   if (!convex || !Array.isArray(phones) || phones.length === 0) return out;
   const fn = (api as any).users?.lookupByPhones;
 
-  // Dedupe by last-10 (keep a representative raw string per key), drop numbers
-  // with too few digits, and cap so a huge address book can't fire dozens of
-  // queries.
-  const byKey = new Map<string, string>();
+  // Normalize each input to E.164 (using the viewer's region for local
+  // numbers) and dedupe on it. Keep a map E164 → representative raw string.
+  const byE164 = new Map<string, string>();
   for (const p of phones) {
     const raw = String(p || '').trim();
-    const key = last10Digits(raw);
-    if (key.length < 7) continue;
-    if (!byKey.has(key)) byKey.set(key, raw);
+    if (!raw) continue;
+    const e164 = toE164(raw, defaultRegion) || (/^\+\d{6,15}$/.test(raw.replace(/\s+/g, '')) ? raw.replace(/\s+/g, '') : null);
+    if (!e164) continue;
+    if (!byE164.has(e164)) byE164.set(e164, raw);
   }
-  const unique = Array.from(byKey.values()).slice(0, 1000);
+  const unique = Array.from(byE164.keys()).slice(0, 1000);
   if (unique.length === 0) return out;
 
   if (fn) {
@@ -142,9 +145,13 @@ export async function lookupUsersByPhones(
         if (Array.isArray(res)) {
           for (const r of res) {
             if (r && r.onSmilers && r.userId) {
-              const key = last10Digits(r.input);
-              if (key.length >= 7) {
-                out.set(key, {
+              // Prefer the server's canonical E.164; else normalize the input.
+              const e164 =
+                (typeof r.phoneE164 === 'string' && r.phoneE164) ||
+                toE164(String(r.input || ''), defaultRegion) ||
+                String(r.input || '');
+              if (e164) {
+                out.set(e164, {
                   userId: String(r.userId),
                   displayName: typeof r.displayName === 'string' ? r.displayName : undefined,
                   avatarUrl: typeof r.avatarUrl === 'string' ? r.avatarUrl : undefined,
@@ -159,30 +166,26 @@ export async function lookupUsersByPhones(
     }
   }
 
-  // iter-311 FIX: the batch `users.lookupByPhones` query was never shipped on
-  // the backend, so classification always came back empty and EVERY device
+  // iter-311/iter-315 FIX: the batch `users.lookupByPhones` query was never
+  // shipped on the backend, so classification came back empty and EVERY device
   // contact — including registered users (e.g. Sarah Asare) — was wrongly
   // listed under "Invite to Smilers". The single-number `users.getByPhone`
-  // query IS shipped/verified (it powers Find-by-phone), so when the batch
-  // path is unavailable or matched nothing, probe each unique number with it
-  // (capped + concurrency-limited) so registered contacts are correctly
-  // recognised as "on Smilers".
+  // query IS shipped/verified, so when the batch path is unavailable or matched
+  // nothing, probe each unique E.164 with it (capped + concurrency-limited).
   if (out.size === 0) {
     const single = (api as any).users?.getByPhone;
     if (single) {
-      const candidates = Array.from(byKey.values()).slice(0, 300);
+      const candidates = unique.slice(0, 400);
       const CONC = 8;
       for (let i = 0; i < candidates.length; i += CONC) {
         const slice = candidates.slice(i, i + CONC);
         const results = await Promise.all(
-          slice.map(async (raw) => {
-            const e164 = toE164(raw) || (raw.startsWith('+') ? raw.replace(/\s+/g, '') : null);
-            if (!e164) return null;
+          slice.map(async (e164) => {
             try {
               const r: any = await convex.query(single, { phoneE164: e164 });
               if (r && r._id) {
                 return {
-                  key: last10Digits(e164),
+                  key: e164,
                   userId: String(r._id),
                   displayName: typeof r.displayName === 'string' ? r.displayName : undefined,
                   avatarUrl: typeof r.avatarUrl === 'string' ? r.avatarUrl : undefined,
@@ -195,7 +198,7 @@ export async function lookupUsersByPhones(
           }),
         );
         for (const m of results) {
-          if (m && m.key.length >= 7) {
+          if (m && m.key) {
             out.set(m.key, { userId: m.userId, displayName: m.displayName, avatarUrl: m.avatarUrl });
           }
         }

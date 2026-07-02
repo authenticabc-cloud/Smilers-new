@@ -121,25 +121,24 @@ export default function UserProfileScreen() {
     return { photos, videos, files };
   }, [messagesPage]);
 
-  const groupsInCommon = useMemo(() => {
-    if (!Array.isArray(conversationsList) || !hasValidUserId) return [];
-    return conversationsList.filter((conv: any) => {
-      if (!conv || conv.type !== 'group') return false;
-      const memberIds = [
-        ...(Array.isArray(conv?.participantIds) ? conv.participantIds : []),
-        ...(Array.isArray(conv?.memberIds) ? conv.memberIds : []),
-        ...(Array.isArray(conv?.participants)
-          ? conv.participants.map(
-              (p: any) => p?.userId || p?._id || p?.id || '',
-            )
-          : []),
-        ...(Array.isArray(conv?.members)
-          ? conv.members.map((p: any) => p?.userId || p?._id || p?.id || '')
-          : []),
-      ].filter(Boolean);
-      return memberIds.map(String).includes(String(userId));
-    });
-  }, [conversationsList, hasValidUserId, userId]);
+  // Candidate groups = all of the viewer's group conversations. Membership of
+  // the *target* user can't be derived reliably from listConversations (group
+  // rows don't always carry member IDs), so each row verifies via
+  // getGroupMembers and reports back through `reportMembership`.
+  const candidateGroups = useMemo(() => {
+    if (!Array.isArray(conversationsList)) return [];
+    return conversationsList.filter((c: any) => c && c.type === 'group');
+  }, [conversationsList]);
+  const [memberVerified, setMemberVerified] = useState<Record<string, boolean>>({});
+  const reportMembership = useCallback((convId: string, isMember: boolean) => {
+    setMemberVerified((prev) =>
+      prev[convId] === isMember ? prev : { ...prev, [convId]: isMember },
+    );
+  }, []);
+  const groupsInCommon = useMemo(
+    () => candidateGroups.filter((g: any) => memberVerified[String(g._id)]),
+    [candidateGroups, memberVerified],
+  );
 
   // --- UI state -----------------------------------------------------------
   const [mediaTab, setMediaTab] = useState<MediaTab>('photos');
@@ -593,40 +592,17 @@ export default function UserProfileScreen() {
           </Text>
           {groupsInCommon.length === 0 ? (
             <Text style={styles.sectionEmpty}>No shared groups yet.</Text>
-          ) : (
-            <View style={styles.groupsList}>
-              {groupsInCommon.map((group: any) => (
-                <TouchableOpacity
-                  key={group._id}
-                  style={styles.groupRow}
-                  activeOpacity={0.85}
-                  onPress={() =>
-                    router.push(`/group/${group._id}` as any)
-                  }
-                  testID={`user-profile-group-${group._id}`}
-                >
-                  <View style={styles.groupAvatar}>
-                    {group?.avatar || group?.avatarUrl ? (
-                      <Image
-                        source={{ uri: group.avatar || group.avatarUrl }}
-                        style={styles.groupAvatarImg}
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <Ionicons
-                        name="people"
-                        size={18}
-                        color={Colors.primary}
-                      />
-                    )}
-                  </View>
-                  <Text style={styles.groupName} numberOfLines={1}>
-                    {group?.name || 'Group'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
+          ) : null}
+          <View style={styles.groupsList}>
+            {candidateGroups.map((group: any) => (
+              <GroupInCommonRow
+                key={group._id}
+                conv={group}
+                targetUserId={String(userId)}
+                onResolve={reportMembership}
+              />
+            ))}
+          </View>
         </View>
 
         {/* SHARED MEDIA */}
@@ -794,6 +770,76 @@ export default function UserProfileScreen() {
 }
 
 // --- Sub-components -------------------------------------------------------
+/**
+ * A single "group in common" candidate. Verifies whether `targetUserId` is a
+ * member of this group via `getGroupMembers` (the only reliable source — the
+ * conversation list doesn't always carry member IDs), reports the result up,
+ * and renders the row only when the target is genuinely a member.
+ */
+function GroupInCommonRow({
+  conv,
+  targetUserId,
+  onResolve,
+}: {
+  conv: any;
+  targetUserId: string;
+  onResolve: (convId: string, isMember: boolean) => void;
+}) {
+  const router = useRouter();
+  const { data: members } = useSafeConvexQuery<any[]>(
+    api.conversations.getGroupMembers,
+    { conversationId: conv?._id },
+    [],
+    !!conv?._id,
+  );
+  const isMember = useMemo(() => {
+    const idOf = (p: any) => String(p?.userId || p?._id || p?.id || '');
+    if (Array.isArray(members) && members.length > 0) {
+      return members.some((m: any) => idOf(m) === String(targetUserId));
+    }
+    // Fallback to any member ids embedded on the conversation object itself.
+    const ids = [
+      ...(Array.isArray(conv?.participantIds) ? conv.participantIds : []),
+      ...(Array.isArray(conv?.memberIds) ? conv.memberIds : []),
+      ...(Array.isArray(conv?.participants) ? conv.participants.map(idOf) : []),
+      ...(Array.isArray(conv?.members) ? conv.members.map(idOf) : []),
+    ]
+      .filter(Boolean)
+      .map(String);
+    return ids.includes(String(targetUserId));
+  }, [members, conv, targetUserId]);
+
+  useEffect(() => {
+    onResolve(String(conv?._id), isMember);
+  }, [isMember, conv?._id, onResolve]);
+
+  if (!isMember) return null;
+  return (
+    <TouchableOpacity
+      style={styles.groupRow}
+      activeOpacity={0.85}
+      onPress={() => router.push(`/group/${conv._id}` as any)}
+      testID={`user-profile-group-${conv._id}`}
+    >
+      <View style={styles.groupAvatar}>
+        {conv?.avatar || conv?.avatarUrl ? (
+          <Image
+            source={{ uri: conv.avatar || conv.avatarUrl }}
+            style={styles.groupAvatarImg}
+            resizeMode="cover"
+          />
+        ) : (
+          <Ionicons name="people" size={18} color={Colors.primary} />
+        )}
+      </View>
+      <Text style={styles.groupName} numberOfLines={1}>
+        {conv?.name || 'Group'}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+
 function ActionButton({
   icon,
   label,
