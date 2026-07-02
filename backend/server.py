@@ -462,14 +462,27 @@ class WebRtcRingRequest(BaseModel):
     conversation_id: str = Field(..., min_length=1)
     is_video: bool = False
     call_id: str | None = None
+    # Device-reachable public backend URL, sent by the mobile caller so the
+    # callee's native receiver can POST call-declined back (see /calls/ring).
+    backend_url: str | None = None
 
 
 @api_router.post("/calls/ring")
-async def webrtc_ring(payload: WebRtcRingRequest):
+async def webrtc_ring(payload: WebRtcRingRequest, request: Request):
     if not payload.callee_identities:
         return {"scheduled": False, "reason": "no-callees"}
     display_name = payload.caller_display_name or "Smilers User"
     call_id = payload.call_id or payload.conversation_id
+    # Public base URL of THIS backend, so the callee's native CallActionReceiver
+    # knows where to POST the `call-declined` event (it reads `backendUrl` from
+    # the ring notification extras). Prefer the URL the mobile caller sends (it
+    # knows the correct device-reachable public host); only fall back to the
+    # request host (which behind the ingress may be an internal cluster domain).
+    backend_url = (payload.backend_url or "").strip().rstrip("/")
+    if not backend_url:
+        backend_url = str(request.base_url).rstrip("/")
+    if backend_url.startswith("http://"):
+        backend_url = "https://" + backend_url[len("http://"):]
     push_data = {
         "title": display_name,
         "message": "Incoming video call" if payload.is_video else "Incoming call",
@@ -481,6 +494,8 @@ async def webrtc_ring(payload: WebRtcRingRequest):
         "conversationId": payload.conversation_id,
         "twilio_is_video": "1" if payload.is_video else "0",
         "twilio_caller_identity": payload.caller_identity,
+        # Where the native receiver POSTs call-declined (it appends the API path).
+        "backendUrl": backend_url,
         # NO twilio_room_name → the Notifee wake routes to /call/<conversationId>
         # (the WebRTC screen), not /twilio-call.
         "action_url": f"/call/{payload.conversation_id}",
@@ -499,7 +514,7 @@ async def webrtc_ring(payload: WebRtcRingRequest):
             logger.info(
                 f"webrtc-ring pushed to {len(payload.callee_identities)} callees: "
                 f"tokens={stats.get('token_count')} ok={stats.get('success_count')} "
-                f"err={stats.get('error_count')}"
+                f"err={stats.get('error_count')} backendUrl={backend_url}"
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception(f"webrtc-ring: push failed (non-fatal): {exc}")
@@ -2160,9 +2175,9 @@ class NotifyEventBody(BaseModel):
     `convex_user_id` field captured at registration."""
 
     recipients: List[str]
-    event: str  # "message" | "call" | "missed-call"
-    title: str
-    message: str
+    event: str  # "message" | "call" | "missed-call" | "call-cancelled" | "call-declined"
+    title: str | None = None
+    message: str | None = None
     conversation_id: str | None = None
     call_id: str | None = None
     call_type: str | None = None  # "voice" | "video"
@@ -2179,7 +2194,7 @@ async def notify_event(body: NotifyEventBody):
         raise HTTPException(400, "recipients is required")
     if len(recipients) > 20:
         recipients = recipients[:20]
-    event = body.event if body.event in ("message", "call", "missed-call", "call-cancelled") else "message"
+    event = body.event if body.event in ("message", "call", "missed-call", "call-cancelled", "call-declined") else "message"
     title = (body.title or "").strip()[:120] or "Smilers"
     message = (body.message or "").strip()[:300] or (
         "Incoming call" if event == "call" else "New message"
@@ -2196,7 +2211,7 @@ async def notify_event(body: NotifyEventBody):
             params.append(f"type={body.call_type}")
         if params:
             action_url += "?" + "&".join(params)
-    elif event in ("missed-call", "call-cancelled"):
+    elif event in ("missed-call", "call-cancelled", "call-declined"):
         action_url = f"/chat/{conv}" if conv else "/notifications"
     else:
         action_url = f"/chat/{conv}" if conv else "/notifications"
@@ -2230,6 +2245,15 @@ async def notify_event(body: NotifyEventBody):
         # the ring notification immediately instead of waiting for its 35s
         # timeout, then surface a missed call.
         data["type"] = "call-cancelled"
+        if body.call_id:
+            data["callId"] = str(body.call_id)
+        if conv:
+            data["conversationId"] = conv
+    elif event == "call-declined":
+        # Callee tapped Decline (often from the notification tray via the
+        # native CallActionReceiver) — tell the CALLER's device to stop the
+        # outgoing-call UI / ringback immediately.
+        data["type"] = "call-declined"
         if body.call_id:
             data["callId"] = str(body.call_id)
         if conv:

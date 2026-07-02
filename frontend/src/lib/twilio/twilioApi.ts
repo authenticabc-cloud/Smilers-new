@@ -42,6 +42,11 @@ export async function ringWebrtcCall(args: {
         conversation_id: args.conversationId,
         is_video: args.isVideo,
         call_id: args.conversationId,
+        // The device-reachable public backend URL, injected into the ring FCM
+        // so the callee's native CallActionReceiver knows where to POST the
+        // `call-declined` event. (Backend can't reliably derive its own public
+        // host behind the ingress.)
+        backend_url: BACKEND_URL,
       }),
     });
     recordDiagnostic({ tag: 'CALL', source: 'ringWebrtcCall', message: `ok conv=${args.conversationId} video=${args.isVideo}` });
