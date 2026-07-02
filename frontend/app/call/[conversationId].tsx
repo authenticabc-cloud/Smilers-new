@@ -2144,40 +2144,88 @@ export function CallScreenInner() {
   if (isMini) {
     return (
       <Pressable
-        style={{ flex: 1, backgroundColor: '#0b141a' }}
+        style={styles.popoutRoot}
         onPress={() => callHost.maximize()}
         testID="mini-call-surface"
       >
-        {showVideo && remoteStreamURL ? (
-          <RTCViewImpl key={`remote-mini-${remoteVideoGen}`} streamURL={remoteStreamURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror={false} />
-        ) : (
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-            <View style={{ width: 56, height: 56, borderRadius: 28, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' }}>
-              <Text style={{ color: Colors.white, fontSize: 22, fontWeight: '700' }}>{getDisplayInitials(otherName) || '?'}</Text>
+        {/* Remote (other participant) fills the top; self-view is attached
+            BELOW it (see popoutSelfStrip) rather than covering their face. */}
+        <View style={styles.popoutRemote}>
+          {showVideo && remoteStreamURL ? (
+            <RTCViewImpl key={`remote-mini-${remoteVideoGen}`} streamURL={remoteStreamURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror={false} />
+          ) : (
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+              <View style={{ width: 56, height: 56, borderRadius: 28, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ color: Colors.white, fontSize: 22, fontWeight: '700' }}>{getDisplayInitials(otherName) || '?'}</Text>
+              </View>
             </View>
+          )}
+          <View style={{ position: 'absolute', top: 6, left: 8, right: 8 }} pointerEvents="none">
+            <Text style={{ color: Colors.white, fontSize: 12, fontWeight: '700' }} numberOfLines={1}>{otherName}</Text>
+            <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 10 }} numberOfLines={1}>{isActive ? durationLabel : statusText}</Text>
           </View>
-        )}
-        <View style={{ position: 'absolute', top: 6, left: 8, right: 8 }} pointerEvents="none">
-          <Text style={{ color: Colors.white, fontSize: 12, fontWeight: '700' }} numberOfLines={1}>{otherName}</Text>
-          <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 10 }} numberOfLines={1}>{isActive ? durationLabel : statusText}</Text>
+          {/* Controls sit at the bottom of the REMOTE area so they clear the
+              self-view strip below. */}
+          <View style={{ position: 'absolute', bottom: 6, left: 0, right: 0, flexDirection: 'row', justifyContent: 'center', gap: 14 }}>
+            <TouchableOpacity
+              onPress={() => callHost.maximize()}
+              style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.22)', alignItems: 'center', justifyContent: 'center' }}
+              testID="mini-expand-btn"
+            >
+              <Ionicons name="expand-outline" size={16} color={Colors.white} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handleHangup}
+              style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: Colors.danger, alignItems: 'center', justifyContent: 'center' }}
+              testID="mini-end-btn"
+            >
+              <Ionicons name="call" size={16} color={Colors.white} style={{ transform: [{ rotate: '135deg' }] }} />
+            </TouchableOpacity>
+          </View>
         </View>
-        <View style={{ position: 'absolute', bottom: 8, left: 0, right: 0, flexDirection: 'row', justifyContent: 'center', gap: 14 }}>
-          <TouchableOpacity
-            onPress={() => callHost.maximize()}
-            style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.22)', alignItems: 'center', justifyContent: 'center' }}
-            testID="mini-expand-btn"
-          >
-            <Ionicons name="expand-outline" size={17} color={Colors.white} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={handleHangup}
-            style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.danger, alignItems: 'center', justifyContent: 'center' }}
-            testID="mini-end-btn"
-          >
-            <Ionicons name="call" size={17} color={Colors.white} style={{ transform: [{ rotate: '135deg' }] }} />
-          </TouchableOpacity>
+        {/* Self-view — rectangle attached directly below the remote frame. */}
+        <View style={styles.popoutSelfStrip} pointerEvents="none">
+          {showVideo && localStreamURL && !cameraOff ? (
+            <RTCViewImpl streamURL={localStreamURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror />
+          ) : (
+            <View style={styles.popoutSelfOff}>
+              <Feather name="video-off" size={14} color="rgba(255,255,255,0.7)" />
+            </View>
+          )}
         </View>
       </Pressable>
+    );
+  }
+
+  // OS Picture-in-Picture (Android): the system gives us a single small window,
+  // so we cannot draw OUTSIDE it — but we CAN stop the self-view from covering
+  // the other participant. Render the remote in the top portion and pin the
+  // self-view as a rectangle attached directly BELOW it (same width, ~18%
+  // height), matching the in-app pop-out layout.
+  if (inPip) {
+    return (
+      <View style={styles.popoutRoot} testID="pip-call-surface">
+        <View style={styles.popoutRemote}>
+          {showVideo && remoteStreamURL ? (
+            <RTCViewImpl key={`remote-pip-${remoteVideoGen}`} streamURL={remoteStreamURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror={false} />
+          ) : (
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+              <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ color: Colors.white, fontSize: 26, fontWeight: '700' }}>{getDisplayInitials(otherName) || '?'}</Text>
+              </View>
+            </View>
+          )}
+        </View>
+        <View style={styles.popoutSelfStrip} pointerEvents="none">
+          {showVideo && localStreamURL && !cameraOff ? (
+            <RTCViewImpl streamURL={localStreamURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror />
+          ) : (
+            <View style={styles.popoutSelfOff}>
+              <Feather name="video-off" size={16} color="rgba(255,255,255,0.7)" />
+            </View>
+          )}
+        </View>
+      </View>
     );
   }
 
@@ -3106,6 +3154,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.3)',
   },
+  // iter-314: pop-out (in-app mini + OS PiP) layout — the remote participant
+  // fills the top and the local self-view is a rectangle attached directly
+  // BELOW it (same width/base, ~18% height) instead of covering their face.
+  popoutRoot: { flex: 1, backgroundColor: '#0b141a' },
+  popoutRemote: { flex: 1, position: 'relative', overflow: 'hidden' },
+  popoutSelfStrip: {
+    height: '18%',
+    width: '100%',
+    backgroundColor: '#000',
+    overflow: 'hidden',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.28)',
+  },
+  popoutSelfOff: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#11202b' },
   videoTopOverlay: {
     position: 'absolute',
     // iter-273: nudge the participant name higher so it clears the centre.
