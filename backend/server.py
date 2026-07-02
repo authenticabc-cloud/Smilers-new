@@ -900,6 +900,22 @@ async def download_freelancer_handover():
     )
 
 
+@api_router.get("/download/server-py")
+async def download_server_py():
+    """Serve the CURRENT backend server.py so it can be downloaded and shared
+    with the freelancer (reflects the live, deployed code — including the
+    call-cancelled event)."""
+    from fastapi.responses import FileResponse
+    src_path = Path(__file__).resolve()
+    if not src_path.exists():
+        raise HTTPException(status_code=404, detail="server.py not found")
+    return FileResponse(
+        path=str(src_path),
+        media_type="text/x-python",
+        filename="server.py",
+    )
+
+
 @api_router.post("/translate", response_model=TranslationResponse)
 async def translate_text(payload: TranslationRequest):
     text = (payload.text or "").strip()
