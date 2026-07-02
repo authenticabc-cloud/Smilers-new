@@ -838,9 +838,17 @@ export default function ChatScreen() {
   const visibleMessages = useMemo(() => {
     const localTtl = DISAPPEARING_OPTIONS.find((item) => item.key === disappearingMode)?.ms || 0;
     const ttlMs = Math.max(localTtl, serverDisappearMs);
-    if (!ttlMs) return decryptedMessages;
-    const cutoff = Date.now() - ttlMs;
-    return decryptedMessages.filter((message) => Number(message?._creationTime || 0) >= cutoff);
+    const cutoff = ttlMs ? Date.now() - ttlMs : 0;
+    return decryptedMessages.filter((message) => {
+      // iter-313: "Delete for me" / "Delete for receiver" are PER-VIEWER
+      // retractions (backend flag `isDeleted`). The affected viewer must see
+      // NOTHING — no "This message was deleted" footprint. Only
+      // "Delete for everyone" (stamps `deletedAt`) keeps the standard
+      // WhatsApp tombstone, so we don't drop those here.
+      if (message?.isDeleted === true && !message?.deletedAt) return false;
+      if (cutoff && Number(message?._creationTime || 0) < cutoff) return false;
+      return true;
+    });
   }, [disappearingMode, serverDisappearMs, decryptedMessages]);
 
   // iter-109: in-chat search filter — applied AFTER the disappearing-mode

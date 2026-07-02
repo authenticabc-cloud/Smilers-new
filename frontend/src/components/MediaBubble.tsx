@@ -1237,6 +1237,34 @@ function VideoViewer({
     return null;
   }, [segments, posMs]);
 
+  // iter-313: Save-to-gallery + Share actions for videos, mirroring the
+  // ImageViewer toolbar. Reuses the same generic media helpers (they handle
+  // video mime types + E2EE-decrypted local URIs).
+  const convex = useConvex();
+  const insets = useSafeAreaInsets();
+  const [busyAction, setBusyAction] = useState<null | 'download' | 'share'>(null);
+
+  const handleDownloadVideo = useCallback(async () => {
+    if (busyAction) return;
+    setBusyAction('download');
+    try {
+      const ok = await saveMessageMediaToGallery({ client: convex as any, message: msg, localUri: uri });
+      if (ok) Alert.alert('Saved', 'Video saved to your gallery.');
+    } finally {
+      setBusyAction(null);
+    }
+  }, [busyAction, convex, msg, uri]);
+
+  const handleShareVideo = useCallback(async () => {
+    if (busyAction) return;
+    setBusyAction('share');
+    try {
+      await shareMessage({ client: convex as any, message: msg });
+    } finally {
+      setBusyAction(null);
+    }
+  }, [busyAction, convex, msg]);
+
   return (
     <Modal visible={visible} transparent={false} animationType="fade" onRequestClose={onClose}>
       <View style={styles.viewerWrap} testID="video-viewer">
@@ -1259,6 +1287,41 @@ function VideoViewer({
         <TouchableOpacity style={styles.viewerClose} onPress={onClose} hitSlop={12} testID="video-viewer-close">
           <Feather name="x" size={28} color={Colors.white} />
         </TouchableOpacity>
+
+        {/* Bottom action toolbar — Save / Share (iter-313) */}
+        {msg ? (
+          <View
+            style={[styles.viewerToolbar, { paddingBottom: Math.max(12, insets.bottom + 8) }]}
+            testID="video-viewer-toolbar"
+          >
+            <TouchableOpacity
+              style={styles.viewerAction}
+              onPress={handleDownloadVideo}
+              disabled={!!busyAction}
+              testID="video-viewer-download"
+            >
+              {busyAction === 'download' ? (
+                <ActivityIndicator size="small" color={Colors.white} />
+              ) : (
+                <Feather name="download" size={22} color={Colors.white} />
+              )}
+              <Text style={styles.viewerActionLabel}>Save</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.viewerAction}
+              onPress={handleShareVideo}
+              disabled={!!busyAction}
+              testID="video-viewer-share"
+            >
+              {busyAction === 'share' ? (
+                <ActivityIndicator size="small" color={Colors.white} />
+              ) : (
+                <Feather name="share-2" size={22} color={Colors.white} />
+              )}
+              <Text style={styles.viewerActionLabel}>Share</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
       </View>
     </Modal>
   );
