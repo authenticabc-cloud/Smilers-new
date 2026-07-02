@@ -1590,6 +1590,11 @@ def _derive_push_routing(data: dict) -> dict[str, str]:
         out["type"] = "missed-call"
     elif explicit_type == "message":
         out["type"] = "message"
+    elif explicit_type in ("call-cancelled", "call-declined"):
+        # Control signals — preserve exactly so the callee/caller Kotlin handler
+        # routes them correctly. Without this they get overridden to "call" or
+        # "message" by the has_call_metadata / channel-detection fallback below.
+        out["type"] = explicit_type
 
     action_url = str(data.get("action_url") or "")
     if not action_url.startswith("/"):
@@ -1597,12 +1602,19 @@ def _derive_push_routing(data: dict) -> dict[str, str]:
     path, _, query = action_url.partition("?")
     parts = [p for p in path.split("/") if p]
     if len(parts) >= 2 and parts[0] == "call":
-        out["type"] = "call"
+        # Don't override an explicit control signal (call-cancelled /
+        # call-declined) — those must reach the Kotlin handler as-is, but
+        # still carry the callId so it knows WHICH call to dismiss.
+        if out.get("type") not in ("call-cancelled", "call-declined"):
+            out["type"] = "call"
         out["conversationId"] = parts[1]
         out["callId"] = parts[1]
     elif len(parts) >= 2 and parts[0] == "chat":
-        # Don't downgrade an explicit call type via the action_url path.
-        if out.get("type") != "call":
+        # Don't downgrade an explicit call / control-signal type via the
+        # action_url path. call-cancelled / call-declined route to /chat/<id>
+        # but MUST keep their type so the native service cancels the ring /
+        # ringback instead of rendering a plain message banner.
+        if out.get("type") not in ("call", "call-cancelled", "call-declined"):
             out["type"] = "message"
         out["conversationId"] = parts[1]
     if query:
@@ -1864,6 +1876,12 @@ async def send_push(
                     if _v is not None and _k not in fcm_data:
                         fcm_data[_k] = str(_v)
                 is_call_push = routing.get("type") == "call"
+                # call-cancelled / call-declined are silent control signals: send
+                # data-only so Android does not auto-display a banner or play a
+                # ringtone. The Kotlin SmilersCallNotificationService intercepts them
+                # directly via handleIntent and handles the UI (dismiss ring, show
+                # missed-call, etc.).
+                is_silent_control = routing.get("type") in ("call-cancelled", "call-declined")
 
                 # iter-199: collapse Convex-trigger + caller-device call
                 # pushes into ONE ring per recipient (25 s window).
@@ -1927,7 +1945,7 @@ async def send_push(
                         # carry a notification block so they display normally.
                         # NOTE: apps force-stopped from Settings can't run JS, so
                         # those won't ring — an accepted Android platform limit.
-                        android_data_only=is_call_push,
+                        android_data_only=is_call_push or is_silent_control,
                     )
                     for t, ch in zip(tokens, resolved_channels)
                 ]
