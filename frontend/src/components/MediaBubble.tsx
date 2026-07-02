@@ -1053,6 +1053,21 @@ function VideoMessage({
     void togglePlay();
   }, [player, togglePlay, markConsumed]);
 
+  // iter-314: one-tap Save-to-gallery directly on the video bubble (WhatsApp
+  // parity) so users don't have to open the fullscreen viewer first.
+  const convex = useConvex();
+  const [savingVideo, setSavingVideo] = useState(false);
+  const handleSaveVideo = useCallback(async () => {
+    if (savingVideo) return;
+    setSavingVideo(true);
+    try {
+      const ok = await saveMessageMediaToGallery({ client: convex as any, message: msg, localUri: src });
+      if (ok) Alert.alert('Saved', 'Video saved to your gallery.');
+    } finally {
+      setSavingVideo(false);
+    }
+  }, [savingVideo, convex, msg, src]);
+
   if (!src) {
     return (
       <View style={[styles.videoPlaceholder]} testID="video-bubble-loading">
@@ -1106,6 +1121,24 @@ function VideoMessage({
             testID="video-fullscreen-btn"
           >
             <Feather name="maximize-2" size={14} color={Colors.white} />
+          </TouchableOpacity>
+
+          {/* Top-right save-to-gallery (one-tap, next to fullscreen) */}
+          <TouchableOpacity
+            style={styles.videoSaveBtn}
+            onPress={(event) => {
+              event.stopPropagation?.();
+              void handleSaveVideo();
+            }}
+            hitSlop={6}
+            disabled={savingVideo}
+            testID="video-save-btn"
+          >
+            {savingVideo ? (
+              <ActivityIndicator size="small" color={Colors.white} />
+            ) : (
+              <Feather name="download" size={14} color={Colors.white} />
+            )}
           </TouchableOpacity>
 
           {/* Bottom-left elapsed/duration pill */}
@@ -2191,6 +2224,17 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 8,
     right: 8,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoSaveBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 46,
     width: 30,
     height: 30,
     borderRadius: 15,
