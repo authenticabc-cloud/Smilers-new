@@ -28,6 +28,19 @@ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src
 import { recordDiagnostic } from '../../src/lib/diagnostics';
 import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
 
+
+// Background palette for editing a text status (mirrors the composer).
+const STATUS_BG_PRESETS = [
+  { id: 'amber', bg: '#F4A93B', fg: '#FFFFFF' },
+  { id: 'brown', bg: '#3A2608', fg: '#FBC871' },
+  { id: 'rose', bg: '#E11D48', fg: '#FFFFFF' },
+  { id: 'violet', bg: '#7C3AED', fg: '#FFFFFF' },
+  { id: 'emerald', bg: '#059669', fg: '#FFFFFF' },
+  { id: 'ocean', bg: '#0EA5E9', fg: '#FFFFFF' },
+  { id: 'slate', bg: '#1F2937', fg: '#FBC871' },
+  { id: 'cream', bg: '#F5EFE0', fg: '#3A2608' },
+];
+
 // iter-135: module-evaluation marker so we can correlate a crash on
 // "Smilers has stopped" with whichever screen the user opened last.
 try {
@@ -181,10 +194,10 @@ function StatusViewScreenInner() {
   const markViewed = useMutation(api.statuses.markViewed);
   const sendMessage = useMutation(api.messages.send);
   const getOrCreateDM = useMutation(api.conversations.getOrCreateDirect);
-  // Delete-my-status. Backend mutation `statuses.remove` is pending on the web
-  // team; this wiring activates automatically once it ships and fails softly
-  // (friendly message, no crash) until then.
-  const removeStatus = useMutation((api as any).statuses.remove);
+  // Backend mutations shipped by the web team: `statuses.deleteStatus` and
+  // `statuses.editStatus` (author-only; edit does not reset the 24h expiry).
+  const deleteStatus = useMutation((api as any).statuses.deleteStatus);
+  const editStatus = useMutation((api as any).statuses.editStatus);
   const onDeleteStatus = useCallback(() => {
     if (!isMine || !current?._id) return;
     Alert.alert('Delete status?', 'This status will be removed for everyone who can see it.', [
@@ -194,14 +207,14 @@ function StatusViewScreenInner() {
         style: 'destructive',
         onPress: async () => {
           try {
-            await (removeStatus as any)({ statusId: current._id });
+            await (deleteStatus as any)({ statusId: current._id });
             router.back();
           } catch (errorValue: any) {
             const msg = String(errorValue?.message || '');
             if (msg.includes('CouldNotFindFunction') || msg.toLowerCase().includes('not found')) {
               Alert.alert(
                 'Not available yet',
-                'Deleting a status needs a small backend update that hasn\u2019t shipped yet. It will work automatically once the web team deploys it.',
+                'Deleting a status needs a backend update that hasn\u2019t shipped yet.',
               );
             } else {
               Alert.alert('Could not delete', msg || 'Please try again.');
@@ -210,7 +223,45 @@ function StatusViewScreenInner() {
         },
       },
     ]);
-  }, [isMine, current, removeStatus, router]);
+  }, [isMine, current, deleteStatus, router]);
+
+  // --- Edit my status ---
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState('');
+  const [editBgIdx, setEditBgIdx] = useState(0);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const openEdit = useCallback(() => {
+    if (!isMine || !current?._id) return;
+    setEditText(String(current?.content || current?.caption || ''));
+    const bg = String(current?.backgroundColor || '').toLowerCase();
+    const foundIdx = STATUS_BG_PRESETS.findIndex((p) => p.bg.toLowerCase() === bg);
+    setEditBgIdx(foundIdx >= 0 ? foundIdx : 0);
+    setEditing(true);
+  }, [isMine, current]);
+  const saveEdit = useCallback(async () => {
+    if (!current?._id) return;
+    const value = editText.trim();
+    const isText = String(current?.type) === 'text';
+    if (isText && !value) return;
+    setSavingEdit(true);
+    try {
+      const palette = STATUS_BG_PRESETS[editBgIdx];
+      const args: any = isText
+        ? { statusId: current._id, content: value, backgroundColor: palette.bg, textColor: palette.fg }
+        : { statusId: current._id, caption: value };
+      await (editStatus as any)(args);
+      setEditing(false);
+    } catch (errorValue: any) {
+      const msg = String(errorValue?.message || '');
+      if (msg.includes('CouldNotFindFunction') || msg.toLowerCase().includes('not found')) {
+        Alert.alert('Not available yet', 'Editing a status needs a backend update that hasn\u2019t shipped yet.');
+      } else {
+        Alert.alert('Could not save', msg || 'Please try again.');
+      }
+    } finally {
+      setSavingEdit(false);
+    }
+  }, [current, editText, editBgIdx, editStatus]);
 
   const [idx, setIdx] = useState(0);
   const [paused, setPaused] = useState(false);
@@ -430,6 +481,16 @@ function StatusViewScreenInner() {
         </View>
         {isMine ? (
           <TouchableOpacity
+            onPress={openEdit}
+            hitSlop={12}
+            style={{ marginRight: 18 }}
+            testID="status-edit"
+          >
+            <Feather name="edit-2" size={20} color="#FFFFFF" />
+          </TouchableOpacity>
+        ) : null}
+        {isMine ? (
+          <TouchableOpacity
             onPress={onDeleteStatus}
             hitSlop={12}
             style={{ marginRight: 18 }}
@@ -542,6 +603,75 @@ function StatusViewScreenInner() {
             />
           </Pressable>
         </Pressable>
+      </Modal>
+
+      {/* Edit my status */}
+      <Modal visible={editing} transparent animationType="slide" onRequestClose={() => setEditing(false)}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.editBackdrop}
+        >
+          <View style={styles.editSheet}>
+            <View style={styles.editHeader}>
+              <TouchableOpacity onPress={() => setEditing(false)} hitSlop={10} testID="status-edit-cancel">
+                <Text style={styles.editCancel}>Cancel</Text>
+              </TouchableOpacity>
+              <Text style={styles.editTitle}>Edit status</Text>
+              <TouchableOpacity onPress={saveEdit} hitSlop={10} disabled={savingEdit} testID="status-edit-save">
+                {savingEdit ? (
+                  <ActivityIndicator color={Colors.primary} />
+                ) : (
+                  <Text style={styles.editSave}>Save</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            {String(current?.type) === 'text' ? (
+              <>
+                <View style={[styles.editPreview, { backgroundColor: STATUS_BG_PRESETS[editBgIdx].bg }]}>
+                  <TextInput
+                    value={editText}
+                    onChangeText={setEditText}
+                    multiline
+                    placeholder="Type a status"
+                    placeholderTextColor={`${STATUS_BG_PRESETS[editBgIdx].fg}99`}
+                    style={[styles.editInput, { color: STATUS_BG_PRESETS[editBgIdx].fg }]}
+                    autoFocus
+                    testID="status-edit-input"
+                  />
+                </View>
+                <View style={styles.editSwatches}>
+                  {STATUS_BG_PRESETS.map((p, idx) => (
+                    <TouchableOpacity
+                      key={p.id}
+                      onPress={() => setEditBgIdx(idx)}
+                      style={[
+                        styles.editSwatch,
+                        { backgroundColor: p.bg },
+                        idx === editBgIdx ? styles.editSwatchActive : null,
+                      ]}
+                      testID={`status-edit-color-${p.id}`}
+                    />
+                  ))}
+                </View>
+              </>
+            ) : (
+              <View style={styles.editCaptionWrap}>
+                <Text style={styles.editCaptionLabel}>Caption</Text>
+                <TextInput
+                  value={editText}
+                  onChangeText={setEditText}
+                  multiline
+                  placeholder="Add a caption"
+                  placeholderTextColor={Colors.textMuted}
+                  style={styles.editCaptionInput}
+                  autoFocus
+                  testID="status-edit-caption"
+                />
+              </View>
+            )}
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -937,4 +1067,45 @@ const styles = StyleSheet.create({
     borderRadius: Radius.pill,
   },
   emptyBtnText: { color: '#FFFFFF', fontWeight: FontWeight.bold },
+  editBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
+  editSheet: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: Spacing.lg,
+    paddingBottom: Spacing.xl,
+  },
+  editHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.md },
+  editTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  editCancel: { fontSize: FontSize.base, color: Colors.textSecondary },
+  editSave: { fontSize: FontSize.base, color: Colors.primary, fontWeight: FontWeight.bold },
+  editPreview: {
+    borderRadius: 16,
+    minHeight: 180,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: Spacing.lg,
+  },
+  editInput: {
+    fontSize: 24,
+    fontWeight: FontWeight.bold,
+    textAlign: 'center',
+    minWidth: '100%',
+    maxHeight: 220,
+  },
+  editSwatches: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: Spacing.md, justifyContent: 'center' },
+  editSwatch: { width: 34, height: 34, borderRadius: 17, borderWidth: 2, borderColor: 'transparent' },
+  editSwatchActive: { borderColor: Colors.textPrimary, transform: [{ scale: 1.12 }] },
+  editCaptionWrap: { gap: 8 },
+  editCaptionLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.semibold },
+  editCaptionInput: {
+    minHeight: 90,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    padding: 12,
+    fontSize: FontSize.base,
+    color: Colors.textPrimary,
+    textAlignVertical: 'top',
+  },
 });
