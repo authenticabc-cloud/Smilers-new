@@ -125,10 +125,15 @@ export default function CallScreen() {
       if (typeof v === 'string') flat[key] = v;
     });
     callHost.start(flat);
-    // Pop this empty shim route; if there's nothing to pop (cold start from a
-    // push), land on the chats tab so the overlay has a screen behind it.
-    if (router.canGoBack()) router.back();
-    else router.replace('/(tabs)/chats' as any);
+    // Defer popping the shim until AFTER callHost's state update propagates to
+    // <CallHost/> (which renders the live call). Popping synchronously in the
+    // same turn can make CallHost briefly observe `params: null` and unmount /
+    // remount CallScreenInner, dropping taps on the Answer button (the
+    // intermittent "Answer not responding" report).
+    requestAnimationFrame(() => {
+      if (router.canGoBack()) router.back();
+      else router.replace('/(tabs)/chats' as any);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
@@ -660,6 +665,25 @@ export function CallScreenInner() {
   );
   const isOutgoingRinging = isCaller && activeCall?.status === 'ringing';
   const isActive = activeCall?.status === 'active';
+
+  // Latch the incoming state so the Answer/Decline controls don't vanish for a
+  // frame if `isIncoming` momentarily flickers false (e.g. `me`/`activeCall`
+  // reactive queries resolving out of order). The latch clears once the call is
+  // answered, ended, declined, or gone — so in-call/normal controls take over.
+  const [incomingLatched, setIncomingLatched] = useState(false);
+  useEffect(() => {
+    if (isIncoming) {
+      setIncomingLatched(true);
+    } else if (
+      !activeCall ||
+      activeCall.status === 'active' ||
+      activeCall.status === 'ended' ||
+      activeCall.status === 'declined'
+    ) {
+      setIncomingLatched(false);
+    }
+  }, [isIncoming, activeCall]);
+  const isIncomingControls = isIncoming || (incomingLatched && !isActive);
 
   // iter-187: keep the session-suppression ref in sync with the role.
   // While an incoming call rings we hold the native audio session back so
@@ -2369,7 +2393,7 @@ export function CallScreenInner() {
   );
 
   function renderControls() {
-    if (isIncoming) {
+    if (isIncomingControls) {
       return (
         <View style={styles.incomingRow}>
           <View style={styles.incomingCol}>
