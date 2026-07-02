@@ -45,6 +45,40 @@ import { Platform } from 'react-native';
 import * as Contacts from 'expo-contacts';
 import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js';
 
+/**
+ * Read the ENTIRE device address book in small pages.
+ *
+ * Android backs `getContactsAsync` with a SQLite CursorWindow that overflows
+ * ("Row too big to fit into CursorWindow") when a large Google-synced address
+ * book is fetched in one big page — the call then throws and the app shows
+ * "no contacts found" even though sync is working. Paginating in small batches
+ * (and tolerating a bad page) fixes that. Returns all contacts across accounts.
+ */
+export async function fetchAllDeviceContacts(
+  fields: Contacts.FieldType[],
+): Promise<Contacts.Contact[]> {
+  const PAGE = 200;
+  const all: Contacts.Contact[] = [];
+  let offset = 0;
+  // Hard cap so a pathological book can't loop forever.
+  for (let guard = 0; guard < 200; guard++) {
+    let page: Contacts.ContactResponse;
+    try {
+      page = await Contacts.getContactsAsync({ fields, pageSize: PAGE, pageOffset: offset });
+    } catch {
+      // A single page blew the CursorWindow — skip it and continue so the rest
+      // of the address book still loads.
+      offset += PAGE;
+      continue;
+    }
+    const data = (page?.data as Contacts.Contact[]) || [];
+    if (data.length > 0) all.push(...data);
+    offset += PAGE;
+    if (!page?.hasNextPage || data.length === 0) break;
+  }
+  return all;
+}
+
 export type DeviceContactIndex = {
   /** E.164 → device-saved display name (e.g. "+355689498822" -> "ABC Albania"). */
   byE164: Map<string, string>;
@@ -154,10 +188,10 @@ export function DeviceContactProvider({
           // Don't clobber any previous index — just bail.
           return;
         }
-        const { data } = await Contacts.getContactsAsync({
-          fields: [Contacts.Fields.Name, Contacts.Fields.PhoneNumbers],
-          pageSize: 10000,
-        });
+        const data = await fetchAllDeviceContacts([
+          Contacts.Fields.Name,
+          Contacts.Fields.PhoneNumbers,
+        ]);
         const byE164 = new Map<string, string>();
         const byDigits = new Map<string, string>();
         for (const raw of (data as any[]) || []) {

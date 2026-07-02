@@ -27,7 +27,7 @@ import { api } from '../../src/convexApi';
 import { lookupUsersByPhones } from '../../src/lib/phoneLookup';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { getDisplayInitials, getDisplayNameFromUser, getResolvedDisplayName } from '../../src/lib/displayName';
-import { useDeviceContactIndex, useDeviceContactRefresh, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
+import { useDeviceContactIndex, useDeviceContactRefresh, lookupDeviceContactName, fetchAllDeviceContacts } from '../../src/lib/deviceContactIndex';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../src/theme';
 
 type TabKey = 'my' | 'device';
@@ -236,10 +236,11 @@ export default function ContactsScreen() {
         return;
       }
       setDevicePerm('granted');
-      const { data } = await Contacts.getContactsAsync({
-        fields: [Contacts.Fields.Name, Contacts.Fields.PhoneNumbers, Contacts.Fields.Emails],
-        pageSize: 5000,
-      });
+      const data = await fetchAllDeviceContacts([
+        Contacts.Fields.Name,
+        Contacts.Fields.PhoneNumbers,
+        Contacts.Fields.Emails,
+      ]);
       // iter-148: align device-contacts surface with the web app.
       // The web shows "INVITE TO SMILERS (N)" with canonical names — only
       // contacts that actually have a usable name and a unique phone.
