@@ -526,7 +526,7 @@ function StatusViewScreenInner() {
       </View>
 
       {!isMine ? (
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={0}>
           <View style={styles.replyBar}>
             <TextInput
               value={reply}
