@@ -450,7 +450,12 @@ function StatusViewScreenInner() {
   const viewsCount = current.views?.length || current.viewCount || 0;
 
   return (
-    <View style={[styles.container, { backgroundColor: bg }]} testID="status-view-screen">
+    <KeyboardAvoidingView
+      style={[styles.container, { backgroundColor: bg }]}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={0}
+      testID="status-view-screen"
+    >
       <View style={styles.progressWrap}>
         {stories.map((_, progressIndex) => (
           <View key={progressIndex} style={styles.progressTrack}>
@@ -526,25 +531,23 @@ function StatusViewScreenInner() {
       </View>
 
       {!isMine ? (
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={0}>
-          <View style={styles.replyBar}>
-            <TextInput
-              value={reply}
-              onChangeText={(value) => {
-                setReply(value);
-                setPaused(true);
-              }}
-              onBlur={() => setPaused(false)}
-              placeholder={`Reply to ${author.name || 'user'}…`}
-              placeholderTextColor="rgba(255,255,255,0.65)"
-              style={styles.replyInput}
-              testID="story-reply-input"
-            />
-            <TouchableOpacity style={styles.replySend} onPress={onSendReply} disabled={!reply.trim()} testID="story-reply-send">
-              <Feather name="send" size={20} color={reply.trim() ? Colors.primary : 'rgba(255,255,255,0.5)'} />
-            </TouchableOpacity>
-          </View>
-        </KeyboardAvoidingView>
+        <View style={styles.replyBar}>
+          <TextInput
+            value={reply}
+            onChangeText={(value) => {
+              setReply(value);
+              setPaused(true);
+            }}
+            onBlur={() => setPaused(false)}
+            placeholder={`Reply to ${author.name || 'user'}…`}
+            placeholderTextColor="rgba(255,255,255,0.65)"
+            style={styles.replyInput}
+            testID="story-reply-input"
+          />
+          <TouchableOpacity style={styles.replySend} onPress={onSendReply} disabled={!reply.trim()} testID="story-reply-send">
+            <Feather name="send" size={20} color={reply.trim() ? Colors.primary : 'rgba(255,255,255,0.5)'} />
+          </TouchableOpacity>
+        </View>
       ) : (
         <TouchableOpacity
           style={styles.viewersBar}
@@ -673,7 +676,7 @@ function StatusViewScreenInner() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 

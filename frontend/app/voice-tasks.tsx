@@ -23,7 +23,7 @@ import {
   writeStoredJson,
 } from '../src/lib/settingsStorage';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../src/lib/deviceContactIndex';
-import { getResolvedDisplayName } from '../src/lib/displayName';
+import { getResolvedDisplayName, getSavedContactRecord } from '../src/lib/displayName';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
 const POSITIONS: number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -143,6 +143,25 @@ function VoiceTasksScreen() {
     isAuthenticated ? {} : 'skip'
   ) as any[] | undefined;
 
+  // iter-311: `getMyVoiceTaskContacts` returns only { position, contactId,
+  // name, avatar } — NO phone. Without a phone we can never match this
+  // phone's address book, so the row always showed the Smilers/Google
+  // account name. Enrich the assignment with the full contact record from
+  // `getContacts` (which carries phone/phoneE164) so the device-saved name
+  // (e.g. "ABC Albania") wins, mirroring the chats list behaviour.
+  const displayNameForAssignment = useCallback(
+    (a: VoiceTaskAssignment): string => {
+      const full = getSavedContactRecord(contacts, { userId: a.contactId }) || a;
+      return getResolvedDisplayName(
+        full,
+        deviceIndex,
+        lookupDeviceContactName,
+        a?.name || 'Contact',
+      );
+    },
+    [contacts, deviceIndex],
+  );
+
   const [assignments, setAssignments] = useState<AssignmentMap>({});
   const [loaded, setLoaded] = useState(false);
   const [pickerVisible, setPickerVisible] = useState(false);
@@ -210,7 +229,7 @@ function VoiceTasksScreen() {
       const next: VoiceTaskAssignment = {
         position,
         contactId: String(contact._id || contact.id || ''),
-        name: contact.name || contact.displayName || contact.email || contact.phone || 'Contact',
+        name: displayNameFor(contact),
         avatar: contact.avatar || null,
         phone: contact.phone || null,
       };
@@ -313,7 +332,7 @@ function VoiceTasksScreen() {
         ) : (
           POSITIONS.map((position) => {
             const a = assignments[position];
-            const aName = a ? displayNameFor(a) : '';
+            const aName = a ? displayNameForAssignment(a) : '';
             const initial = a ? (aName.charAt(0) || '?').toUpperCase() : '+';
             return (
               <Pressable
