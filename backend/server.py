@@ -2163,7 +2163,7 @@ async def notify_event(body: NotifyEventBody):
         raise HTTPException(400, "recipients is required")
     if len(recipients) > 20:
         recipients = recipients[:20]
-    event = body.event if body.event in ("message", "call", "missed-call") else "message"
+    event = body.event if body.event in ("message", "call", "missed-call", "call-cancelled") else "message"
     title = (body.title or "").strip()[:120] or "Smilers"
     message = (body.message or "").strip()[:300] or (
         "Incoming call" if event == "call" else "New message"
@@ -2180,7 +2180,7 @@ async def notify_event(body: NotifyEventBody):
             params.append(f"type={body.call_type}")
         if params:
             action_url += "?" + "&".join(params)
-    elif event == "missed-call":
+    elif event in ("missed-call", "call-cancelled"):
         action_url = f"/chat/{conv}" if conv else "/notifications"
     else:
         action_url = f"/chat/{conv}" if conv else "/notifications"
@@ -2207,6 +2207,15 @@ async def notify_event(body: NotifyEventBody):
             data["displayName"] = display
     elif event == "missed-call":
         data["type"] = "missed-call"
+        if conv:
+            data["conversationId"] = conv
+    elif event == "call-cancelled":
+        # Caller hung up during ringing — tell the callee's device to cancel
+        # the ring notification immediately instead of waiting for its 35s
+        # timeout, then surface a missed call.
+        data["type"] = "call-cancelled"
+        if body.call_id:
+            data["callId"] = str(body.call_id)
         if conv:
             data["conversationId"] = conv
 

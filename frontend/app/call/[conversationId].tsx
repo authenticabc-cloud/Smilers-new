@@ -1417,6 +1417,29 @@ export function CallScreenInner() {
       try {
         if (activeCall?.status === 'ringing') {
           await declineCall({ callId: id });
+          // iter-318: if WE are the caller cancelling during ringing, tell the
+          // callee's device to drop the incoming-call ring IMMEDIATELY (their
+          // native service otherwise waits out a 35s timeout before showing a
+          // missed call). Distinct idempotency key so it isn't deduped against
+          // the original 'call' ring push.
+          if (isCaller) {
+            try {
+              const meId = me?._id ? String(me._id) : null;
+              const recipients = getConversationMemberIds(
+                { ...(conversation || {}), otherUser: (conversation as any)?.otherUser || fetchedOtherUser },
+                meId,
+              );
+              notifyEventPush({
+                recipients,
+                event: 'call-cancelled',
+                title: getDisplayNameFromUser(me, 'Smilers'),
+                message: 'Missed call',
+                conversationId: String(conversationId),
+                callId: String(id),
+                idempotencyKey: `${id}:cancel`,
+              });
+            } catch {}
+          }
         } else {
           await endCall({ callId: id });
         }
@@ -1438,7 +1461,7 @@ export function CallScreenInner() {
       // pruning expired signaling rows automatically.
     }
     callHost.end();
-  }, [activeCall?.status, callId, declineCall, endCall, router, callDurationSec, callType, engagement]);
+  }, [activeCall?.status, callId, declineCall, endCall, router, callDurationSec, callType, engagement, isCaller, me, conversation, fetchedOtherUser, conversationId]);
 
   const handleDecline = useCallback(async () => {
     const id = callId || (activeCall as any)?._id || null;
