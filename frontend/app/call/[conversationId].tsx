@@ -378,6 +378,9 @@ export function CallScreenInner() {
   }, [flushScreenSignalQueue]);
 
   const [callId, setCallId] = useState<string | null>(null);
+  // Optimistic feedback for the incoming-call Answer button so a tap always
+  // registers visibly even before the answerCall mutation / status flip lands.
+  const [answering, setAnswering] = useState(false);
   const [callType, setCallType] = useState<CallType>(requestedType);
   const [localStreamURL, setLocalStreamURL] = useState<string | null>(null);
   const [remoteStreamURL, setRemoteStreamURL] = useState<string | null>(null);
@@ -1414,7 +1417,7 @@ export function CallScreenInner() {
   }, [activeCall?.status, callId, declineCall, endCall, router, callDurationSec, callType, engagement]);
 
   const handleDecline = useCallback(async () => {
-    const id = callId;
+    const id = callId || (activeCall as any)?._id || null;
     sessionRef.current?.close();
     sessionRef.current = null;
     initStartedRef.current = false;
@@ -1430,18 +1433,42 @@ export function CallScreenInner() {
       // Cleanup handled server-side by `expireDeadCalls` cron — see comment above.
     }
     callHost.end();
-  }, [callId, declineCall, router]);
+  }, [callId, activeCall, declineCall, router]);
 
   const handleAnswer = useCallback(async () => {
-    if (!callId) return;
-    callDebug.push('CALL', `handleAnswer → answerCall(${String(callId).slice(0, 8)}…)`);
-    try {
-      await answerCall({ callId });
-      callDebug.push('CALL', 'answerCall mutation OK');
-    } catch (errorValue: any) {
-      callDebug.push('ERR', `answerCall failed: ${errorValue?.message}`);
+    // Race-proofing: `callId` state can lag one render behind the reactive
+    // `activeCall` record (it's copied over in a follow-up effect). Falling
+    // back to `activeCall._id` means the very first tap always has an id, so
+    // the button never silently no-ops ("Answer not responding" reports).
+    const id = callId || (activeCall as any)?._id || null;
+    if (!id) {
+      callDebug.push('ERR', 'handleAnswer: no callId yet (activeCall not loaded)');
+      return;
     }
-  }, [answerCall, callId]);
+    if (answering) return; // ignore double-taps
+    setAnswering(true); // immediate visual feedback while the mutation resolves
+    callDebug.push('CALL', `handleAnswer → answerCall(${String(id).slice(0, 8)}…)`);
+    try {
+      await answerCall({ callId: id });
+      callDebug.push('CALL', 'answerCall mutation OK');
+      // status → 'active' arrives via the reactive query; `answering` is reset
+      // by the isActive effect below (or on error here).
+    } catch (errorValue: any) {
+      setAnswering(false);
+      callDebug.push('ERR', `answerCall failed: ${errorValue?.message}`);
+      Alert.alert(
+        'Could not answer',
+        'We couldn\u2019t connect this call. It may have already ended. Please try again.',
+      );
+    }
+  }, [answerCall, callId, activeCall, answering]);
+
+  // Clear the optimistic "Connecting…" state once the call is live or gone.
+  useEffect(() => {
+    if (answering && (isActive || !activeCall || activeCall?.status !== 'ringing')) {
+      setAnswering(false);
+    }
+  }, [answering, isActive, activeCall]);
 
   // If remote ends the call, also tear down locally
   const wasLiveRef = useRef(false);
@@ -2372,7 +2399,7 @@ export function CallScreenInner() {
               label=""
               size="xl"
             />
-            <Text style={styles.incomingActionLabel}>Answer</Text>
+            <Text style={styles.incomingActionLabel}>{answering ? 'Connecting…' : 'Answer'}</Text>
           </View>
         </View>
       );
