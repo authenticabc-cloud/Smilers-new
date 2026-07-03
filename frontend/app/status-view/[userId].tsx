@@ -56,6 +56,8 @@ try {
 
 const DEFAULT_DURATION_MS = 5000;
 const MAX_VIDEO_DURATION_MS = 30000;
+// iter-317: WhatsApp-style quick status reactions (sent as a status-reply DM).
+const STATUS_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
 // iter-267: the web status contract exposes type under `type` OR `kind`, text
 // under `content` OR `text`, and colors under `backgroundColor`/`textColor` OR
@@ -405,51 +407,64 @@ function StatusViewScreenInner() {
   const onPressIn = () => setPaused(true);
   const onPressOut = () => setPaused(false);
 
-  const onSendReply = useCallback(async () => {
-    const text = reply.trim();
-    if (!text || isMine || !targetUserId) return;
-
-    setReply('');
-    try {
-      const conversation: any = await getOrCreateDM({ otherUserId: targetUserId });
-      const conversationId = typeof conversation === 'string' ? conversation : conversation?._id || conversation?.conversationId;
-      if (!conversationId) throw new Error('No conversation');
-
-      // iter-317: the poster receives status replies as a plain DM and could
-      // not tell WHICH status (or that it was a status reply at all). Prepend a
-      // human-readable reference line so the context is ALWAYS visible, even on
-      // deployments where the structured `replyToStatusId` link isn't rendered.
-      const rawRef =
-        (typeof current?.caption === 'string' && current.caption.trim()) ||
-        (current?.type === 'text' && typeof current?.text === 'string' && current.text.trim()) ||
-        '';
-      const refLabel = rawRef ? `“${rawRef.slice(0, 60)}${rawRef.length > 60 ? '…' : ''}”` : 'your status update';
-      const composed = `↩️ Reply to ${refLabel}:\n${text}`;
-
-      // Try to send with the status-link metadata first. Some deployed
-      // `messages:send` validators reject the optional `replyToStatusId`
-      // field outright (Server Error / Called by client) — in that case we
-      // retry as a plain text DM so the reply ALWAYS lands. The composed
-      // reference line guarantees the poster still understands the context.
+  const sendReplyText = useCallback(
+    async (text: string) => {
+      const trimmed = (text || '').trim();
+      if (!trimmed || isMine || !targetUserId) return;
       try {
-        await sendMessage({
-          conversationId,
-          type: 'text',
-          text: composed,
-          replyToStatusId: current?._id,
-        } as any);
-      } catch {
-        await sendMessage({
-          conversationId,
-          type: 'text',
-          text: composed,
-        } as any);
+        const conversation: any = await getOrCreateDM({ otherUserId: targetUserId });
+        const conversationId = typeof conversation === 'string' ? conversation : conversation?._id || conversation?.conversationId;
+        if (!conversationId) throw new Error('No conversation');
+
+        // iter-317: the poster receives status replies as a plain DM and could
+        // not tell WHICH status (or that it was a status reply at all). Prepend
+        // a human-readable reference line so the context is ALWAYS visible, even
+        // on deployments where the structured `replyToStatusId` link isn't shown.
+        const rawRef =
+          (typeof current?.caption === 'string' && current.caption.trim()) ||
+          (current?.type === 'text' && typeof current?.text === 'string' && current.text.trim()) ||
+          '';
+        const refLabel = rawRef ? `“${rawRef.slice(0, 60)}${rawRef.length > 60 ? '…' : ''}”` : 'your status update';
+        const composed = `↩️ Reply to ${refLabel}:\n${trimmed}`;
+
+        try {
+          await sendMessage({
+            conversationId,
+            type: 'text',
+            text: composed,
+            replyToStatusId: current?._id,
+          } as any);
+        } catch {
+          await sendMessage({
+            conversationId,
+            type: 'text',
+            text: composed,
+          } as any);
+        }
+        Alert.alert('Reply sent', 'Your reply was sent as a direct message.');
+      } catch (errorValue: any) {
+        Alert.alert('Failed to reply', errorValue?.message || 'Unknown error');
       }
-      Alert.alert('Reply sent', 'Your reply was sent as a direct message.');
-    } catch (errorValue: any) {
-      Alert.alert('Failed to reply', errorValue?.message || 'Unknown error');
-    }
-  }, [reply, isMine, targetUserId, getOrCreateDM, sendMessage, current]);
+    },
+    [isMine, targetUserId, getOrCreateDM, sendMessage, current],
+  );
+
+  const onSendReply = useCallback(() => {
+    const text = reply.trim();
+    if (!text) return;
+    setReply('');
+    void sendReplyText(text);
+  }, [reply, sendReplyText]);
+
+  // iter-317: one-tap emoji reactions for statuses (WhatsApp-style). Sent as a
+  // status reply DM so it works via the existing message path and the poster
+  // still gets the "↩️ Reply to your status" context line.
+  const onStatusReaction = useCallback(
+    (emoji: string) => {
+      void sendReplyText(emoji);
+    },
+    [sendReplyText],
+  );
 
   if (!stories.length && (myStories !== undefined || otherStories !== undefined)) {
     return (
@@ -558,22 +573,36 @@ function StatusViewScreenInner() {
       </View>
 
       {!isMine ? (
-        <View style={[styles.replyBar, { marginBottom: keyboardHeight }]}>
-          <TextInput
-            value={reply}
-            onChangeText={(value) => {
-              setReply(value);
-              setPaused(true);
-            }}
-            onBlur={() => setPaused(false)}
-            placeholder={`Reply to ${author.name || 'user'}…`}
-            placeholderTextColor="rgba(255,255,255,0.65)"
-            style={styles.replyInput}
-            testID="story-reply-input"
-          />
-          <TouchableOpacity style={styles.replySend} onPress={onSendReply} disabled={!reply.trim()} testID="story-reply-send">
-            <Feather name="send" size={20} color={reply.trim() ? Colors.primary : 'rgba(255,255,255,0.5)'} />
-          </TouchableOpacity>
+        <View style={[styles.replyContainer, { marginBottom: keyboardHeight }]}>
+          <View style={styles.reactionRow}>
+            {STATUS_REACTIONS.map((emoji) => (
+              <TouchableOpacity
+                key={emoji}
+                style={styles.reactionBtn}
+                onPress={() => onStatusReaction(emoji)}
+                testID={`story-react-${emoji}`}
+              >
+                <Text style={styles.reactionEmoji}>{emoji}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <View style={styles.replyBar}>
+            <TextInput
+              value={reply}
+              onChangeText={(value) => {
+                setReply(value);
+                setPaused(true);
+              }}
+              onBlur={() => setPaused(false)}
+              placeholder={`Reply to ${author.name || 'user'}…`}
+              placeholderTextColor="rgba(255,255,255,0.65)"
+              style={styles.replyInput}
+              testID="story-reply-input"
+            />
+            <TouchableOpacity style={styles.replySend} onPress={onSendReply} disabled={!reply.trim()} testID="story-reply-send">
+              <Feather name="send" size={20} color={reply.trim() ? Colors.primary : 'rgba(255,255,255,0.5)'} />
+            </TouchableOpacity>
+          </View>
         </View>
       ) : (
         <TouchableOpacity
@@ -1008,6 +1037,25 @@ const styles = StyleSheet.create({
   tapZone: {},
   tapZonePrev: { flex: 1 },
   tapZoneNext: { flex: 2 },
+  replyContainer: {
+    zIndex: 2,
+  },
+  reactionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.base,
+    paddingTop: Spacing.sm,
+    paddingBottom: 2,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  reactionBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+  },
+  reactionEmoji: {
+    fontSize: 28,
+  },
   replyBar: {
     flexDirection: 'row',
     alignItems: 'center',

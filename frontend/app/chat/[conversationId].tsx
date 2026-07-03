@@ -2486,12 +2486,20 @@ export default function ChatScreen() {
       closeActionSheet();
       try {
         await toggleReaction({ messageId: msg._id, emoji });
-        await refetchMessages();
+        callDebug.push('REACT', `ok ${emoji} on ${String(msg._id).slice(-6)}`);
+        try {
+          await refetchMessages();
+        } catch {}
       } catch (e: any) {
-        console.warn('react failed:', e?.message);
+        // iter-317: reactions were failing SILENTLY (only console.warn), so the
+        // sheet just closed with nothing applied. Surface the real reason into
+        // the Diagnostic Log + a brief alert so the failure is diagnosable.
+        const reason = e?.message || String(e);
+        callDebug.push('ERR', `REACT failed ${emoji}: ${reason}`);
+        Alert.alert('Reaction failed', reason);
       }
     },
-    [selectedMsg, toggleReaction]
+    [selectedMsg, toggleReaction, refetchMessages]
   );
 
   const onCopy = useCallback(async () => {
@@ -2924,9 +2932,14 @@ export default function ChatScreen() {
     async (msgId: string, emoji: string) => {
       try {
         await toggleReaction({ messageId: msgId, emoji });
-        await refetchMessages();
+        callDebug.push('REACT', `toggle ok ${emoji} on ${String(msgId).slice(-6)}`);
+        try {
+          await refetchMessages();
+        } catch {}
       } catch (e: any) {
-        console.warn('react failed:', e?.message);
+        const reason = e?.message || String(e);
+        callDebug.push('ERR', `REACT toggle failed ${emoji}: ${reason}`);
+        Alert.alert('Reaction failed', reason);
       }
     },
     [refetchMessages, toggleReaction]
