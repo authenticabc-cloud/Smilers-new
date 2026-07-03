@@ -2951,7 +2951,10 @@ export default function ChatScreen() {
             messageId: msg._id,
             forReceiver: true,
           });
-          hideMessageLocally(String(msg._id));
+          // iter-319: do NOT hide on the SENDER's device — "Delete for receiver"
+          // removes it only for the recipient; the sender keeps the message.
+          // (Hiding locally here was the regression that made it disappear for
+          // the sender too.)
         } else {
           // 'everyone'
           await convex.mutation((api as any).messages.deleteMessage, {
