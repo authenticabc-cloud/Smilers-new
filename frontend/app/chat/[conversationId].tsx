@@ -662,20 +662,37 @@ export default function ChatScreen() {
   const respondToDeletionRequest = useMutation((api as any).messages.respondToDeletionRequest);
   const toggleReaction = useMutation(api.messages.toggleReaction);
   const deleteMessage = useMutation(api.messages.deleteMessage);
-  // iter-321: PER-VIEWER deletes ("Delete for me" / "Delete for receiver") do
-  // NOT set deletedAt/isDeleted on the ACTOR's own copy of the message via the
-  // shared Convex backend (only delete-for-EVERYONE marks deletedAt globally).
-  // The user wants a WhatsApp-style "This message was deleted" TOMBSTONE on the
-  // actor's device for these scopes (NOT a vanish). So we locally remember the
-  // ids the user deleted (me/receiver) and OVERLAY a deletedAt at render time
-  // so MessageBubble/MediaBubble show the tombstone. Persisted per-conversation
-  // as { [msgId]: deletedAtMs } so the timestamp is stable across renders.
+  // iter-322: PER-VIEWER deletes ("Delete for me" / "Delete for receiver") are
+  // handled by the shared Convex backend by REMOVING the message from the
+  // actor's query results entirely (verified w/ Emergent support) — it does NOT
+  // stamp deletedAt/isDeleted on the actor's own copy (only delete-for-EVERYONE
+  // marks deletedAt globally). The user wants a WhatsApp-style "This message was
+  // deleted" TOMBSTONE on the actor's device for these scopes (NOT a vanish).
+  // Since the server drops the row, an overlay alone has nothing to attach to,
+  // so we persist enough metadata (senderId + creationTime) to reconstruct a
+  // SYNTHETIC tombstone entry in the timeline. Persisted per-conversation as
+  // { [msgId]: { deletedAt, senderId, creationTime } }.
   const LOCAL_DELETED_KEY = `smilers:deleted_msgs:${String(conversationId || 'unknown')}`;
-  const [locallyDeleted, setLocallyDeleted] = useState<Record<string, number>>({});
+  type LocalDeletedEntry = { deletedAt: number; senderId: string; creationTime: number };
+  const [locallyDeleted, setLocallyDeleted] = useState<Record<string, LocalDeletedEntry>>({});
   useEffect(() => {
     let alive = true;
-    readStoredJson<Record<string, number>>(LOCAL_DELETED_KEY, {}).then((stored) => {
-      if (alive && stored && typeof stored === 'object') setLocallyDeleted(stored);
+    readStoredJson<Record<string, any>>(LOCAL_DELETED_KEY, {}).then((stored) => {
+      if (!alive || !stored || typeof stored !== 'object') return;
+      // Normalise legacy shape ({ id: number }) → { id: { deletedAt, ... } }.
+      const normalised: Record<string, LocalDeletedEntry> = {};
+      for (const [id, val] of Object.entries(stored)) {
+        if (typeof val === 'number') {
+          normalised[id] = { deletedAt: val, senderId: '', creationTime: val };
+        } else if (val && typeof val === 'object') {
+          normalised[id] = {
+            deletedAt: Number((val as any).deletedAt) || Date.now(),
+            senderId: String((val as any).senderId || ''),
+            creationTime: Number((val as any).creationTime) || Number((val as any).deletedAt) || Date.now(),
+          };
+        }
+      }
+      setLocallyDeleted(normalised);
     });
     return () => {
       alive = false;
@@ -683,11 +700,17 @@ export default function ChatScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
   const markDeletedLocally = useCallback(
-    (id: string) => {
+    (msg: any) => {
+      const id = msg?._id ? String(msg._id) : '';
       if (!id) return;
       setLocallyDeleted((prev) => {
         if (prev[id]) return prev;
-        const next = { ...prev, [id]: Date.now() };
+        const entry: LocalDeletedEntry = {
+          deletedAt: Date.now(),
+          senderId: String(msg?.senderId || ''),
+          creationTime: Number(msg?._creationTime) || Date.now(),
+        };
+        const next = { ...prev, [id]: entry };
         void writeStoredJson(LOCAL_DELETED_KEY, next);
         return next;
       });
@@ -874,20 +897,41 @@ export default function ChatScreen() {
     const ttlMs = Math.max(localTtl, serverDisappearMs);
     const cutoff = ttlMs ? Date.now() - ttlMs : 0;
     const out: any[] = [];
+    const presentIds = new Set<string>();
     for (const message of decryptedMessages) {
       if (cutoff && Number(message?._creationTime || 0) < cutoff) continue;
-      // iter-321: per-viewer deletes ("Delete for me" / "Delete for receiver")
+      const id = message?._id ? String(message._id) : '';
+      if (id) presentIds.add(id);
+      // iter-322: per-viewer deletes ("Delete for me" / "Delete for receiver")
       // must leave a "This message was deleted" TOMBSTONE on the actor's device
-      // (NOT vanish). The shared backend does NOT set deletedAt on the actor's
-      // own copy for these scopes, so we overlay a stable deletedAt locally so
-      // MessageBubble/MediaBubble render the tombstone.
-      const localDeletedAt = message?._id ? locallyDeleted[String(message._id)] : undefined;
-      if (localDeletedAt && !message?.deletedAt && message?.isDeleted !== true) {
-        out.push({ ...message, deletedAt: localDeletedAt });
+      // (NOT vanish). If the backend still returns the row, overlay a stable
+      // deletedAt so MessageBubble/MediaBubble render the tombstone in place.
+      const entry = id ? locallyDeleted[id] : undefined;
+      if (entry && !message?.deletedAt && message?.isDeleted !== true) {
+        out.push({ ...message, deletedAt: entry.deletedAt });
       } else {
         out.push(message);
       }
     }
+    // iter-322: SECOND PASS — the shared backend REMOVES per-viewer-deleted rows
+    // from the actor's query results, so an in-place overlay has nothing to
+    // attach to. For every locally-deleted id NOT present in the server results,
+    // synthesise a tombstone message so it still renders "This message was
+    // deleted" in its original timeline position (and survives reopen).
+    for (const [id, entry] of Object.entries(locallyDeleted)) {
+      if (presentIds.has(id)) continue;
+      out.push({
+        _id: id,
+        _creationTime: entry.creationTime || entry.deletedAt,
+        senderId: entry.senderId,
+        deletedAt: entry.deletedAt,
+        isDeleted: true,
+        text: '',
+        __syntheticTombstone: true,
+      });
+    }
+    // Timeline is ascending by _creationTime; keep synthetic entries positioned.
+    out.sort((a: any, b: any) => Number(a?._creationTime || 0) - Number(b?._creationTime || 0));
     return out;
   }, [disappearingMode, serverDisappearMs, decryptedMessages, locallyDeleted]);
 
@@ -2968,18 +3012,17 @@ export default function ChatScreen() {
             messageId: msg._id,
             forEveryone: false,
           });
-          // iter-321: the backend does not mark deletedAt on the actor's own
-          // copy for delete-for-me, so overlay a local tombstone.
-          markDeletedLocally(String(msg._id));
+          // iter-322: the backend REMOVES the actor's own copy for delete-for-me,
+          // so persist metadata and synthesise a local tombstone.
+          markDeletedLocally(msg);
         } else if (mode === 'receiver') {
           await convex.mutation((api as any).messages.deleteMessage, {
             messageId: msg._id,
             forReceiver: true,
           });
-          // iter-321: user wants a "This message was deleted" tombstone on the
-          // sender's device for delete-for-receiver too (the message is not
-          // removed server-side for the sender, so overlay it locally).
-          markDeletedLocally(String(msg._id));
+          // iter-322: user wants a "This message was deleted" tombstone on the
+          // sender's device for delete-for-receiver too. Persist + synthesise.
+          markDeletedLocally(msg);
         } else {
           // 'everyone'
           await convex.mutation((api as any).messages.deleteMessage, {
