@@ -43,6 +43,24 @@ interface VoiceTaskAssignment {
 
 type AssignmentMap = Record<number, VoiceTaskAssignment>;
 
+// iter-323: `addVoiceTaskContact({ contactId })` expects the contact's USER id
+// (Id<"users">), NOT the contacts-table row `_id`. On backends whose
+// getContacts rows carry both, passing `_id` first (the old bug) sent the wrong
+// id and the mutation threw a generic Convex "Server Error". Resolve the linked
+// user id with the canonical priority (userId first, row `_id` last) — mirrors
+// the helper used in groups-create.tsx / trustees.tsx.
+function getContactUserId(item: any): string | null {
+  const value =
+    item?.userId ||
+    item?.user?._id ||
+    item?.user?.userId ||
+    item?.contactUserId ||
+    item?.linkedUserId ||
+    item?._id ||
+    item?.id;
+  return value ? String(value) : null;
+}
+
 /**
  * iter-137: locked to the canonical Convex paths confirmed by the web
  * team. The previous fallback probe arrays have been removed — only
@@ -226,9 +244,16 @@ function VoiceTasksScreen() {
   const handleAssign = useCallback(
     async (position: number, contact: any) => {
       if (!contact) return;
+      // iter-323: resolve the contact's USER id (not the contacts-row _id) so
+      // addVoiceTaskContact receives the id shape the backend expects.
+      const resolvedUserId = getContactUserId(contact);
+      if (!resolvedUserId) {
+        console.warn('[voice-tasks] could not resolve user id for contact');
+        return;
+      }
       const next: VoiceTaskAssignment = {
         position,
-        contactId: String(contact._id || contact.id || ''),
+        contactId: resolvedUserId,
         name: displayNameFor(contact),
         avatar: contact.avatar || null,
         phone: contact.phone || null,
