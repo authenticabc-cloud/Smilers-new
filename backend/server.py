@@ -1871,6 +1871,7 @@ async def send_push(
                     "isConference",
                     "conversationId",
                     "displayName",
+                    "backendUrl",
                 ):
                     _v = data.get(_k)
                     if _v is not None and _k not in fcm_data:
