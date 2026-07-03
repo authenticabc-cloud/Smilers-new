@@ -662,6 +662,41 @@ export default function ChatScreen() {
   const respondToDeletionRequest = useMutation((api as any).messages.respondToDeletionRequest);
   const toggleReaction = useMutation(api.messages.toggleReaction);
   const deleteMessage = useMutation(api.messages.deleteMessage);
+  // iter-318: "Delete for me" / "Delete for receiver" are PER-VIEWER
+  // retractions that must leave NO "This message was deleted" footprint on the
+  // actor's device. The mobile message object carries NO delete-scope field
+  // (per-viewer deletes look identical to delete-for-everyone — both surface a
+  // deletedAt/isDeleted), so we cannot distinguish them from the payload.
+  // Instead we locally remember which messages the user chose to hide (me /
+  // receiver) and filter them out entirely. Delete-for-EVERYONE is NOT tracked
+  // here, so it still shows the standard tombstone (WhatsApp parity).
+  const HIDDEN_MSGS_KEY = `smilers:hidden_msgs:${String(conversationId || 'unknown')}`;
+  const [hiddenMsgIds, setHiddenMsgIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let alive = true;
+    readStoredJson<string[]>(HIDDEN_MSGS_KEY, []).then((ids) => {
+      if (alive && Array.isArray(ids) && ids.length) setHiddenMsgIds(new Set(ids));
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
+  const hideMessageLocally = useCallback(
+    (id: string) => {
+      if (!id) return;
+      setHiddenMsgIds((prev) => {
+        if (prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.add(id);
+        void writeStoredJson(HIDDEN_MSGS_KEY, Array.from(next));
+        return next;
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [conversationId]
+  );
+
   // Optional edit mutations — different Convex deployments expose this under
   // different names (`editMessage`, `updateMessage`, `editText`). We try them
   // in order at call-time. `api: any` keeps TS happy even if the function
@@ -840,6 +875,11 @@ export default function ChatScreen() {
     const ttlMs = Math.max(localTtl, serverDisappearMs);
     const cutoff = ttlMs ? Date.now() - ttlMs : 0;
     return decryptedMessages.filter((message) => {
+      // iter-318: hide messages the user retracted via "Delete for me" /
+      // "Delete for receiver" (tracked locally) so NO tombstone footprint
+      // shows on this device. Delete-for-everyone is NOT in this set → keeps
+      // the standard tombstone.
+      if (message?._id && hiddenMsgIds.has(String(message._id))) return false;
       // iter-313: "Delete for me" / "Delete for receiver" are PER-VIEWER
       // retractions (backend flag `isDeleted`). The affected viewer must see
       // NOTHING — no "This message was deleted" footprint. Only
@@ -849,7 +889,7 @@ export default function ChatScreen() {
       if (cutoff && Number(message?._creationTime || 0) < cutoff) return false;
       return true;
     });
-  }, [disappearingMode, serverDisappearMs, decryptedMessages]);
+  }, [disappearingMode, serverDisappearMs, decryptedMessages, hiddenMsgIds]);
 
   // iter-109: in-chat search filter — applied AFTER the disappearing-mode
   // filter so the user only sees results that are still visible per the
@@ -1166,8 +1206,9 @@ export default function ChatScreen() {
       // forEveryone:false = delete just for this viewer (private retraction),
       // matching the web app's `deleteMessage({ messageId, forEveryone:false })`.
       (deleteMessage as any)({ messageId: m._id, forEveryone: false }).catch(() => {});
+      hideMessageLocally(String(m._id));
     }
-  }, [displayMessages, deleteMessage]);
+  }, [displayMessages, deleteMessage, hideMessageLocally]);
 
   // NOTE: in-chat markDelivered was removed (iter-240) — it fired at the same
   // moment as markRead on chat open, making the sender's dot jump yellow→blue
@@ -2904,11 +2945,13 @@ export default function ChatScreen() {
             messageId: msg._id,
             forEveryone: false,
           });
+          hideMessageLocally(String(msg._id));
         } else if (mode === 'receiver') {
           await convex.mutation((api as any).messages.deleteMessage, {
             messageId: msg._id,
             forReceiver: true,
           });
+          hideMessageLocally(String(msg._id));
         } else {
           // 'everyone'
           await convex.mutation((api as any).messages.deleteMessage, {
