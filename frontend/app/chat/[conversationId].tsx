@@ -662,10 +662,39 @@ export default function ChatScreen() {
   const respondToDeletionRequest = useMutation((api as any).messages.respondToDeletionRequest);
   const toggleReaction = useMutation(api.messages.toggleReaction);
   const deleteMessage = useMutation(api.messages.deleteMessage);
-  // iter-319: "Delete for me" / "Delete for receiver" / "Delete for everyone"
-  // all leave the standard WhatsApp-style "This message was deleted" tombstone
-  // (rendered by MessageBubble/MediaBubble for deletedAt || isDeleted). We do
-  // NOT locally hide any deleted message.
+  // iter-321: PER-VIEWER deletes ("Delete for me" / "Delete for receiver") do
+  // NOT set deletedAt/isDeleted on the ACTOR's own copy of the message via the
+  // shared Convex backend (only delete-for-EVERYONE marks deletedAt globally).
+  // The user wants a WhatsApp-style "This message was deleted" TOMBSTONE on the
+  // actor's device for these scopes (NOT a vanish). So we locally remember the
+  // ids the user deleted (me/receiver) and OVERLAY a deletedAt at render time
+  // so MessageBubble/MediaBubble show the tombstone. Persisted per-conversation
+  // as { [msgId]: deletedAtMs } so the timestamp is stable across renders.
+  const LOCAL_DELETED_KEY = `smilers:deleted_msgs:${String(conversationId || 'unknown')}`;
+  const [locallyDeleted, setLocallyDeleted] = useState<Record<string, number>>({});
+  useEffect(() => {
+    let alive = true;
+    readStoredJson<Record<string, number>>(LOCAL_DELETED_KEY, {}).then((stored) => {
+      if (alive && stored && typeof stored === 'object') setLocallyDeleted(stored);
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
+  const markDeletedLocally = useCallback(
+    (id: string) => {
+      if (!id) return;
+      setLocallyDeleted((prev) => {
+        if (prev[id]) return prev;
+        const next = { ...prev, [id]: Date.now() };
+        void writeStoredJson(LOCAL_DELETED_KEY, next);
+        return next;
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [conversationId]
+  );
 
   // Optional edit mutations — different Convex deployments expose this under
   // different names (`editMessage`, `updateMessage`, `editText`). We try them
@@ -844,15 +873,23 @@ export default function ChatScreen() {
     const localTtl = DISAPPEARING_OPTIONS.find((item) => item.key === disappearingMode)?.ms || 0;
     const ttlMs = Math.max(localTtl, serverDisappearMs);
     const cutoff = ttlMs ? Date.now() - ttlMs : 0;
-    return decryptedMessages.filter((message) => {
-      // iter-319: per-viewer deletes ("Delete for me" / "Delete for receiver")
-      // must leave a "This message was deleted" TOMBSTONE (WhatsApp parity),
-      // NOT vanish. So we no longer hide any deleted message here — the
-      // MessageBubble/MediaBubble render the tombstone for deletedAt || isDeleted.
-      if (cutoff && Number(message?._creationTime || 0) < cutoff) return false;
-      return true;
-    });
-  }, [disappearingMode, serverDisappearMs, decryptedMessages]);
+    const out: any[] = [];
+    for (const message of decryptedMessages) {
+      if (cutoff && Number(message?._creationTime || 0) < cutoff) continue;
+      // iter-321: per-viewer deletes ("Delete for me" / "Delete for receiver")
+      // must leave a "This message was deleted" TOMBSTONE on the actor's device
+      // (NOT vanish). The shared backend does NOT set deletedAt on the actor's
+      // own copy for these scopes, so we overlay a stable deletedAt locally so
+      // MessageBubble/MediaBubble render the tombstone.
+      const localDeletedAt = message?._id ? locallyDeleted[String(message._id)] : undefined;
+      if (localDeletedAt && !message?.deletedAt && message?.isDeleted !== true) {
+        out.push({ ...message, deletedAt: localDeletedAt });
+      } else {
+        out.push(message);
+      }
+    }
+    return out;
+  }, [disappearingMode, serverDisappearMs, decryptedMessages, locallyDeleted]);
 
   // iter-109: in-chat search filter — applied AFTER the disappearing-mode
   // filter so the user only sees results that are still visible per the
@@ -2931,15 +2968,18 @@ export default function ChatScreen() {
             messageId: msg._id,
             forEveryone: false,
           });
+          // iter-321: the backend does not mark deletedAt on the actor's own
+          // copy for delete-for-me, so overlay a local tombstone.
+          markDeletedLocally(String(msg._id));
         } else if (mode === 'receiver') {
           await convex.mutation((api as any).messages.deleteMessage, {
             messageId: msg._id,
             forReceiver: true,
           });
-          // iter-319: do NOT hide on the SENDER's device — "Delete for receiver"
-          // removes it only for the recipient; the sender keeps the message.
-          // (Hiding locally here was the regression that made it disappear for
-          // the sender too.)
+          // iter-321: user wants a "This message was deleted" tombstone on the
+          // sender's device for delete-for-receiver too (the message is not
+          // removed server-side for the sender, so overlay it locally).
+          markDeletedLocally(String(msg._id));
         } else {
           // 'everyone'
           await convex.mutation((api as any).messages.deleteMessage, {
@@ -2956,7 +2996,7 @@ export default function ChatScreen() {
         Alert.alert('Failed to delete', String(detail).slice(0, 240));
       }
     },
-    [convex, deleteTarget, refetchMessages],
+    [convex, deleteTarget, refetchMessages, markDeletedLocally],
   );
 
   const onToggleMyReaction = useCallback(
