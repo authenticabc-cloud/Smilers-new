@@ -27,7 +27,13 @@ import SaveContactDialog from '../../src/components/SaveContactDialog';
 import {
   getDisplayInitials,
   getDisplayNameFromUser,
+  getResolvedDisplayName,
+  getSavedContactRecord,
 } from '../../src/lib/displayName';
+import {
+  useDeviceContactIndex,
+  lookupDeviceContactName,
+} from '../../src/lib/deviceContactIndex';
 import { formatLastSeenLabel } from '../../src/lib/presence';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 import ActionButton from '../../src/components/user-profile/ActionButton';
@@ -79,6 +85,7 @@ export default function UserProfileScreen() {
       (c: any) => String(c?._id || c?.userId) === String(userId) && c?.contactStatus === 'accepted'
     );
   }, [myContacts, userId]);
+  const deviceIndex = useDeviceContactIndex();
   const [showSaveDialog, setShowSaveDialog] = useState(false);
 
   // Shared media is sourced from the existing conversation messages.
@@ -120,12 +127,17 @@ export default function UserProfileScreen() {
   // getGroupMembers and reports back through `reportMembership`.
   const candidateGroups = useMemo(() => {
     if (!Array.isArray(conversationsList)) return [];
-    // iter-315: `listConversations` marks groups with EITHER `isGroup: true`
-    // OR `type: 'group'` depending on the row source (mirrors trustees.tsx).
-    // Filtering on `type` alone dropped groups like "NOAS FAMILY" that only
-    // carry `isGroup`, so Groups-in-Common showed 0 while the web showed 1.
+    // iter-317: match the EXACT group-detection used by the chats list
+    // (chats.tsx L570) — groups are marked by `isGroup`, `type==='group'`, OR
+    // simply having >2 participants. Earlier filters checked only the first
+    // two, so `listConversations` (which returns groups as participant arrays)
+    // detected 0 groups → Groups-in-Common was always empty.
     return conversationsList.filter(
-      (c: any) => c && (c.isGroup === true || c.type === 'group'),
+      (c: any) =>
+        c &&
+        (c.isGroup === true ||
+          c.type === 'group' ||
+          (Array.isArray(c.participants) && c.participants.length > 2)),
     );
   }, [conversationsList]);
   const [memberVerified, setMemberVerified] = useState<Record<string, boolean>>({});
@@ -174,7 +186,19 @@ export default function UserProfileScreen() {
   }, [avatarViewerOpen]);
 
   // --- Derived ------------------------------------------------------------
-  const displayName = getDisplayNameFromUser(user, 'Smilers user');
+  // iter-317: resolve the profile title to the viewer's DEVICE contact name
+  // (e.g. "Kojo") instead of the Smilers/Google account name. Enrich the user
+  // with the saved contact record (has phone) by userId, then match the device
+  // address book — same resolution the chat list/header already use.
+  const displayName = useMemo(() => {
+    const full = getSavedContactRecord(myContacts, { userId: userId || '' }) || user;
+    return getResolvedDisplayName(
+      full,
+      deviceIndex,
+      lookupDeviceContactName,
+      getDisplayNameFromUser(user, 'Smilers user'),
+    );
+  }, [myContacts, userId, user, deviceIndex]);
   const initials = getDisplayInitials(displayName);
   const avatarUri: string | null =
     user?.avatar || user?.avatarUrl || user?.photoURL || null;

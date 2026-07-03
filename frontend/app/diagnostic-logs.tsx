@@ -204,7 +204,7 @@ export default function DiagnosticLogsScreen() {
     lines.push('');
     lines.push('--- Group detection (listConversations) ---');
     const convs = Array.isArray(conversationsList) ? conversationsList : [];
-    const groups = convs.filter((c: any) => c && (c.isGroup === true || c.type === 'group'));
+    const groups = convs.filter((c: any) => c && (c.isGroup === true || c.type === 'group' || (Array.isArray(c.participants) && c.participants.length > 2)));
     lines.push(`conversations: ${convs.length} · detected groups: ${groups.length}`);
     for (const g of groups.slice(0, 20)) {
       lines.push(`  "${g?.name || '(no name)'}" isGroup=${g?.isGroup} type=${g?.type}`);
@@ -514,7 +514,7 @@ export default function DiagnosticLogsScreen() {
           Smilers contacts: {Array.isArray(contacts) ? contacts.length : '…'} · Voice tasks: {Array.isArray(voiceTasksConvex) ? voiceTasksConvex.length : '…'}
         </Text>
         <Text style={styles.snapshotLine}>
-          Groups detected: {Array.isArray(conversationsList) ? conversationsList.filter((c: any) => c && (c.isGroup === true || c.type === 'group')).length : '…'} / {Array.isArray(conversationsList) ? conversationsList.length : '…'} convos
+          Groups detected: {Array.isArray(conversationsList) ? conversationsList.filter((c: any) => c && (c.isGroup === true || c.type === 'group' || (Array.isArray(c.participants) && c.participants.length > 2))).length : '…'} / {Array.isArray(conversationsList) ? conversationsList.length : '…'} convos
         </Text>
         <Text style={styles.snapshotLine}>
           Keyboard KAV: {Platform.OS === 'ios' ? 'padding' : 'height'} · edge-to-edge: {String((Constants?.expoConfig?.android as any)?.edgeToEdgeEnabled)}
