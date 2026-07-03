@@ -203,10 +203,19 @@ export default function ChatsScreen() {
   // almost certainly in a bad state — actively recover by forcing a Convex
   // reconnect (once per empty-resolve) instead of leaving the user stranded.
   const recoveredEmptyRef = useRef(false);
+  // iter-316: hard time-based cooldown. `forceConvexReconnect` is NOT
+  // rate-limited, and `recoveredEmptyRef` resets the moment rows briefly
+  // appear — so an oscillating live query (empty→rows→empty every ~2s) could
+  // weaponise this into a reconnect STORM ("disco" flicker + constant token
+  // refresh + push re-register). Never fire this recovery more than once per
+  // 30s regardless of the ref, so a flapping socket can't runaway.
+  const lastEmptyRecoverAtRef = useRef(0);
   useEffect(() => {
     if (liveResolved && !liveHasRows && cacheHasRows) {
-      if (!recoveredEmptyRef.current) {
+      const now = Date.now();
+      if (!recoveredEmptyRef.current && now - lastEmptyRecoverAtRef.current > 30_000) {
         recoveredEmptyRef.current = true;
+        lastEmptyRecoverAtRef.current = now;
         void forceConvexReconnect('chats-empty-with-cache');
       }
     } else if (liveHasRows) {

@@ -8,7 +8,7 @@ const convex = new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL!, {
 });
 
 function useAuthForConvex() {
-  const { isLoading, isAuthenticated, idToken, getFreshIdToken } = useAuth();
+  const { isLoading, isAuthenticated, getFreshIdToken } = useAuth();
 
   return useMemo(
     () => ({
@@ -24,14 +24,14 @@ function useAuthForConvex() {
         return token;
       },
     }),
-    // iter-315: include `idToken` so that when a background/foreground refresh
-    // ROTATES the token, this memo returns a new object → ConvexProviderWithAuth
-    // re-runs `client.setAuth(...)` and re-authenticates the socket with the
-    // FRESH token. Without this, Convex kept using the old (rejected) token on
-    // overnight resume → "authenticated locally but Convex-unauthenticated".
-    // idToken is INTENTIONALLY a dep even though unused in the body — do not remove.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [isLoading, isAuthenticated, idToken, getFreshIdToken]
+    // iter-316 REVERT of iter-315: `idToken` was added here to notify Convex of
+    // token rotation, but it created an INFINITE LOOP → "disco" flicker:
+    //   setAuth → fetchAccessToken(force=true) → getFreshIdToken rotates the
+    //   id_token → idToken state changes → this memo changes → setAuth again → …
+    // (device log showed AUTH "refresh OK force=true" + CONVEX hardReconnect
+    // firing every 1-2s). Convex re-fetches the token on its OWN reconnect, so
+    // this memo MUST stay stable across token rotations. Do NOT add idToken.
+    [isLoading, isAuthenticated, getFreshIdToken]
   );
 }
 
