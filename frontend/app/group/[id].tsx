@@ -46,7 +46,7 @@ import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
-import { getResolvedDisplayName } from '../../src/lib/displayName';
+import { getResolvedDisplayName, getSavedContactRecord } from '../../src/lib/displayName';
 
 /** Resolve the registered Smilers user id for a contact row, mirroring groups-create. */
 function getContactUserId(item: any): string | null {
@@ -169,6 +169,24 @@ function GroupInfoInner() {
         obj?.name || obj?.displayName || obj?.email || obj?.phone || 'Contact',
       ),
     [deviceIndex],
+  );
+  // iter-317: group members from getGroupMembers carry only the Smilers/Google
+  // account name (no phone), so they showed "Abednego Obeng Asare" instead of
+  // the viewer's saved contact "Kojo". Enrich each member with the full contact
+  // record from `getContacts` (which has phone/phoneE164) by matching userId,
+  // then resolve the device-saved name — same fix used for voice tasks.
+  const displayNameForMember = useCallback(
+    (m: any): string => {
+      const uid = String(m?.userId || m?._id || m?.user?._id || '');
+      const full = getSavedContactRecord(myContacts, { userId: uid }) || m;
+      return getResolvedDisplayName(
+        full,
+        deviceIndex,
+        lookupDeviceContactName,
+        m?.name || m?.displayName || 'Unnamed',
+      );
+    },
+    [deviceIndex, myContacts],
   );
   const memberIdSet = useMemo(
     () =>
@@ -564,20 +582,21 @@ function GroupInfoInner() {
             const isChiefMember = mid === chiefAdminId;
             const isAdminMember = adminIds.has(mid);
             const suspension = suspendedMap.get(mid);
+            const resolvedName = displayNameForMember(m);
             return (
               <View key={mid} style={styles.memberRow} testID={`group-member-${mid}`}>
                 <View style={styles.memberAvatar}>
                   {m?.avatarUrl ? (
                     <Image source={{ uri: m.avatarUrl }} style={styles.memberAvatarImg} />
                   ) : (
-                    <Text style={styles.memberAvatarText}>{getInitials(m?.name)}</Text>
+                    <Text style={styles.memberAvatarText}>{getInitials(resolvedName)}</Text>
                   )}
                 </View>
                 <View style={styles.memberBody}>
                   <View style={styles.memberNameLine}>
                     {isChiefMember ? <Text style={styles.crown}>👑 </Text> : null}
                     <Text style={styles.memberName} numberOfLines={1}>
-                      {isMe ? 'You' : m?.name || 'Unnamed'}
+                      {isMe ? 'You' : resolvedName}
                     </Text>
                     {isChiefMember ? (
                       <View style={styles.chiefBadge}>

@@ -415,23 +415,34 @@ function StatusViewScreenInner() {
       const conversationId = typeof conversation === 'string' ? conversation : conversation?._id || conversation?.conversationId;
       if (!conversationId) throw new Error('No conversation');
 
+      // iter-317: the poster receives status replies as a plain DM and could
+      // not tell WHICH status (or that it was a status reply at all). Prepend a
+      // human-readable reference line so the context is ALWAYS visible, even on
+      // deployments where the structured `replyToStatusId` link isn't rendered.
+      const rawRef =
+        (typeof current?.caption === 'string' && current.caption.trim()) ||
+        (current?.type === 'text' && typeof current?.text === 'string' && current.text.trim()) ||
+        '';
+      const refLabel = rawRef ? `“${rawRef.slice(0, 60)}${rawRef.length > 60 ? '…' : ''}”` : 'your status update';
+      const composed = `↩️ Reply to ${refLabel}:\n${text}`;
+
       // Try to send with the status-link metadata first. Some deployed
       // `messages:send` validators reject the optional `replyToStatusId`
       // field outright (Server Error / Called by client) — in that case we
-      // retry as a plain text DM so the reply ALWAYS lands. The status link
-      // is a nice-to-have, not a hard requirement for delivery.
+      // retry as a plain text DM so the reply ALWAYS lands. The composed
+      // reference line guarantees the poster still understands the context.
       try {
         await sendMessage({
           conversationId,
           type: 'text',
-          text,
+          text: composed,
           replyToStatusId: current?._id,
         } as any);
       } catch {
         await sendMessage({
           conversationId,
           type: 'text',
-          text,
+          text: composed,
         } as any);
       }
       Alert.alert('Reply sent', 'Your reply was sent as a direct message.');
