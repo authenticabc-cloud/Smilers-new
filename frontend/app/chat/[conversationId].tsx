@@ -2482,13 +2482,37 @@ export default function ChatScreen() {
     setSelectedMsg(null);
   };
 
+  // iter-320: reactions kept failing with a generic Convex "Server Error".
+  // A generic Server Error (not an ArgumentValidationError) means the args
+  // validated but the function threw internally — consistent with the server
+  // being unable to validate participant access without `conversationId`
+  // (same contract as toggleStar, iter-147). We therefore send conversationId
+  // and, if a backend rejects the extra field (ArgumentValidationError), we
+  // transparently retry with the minimal {messageId, emoji} payload so we
+  // remain compatible with either backend signature.
+  const reactToMessage = useCallback(
+    async (messageId: string, emoji: string) => {
+      try {
+        await toggleReaction({ messageId, emoji, conversationId } as any);
+      } catch (e: any) {
+        const msg = e?.message || String(e);
+        if (/extra field|ArgumentValidationError|conversationId/i.test(msg)) {
+          await toggleReaction({ messageId, emoji } as any);
+        } else {
+          throw e;
+        }
+      }
+    },
+    [toggleReaction, conversationId]
+  );
+
   const onPickReaction = useCallback(
     async (emoji: string) => {
       const msg = selectedMsg;
       if (!msg) return;
       closeActionSheet();
       try {
-        await toggleReaction({ messageId: msg._id, emoji });
+        await reactToMessage(msg._id, emoji);
         callDebug.push('REACT', `ok ${emoji} on ${String(msg._id).slice(-6)}`);
         try {
           await refetchMessages();
@@ -2502,7 +2526,7 @@ export default function ChatScreen() {
         Alert.alert('Reaction failed', reason);
       }
     },
-    [selectedMsg, toggleReaction, refetchMessages]
+    [selectedMsg, reactToMessage, refetchMessages]
   );
 
   const onCopy = useCallback(async () => {
@@ -2938,7 +2962,7 @@ export default function ChatScreen() {
   const onToggleMyReaction = useCallback(
     async (msgId: string, emoji: string) => {
       try {
-        await toggleReaction({ messageId: msgId, emoji });
+        await reactToMessage(msgId, emoji);
         callDebug.push('REACT', `toggle ok ${emoji} on ${String(msgId).slice(-6)}`);
         try {
           await refetchMessages();
@@ -2949,7 +2973,7 @@ export default function ChatScreen() {
         Alert.alert('Reaction failed', reason);
       }
     },
-    [refetchMessages, toggleReaction]
+    [refetchMessages, reactToMessage]
   );
 
   const savedContactTitle = useMemo(
@@ -4213,7 +4237,7 @@ export default function ChatScreen() {
           if (emojiPickerMode === 'react' && reactionTargetMsg) {
             // Apply as a reaction to the previously long-pressed message.
             try {
-              await toggleReaction({ messageId: reactionTargetMsg._id, emoji });
+              await reactToMessage(reactionTargetMsg._id, emoji);
               await refetchMessages();
             } catch (errorValue: any) {
               console.warn('react failed:', errorValue?.message);
