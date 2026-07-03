@@ -594,6 +594,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // cached id_token. Convex may 401 a few times until our background
       // retry succeeds; the user stays signed in.
       callDebug.push('ERR', `AUTH getFreshIdToken: refresh FAILED (force=${force}, disco=${haveDisco}, hasRefresh=${!!refreshToken}, reason=${lastRefreshErrorRef.current || '?'}, terminal=${refreshTokenDeadRef.current}) → returning ${idToken ? 'STALE id_token' : 'null'}`);
+      // iter-315 TOKEN-LIMBO FIX: when Convex EXPLICITLY rejected the current
+      // token (force=true) and the refresh could not mint a new one, returning
+      // the SAME stale/expired id_token just loops forever (Convex rejects →
+      // asks again with force=true → we hand back the rejected token → …).
+      // That loop is the "logged-in but Convex-unauthenticated / No chats yet"
+      // limbo the user hits after an overnight background. Return null so
+      // Convex settles as unauthenticated and retries cleanly once a refresh
+      // finally succeeds (or the terminal path routes to recovery), instead of
+      // spinning on a token the server already refused.
+      if (force) return null;
     }
     // IMPORTANT: Convex validates the ID token (JWT) for user identity.
     // The access token does not contain the OIDC claims Convex needs (iss/sub),

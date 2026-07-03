@@ -8,7 +8,7 @@ const convex = new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL!, {
 });
 
 function useAuthForConvex() {
-  const { isLoading, isAuthenticated, getFreshIdToken } = useAuth();
+  const { isLoading, isAuthenticated, idToken, getFreshIdToken } = useAuth();
 
   return useMemo(
     () => ({
@@ -24,7 +24,14 @@ function useAuthForConvex() {
         return token;
       },
     }),
-    [isLoading, isAuthenticated, getFreshIdToken]
+    // iter-315: include `idToken` so that when a background/foreground refresh
+    // ROTATES the token, this memo returns a new object → ConvexProviderWithAuth
+    // re-runs `client.setAuth(...)` and re-authenticates the socket with the
+    // FRESH token. Without this, Convex kept using the old (rejected) token on
+    // overnight resume → "authenticated locally but Convex-unauthenticated".
+    // idToken is INTENTIONALLY a dep even though unused in the body — do not remove.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isLoading, isAuthenticated, idToken, getFreshIdToken]
   );
 }
 

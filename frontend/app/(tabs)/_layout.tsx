@@ -213,7 +213,12 @@ export default function TabsLayout() {
   // This must come BEFORE the meLoading spinner gate below, otherwise a brief
   // me=undefined window (e.g. during a Convex reconnect after the token dies)
   // would show the infinite spinner instead of the actionable recovery UI.
-  if (sessionExpired && isAuthenticated && !me) {
+  // iter-315: fire REGARDLESS of `me`/`everReady`. On an overnight WARM resume
+  // the component is never remounted, so `everReady` stays true and Convex may
+  // still return a STALE cached `me` — both of which previously bypassed every
+  // recovery gate and left the user on a logged-in-but-empty screen. When the
+  // refresh token is terminally dead there is nothing to render but recovery.
+  if (sessionExpired && isAuthenticated) {
     return <AuthRecovery onSignIn={signOut} />;
   }
 
