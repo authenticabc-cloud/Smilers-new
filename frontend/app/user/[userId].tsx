@@ -16,9 +16,10 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useMutation, useQuery } from 'convex/react';
+import { useMutation, useQuery, useConvex } from 'convex/react';
 import * as Clipboard from 'expo-clipboard';
 import { api } from '../../src/convexApi';
+import { lookupUserByPhone } from '../../src/lib/phoneLookup';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { savePhotoToGallery } from '../../src/lib/savePhotoToGallery';
@@ -140,6 +141,48 @@ export default function UserProfileScreen() {
           (Array.isArray(c.participants) && c.participants.length > 2)),
     );
   }, [conversationsList]);
+
+  // iter-324 (web-agent contract): the profile identifies people by PHONE, but
+  // group member lists hold ACCOUNT IDS. The old check compared the raw route
+  // param (which can be a phone/contact id) against account ids and always
+  // missed → "No shared groups yet". We build a set of ALL identities that
+  // point to the SAME account: the route param, the resolved `user._id`, and
+  // the account id we get by resolving the target's phone → account via
+  // `users.getByPhone`. GroupInCommonRow matches any of these (or a phone).
+  const convex = useConvex();
+  const targetPhoneE164 = useMemo(() => {
+    const raw = (user as any)?.phoneE164 || (user as any)?.phone || '';
+    if (typeof raw === 'string' && raw.trim()) return raw.trim();
+    // Route param itself may be a phone in some navigation paths.
+    const param = String(userId || '');
+    return /^\+?\d[\d\s-]{5,}$/.test(param) ? param : '';
+  }, [user, userId]);
+  const [phoneResolvedId, setPhoneResolvedId] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    if (!convex || !targetPhoneE164) {
+      setPhoneResolvedId(null);
+      return;
+    }
+    lookupUserByPhone(convex, targetPhoneE164)
+      .then((res) => {
+        if (alive) setPhoneResolvedId(res?._id ? String(res._id) : null);
+      })
+      .catch(() => {
+        if (alive) setPhoneResolvedId(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [convex, targetPhoneE164]);
+  const targetUserIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (userId) ids.add(String(userId));
+    if ((user as any)?._id) ids.add(String((user as any)._id));
+    if (phoneResolvedId) ids.add(phoneResolvedId);
+    return Array.from(ids);
+  }, [userId, user, phoneResolvedId]);
+
   const [memberVerified, setMemberVerified] = useState<Record<string, boolean>>({});
   const reportMembership = useCallback((convId: string, isMember: boolean) => {
     setMemberVerified((prev) =>
@@ -621,7 +664,8 @@ export default function UserProfileScreen() {
               <GroupInCommonRow
                 key={group._id}
                 conv={group}
-                targetUserId={String(userId)}
+                targetUserIds={targetUserIds}
+                targetPhoneE164={targetPhoneE164}
                 onResolve={reportMembership}
               />
             ))}

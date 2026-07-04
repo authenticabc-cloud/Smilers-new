@@ -15,11 +15,13 @@ import { Colors, FontSize, FontWeight } from '../../theme';
  */
 export default function GroupInCommonRow({
   conv,
-  targetUserId,
+  targetUserIds,
+  targetPhoneE164,
   onResolve,
 }: {
   conv: any;
-  targetUserId: string;
+  targetUserIds: string[];
+  targetPhoneE164?: string | null;
   onResolve: (convId: string, isMember: boolean) => void;
 }) {
   const router = useRouter();
@@ -30,9 +32,22 @@ export default function GroupInCommonRow({
     !!conv?._id,
   );
   const isMember = useMemo(() => {
+    const idSet = new Set((targetUserIds || []).map((id) => String(id)));
     const idOf = (p: any) => String(p?.userId || p?._id || p?.id || '');
+    // Last-9-digits key handles country-code variance (e.g. Ghana +233).
+    const digitsKey = (v: any) => {
+      const d = String(v || '').replace(/\D/g, '');
+      return d.length >= 9 ? d.slice(-9) : '';
+    };
+    const targetDigits = digitsKey(targetPhoneE164);
+    const matches = (candidateId: string, phone?: any) =>
+      (candidateId && idSet.has(candidateId)) ||
+      (!!targetDigits && !!phone && digitsKey(phone) === targetDigits);
+
     if (Array.isArray(members) && members.length > 0) {
-      return members.some((m: any) => idOf(m) === String(targetUserId));
+      return members.some((m: any) =>
+        matches(idOf(m), m?.phoneE164 || m?.phone),
+      );
     }
     // Fallback to any member ids embedded on the conversation object itself.
     const ids = [
@@ -43,8 +58,8 @@ export default function GroupInCommonRow({
     ]
       .filter(Boolean)
       .map(String);
-    return ids.includes(String(targetUserId));
-  }, [members, conv, targetUserId]);
+    return ids.some((id) => idSet.has(id));
+  }, [members, conv, targetUserIds, targetPhoneE164]);
 
   useEffect(() => {
     onResolve(String(conv?._id), isMember);
