@@ -108,7 +108,14 @@ export default function PrivacyScreen() {
     try {
       const { typingIndicators, ...cloud } = next;
       void typingIndicators;
-      await updateSettings({ settings: cloud });
+      // iter-326 READ RECEIPTS FIX: the backend stores read receipts in a
+      // TOP-LEVEL `readReceipts` arg (→ users.privacyReadReceipts), NOT inside
+      // the `settings` blob. Sending it only nested under `settings` (as we did
+      // before) meant the server never patched privacyReadReceipts, so it always
+      // read back as the default ON → the toggle "snapped back". We now send it
+      // BOTH ways: the visibility fields via `settings`, plus `readReceipts` as
+      // a real top-level boolean (literal `false` when OFF — never undefined).
+      await updateSettings({ settings: cloud, readReceipts: next.readReceipts === true });
     } catch {
       if (serverSettings) {
         setDraft((prev) => ({ ...DEFAULTS, ...serverSettings, typingIndicators: prev.typingIndicators }));
