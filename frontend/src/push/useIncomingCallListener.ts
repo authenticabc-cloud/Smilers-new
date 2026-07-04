@@ -5,6 +5,7 @@ import { useQuery } from 'convex/react';
 import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
 import { isTwilioEnabled } from '../lib/twilio/twilioApi';
+import { hasOtherActiveCall } from '../lib/call/activeCallRegistry';
 
 /**
  * Real-time incoming-call listener — when foregrounded, Convex's reactive
@@ -43,6 +44,16 @@ export function useIncomingCallListener() {
       '',
     );
     if (myId && recordCallerId && myId === recordCallerId) {
+      handledCallId.current = incomingCall._id;
+      return;
+    }
+
+    // iter-325 CALL WAITING: if the user is ALREADY on an active call, do NOT
+    // hijack it by navigating to this new (second) call. The active call screen
+    // subscribes to the same incoming-call query and renders an in-call "Call
+    // Waiting" overlay so the user can accept/decline WITHOUT losing the
+    // ongoing call. We mark it handled so we don't re-trigger, and bail here.
+    if (hasOtherActiveCall(incomingCall._id, incomingCall.conversationId)) {
       handledCallId.current = incomingCall._id;
       return;
     }

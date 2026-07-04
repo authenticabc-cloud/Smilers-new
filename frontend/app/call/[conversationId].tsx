@@ -52,6 +52,8 @@ import { Colors, FontSize, FontWeight, Shadow, Spacing } from '../../src/theme';
 import { useRingtonePlayer } from '../../src/lib/ringtone/useRingtonePlayer';
 import { setPipParams, enterPip, isPipSupported, useIsInPip } from '../../src/lib/pip';
 import { callHost, useCallHost } from '../../src/lib/call/callHost';
+import { setActiveCall } from '../../src/lib/call/activeCallRegistry';
+import CallWaitingOverlay from '../../src/components/call/CallWaitingOverlay';
 
 type CallType = 'voice' | 'video';
 type AudioOutputRoute = 'earpiece' | 'speaker' | 'bluetooth';
@@ -167,6 +169,7 @@ export function CallScreenInner() {
     role: rawRoleParam,
     convId: rawConvIdParam,
     peerUserId: rawPeerUserIdParam,
+    answer: rawAnswerParam,
   } = (hostParams || {}) as Record<string, string | undefined>;
   const conversationId = Array.isArray(rawConversationId) ? rawConversationId[0] : rawConversationId;
   const typeParam = Array.isArray(rawTypeParam) ? rawTypeParam[0] : rawTypeParam;
@@ -1517,6 +1520,114 @@ export function CallScreenInner() {
     }
   }, [answering, isActive, activeCall]);
 
+  // ─── iter-325 CALL WAITING ───────────────────────────────────────────────
+  // Register THIS screen as the "active call" (once connected or dialing out)
+  // so the global incoming-call listener defers to us instead of hijacking the
+  // ongoing call when a SECOND call rings. Cleared on unmount.
+  useEffect(() => {
+    if ((isActive || isOutgoingRinging) && (callId || conversationId)) {
+      setActiveCall({ callId: callId || null, conversationId: conversationId ? String(conversationId) : null });
+    }
+    return undefined;
+  }, [isActive, isOutgoingRinging, callId, conversationId]);
+  useEffect(() => {
+    return () => setActiveCall(null);
+  }, []);
+
+  // Subscribe to the same global incoming-call query the listener uses, so we
+  // can surface an in-call banner for a genuine SECOND call.
+  const waitingRecord = useQuery(
+    api.calls.getIncomingCall,
+    canRunCallQueries ? {} : 'skip',
+  ) as any;
+  const [dismissedWaitingIds, setDismissedWaitingIds] = useState<string[]>([]);
+  const waitingCall = useMemo(() => {
+    const rec = waitingRecord;
+    if (!rec || !rec._id || rec.status !== 'ringing') return null;
+    // Ignore my own outgoing call record.
+    const myId = me?._id ? String(me._id) : '';
+    const callerId = String(rec?.callerId || rec?.callerIdentity || rec?.caller?._id || '');
+    if (myId && callerId && myId === callerId) return null;
+    // Ignore the call THIS screen is already handling.
+    if (callId && String(rec._id) === String(callId)) return null;
+    if (conversationId && String(rec.conversationId) === String(conversationId)) return null;
+    // Only surface while we actually have an ongoing call.
+    if (!(isActive || isOutgoingRinging)) return null;
+    // Ignore screen-share "calls".
+    const t = String(rec?.type || rec?.callType || rec?.kind || rec?.mediaType || '').toLowerCase();
+    if (['screen', 'screenshare', 'screen-share', 'screen_share', 'sharing'].includes(t)) return null;
+    if (rec?.isScreenShare || rec?.screenShareSessionId || rec?.screenSharing) return null;
+    if (dismissedWaitingIds.includes(String(rec._id))) return null;
+    return rec;
+  }, [waitingRecord, me, callId, conversationId, isActive, isOutgoingRinging, dismissedWaitingIds]);
+
+  const waitingCallerName = useMemo(() => {
+    const rec = waitingCall;
+    if (!rec) return '';
+    return String(
+      rec?.callerName || rec?.caller?.displayName || rec?.caller?.name || rec?.caller?.fullName || '',
+    ).trim();
+  }, [waitingCall]);
+  const waitingIsVideo = useMemo(() => {
+    const rec = waitingCall;
+    if (!rec) return false;
+    return (
+      rec?.isVideo === true ||
+      String(rec?.type || rec?.callType || '').toLowerCase() === 'video'
+    );
+  }, [waitingCall]);
+
+  const declineWaitingCall = useCallback(async () => {
+    const rec = waitingCall;
+    if (!rec?._id) return;
+    const id = String(rec._id);
+    setDismissedWaitingIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    try {
+      await declineCall({ callId: id });
+      callDebug.push('CALL', `[call-waiting] declined ${id.slice(0, 8)}…`);
+    } catch (e: any) {
+      callDebug.push('ERR', `[call-waiting] decline failed: ${String(e?.message || e)}`);
+    }
+  }, [waitingCall, declineCall]);
+
+  const acceptWaitingCall = useCallback(async () => {
+    const rec = waitingCall;
+    if (!rec?.conversationId) return;
+    const targetConv = String(rec.conversationId);
+    const typeQs = `type=${waitingIsVideo ? 'video' : 'voice'}`;
+    const nameQs = waitingCallerName ? `&displayName=${encodeURIComponent(waitingCallerName)}` : '';
+    callDebug.push('CALL', `[call-waiting] end current → answer ${targetConv.slice(0, 8)}…`);
+    // End the current call, then route to the incoming call (auto-answers via
+    // the ?answer=1 flag once the incoming screen mounts).
+    try {
+      await handleHangup();
+    } catch {}
+    setActiveCall(null);
+    setTimeout(() => {
+      try {
+        router.push(`/call/${targetConv}?${typeQs}${nameQs}&answer=1` as any);
+      } catch (e: any) {
+        callDebug.push('ERR', `[call-waiting] route failed: ${String(e?.message || e)}`);
+      }
+    }, 250);
+  }, [waitingCall, waitingIsVideo, waitingCallerName, handleHangup, router]);
+
+  // Auto-answer when arriving via the call-waiting "End & Accept" flow
+  // (?answer=1). Fires once, only for an incoming ringing call.
+  const answerParam = Array.isArray(rawAnswerParam) ? rawAnswerParam[0] : rawAnswerParam;
+  const autoAnsweredRef = useRef(false);
+  useEffect(() => {
+    if (autoAnsweredRef.current) return;
+    if (String(answerParam || '') !== '1') return;
+    if (!isIncoming) return;
+    const id = callId || (activeCall as any)?._id || null;
+    if (!id) return;
+    autoAnsweredRef.current = true;
+    callDebug.push('CALL', '[call-waiting] auto-answer via ?answer=1');
+    void handleAnswer();
+  }, [answerParam, isIncoming, callId, activeCall, handleAnswer]);
+  // ─────────────────────────────────────────────────────────────────────────
+
   // If remote ends the call, also tear down locally
   const wasLiveRef = useRef(false);
   useEffect(() => {
@@ -2455,6 +2566,16 @@ export function CallScreenInner() {
           role="sharer"
         />
       )}
+
+      {/* iter-325 CALL WAITING — in-call banner for a second incoming call. */}
+      {waitingCall ? (
+        <CallWaitingOverlay
+          callerName={waitingCallerName}
+          isVideo={waitingIsVideo}
+          onEndAndAccept={acceptWaitingCall}
+          onDecline={declineWaitingCall}
+        />
+      ) : null}
 
       {/* On-screen debug overlay — bottom-right floating "activity" badge.
           Tap to expand the last ~60 call/screen-share events. Visible in
