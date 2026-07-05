@@ -3603,7 +3603,12 @@ export default function ChatScreen() {
       {pinnedMessage ? (
         <View style={styles.pinnedBanner} testID="chat-pinned-banner">
           <Feather name="bookmark" size={16} color={Colors.primary} />
-          <View style={styles.flexOne}>
+          <TouchableOpacity
+            style={styles.flexOne}
+            activeOpacity={0.7}
+            onPress={() => jumpToMessage(pinnedMessageId)}
+            testID="chat-pinned-banner-jump"
+          >
             <Text style={styles.pinnedBannerLabel}>Pinned message</Text>
             <Text style={styles.pinnedBannerText} numberOfLines={1}>
               {(() => {
@@ -3613,7 +3618,7 @@ export default function ChatScreen() {
                 return previewForMessageType(p?.type, typeof p?.text === 'string' ? p.text : null);
               })()}
             </Text>
-          </View>
+          </TouchableOpacity>
           {canPinMessages ? (
             <TouchableOpacity onPress={onUnpinBanner} hitSlop={10} testID="chat-unpin-btn">
               <Feather name="x" size={18} color={Colors.textSecondary} />
