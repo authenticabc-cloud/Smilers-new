@@ -1639,6 +1639,32 @@ export function CallScreenInner() {
     isAuthenticated,
   });
 
+  // iter-328: OPTIONAL, NON-GATING "On hold" presence flag. When we hold a
+  // call we best-effort write `calls.setHold({ callId, held })` so the OTHER
+  // party can render an "On hold" indicator. It NEVER gates media — if the
+  // mutation doesn't exist yet on the backend (web agent hasn't shipped it) or
+  // the write fails, hold still works exactly the same. Reading `activeCall.held`
+  // lets US show an indicator when the remote party has put US on hold.
+  const setHoldMutation = useMutation((api as any).calls?.setHold);
+  const writeHoldFlag = useCallback(
+    (targetCallId: string | null, held: boolean) => {
+      if (!targetCallId || !setHoldMutation) return;
+      try {
+        void Promise.resolve(setHoldMutation({ callId: targetCallId, held })).catch(() => {});
+      } catch {
+        /* non-gating — ignore */
+      }
+    },
+    [setHoldMutation],
+  );
+  const remoteHeldByOther = useMemo(() => {
+    const held: any = (activeCall as any)?.held;
+    if (!held) return false;
+    const byId = String(held?.by || held?.userId || '');
+    const myId = me?._id ? String(me._id) : '';
+    return !!byId && byId !== myId;
+  }, [activeCall, me]);
+
   const buildSecondaryInfo = useCallback((): SecondaryCallInfo | null => {
     const rec = waitingCall;
     if (!rec?._id) return null;
@@ -1674,6 +1700,9 @@ export function CallScreenInner() {
     if (!secondaryInfo) return;
     setPrimaryHeld(heldSide === 'primary');
     secondary.setHeld(heldSide === 'secondary');
+    // Best-effort presence flag so the other party can show "On hold".
+    writeHoldFlag(callId, heldSide === 'primary');
+    writeHoldFlag(secondaryInfo.callId, heldSide === 'secondary');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [heldSide, secondaryInfo, secondary.connected]);
 
@@ -2682,6 +2711,16 @@ export function CallScreenInner() {
         />
       ) : null}
 
+      {/* iter-328 — the OTHER party has put us on hold (reads calls.held). */}
+      {remoteHeldByOther ? (
+        <View style={[styles.heldBanner, styles.onHoldBanner]} testID="on-hold-indicator">
+          <MaterialCommunityIcons name="phone-paused" size={16} color={Colors.white} />
+          <Text style={styles.heldBannerText} numberOfLines={1}>
+            {`${otherName || 'They'} put you on hold`}
+          </Text>
+        </View>
+      ) : null}
+
       {/* iter-327 — banner for the OTHER (held/foreground) call while two calls
           coexist. Tap Swap to switch which call is active. */}
       {secondaryInfo ? (
@@ -3135,6 +3174,7 @@ const styles = StyleSheet.create({
   },
   heldBannerEndBtn: { backgroundColor: 'rgba(239,68,68,0.9)' },
   heldBannerBtnText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
+  onHoldBanner: { top: 56, backgroundColor: 'rgba(180,53,59,0.95)' },
   containerTransparent: {
     backgroundColor: 'transparent',
   },
