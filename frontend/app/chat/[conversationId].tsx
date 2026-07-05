@@ -726,6 +726,9 @@ export default function ChatScreen() {
   const editMessage = useMutation((api as any).messages.editMessage);
   const updateMessage = useMutation((api as any).messages.updateMessage);
   const editTextMutation = useMutation((api as any).messages.editText);
+  // iter-333 group-post edit permissions (Phase 1). mode ∈ owner|open|approval.
+  const setEditModeMutation = useMutation((api as any).messages.setEditMode);
+  const [editModeTarget, setEditModeTarget] = useState<any | null>(null);
   // iter-147: canonical contract — toggleStar lives on `api.starred`,
   // NOT `api.messages`. Args require BOTH `messageId` AND
   // `conversationId` (server validates participant access).
@@ -2841,6 +2844,32 @@ export default function ChatScreen() {
     resetComposerFormatting();
   }, [resetComposerFormatting]);
 
+  // iter-333 (Phase 1): author opens the "Who can edit" picker for a group post.
+  const onWhoCanEdit = useCallback(() => {
+    const msg = selectedMsg;
+    closeActionSheet();
+    if (!msg?._id) return;
+    setEditModeTarget(msg);
+  }, [selectedMsg]);
+
+  const applyEditMode = useCallback(
+    async (mode: 'owner' | 'open' | 'approval') => {
+      const msg = editModeTarget;
+      setEditModeTarget(null);
+      if (!msg?._id) return;
+      try {
+        await setEditModeMutation({ messageId: msg._id, mode });
+        callDebug.push('EDIT', `setEditMode=${mode} on ${String(msg._id).slice(-6)}`);
+        try {
+          await refetchMessages();
+        } catch {}
+      } catch (e: any) {
+        Alert.alert('Could not update', e?.message || 'Failed to change edit permissions.');
+      }
+    },
+    [editModeTarget, setEditModeMutation, refetchMessages],
+  );
+
   /**
    * Attempt to call any of the known edit mutations the backend may expose.
    * Different Convex deployments use different function names — try each
@@ -4338,12 +4367,25 @@ export default function ChatScreen() {
 
       <MessageActionSheet
         message={selectedMsg}
-        canEdit={!!(isMineSelected && (selectedMsg?.type === 'text' || !selectedMsg?.type))}
+        canEdit={
+          !!(
+            (selectedMsg?.type === 'text' || !selectedMsg?.type) &&
+            (isMineSelected || selectedMsg?.editMode === 'open')
+          )
+        }
+        canSetEditMode={
+          !!(
+            isMineSelected &&
+            conversation?.type === 'group' &&
+            (selectedMsg?.type === 'text' || !selectedMsg?.type)
+          )
+        }
         onClose={closeActionSheet}
         onPickReaction={onPickReaction}
         onReply={onReply}
         onCopy={onCopy}
         onEdit={onEdit}
+        onWhoCanEdit={onWhoCanEdit}
         onForward={onForward}
         onShare={onShare}
         onSelectMultiple={onSelectMultiple}
@@ -4353,6 +4395,43 @@ export default function ChatScreen() {
         onMessageInfo={onMessageInfo}
         onDelete={onDelete}
       />
+
+      {/* iter-333 (Phase 1): "Who can edit" picker for a group post (author). */}
+      <Modal
+        visible={!!editModeTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEditModeTarget(null)}
+      >
+        <Pressable style={styles.editModeBackdrop} onPress={() => setEditModeTarget(null)}>
+          <Pressable style={styles.editModeSheet} onPress={() => {}}>
+            <Text style={styles.editModeTitle}>Who can edit this post?</Text>
+            {(
+              [
+                { key: 'owner', label: 'Only me', hint: 'Just you can edit this post' },
+                { key: 'open', label: 'Anyone can edit', hint: 'Any member can edit directly' },
+                { key: 'approval', label: 'Anyone with my approval', hint: 'Members propose; you approve each edit' },
+              ] as const
+            ).map((opt) => {
+              const active = (editModeTarget?.editMode || 'owner') === opt.key;
+              return (
+                <TouchableOpacity
+                  key={opt.key}
+                  style={styles.editModeOption}
+                  onPress={() => applyEditMode(opt.key)}
+                  testID={`edit-mode-${opt.key}`}
+                >
+                  <View style={styles.flexOne}>
+                    <Text style={styles.editModeOptionLabel}>{opt.label}</Text>
+                    <Text style={styles.editModeOptionHint}>{opt.hint}</Text>
+                  </View>
+                  {active ? <Feather name="check" size={20} color={Colors.primary} /> : null}
+                </TouchableOpacity>
+              );
+            })}
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* iter-292: rich Message Info sheet — Read by + media consumption
           (Played/Watched/Viewed/Opened by), mirroring the web app. */}
@@ -4506,6 +4585,28 @@ export default function ChatScreen() {
 }
 
 const styles = StyleSheet.create({
+  editModeBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  editModeSheet: {
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    paddingBottom: 34,
+  },
+  editModeTitle: { fontSize: 17, fontWeight: '700', color: Colors.textPrimary, marginBottom: 12 },
+  editModeOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  editModeOptionLabel: { fontSize: 16, fontWeight: '600', color: Colors.textPrimary },
+  editModeOptionHint: { fontSize: 13, color: Colors.textMuted, marginTop: 2 },
   // iter-169 web parity: conversation message area uses the dedicated
   // `chatWallpaper` token (#F5F1E7) instead of the app body color.
   container: { flex: 1, backgroundColor: Colors.chatWallpaper },

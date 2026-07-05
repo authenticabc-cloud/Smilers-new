@@ -274,8 +274,17 @@ export function MessageBubble({
               editedAtMs && Number.isFinite(editedAtMs)
                 ? new Date(editedAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                 : timeStr;
+            // iter-333: when a group post was last edited by someone OTHER than
+            // the author, the backend resolves `lastEditedByName`. Show
+            // "edited by <name>"; otherwise fall back to "edited <time>".
+            const byName =
+              typeof msg.lastEditedByName === 'string' && msg.lastEditedByName.trim()
+                ? msg.lastEditedByName.trim()
+                : null;
             return (
-              <Text style={[styles.bubbleTime, styles.editedBadge]}>edited {editedTimeStr}</Text>
+              <Text style={[styles.bubbleTime, styles.editedBadge]}>
+                {byName ? `edited by ${byName}` : `edited ${editedTimeStr}`}
+              </Text>
             );
           })()}
           <Text style={styles.bubbleTime}>{timeStr}</Text>

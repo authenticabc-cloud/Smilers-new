@@ -14,11 +14,13 @@ export const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'
 export function MessageActionSheet({
   message,
   canEdit,
+  canSetEditMode,
   onClose,
   onPickReaction,
   onReply,
   onCopy,
   onEdit,
+  onWhoCanEdit,
   onForward,
   onShare,
   onSelectMultiple,
@@ -30,11 +32,13 @@ export function MessageActionSheet({
 }: {
   message: any | null;
   canEdit: boolean;
+  canSetEditMode?: boolean;
   onClose: () => void;
   onPickReaction: (emoji: string) => void;
   onReply: () => void;
   onCopy: () => void;
   onEdit: () => void;
+  onWhoCanEdit?: () => void;
   onForward: () => void;
   onShare: () => void;
   onSelectMultiple: () => void;
@@ -65,6 +69,9 @@ export function MessageActionSheet({
             <ActionRow icon="copy" lib="feather" label="Copy text" onPress={onCopy} />
             {canEdit ? (
               <ActionRow icon="edit-2" lib="feather" label="Edit" onPress={onEdit} />
+            ) : null}
+            {canSetEditMode && onWhoCanEdit ? (
+              <ActionRow icon="shield" lib="feather" label="Who can edit" onPress={onWhoCanEdit} />
             ) : null}
             <ActionRow icon="corner-up-right" lib="feather" label="Forward" onPress={onForward} />
             <ActionRow icon="share-2" lib="feather" label="Share" onPress={onShare} />
