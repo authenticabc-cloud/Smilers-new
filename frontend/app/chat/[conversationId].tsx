@@ -2892,10 +2892,22 @@ export default function ChatScreen() {
   }, [selectedMsg]);
 
   const handleReviewEdit = useCallback(
-    async (pendingEditId: string, decision: 'approve' | 'reject') => {
+    async (pendingEditId: string, decision: 'approve' | 'reject', proposerName?: string) => {
       try {
         await reviewEditMutation({ pendingEditId, decision });
         callDebug.push('EDIT', `reviewEdit ${decision} ${String(pendingEditId).slice(-6)}`);
+        // Post a lightweight, human-readable notice so the whole group sees
+        // the outcome (syncs to web + native via a normal text message).
+        if (decision === 'approve' && conversationId) {
+          const who = (proposerName && proposerName.trim()) || 'A member';
+          try {
+            await sendMessage({
+              conversationId,
+              type: 'text',
+              text: `✏️ ${who}'s suggested edit was approved`,
+            });
+          } catch {}
+        }
         try {
           await refetchMessages();
         } catch {}
@@ -2903,7 +2915,7 @@ export default function ChatScreen() {
         Alert.alert('Review failed', e?.message || 'Could not review this edit.');
       }
     },
-    [reviewEditMutation, refetchMessages],
+    [reviewEditMutation, refetchMessages, sendMessage, conversationId],
   );
 
   // iter-333 (Phase 1): author opens the "Who can edit" picker for a group post.
@@ -4572,7 +4584,13 @@ export default function ChatScreen() {
                       </TouchableOpacity>
                       <TouchableOpacity
                         style={[styles.pendingEditBtn, styles.pendingEditApprove]}
-                        onPress={() => handleReviewEdit(String(pe._id), 'approve')}
+                        onPress={() =>
+                          handleReviewEdit(
+                            String(pe._id),
+                            'approve',
+                            pe.proposerName || pe.proposer?.name,
+                          )
+                        }
                         testID={`pending-edit-approve-${String(pe._id).slice(-6)}`}
                       >
                         <Feather name="check" size={16} color={Colors.white} />
