@@ -5,27 +5,27 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../theme';
 
 /**
- * iter-325 CALL WAITING — an in-call banner shown when a SECOND call rings
- * while the user is already on an active call. It lets the user handle the
- * incoming call WITHOUT losing the ongoing one.
- *
- * Phase 1 (this build) wires the two actions that are safe on the published
- * single-call engine:
- *   • End & Accept  → hang up the current call, then answer the incoming one.
- *   • Decline       → reject the incoming call, keep talking on the current one.
- *
- * The two "Hold" options (hold current & accept / hold incoming) require a
- * dual-session call engine and land in Phase 2.
+ * iter-325/327 CALL WAITING — an in-call banner shown when a SECOND call rings
+ * while the user is already on an active call. Offers the 4 options without
+ * losing the ongoing call:
+ *   (a) End & Accept     → hang up current, answer incoming
+ *   (b) Hold & Accept    → hold current (media), answer incoming (foreground)
+ *   (c) Decline          → reject incoming, keep current
+ *   (d) Hold incoming    → answer incoming but keep it held; stay on current
  */
 export default function CallWaitingOverlay({
   callerName,
   isVideo,
   onEndAndAccept,
+  onHoldAndAccept,
+  onHoldIncoming,
   onDecline,
 }: {
   callerName: string;
   isVideo: boolean;
   onEndAndAccept: () => void;
+  onHoldAndAccept: () => void;
+  onHoldIncoming: () => void;
   onDecline: () => void;
 }) {
   return (
@@ -47,25 +47,45 @@ export default function CallWaitingOverlay({
           </View>
         </View>
 
-        <View style={styles.actionsRow}>
+        <View style={styles.grid}>
           <TouchableOpacity
-            style={[styles.actionBtn, styles.declineBtn]}
+            style={[styles.gridBtn, styles.acceptBtn]}
             activeOpacity={0.85}
-            onPress={onDecline}
-            testID="call-waiting-decline"
+            onPress={onHoldAndAccept}
+            testID="call-waiting-hold-accept"
           >
-            <Ionicons name="close" size={20} color={Colors.white} />
-            <Text style={styles.actionLabel}>Decline</Text>
+            <MaterialCommunityIcons name="phone-paused" size={18} color={Colors.white} />
+            <Text style={styles.gridLabel}>Hold &amp; Accept</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.actionBtn, styles.acceptBtn]}
+            style={[styles.gridBtn, styles.holdBtn]}
+            activeOpacity={0.85}
+            onPress={onHoldIncoming}
+            testID="call-waiting-hold-incoming"
+          >
+            <MaterialCommunityIcons name="pause-circle" size={18} color={Colors.white} />
+            <Text style={styles.gridLabel}>Hold incoming</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.gridBtn, styles.endAcceptBtn]}
             activeOpacity={0.85}
             onPress={onEndAndAccept}
             testID="call-waiting-end-accept"
           >
-            <MaterialCommunityIcons name="phone-check" size={20} color={Colors.white} />
-            <Text style={styles.actionLabel}>End &amp; Accept</Text>
+            <MaterialCommunityIcons name="phone-check" size={18} color={Colors.white} />
+            <Text style={styles.gridLabel}>End &amp; Accept</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.gridBtn, styles.declineBtn]}
+            activeOpacity={0.85}
+            onPress={onDecline}
+            testID="call-waiting-decline"
+          >
+            <Ionicons name="close" size={18} color={Colors.white} />
+            <Text style={styles.gridLabel}>Decline</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -104,9 +124,15 @@ const styles = StyleSheet.create({
   flexOne: { flex: 1 },
   title: { color: 'rgba(255,255,255,0.7)', fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   name: { color: Colors.white, fontSize: FontSize.lg, fontWeight: FontWeight.bold, marginTop: 2 },
-  actionsRow: { flexDirection: 'row', gap: 12, marginTop: Spacing.base },
-  actionBtn: {
-    flex: 1,
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: Spacing.base,
+  },
+  gridBtn: {
+    flexGrow: 1,
+    flexBasis: '46%',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -115,7 +141,9 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     minHeight: 48,
   },
-  declineBtn: { backgroundColor: Colors.danger },
   acceptBtn: { backgroundColor: Colors.success || '#2E7D32' },
-  actionLabel: { color: Colors.white, fontSize: FontSize.base, fontWeight: FontWeight.bold },
+  holdBtn: { backgroundColor: '#4B5563' },
+  endAcceptBtn: { backgroundColor: '#2563EB' },
+  declineBtn: { backgroundColor: Colors.danger },
+  gridLabel: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.bold },
 });

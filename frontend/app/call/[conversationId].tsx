@@ -53,6 +53,7 @@ import { useRingtonePlayer } from '../../src/lib/ringtone/useRingtonePlayer';
 import { setPipParams, enterPip, isPipSupported, useIsInPip } from '../../src/lib/pip';
 import { callHost, useCallHost } from '../../src/lib/call/callHost';
 import { setActiveCall } from '../../src/lib/call/activeCallRegistry';
+import { useSecondaryCall, SecondaryCallInfo } from '../../src/lib/call/useSecondaryCall';
 import CallWaitingOverlay from '../../src/components/call/CallWaitingOverlay';
 
 type CallType = 'voice' | 'video';
@@ -1612,6 +1613,103 @@ export function CallScreenInner() {
     }, 250);
   }, [waitingCall, waitingIsVideo, waitingCallerName, handleHangup, router]);
 
+  // ── Phase 2: true media HOLD via a second concurrent WebRTC session ──────
+  const [heldSide, setHeldSide] = useState<'none' | 'primary' | 'secondary'>('none');
+  const [secondaryInfo, setSecondaryInfo] = useState<SecondaryCallInfo | null>(null);
+  const [primaryEndedPromoted, setPrimaryEndedPromoted] = useState(false);
+  const setPrimaryHeld = useCallback(
+    (held: boolean) => {
+      const s = sessionRef.current;
+      if (!s) return;
+      try {
+        s.setMuted(held);
+        if (callType === 'video') (s as any).setCameraOff?.(held);
+        const remote: any = (s as any).remoteStream;
+        remote?.getTracks?.().forEach((t: any) => {
+          t.enabled = !held;
+        });
+      } catch {}
+    },
+    [callType],
+  );
+
+  const secondary = useSecondaryCall({
+    active: !!secondaryInfo,
+    call: secondaryInfo,
+    isAuthenticated,
+  });
+
+  const buildSecondaryInfo = useCallback((): SecondaryCallInfo | null => {
+    const rec = waitingCall;
+    if (!rec?._id) return null;
+    return {
+      callId: String(rec._id),
+      remoteUserId: String(rec?.callerId || rec?.callerIdentity || rec?.caller?._id || ''),
+      callType: waitingIsVideo ? 'video' : 'voice',
+    };
+  }, [waitingCall, waitingIsVideo]);
+
+  const holdCurrentAndAccept = useCallback(() => {
+    const info = buildSecondaryInfo();
+    if (!info) return;
+    setDismissedWaitingIds((prev) => (prev.includes(info.callId) ? prev : [...prev, info.callId]));
+    setPrimaryHeld(true);
+    setHeldSide('primary'); // primary held, secondary is foreground
+    setSecondaryInfo(info);
+    callDebug.push('CALL', `[call-waiting] hold current → accept ${info.callId.slice(0, 8)}…`);
+  }, [buildSecondaryInfo, setPrimaryHeld]);
+
+  const holdIncoming = useCallback(() => {
+    const info = buildSecondaryInfo();
+    if (!info) return;
+    setDismissedWaitingIds((prev) => (prev.includes(info.callId) ? prev : [...prev, info.callId]));
+    setHeldSide('secondary'); // primary stays foreground, secondary held
+    setSecondaryInfo(info);
+    callDebug.push('CALL', `[call-waiting] answer+hold incoming ${info.callId.slice(0, 8)}…`);
+  }, [buildSecondaryInfo]);
+
+  // Apply the hold state to whichever side is held (re-applies once the
+  // secondary session connects).
+  useEffect(() => {
+    if (!secondaryInfo) return;
+    setPrimaryHeld(heldSide === 'primary');
+    secondary.setHeld(heldSide === 'secondary');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [heldSide, secondaryInfo, secondary.connected]);
+
+  const swapCalls = useCallback(() => {
+    if (!secondaryInfo) return;
+    setHeldSide((prev) => (prev === 'primary' ? 'secondary' : 'primary'));
+  }, [secondaryInfo]);
+
+  const endSecondaryCall = useCallback(() => {
+    secondary.teardown({ endOnServer: true });
+    setSecondaryInfo(null);
+    setHeldSide('none');
+    setPrimaryHeld(false); // resume primary if it was held
+  }, [secondary, setPrimaryHeld]);
+
+  // When the FOREGROUND (primary) call ends while a secondary exists, promote
+  // the secondary: keep the screen alive, un-hold it, and show it foreground.
+  useEffect(() => {
+    if (!secondaryInfo) return;
+    if (activeCall && (activeCall.status === 'ended' || activeCall.status === 'declined')) {
+      setPrimaryEndedPromoted(true);
+      setHeldSide('none');
+      secondary.setHeld(false);
+      callDebug.push('CALL', '[call-waiting] primary ended → promoting held call');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCall?.status, secondaryInfo]);
+
+  // The remote stream shown in the MAIN video area: the secondary call when it
+  // is the foreground call (primary held) or after the primary call ended.
+  const displayRemoteURL =
+    secondaryInfo && (heldSide === 'primary' || primaryEndedPromoted)
+      ? secondary.remoteStreamURL || remoteStreamURL
+      : remoteStreamURL;
+  // ─────────────────────────────────────────────────────────────────────────
+
   // Auto-answer when arriving via the call-waiting "End & Accept" flow
   // (?answer=1). Fires once, only for an incoming ringing call.
   const answerParam = Array.isArray(rawAnswerParam) ? rawAnswerParam[0] : rawAnswerParam;
@@ -1665,6 +1763,11 @@ export function CallScreenInner() {
     if (activeCall && (activeCall.status === 'ended' || activeCall.status === 'declined')) {
       teardownLocalSession();
       wasLiveRef.current = false;
+      // iter-327: if a SECOND (held) call exists, DON'T close the screen — the
+      // promotion effect keeps it alive and brings the held call to foreground.
+      if (secondaryInfo) {
+        return undefined;
+      }
       // Give the user 700ms to see the "Call ended" state before popping
       const timeoutId = setTimeout(() => callHost.end(), 700);
       return () => clearTimeout(timeoutId);
@@ -2379,11 +2482,11 @@ export function CallScreenInner() {
         title="Add to call"
       />
       {/* Video layer or gradient + avatar */}
-      {showVideo && remoteStreamURL ? (
+      {showVideo && displayRemoteURL ? (
         <View style={styles.videoLayer}>
           <RTCViewImpl
             key={`remote-${remoteVideoGen}`}
-            streamURL={remoteStreamURL}
+            streamURL={displayRemoteURL}
             style={StyleSheet.absoluteFill}
             objectFit="cover"
             mirror={false}
@@ -2573,8 +2676,37 @@ export function CallScreenInner() {
           callerName={waitingCallerName}
           isVideo={waitingIsVideo}
           onEndAndAccept={acceptWaitingCall}
+          onHoldAndAccept={holdCurrentAndAccept}
+          onHoldIncoming={holdIncoming}
           onDecline={declineWaitingCall}
         />
+      ) : null}
+
+      {/* iter-327 — banner for the OTHER (held/foreground) call while two calls
+          coexist. Tap Swap to switch which call is active. */}
+      {secondaryInfo ? (
+        <View style={styles.heldBanner} testID="held-call-banner">
+          <MaterialCommunityIcons name="phone-paused" size={16} color={Colors.white} />
+          <Text style={styles.heldBannerText} numberOfLines={1}>
+            {heldSide === 'primary'
+              ? `${otherName || 'Call'} on hold`
+              : heldSide === 'secondary'
+                ? `${waitingCallerName || 'Second call'} on hold`
+                : 'Two calls active'}
+          </Text>
+          <TouchableOpacity onPress={swapCalls} style={styles.heldBannerBtn} testID="held-call-swap">
+            <MaterialCommunityIcons name="swap-horizontal" size={16} color={Colors.white} />
+            <Text style={styles.heldBannerBtnText}>Swap</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={endSecondaryCall}
+            style={[styles.heldBannerBtn, styles.heldBannerEndBtn]}
+            testID="held-call-end"
+          >
+            <Ionicons name="call" size={14} color={Colors.white} />
+            <Text style={styles.heldBannerBtnText}>End 2nd</Text>
+          </TouchableOpacity>
+        </View>
       ) : null}
 
       {/* On-screen debug overlay — bottom-right floating "activity" badge.
@@ -2978,6 +3110,31 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.headerBg,
     justifyContent: 'space-between',
   },
+  heldBanner: {
+    position: 'absolute',
+    top: 96,
+    left: 12,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(75,85,99,0.95)',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  heldBannerText: { flex: 1, color: '#FFFFFF', fontSize: 13, fontWeight: '600' },
+  heldBannerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  heldBannerEndBtn: { backgroundColor: 'rgba(239,68,68,0.9)' },
+  heldBannerBtnText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
   containerTransparent: {
     backgroundColor: 'transparent',
   },
