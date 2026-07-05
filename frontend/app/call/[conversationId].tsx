@@ -24,6 +24,7 @@ import CallBackground from '../../src/components/CallBackground';
 import InviteContactPicker from '../../src/components/InviteContactPicker';
 import { stashCallHandoff } from '../../src/lib/call/handoff';
 import { InCallAudio } from '../../src/lib/webrtc/inCallManager';
+import * as Haptics from 'expo-haptics';
 import { useKeepAwake } from 'expo-keep-awake';
 import { callActivity } from '../../src/lib/callActivity';
 import Animated, {
@@ -1576,6 +1577,30 @@ export function CallScreenInner() {
       rec?.isVideo === true ||
       String(rec?.type || rec?.callType || '').toLowerCase() === 'video'
     );
+  }, [waitingCall]);
+
+  // iter-329: WhatsApp-style ALERT when a second call arrives during a call —
+  // a distinct double-beep (over the live call audio) + a double haptic buzz,
+  // fired ONCE per new waiting call so the user notices without looking.
+  const alertedWaitingIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const id = waitingCall?._id ? String(waitingCall._id) : null;
+    if (!id) {
+      alertedWaitingIdRef.current = null;
+      return;
+    }
+    if (alertedWaitingIdRef.current === id) return;
+    alertedWaitingIdRef.current = id;
+    try {
+      InCallAudio.playCallWaitingTone();
+    } catch {}
+    try {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+      setTimeout(() => {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+      }, 500);
+    } catch {}
+    callDebug.push('CALL', `[call-waiting] alert tone+haptic for ${id.slice(0, 8)}…`);
   }, [waitingCall]);
 
   const declineWaitingCall = useCallback(async () => {

@@ -326,6 +326,28 @@ export function stopNativeRingback() {
 }
 
 /**
+ * iter-329 CALL WAITING tone. Plays a short WhatsApp-style DOUBLE-BEEP over
+ * the ongoing call when a second call arrives. We use InCallManager's DTMF
+ * ringback because it plays on Android's VOICE-CALL stream, which is NOT muted
+ * by MODE_IN_COMMUNICATION (unlike expo-audio's media stream that goes silent
+ * during an active call). Fully defensive + native-only (no-op on web / if the
+ * module is missing). Never throws into the call screen.
+ */
+export function playCallWaitingTone() {
+  const native = getNative();
+  if (!native || typeof native.startRingback !== 'function' || typeof native.stopRingback !== 'function') {
+    return;
+  }
+  const beep = () => {
+    safeCall(() => native.startRingback!('_DTMF_'), 'cw startRingback');
+    setTimeout(() => safeCall(() => native.stopRingback!(), 'cw stopRingback'), 220);
+  };
+  beep();
+  setTimeout(beep, 420); // second beep after a short gap → "de-dum"
+}
+
+
+/**
  * iter-194: subscribe to Android's audio-device list changes
  * (react-native-incall-manager emits `onAudioDeviceChanged` whenever a
  * Bluetooth headset connects/disconnects or the selected route changes).
@@ -378,4 +400,5 @@ export const InCallAudio = {
   addAudioDeviceChangedListener,
   startRingback: startNativeRingback,
   stopRingback: stopNativeRingback,
+  playCallWaitingTone,
 };
