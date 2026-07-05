@@ -491,7 +491,27 @@ function StatusViewScreenInner() {
   const isTextStory = readStoryType(current) === 'text';
   const bg = isTextStory ? readStoryBg(current) : '#000';
   const fg = isTextStory ? readStoryFg(current) : '#FFFFFF';
-  const viewsCount = current.views?.length || current.viewCount || 0;
+  // iter-330: the backend returns the viewer list + count under SEVERAL aliases
+  // (views / viewers / viewedBy / seenBy, and viewCount / viewsCount / seenCount).
+  // Reading only `views` made the owner see "0 viewers" whenever the backend
+  // used a different field name. Resolve all of them.
+  const viewerList: any[] = Array.isArray(current.views)
+    ? current.views
+    : Array.isArray(current.viewers)
+      ? current.viewers
+      : Array.isArray(current.viewedBy)
+        ? current.viewedBy
+        : Array.isArray(current.seenBy)
+          ? current.seenBy
+          : [];
+  const viewsCount =
+    Number(
+      current.viewCount ??
+        current.viewsCount ??
+        current.seenCount ??
+        current.viewsTotal ??
+        (Array.isArray(current.views) ? current.views.length : undefined),
+    ) || viewerList.length || 0;
 
   return (
     <View
@@ -641,11 +661,14 @@ function StatusViewScreenInner() {
             <View style={styles.grabber} />
             <Text style={styles.viewersSheetTitle}>Seen by {viewsCount}</Text>
             <FlatList
-              data={current.views || []}
-              keyExtractor={(viewer: any, viewerIndex: number) => viewer?.userId || String(viewerIndex)}
+              data={viewerList}
+              keyExtractor={(viewer: any, viewerIndex: number) =>
+                viewer?.userId || viewer?._id || viewer?.viewer || String(viewerIndex)
+              }
               contentContainerStyle={styles.viewersList}
               renderItem={({ item }: any) => {
-                const viewerName = resolveContactName(item?.userId, item?.name || 'User');
+                const viewerId = item?.userId || item?._id || item?.viewer || item?.viewerId;
+                const viewerName = resolveContactName(viewerId, item?.name || item?.displayName || 'User');
                 return (
                   <View style={styles.viewerRow}>
                     <View style={styles.viewerAvatar}>
@@ -653,7 +676,9 @@ function StatusViewScreenInner() {
                     </View>
                     <View style={styles.flexOne}>
                       <Text style={styles.viewerName}>{viewerName}</Text>
-                      <Text style={styles.viewerTime}>{timeAgo(item?.viewedAt || Date.now())}</Text>
+                      <Text style={styles.viewerTime}>
+                        {timeAgo(item?.viewedAt || item?.at || item?.seenAt || Date.now())}
+                      </Text>
                     </View>
                   </View>
                 );
