@@ -62,6 +62,31 @@ async function stashPendingCode(code: string | null): Promise<void> {
   }
 }
 
+/** iter-332 — MANUAL entry from the Sign-In screen ("Do you have a referral
+ *  code?"). Unlike install/deep-link capture, an explicit user entry OVERWRITES
+ *  any pending code. Returns the normalized code (or null if empty/invalid).
+ *  `ReferralAttribution` then credits it via earnings.trackReferral once the
+ *  user authenticates — same path as the web app's ?ref=CODE flow. */
+export async function setPendingReferralCode(raw: string): Promise<string | null> {
+  const code = (raw || '').trim().toUpperCase().slice(0, 64);
+  if (!code) return null;
+  try {
+    await AsyncStorage.setItem(PENDING_CODE_KEY, code);
+  } catch {
+    /* best-effort */
+  }
+  return code;
+}
+
+/** Read the currently-stored pending referral code (for prefill/display). */
+export async function getPendingReferralCode(): Promise<string | null> {
+  try {
+    return await AsyncStorage.getItem(PENDING_CODE_KEY);
+  } catch {
+    return null;
+  }
+}
+
 /** Capture a `?ref=CODE` query param from the app's open/deep-link URL
  *  (mirrors the web app's `?ref=CODE` → localStorage flow). */
 async function captureDeepLinkRef(url?: string | null): Promise<void> {
