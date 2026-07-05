@@ -15,6 +15,8 @@ export function MessageActionSheet({
   message,
   canEdit,
   canSetEditMode,
+  canSuggestEdit,
+  suggestPending,
   onClose,
   onPickReaction,
   onReply,

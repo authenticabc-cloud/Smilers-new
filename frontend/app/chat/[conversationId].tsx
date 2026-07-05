@@ -729,6 +729,23 @@ export default function ChatScreen() {
   // iter-333 group-post edit permissions (Phase 1). mode ∈ owner|open|approval.
   const setEditModeMutation = useMutation((api as any).messages.setEditMode);
   const [editModeTarget, setEditModeTarget] = useState<any | null>(null);
+  // iter-334 (Phase 2): propose / review edit workflow for "approval" mode.
+  const proposeEditMutation = useMutation((api as any).messages.proposeEdit);
+  const reviewEditMutation = useMutation((api as any).messages.reviewEdit);
+  const [proposingMessageId, setProposingMessageId] = useState<string | null>(null);
+  const [showPendingEdits, setShowPendingEdits] = useState(false);
+  const pendingEditsList = useQuery(
+    (api as any).messages.listPendingEdits,
+    conversationId ? { conversationId } : 'skip',
+  ) as any[] | undefined;
+  const pendingEditsCount = useQuery(
+    (api as any).messages.countPendingEdits,
+    conversationId ? { conversationId } : 'skip',
+  ) as number | undefined;
+  const myPendingForSelected = useQuery(
+    (api as any).messages.getMyPendingEdit,
+    selectedMsg?._id ? { messageId: selectedMsg._id } : 'skip',
+  ) as any;
   // iter-147: canonical contract — toggleStar lives on `api.starred`,
   // NOT `api.messages`. Args require BOTH `messageId` AND
   // `conversationId` (server validates participant access).
@@ -1441,12 +1458,26 @@ export default function ChatScreen() {
     setSending(true);
     const replyToMessageId = replyTo?._id;
     const editTargetId = editingMessageId;
+    const proposeTargetId = proposingMessageId;
     setText('');
     setReplyTo(null);
     setEditingMessageId(null);
+    setProposingMessageId(null);
     resetComposerFormatting();
 
     try {
+      if (proposeTargetId) {
+        // iter-334: member proposing an edit on an "approval"-mode post.
+        setSending(false);
+        try {
+          await proposeEditMutation({ messageId: proposeTargetId, text: formattedValue });
+          callDebug.push('EDIT', `proposeEdit on ${proposeTargetId.slice(-6)}`);
+          Alert.alert('Edit suggested', 'Your suggested edit was sent to the author for approval.');
+        } catch (proposeErr: any) {
+          Alert.alert('Could not suggest edit', proposeErr?.message || 'Please try again.');
+        }
+        return;
+      }
       if (editTargetId) {
         // EDIT mode — try to update the original message in place. If the
         // backend exposes an edit mutation under any of the known names,
@@ -2840,9 +2871,40 @@ export default function ChatScreen() {
 
   const cancelEdit = useCallback(() => {
     setEditingMessageId(null);
+    setProposingMessageId(null);
     setText('');
     resetComposerFormatting();
   }, [resetComposerFormatting]);
+
+  // iter-334 (Phase 2): member suggests an edit on an "approval"-mode post.
+  const onSuggestEdit = useCallback(() => {
+    const msg = selectedMsg;
+    closeActionSheet();
+    if (!msg?._id) return;
+    if (msg.type && msg.type !== 'text') {
+      Alert.alert('Not available', 'Only text posts can be edited.');
+      return;
+    }
+    setEditingMessageId(null);
+    setProposingMessageId(String(msg._id));
+    setText(stripRichTextTags(msg.text) || '');
+    setComposerFocused(true);
+  }, [selectedMsg]);
+
+  const handleReviewEdit = useCallback(
+    async (pendingEditId: string, decision: 'approve' | 'reject') => {
+      try {
+        await reviewEditMutation({ pendingEditId, decision });
+        callDebug.push('EDIT', `reviewEdit ${decision} ${String(pendingEditId).slice(-6)}`);
+        try {
+          await refetchMessages();
+        } catch {}
+      } catch (e: any) {
+        Alert.alert('Review failed', e?.message || 'Could not review this edit.');
+      }
+    },
+    [reviewEditMutation, refetchMessages],
+  );
 
   // iter-333 (Phase 1): author opens the "Who can edit" picker for a group post.
   const onWhoCanEdit = useCallback(() => {
