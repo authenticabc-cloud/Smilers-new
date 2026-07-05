@@ -23,6 +23,7 @@ export function MessageActionSheet({
   onCopy,
   onEdit,
   onWhoCanEdit,
+  onSuggestEdit,
   onForward,
   onShare,
   onSelectMultiple,
@@ -35,12 +36,15 @@ export function MessageActionSheet({
   message: any | null;
   canEdit: boolean;
   canSetEditMode?: boolean;
+  canSuggestEdit?: boolean;
+  suggestPending?: boolean;
   onClose: () => void;
   onPickReaction: (emoji: string) => void;
   onReply: () => void;
   onCopy: () => void;
   onEdit: () => void;
   onWhoCanEdit?: () => void;
+  onSuggestEdit?: () => void;
   onForward: () => void;
   onShare: () => void;
   onSelectMultiple: () => void;
@@ -74,6 +78,14 @@ export function MessageActionSheet({
             ) : null}
             {canSetEditMode && onWhoCanEdit ? (
               <ActionRow icon="shield" lib="feather" label="Who can edit" onPress={onWhoCanEdit} />
+            ) : null}
+            {canSuggestEdit && onSuggestEdit ? (
+              <ActionRow
+                icon="edit-3"
+                lib="feather"
+                label={suggestPending ? 'Edit suggested • awaiting approval' : 'Suggest edit'}
+                onPress={onSuggestEdit}
+              />
             ) : null}
             <ActionRow icon="corner-up-right" lib="feather" label="Forward" onPress={onForward} />
             <ActionRow icon="share-2" lib="feather" label="Share" onPress={onShare} />

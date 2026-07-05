@@ -3534,6 +3534,20 @@ export default function ChatScreen() {
           <TouchableOpacity testID="chat-encryption-btn" onPress={() => router.push('/encryption' as any)} style={styles.headerIconButton}>
             <Ionicons name="shield-checkmark-outline" size={20} color={Colors.white} />
           </TouchableOpacity>
+          {pendingEditsCount && pendingEditsCount > 0 ? (
+            <TouchableOpacity
+              testID="chat-pending-edits-btn"
+              onPress={() => setShowPendingEdits(true)}
+              style={styles.headerIconButton}
+            >
+              <Feather name="edit-3" size={20} color={Colors.white} />
+              <View style={styles.pendingEditsBadge}>
+                <Text style={styles.pendingEditsBadgeText}>
+                  {pendingEditsCount > 9 ? '9+' : pendingEditsCount}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity testID="chat-menu-btn" onPress={() => setShowOptionsMenu(true)} style={styles.headerIconButton}>
             <Feather name="more-vertical" size={20} color={Colors.white} />
           </TouchableOpacity>
@@ -4039,6 +4053,21 @@ export default function ChatScreen() {
             </View>
           ) : null}
 
+          {proposingMessageId && isConversationAvailable ? (
+            <View style={styles.replyPill} testID="propose-preview-pill">
+              <View style={[styles.replyAccent, styles.editAccent]} />
+              <View style={styles.flexOne}>
+                <Text style={styles.replyLabel}>Suggesting an edit</Text>
+                <Text style={styles.replyText} numberOfLines={1}>
+                  Tap send to submit for the author's approval
+                </Text>
+              </View>
+              <TouchableOpacity onPress={cancelEdit} hitSlop={10} testID="propose-preview-close">
+                <Feather name="x" size={18} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
           {uploading ? (
             <View style={styles.uploadBar} testID="uploading-bar">
               <ActivityIndicator size="small" color={Colors.primary} />
@@ -4442,12 +4471,22 @@ export default function ChatScreen() {
             (selectedMsg?.type === 'text' || !selectedMsg?.type)
           )
         }
+        canSuggestEdit={
+          !!(
+            !isMineSelected &&
+            conversation?.type === 'group' &&
+            selectedMsg?.editMode === 'approval' &&
+            (selectedMsg?.type === 'text' || !selectedMsg?.type)
+          )
+        }
+        suggestPending={!!myPendingForSelected}
         onClose={closeActionSheet}
         onPickReaction={onPickReaction}
         onReply={onReply}
         onCopy={onCopy}
         onEdit={onEdit}
         onWhoCanEdit={onWhoCanEdit}
+        onSuggestEdit={onSuggestEdit}
         onForward={onForward}
         onShare={onShare}
         onSelectMultiple={onSelectMultiple}
@@ -4495,9 +4534,58 @@ export default function ChatScreen() {
         </Pressable>
       </Modal>
 
-      {/* iter-292: rich Message Info sheet — Read by + media consumption
-          (Played/Watched/Viewed/Opened by), mirroring the web app. */}
-      <MessageInfoSheet
+      {/* iter-334 (Phase 2): author reviews member-proposed edits. */}
+      <Modal
+        visible={showPendingEdits}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowPendingEdits(false)}
+      >
+        <Pressable style={styles.editModeBackdrop} onPress={() => setShowPendingEdits(false)}>
+          <Pressable style={styles.pendingEditsSheet} onPress={() => {}}>
+            <Text style={styles.editModeTitle}>Suggested edits</Text>
+            {!pendingEditsList || pendingEditsList.length === 0 ? (
+              <Text style={styles.pendingEditsEmpty}>No pending edits to review.</Text>
+            ) : (
+              <ScrollView style={styles.pendingEditsScroll}>
+                {pendingEditsList.map((pe: any) => (
+                  <View key={String(pe._id)} style={styles.pendingEditItem}>
+                    <Text style={styles.pendingEditProposer}>
+                      {pe.proposerName || pe.proposer?.name || 'A member'} suggests:
+                    </Text>
+                    {pe.originalText ? (
+                      <Text style={styles.pendingEditOriginal} numberOfLines={3}>
+                        {stripRichTextTags(pe.originalText)}
+                      </Text>
+                    ) : null}
+                    <Text style={styles.pendingEditProposed} numberOfLines={6}>
+                      {stripRichTextTags(pe.proposedText || pe.text || '')}
+                    </Text>
+                    <View style={styles.pendingEditActions}>
+                      <TouchableOpacity
+                        style={[styles.pendingEditBtn, styles.pendingEditReject]}
+                        onPress={() => handleReviewEdit(String(pe._id), 'reject')}
+                        testID={`pending-edit-reject-${String(pe._id).slice(-6)}`}
+                      >
+                        <Feather name="x" size={16} color={Colors.danger} />
+                        <Text style={styles.pendingEditRejectText}>Reject</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.pendingEditBtn, styles.pendingEditApprove]}
+                        onPress={() => handleReviewEdit(String(pe._id), 'approve')}
+                        testID={`pending-edit-approve-${String(pe._id).slice(-6)}`}
+                      >
+                        <Feather name="check" size={16} color={Colors.white} />
+                        <Text style={styles.pendingEditApproveText}>Approve</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
         visible={!!infoMsg}
         message={infoMsg}
         recipientCount={Math.max(0, (conversation?.participants?.length || conversation?.memberCount || 2) - 1)}
@@ -4669,6 +4757,56 @@ const styles = StyleSheet.create({
   },
   editModeOptionLabel: { fontSize: 16, fontWeight: '600', color: Colors.textPrimary },
   editModeOptionHint: { fontSize: 13, color: Colors.textMuted, marginTop: 2 },
+  pendingEditsBadge: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: Colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  pendingEditsBadgeText: { color: Colors.white, fontSize: 10, fontWeight: '700' },
+  pendingEditsSheet: {
+    backgroundColor: Colors.surface,
+    borderRadius: 16,
+    padding: 20,
+    marginHorizontal: 24,
+    maxHeight: '75%',
+  },
+  pendingEditsScroll: { marginTop: 8 },
+  pendingEditsEmpty: { fontSize: 14, color: Colors.textMuted, marginTop: 12 },
+  pendingEditItem: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  pendingEditProposer: { fontSize: 13, fontWeight: '600', color: Colors.textPrimary },
+  pendingEditOriginal: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    marginTop: 6,
+    textDecorationLine: 'line-through',
+  },
+  pendingEditProposed: { fontSize: 15, color: Colors.textPrimary, marginTop: 6 },
+  pendingEditActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 12 },
+  pendingEditBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+  },
+  pendingEditReject: { borderWidth: 1, borderColor: Colors.danger },
+  pendingEditRejectText: { color: Colors.danger, fontWeight: '600', fontSize: 14 },
+  pendingEditApprove: { backgroundColor: Colors.primary },
+  pendingEditApproveText: { color: Colors.white, fontWeight: '600', fontSize: 14 },
   // iter-169 web parity: conversation message area uses the dedicated
   // `chatWallpaper` token (#F5F1E7) instead of the app body color.
   container: { flex: 1, backgroundColor: Colors.chatWallpaper },
