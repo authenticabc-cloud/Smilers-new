@@ -100,10 +100,14 @@ export default function UserProfileScreen() {
     isAuthenticated && hasValidConversationId,
   );
 
-  // Groups in common — filter the user's conversations to groups that include
-  // the target user as a participant.
-  const { data: conversationsList } = useSafeConvexQuery<any[]>(
-    api.conversations.listConversations,
+  // Groups in common — use the SAME authoritative source as the Groups tab
+  // (api.conversations.listGroups). The old approach filtered
+  // listConversations by shape (isGroup/type/participants>2), but that query
+  // doesn't carry those flags reliably → 0 groups detected even when the
+  // viewer had many. listGroups returns the viewer's group conversations
+  // directly; GroupInCommonRow then verifies the target is a member.
+  const { data: myGroups } = useSafeConvexQuery<any[]>(
+    api.conversations.listGroups,
     {},
     [],
     isAuthenticated,
@@ -123,25 +127,13 @@ export default function UserProfileScreen() {
     return { photos, videos, files };
   }, [messagesPage]);
 
-  // Candidate groups = all of the viewer's group conversations. Membership of
-  // the *target* user can't be derived reliably from listConversations (group
-  // rows don't always carry member IDs), so each row verifies via
-  // getGroupMembers and reports back through `reportMembership`.
-  const candidateGroups = useMemo(() => {
-    if (!Array.isArray(conversationsList)) return [];
-    // iter-317: match the EXACT group-detection used by the chats list
-    // (chats.tsx L570) — groups are marked by `isGroup`, `type==='group'`, OR
-    // simply having >2 participants. Earlier filters checked only the first
-    // two, so `listConversations` (which returns groups as participant arrays)
-    // detected 0 groups → Groups-in-Common was always empty.
-    return conversationsList.filter(
-      (c: any) =>
-        c &&
-        (c.isGroup === true ||
-          c.type === 'group' ||
-          (Array.isArray(c.participants) && c.participants.length > 2)),
-    );
-  }, [conversationsList]);
+  // Candidate groups = all of the viewer's group conversations (from
+  // listGroups). Membership of the *target* user is verified per-row via
+  // getGroupMembers (group rows don't always carry member IDs).
+  const candidateGroups = useMemo(
+    () => (Array.isArray(myGroups) ? myGroups.filter((g: any) => g && g._id) : []),
+    [myGroups],
+  );
 
   // iter-324 (web-agent contract): the profile identifies people by PHONE, but
   // group member lists hold ACCOUNT IDS. The old check compared the raw route

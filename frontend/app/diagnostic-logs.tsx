@@ -125,6 +125,7 @@ export default function DiagnosticLogsScreen() {
     {},
   ) as any[] | undefined;
   const conversationsList = useQuery(api.conversations.listConversations, {}) as any[] | undefined;
+  const listGroupsData = useQuery((api as any).conversations.listGroups, {}) as any[] | undefined;
   const [localVoiceTasks, setLocalVoiceTasks] = useState<Record<string, any> | null>(null);
   useEffect(() => {
     (async () => {
@@ -202,12 +203,14 @@ export default function DiagnosticLogsScreen() {
     }
     lines.push(`device-matched: ${matched}/${shown.length} shown`);
     lines.push('');
-    lines.push('--- Group detection (listConversations) ---');
+    lines.push('--- Group detection ---');
     const convs = Array.isArray(conversationsList) ? conversationsList : [];
     const groups = convs.filter((c: any) => c && (c.isGroup === true || c.type === 'group' || (Array.isArray(c.participants) && c.participants.length > 2)));
-    lines.push(`conversations: ${convs.length} · detected groups: ${groups.length}`);
-    for (const g of groups.slice(0, 20)) {
-      lines.push(`  "${g?.name || '(no name)'}" isGroup=${g?.isGroup} type=${g?.type}`);
+    const lg = Array.isArray(listGroupsData) ? listGroupsData : [];
+    lines.push(`listConversations: ${convs.length} · shape-detected groups: ${groups.length}`);
+    lines.push(`listGroups (authoritative): ${lg.length}`);
+    for (const g of lg.slice(0, 20)) {
+      lines.push(`  "${g?.name || '(no name)'}" id=${String(g?._id || '').slice(-6)}`);
     }
     lines.push('==================================');
     return lines.join('\n');
