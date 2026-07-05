@@ -20,6 +20,7 @@ import { useMutation, useQuery, useConvex } from 'convex/react';
 import * as Clipboard from 'expo-clipboard';
 import { api } from '../../src/convexApi';
 import { lookupUserByPhone } from '../../src/lib/phoneLookup';
+import { friendlyConvexError } from '../../src/lib/friendlyError';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { savePhotoToGallery } from '../../src/lib/savePhotoToGallery';

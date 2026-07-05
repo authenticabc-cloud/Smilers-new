@@ -18,6 +18,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { buildInviteUrl, buildInviteMessage } from '../../src/lib/inviteLink';
+import { friendlyConvexError } from '../../src/lib/friendlyError';
 import { useRouter } from 'expo-router';
 import { useMutation, useQuery, useConvex } from 'convex/react';
 import * as Contacts from 'expo-contacts';
@@ -377,7 +378,7 @@ export default function ContactsScreen() {
         typeof conversation === 'string' ? conversation : conversation?._id || conversation?.conversationId;
       if (conversationId) router.push(`/chat/${conversationId}` as any);
     } catch (errorValue: any) {
-      Alert.alert('Error', errorValue?.message || 'Could not open chat');
+      Alert.alert('Could not open chat', friendlyConvexError(errorValue, 'Could not open chat'));
     }
   };
 

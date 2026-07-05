@@ -44,6 +44,7 @@ import { api } from '../src/convexApi';
 import { useAuth } from '../src/providers/AuthProvider';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { buildInviteMessage, buildInviteUrl } from '../src/lib/inviteLink';
+import { friendlyConvexError } from '../src/lib/friendlyError';
 import Header from '../src/components/Header';
 import {
   lookupUserByPhone,
@@ -205,7 +206,7 @@ export default function FindByPhoneScreen() {
           Alert.alert('Could not start chat', 'Server did not return a conversation id.');
         }
       } catch (errorValue: any) {
-        Alert.alert('Could not start chat', errorValue?.message || 'Please try again later.');
+        Alert.alert('Could not start chat', friendlyConvexError(errorValue, 'Please try again later.'));
       } finally {
         setOpening(null);
       }
