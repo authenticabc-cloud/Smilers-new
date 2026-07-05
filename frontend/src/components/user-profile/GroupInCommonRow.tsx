@@ -33,28 +33,50 @@ export default function GroupInCommonRow({
   );
   const isMember = useMemo(() => {
     const idSet = new Set((targetUserIds || []).map((id) => String(id)));
-    const idOf = (p: any) => String(p?.userId || p?._id || p?.id || '');
+    // Members from getGroupMembers come in several shapes across the backend:
+    // flat ({ userId, _id, phone }) OR nested ({ user: { _id, userId, phone } }).
+    // Collect EVERY id alias so we don't miss the account id (mirrors the
+    // resolution used in app/group/[id].tsx which handles m.user._id too).
+    const idsOf = (p: any): string[] =>
+      [
+        p?.userId,
+        p?._id,
+        p?.id,
+        p?.accountId,
+        p?.memberId,
+        p?.user?._id,
+        p?.user?.userId,
+        p?.user?.id,
+      ]
+        .filter(Boolean)
+        .map((v) => String(v));
+    const phonesOf = (p: any): any[] => [
+      p?.phoneE164,
+      p?.phone,
+      p?.user?.phoneE164,
+      p?.user?.phone,
+    ];
     // Last-9-digits key handles country-code variance (e.g. Ghana +233).
     const digitsKey = (v: any) => {
       const d = String(v || '').replace(/\D/g, '');
       return d.length >= 9 ? d.slice(-9) : '';
     };
     const targetDigits = digitsKey(targetPhoneE164);
-    const matches = (candidateId: string, phone?: any) =>
-      (candidateId && idSet.has(candidateId)) ||
-      (!!targetDigits && !!phone && digitsKey(phone) === targetDigits);
+    const matches = (m: any) => {
+      if (idsOf(m).some((cid) => idSet.has(cid))) return true;
+      if (!targetDigits) return false;
+      return phonesOf(m).some((ph) => digitsKey(ph) === targetDigits);
+    };
 
     if (Array.isArray(members) && members.length > 0) {
-      return members.some((m: any) =>
-        matches(idOf(m), m?.phoneE164 || m?.phone),
-      );
+      return members.some((m: any) => matches(m));
     }
     // Fallback to any member ids embedded on the conversation object itself.
     const ids = [
       ...(Array.isArray(conv?.participantIds) ? conv.participantIds : []),
       ...(Array.isArray(conv?.memberIds) ? conv.memberIds : []),
-      ...(Array.isArray(conv?.participants) ? conv.participants.map(idOf) : []),
-      ...(Array.isArray(conv?.members) ? conv.members.map(idOf) : []),
+      ...(Array.isArray(conv?.participants) ? conv.participants.flatMap(idsOf) : []),
+      ...(Array.isArray(conv?.members) ? conv.members.flatMap(idsOf) : []),
     ]
       .filter(Boolean)
       .map(String);
