@@ -17,6 +17,8 @@ export function MessageActionSheet({
   canSetEditMode,
   canSuggestEdit,
   suggestPending,
+  canPin,
+  isPinned,
   onClose,
   onPickReaction,
   onReply,
@@ -38,6 +40,8 @@ export function MessageActionSheet({
   canSetEditMode?: boolean;
   canSuggestEdit?: boolean;
   suggestPending?: boolean;
+  canPin?: boolean;
+  isPinned?: boolean;
   onClose: () => void;
   onPickReaction: (emoji: string) => void;
   onReply: () => void;
@@ -96,7 +100,14 @@ export function MessageActionSheet({
               label={message?.starred ? 'Unstar' : 'Star'}
               onPress={onStar}
             />
-            <ActionRow icon="bookmark" lib="feather" label="Pin" onPress={onPin} />
+            {canPin ? (
+              <ActionRow
+                icon="bookmark"
+                lib="feather"
+                label={isPinned ? 'Unpin' : 'Pin'}
+                onPress={onPin}
+              />
+            ) : null}
             <ActionRow icon="smile" lib="feather" label="More reactions" onPress={onMoreReactions} />
             <ActionRow icon="info" lib="feather" label="Message info" onPress={onMessageInfo} />
             <ActionRow icon="trash-2" lib="feather" label="Delete message" onPress={onDelete} danger />

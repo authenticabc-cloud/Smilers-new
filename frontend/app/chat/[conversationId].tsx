@@ -112,6 +112,7 @@ import { formatChatDayChip, isSameCalendarDay } from '../../src/lib/chatFormat';
 import { CallPill } from '../../src/components/chat/CallPill';
 import { RecordingPlaybackModal } from '../../src/components/chat/RecordingPlayback';
 import { EditPermissionModals } from '../../src/components/chat/EditPermissionModals';
+import { friendlyConvexError } from '../../src/lib/friendlyError';
 import { ChatOptionsMenu } from '../../src/components/chat/ChatOptionsMenu';
 import { SwipeToReply } from '../../src/components/chat/SwipeToReply';
 import { MessageActionSheet } from '../../src/components/chat/MessageActionSheet';
@@ -381,6 +382,26 @@ export default function ChatScreen() {
     canQueryConversation ? { conversationId, paginationOpts: { numItems: 50, cursor: null } } : 'skip'
   ) as any;
   const messagesLoading = canQueryConversation && messagesPage === undefined;
+  // iter-336: group pinned post. Admins (chief/admin/creator) pin or unpin;
+  // banner is visible to ALL members. Direct 1:1 chats — either person can
+  // pin. Canonical contract: conversations.pinMessage({ conversationId,
+  // messageId }) to pin/replace; omit messageId to unpin. getPinnedMessage
+  // returns the pinned message doc (or null). Admin gate via
+  // groupAdmin.getGroupAdminInfo → isAdmin.
+  const isGroupChat = conversation?.type === 'group';
+  const pinMessageMutation = useMutation((api as any).conversations?.pinMessage);
+  const pinnedMessage = useQuery(
+    (api as any).conversations?.getPinnedMessage,
+    canQueryConversation ? { conversationId } : 'skip',
+  ) as any;
+  const groupAdminInfo = useQuery(
+    (api as any).groupAdmin?.getGroupAdminInfo,
+    canQueryConversation && isGroupChat ? { conversationId } : 'skip',
+  ) as any;
+  const canPinMessages = isGroupChat ? !!groupAdminInfo?.isAdmin : true;
+  const pinnedMessageId = pinnedMessage
+    ? String(pinnedMessage._id || pinnedMessage.messageId || pinnedMessage.message?._id || '')
+    : '';
   // iter 156: call-log pills in chat timeline (per Smilers web parity).
   // Backed by canonical contract api.calls.listCallLogsForConversation.
   // iter-180: switched from one-shot useSafeConvexQuery to a LIVE
@@ -2742,81 +2763,41 @@ export default function ChatScreen() {
     const msg = selectedMsg;
     if (!msg) return;
     closeActionSheet();
-    // Probe multiple backend endpoint names — different Convex deployments
-    // expose pin under different names. Stop at the first success.
-    const candidates: { label: string; run: () => Promise<unknown> }[] = [
-      {
-        label: 'messages.togglePin',
-        run: () => (api as any).messages.togglePin
-          ? (api as any).messages.togglePin({ messageId: msg._id })
-          : Promise.reject(new Error('CouldNotFindFunction')),
-      },
-      {
-        label: 'messages.pinMessage',
-        run: () => (api as any).messages.pinMessage
-          ? (api as any).messages.pinMessage({ messageId: msg._id })
-          : Promise.reject(new Error('CouldNotFindFunction')),
-      },
-      {
-        label: 'messages.pin',
-        run: () => (api as any).messages.pin
-          ? (api as any).messages.pin({ messageId: msg._id })
-          : Promise.reject(new Error('CouldNotFindFunction')),
-      },
-      {
-        label: 'conversations.pinMessage',
-        run: () => (api as any).conversations?.pinMessage
-          ? (api as any).conversations.pinMessage({
-              conversationId,
-              messageId: msg._id,
-            })
-          : Promise.reject(new Error('CouldNotFindFunction')),
-      },
-    ];
-    let lastError: any = null;
-    let pinned = false;
-    for (const candidate of candidates) {
-      try {
-        await candidate.run();
-        pinned = true;
-        break;
-      } catch (errorValue: any) {
-        lastError = errorValue;
-        const message = String(errorValue?.message || '');
-        // Try the next variant only when the function literally
-        // doesn't exist — permission / validation errors must NOT
-        // fall through (we'd accidentally pin via a different path).
-        if (
-          !message.includes('CouldNotFindFunction') &&
-          !message.toLowerCase().includes('not found')
-        ) {
-          break;
-        }
-      }
-    }
-    if (pinned) {
-      Alert.alert('Pinned', 'This message will appear at the top of the chat.');
+    // iter-336: canonical group pinned-post contract. In groups only admins
+    // may pin/unpin (the server enforces this too); 1:1 chats allow either
+    // participant. Pinning replaces any existing pin (one per chat).
+    if (!canPinMessages) {
+      Alert.alert('Only admins can pin', 'Ask a group admin to pin or unpin posts.');
       return;
     }
-    // Best-effort local fallback so the user gets an actionable response
-    // even when the backend hasn't shipped any of the known mutations.
-    // We just store the id in AsyncStorage keyed by conversationId — a
-    // future iteration can wire this into the conversation header banner.
+    const isCurrentlyPinned = !!pinnedMessageId && pinnedMessageId === String(msg._id);
     try {
-      const key = `smilers_local_pinned_${conversationId}`;
-      const list = ((await readStoredJson(key, [])) as string[]) || [];
-      const next = Array.isArray(list)
-        ? Array.from(new Set([...list, String(msg._id)]))
-        : [String(msg._id)];
-      await writeStoredJson(key, next);
-    } catch {
-      /* swallow */
+      if (isCurrentlyPinned) {
+        // Unpin — omit messageId.
+        await pinMessageMutation({ conversationId });
+        callDebug.push('PIN', `unpin ${String(msg._id).slice(-6)}`);
+      } else {
+        // Pin / replace the current pin.
+        await pinMessageMutation({ conversationId, messageId: msg._id });
+        callDebug.push('PIN', `pin ${String(msg._id).slice(-6)}`);
+      }
+    } catch (e: any) {
+      Alert.alert(
+        isCurrentlyPinned ? 'Could not unpin' : 'Could not pin',
+        friendlyConvexError(e, 'Please try again.'),
+      );
     }
-    Alert.alert(
-      'Pinned on this device',
-      'Pin will sync across your devices once the backend deploys the pin endpoint.',
-    );
-  }, [selectedMsg, conversationId]);
+  }, [selectedMsg, conversationId, canPinMessages, pinnedMessageId, pinMessageMutation]);
+
+  // iter-336: unpin from the pinned banner (admins in groups; either in 1:1).
+  const onUnpinBanner = useCallback(async () => {
+    try {
+      await pinMessageMutation({ conversationId });
+      callDebug.push('PIN', 'unpin via banner');
+    } catch (e: any) {
+      Alert.alert('Could not unpin', friendlyConvexError(e, 'Please try again.'));
+    }
+  }, [conversationId, pinMessageMutation]);
 
   const onSelectMultiple = useCallback(() => {
     const msg = selectedMsg;
@@ -3616,6 +3597,30 @@ export default function ChatScreen() {
           </View>
         );
       })()}
+
+      {/* iter-336: group pinned post banner — visible to ALL members.
+          Admins (and either party in 1:1) get an unpin (✕) affordance. */}
+      {pinnedMessage ? (
+        <View style={styles.pinnedBanner} testID="chat-pinned-banner">
+          <Feather name="bookmark" size={16} color={Colors.primary} />
+          <View style={styles.flexOne}>
+            <Text style={styles.pinnedBannerLabel}>Pinned message</Text>
+            <Text style={styles.pinnedBannerText} numberOfLines={1}>
+              {(() => {
+                const p = pinnedMessage.message || pinnedMessage;
+                const t = stripRichTextTags(p?.text);
+                if (t) return t;
+                return previewForMessageType(p?.type, typeof p?.text === 'string' ? p.text : null);
+              })()}
+            </Text>
+          </View>
+          {canPinMessages ? (
+            <TouchableOpacity onPress={onUnpinBanner} hitSlop={10} testID="chat-unpin-btn">
+              <Feather name="x" size={18} color={Colors.textSecondary} />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
 
       {/* iter-109 → iter-111: in-chat search bar — slides in below the
           header when the search button is tapped. Live-filters the
@@ -4495,6 +4500,8 @@ export default function ChatScreen() {
           )
         }
         suggestPending={!!myPendingForSelected}
+        canPin={canPinMessages}
+        isPinned={!!pinnedMessageId && pinnedMessageId === String(selectedMsg?._id || '')}
         onClose={closeActionSheet}
         onPickReaction={onPickReaction}
         onReply={onReply}
@@ -4687,6 +4694,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 3,
   },
   pendingEditsBadgeText: { color: Colors.white, fontSize: 10, fontWeight: '700' },
+  pinnedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    backgroundColor: '#FFF7E6',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  pinnedBannerLabel: { fontSize: 11, fontWeight: '700', color: Colors.primary },
+  pinnedBannerText: { fontSize: 14, color: Colors.textPrimary, marginTop: 1 },
   // iter-169 web parity: conversation message area uses the dedicated
   // `chatWallpaper` token (#F5F1E7) instead of the app body color.
   container: { flex: 1, backgroundColor: Colors.chatWallpaper },

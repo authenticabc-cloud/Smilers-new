@@ -1071,3 +1071,9 @@ compiles; Sign-In renders. Native-only — verify on EAS device build.
 - pickVideo (gallery) now sends fileName+fileSize via getMediaMeta (was missed; only recordVideo had it).
 - MediaBubble receiver purge now triggers on isDeleted too (local file corruption on delete-for-everyone).
 - Backend Server Errors noted (NOT mobile): conference:toggleSelfMute, messages:setTranscription — web-team Convex fns.
+
+## Group Pinned Post (Admin-gated) — iter-336
+- Groups: only admins (chief admin / any admin / creator, via `groupAdmin.getGroupAdminInfo.isAdmin`) can pin/unpin; regular members don't see pin controls. Direct 1:1: either party can pin.
+- One pinned post per chat — pinning replaces the previous; unpinning clears it. Banner (`getPinnedMessage`) shows at top of chat, visible to all members; admins get an unpin (✕) affordance.
+- Canonical contract: `conversations.pinMessage({ conversationId, messageId })` pin/replace; `conversations.pinMessage({ conversationId })` unpin; `conversations.getPinnedMessage({ conversationId })` read banner.
+- Files: `app/chat/[conversationId].tsx` (queries, onPin/onUnpinBanner, banner), `src/components/chat/MessageActionSheet.tsx` (canPin/isPinned → Pin/Unpin row).
