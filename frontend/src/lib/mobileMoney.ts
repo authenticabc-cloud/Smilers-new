@@ -71,6 +71,14 @@ export function currencyForCountry(code: string): string {
   return MOBILE_MONEY_COUNTRIES.find((c) => c.code === code)?.currency || '';
 }
 
+/** Ad-click price (EUR per paid click) — mirrors the web app. */
+export const AD_CLICK_PRICE_EUR = 0.04;
+
+/** ≈ estimate for buying `clicks` paid ad clicks, in local currency. */
+export function estimateAdClicksAmount(clicks: number, currency: string): number {
+  return estimateLocalAmount(clicks * AD_CLICK_PRICE_EUR, currency);
+}
+
 /** Compact money label, e.g. "KES 3,360" or "GHS 48.00". */
 export function formatLocalAmount(amount: number, currency: string): string {
   const zero = ZERO_DECIMAL_CURRENCIES.includes(currency);
