@@ -400,6 +400,22 @@ export default function PremiumPage() {
                 </>
               )}
             </TouchableOpacity>
+
+            {/* iter-339: manual Mobile Money alternative to card checkout. */}
+            <TouchableOpacity
+              style={styles.mobileMoneyBtn}
+              onPress={() =>
+                router.push({
+                  pathname: '/mobile-money',
+                  params: { variantId: selectedPlan.variantId },
+                } as any)
+              }
+              activeOpacity={0.85}
+              testID="premium-mobile-money"
+            >
+              <MaterialCommunityIcons name="cellphone" size={19} color={Colors.primary} />
+              <Text style={styles.mobileMoneyBtnText}>Pay with Mobile Money</Text>
+            </TouchableOpacity>
           </>
         ) : null}
 
@@ -630,6 +646,18 @@ const styles = StyleSheet.create({
   },
   subscribeBtnLoading: { opacity: 0.85 },
   subscribeBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: '#3D2A00' },
+  mobileMoneyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    marginTop: 12,
+    borderRadius: Radius.md,
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+  },
+  mobileMoneyBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.primary },
 
   // Includes
   includesList: { gap: 10 },
