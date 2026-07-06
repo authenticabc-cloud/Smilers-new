@@ -29,7 +29,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useAction, useMutation } from 'convex/react';
+import { useAction, useMutation, useQuery } from 'convex/react';
 import * as WebBrowser from 'expo-web-browser';
 import * as ExpoLinking from 'expo-linking';
 import { api } from '../src/convexApi';
@@ -139,6 +139,9 @@ export default function PremiumPage() {
   const checkoutAction = useAction(
     (api as any).premiumAction?.checkoutPremium,
   );
+  // iter-340: quick status entry — the user's own mobile-money requests.
+  const myMoneyRequests = useQuery((api as any).mobileMoneyRequests?.getMyRequests, {}) as any[] | undefined;
+  const latestMoneyReq = Array.isArray(myMoneyRequests) && myMoneyRequests.length > 0 ? myMoneyRequests[0] : null;
 
   useEffect(() => {
     if (success === 'true') {
@@ -419,6 +422,25 @@ export default function PremiumPage() {
           </>
         ) : null}
 
+        {/* iter-340: quick access to the user's mobile-money request status. */}
+        {latestMoneyReq ? (
+          <TouchableOpacity
+            style={styles.myMoneyRow}
+            onPress={() => router.push('/mobile-money' as any)}
+            activeOpacity={0.7}
+            testID="premium-my-money-requests"
+          >
+            <MaterialCommunityIcons name="cellphone-check" size={20} color={Colors.primary} />
+            <View style={styles.flexOne}>
+              <Text style={styles.myMoneyTitle}>Your mobile money requests</Text>
+              <Text style={styles.myMoneySub} numberOfLines={1}>
+                Latest: {latestMoneyReq.planLabel || latestMoneyReq.variantId} · {String(latestMoneyReq.status).charAt(0).toUpperCase() + String(latestMoneyReq.status).slice(1)}
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={18} color={Colors.textSecondary} />
+          </TouchableOpacity>
+        ) : null}
+
         {/* Premium includes section (always shown) */}
         <Text style={[styles.sectionLabel, { marginTop: Spacing.xl }]}>PREMIUM INCLUDES</Text>
         <View style={styles.includesList}>
@@ -658,6 +680,21 @@ const styles = StyleSheet.create({
     borderColor: Colors.primary,
   },
   mobileMoneyBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.primary },
+  flexOne: { flex: 1 },
+  myMoneyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.border,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    marginTop: Spacing.lg,
+  },
+  myMoneyTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  myMoneySub: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
 
   // Includes
   includesList: { gap: 10 },
