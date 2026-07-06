@@ -1,0 +1,2416 @@
+diff --git a/frontend/app/(tabs)/contacts.tsx b/frontend/app/(tabs)/contacts.tsx
+index 3e77ad2f..9e83e330 100644
+--- a/frontend/app/(tabs)/contacts.tsx
++++ b/frontend/app/(tabs)/contacts.tsx
+@@ -18,6 +18,7 @@ import {
+ import { SafeAreaView } from 'react-native-safe-area-context';
+ import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+ import { buildInviteUrl, buildInviteMessage } from '../../src/lib/inviteLink';
++import { friendlyConvexError } from '../../src/lib/friendlyError';
+ import { useRouter } from 'expo-router';
+ import { useMutation, useQuery, useConvex } from 'convex/react';
+ import * as Contacts from 'expo-contacts';
+@@ -377,7 +378,7 @@ export default function ContactsScreen() {
+         typeof conversation === 'string' ? conversation : conversation?._id || conversation?.conversationId;
+       if (conversationId) router.push(`/chat/${conversationId}` as any);
+     } catch (errorValue: any) {
+-      Alert.alert('Error', errorValue?.message || 'Could not open chat');
++      Alert.alert('Could not open chat', friendlyConvexError(errorValue, 'Could not open chat'));
+     }
+   };
+ 
+diff --git a/frontend/app/admin.tsx b/frontend/app/admin.tsx
+index 048401d5..8113a8f7 100644
+--- a/frontend/app/admin.tsx
++++ b/frontend/app/admin.tsx
+@@ -18,12 +18,13 @@ import { Ionicons } from '@expo/vector-icons';
+ import { useRouter } from 'expo-router';
+ import { useMutation } from 'convex/react';
+ import Header from '../src/components/Header';
++import { MobileMoneyAdmin } from '../src/components/admin/MobileMoneyAdmin';
+ import { api } from '../src/convexApi';
+ import { useAuth } from '../src/providers/AuthProvider';
+ import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+ import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
+ 
+-type Tab = 'overview' | 'users' | 'reports' | 'ads' | 'devotions' | 'premium' | 'activity';
++type Tab = 'overview' | 'users' | 'reports' | 'ads' | 'devotions' | 'premium' | 'payments' | 'activity';
+ type AdsSubTab = 'review' | 'codes';
+ 
+ // iter-136: canonical shape returned by `api.admin.queries.getStats`
+@@ -178,6 +179,13 @@ export default function AdminDashboard() {
+     refetch: refetchDevReports,
+     loading: devReportsLoading,
+   } = useSafeConvexQuery<DevReportItem[]>(api.devotionals.listPendingReports, {}, [], isAdmin);
++  // iter-339: pending mobile-money payment requests (badge + Payments tab).
++  const { data: pendingMoneyCount } = useSafeConvexQuery<number>(
++    (api as any).mobileMoneyRequests?.countPendingRequests,
++    {},
++    0,
++    isAdmin,
++  );
+ 
+   // Mutations — iter-140b: canonical names.
+   // `updateUserRole({ userId, role })` replaces the old `setRole`. The
+@@ -415,6 +423,7 @@ export default function AdminDashboard() {
+     { key: 'ads', label: 'Ads', icon: 'megaphone-outline', badge: pendingAds?.length },
+     { key: 'devotions', label: 'Devotions', icon: 'book-outline', badge: pendingDevReports?.length },
+     { key: 'premium', label: 'Premium', icon: 'star-outline' },
++    { key: 'payments', label: 'Payments', icon: 'cash-outline', badge: pendingMoneyCount || undefined },
+     { key: 'activity', label: 'Activity', icon: 'pulse-outline' },
+   ];
+ 
+@@ -499,6 +508,7 @@ export default function AdminDashboard() {
+           />
+         ) : null}
+         {tab === 'premium' ? <PremiumTab isAdmin={isAdmin} /> : null}
++        {tab === 'payments' ? <MobileMoneyAdmin /> : null}
+         {tab === 'activity' ? <ActivityTab isAdmin={isAdmin} /> : null}
+         {tab === 'devotions' ? (
+           <DevotionsTab
+diff --git a/frontend/app/chat/[conversationId].tsx b/frontend/app/chat/[conversationId].tsx
+index de2a29a2..88bd6b1e 100644
+--- a/frontend/app/chat/[conversationId].tsx
++++ b/frontend/app/chat/[conversationId].tsx
+@@ -8,7 +8,9 @@ import {
+   InteractionManager,
+   Keyboard,
+   KeyboardAvoidingView,
++  Modal,
+   Platform,
++  Pressable,
+   ScrollView,
+   StyleSheet,
+   Text,
+@@ -75,7 +77,7 @@ import { appendDiaryEntry, chatMessageToDiaryEntry } from '../../src/lib/diarySt
+ import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
+ import { notifyEventPush, previewForMessageType } from '../../src/lib/notifyPush';
+ import { reportConvexUserIdForPush } from '../../src/push/useEmergentPush';
+-import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
++import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName, getResolvedDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
+ import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
+ import { getLanguageByCode } from '../../src/lib/languages';
+ import {
+@@ -109,6 +111,8 @@ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src
+ import { formatChatDayChip, isSameCalendarDay } from '../../src/lib/chatFormat';
+ import { CallPill } from '../../src/components/chat/CallPill';
+ import { RecordingPlaybackModal } from '../../src/components/chat/RecordingPlayback';
++import { EditPermissionModals } from '../../src/components/chat/EditPermissionModals';
++import { friendlyConvexError } from '../../src/lib/friendlyError';
+ import { ChatOptionsMenu } from '../../src/components/chat/ChatOptionsMenu';
+ import { SwipeToReply } from '../../src/components/chat/SwipeToReply';
+ import { MessageActionSheet } from '../../src/components/chat/MessageActionSheet';
+@@ -378,6 +382,26 @@ export default function ChatScreen() {
+     canQueryConversation ? { conversationId, paginationOpts: { numItems: 50, cursor: null } } : 'skip'
+   ) as any;
+   const messagesLoading = canQueryConversation && messagesPage === undefined;
++  // iter-336: group pinned post. Admins (chief/admin/creator) pin or unpin;
++  // banner is visible to ALL members. Direct 1:1 chats — either person can
++  // pin. Canonical contract: conversations.pinMessage({ conversationId,
++  // messageId }) to pin/replace; omit messageId to unpin. getPinnedMessage
++  // returns the pinned message doc (or null). Admin gate via
++  // groupAdmin.getGroupAdminInfo → isAdmin.
++  const isGroupChat = conversation?.type === 'group';
++  const pinMessageMutation = useMutation((api as any).conversations?.pinMessage);
++  const pinnedMessage = useQuery(
++    (api as any).conversations?.getPinnedMessage,
++    canQueryConversation ? { conversationId } : 'skip',
++  ) as any;
++  const groupAdminInfo = useQuery(
++    (api as any).groupAdmin?.getGroupAdminInfo,
++    canQueryConversation && isGroupChat ? { conversationId } : 'skip',
++  ) as any;
++  const canPinMessages = isGroupChat ? !!groupAdminInfo?.isAdmin : true;
++  const pinnedMessageId = pinnedMessage
++    ? String(pinnedMessage._id || pinnedMessage.messageId || pinnedMessage.message?._id || '')
++    : '';
+   // iter 156: call-log pills in chat timeline (per Smilers web parity).
+   // Backed by canonical contract api.calls.listCallLogsForConversation.
+   // iter-180: switched from one-shot useSafeConvexQuery to a LIVE
+@@ -416,6 +440,26 @@ export default function ChatScreen() {
+   // iter-176: device address-book name takes priority for the chat
+   // header title (1:1 chats only — group titles are untouched).
+   const deviceContactIndex = useDeviceContactIndex();
++  // iter-337: resolve a group message sender's display name. Device address-
++  // book name takes priority (matched via the viewer's saved contact record,
++  // which carries the phone), falling back to the Smilers/Google account name
++  // the message already carries. Mirrors group/[id].tsx's displayNameForMember.
++  const resolveSenderName = useCallback(
++    (senderId: any, fallbackName?: string): string => {
++      const uid = String(senderId || '');
++      const fb = (fallbackName && String(fallbackName).trim()) || 'Member';
++      const record = getSavedContactRecord(contacts, { userId: uid });
++      const base = record || {};
++      return getResolvedDisplayName(
++        { ...base, name: base.name || fb, displayName: base.displayName || fb },
++        deviceContactIndex,
++        lookupDeviceContactName,
++        fb,
++      );
++    },
++    [contacts, deviceContactIndex],
++  );
++
+   const refetchMessages = useCallback(async () => {}, []);
+   const { data: conversationsForForward } = useSafeConvexQuery<any[]>(
+     api.conversations.listConversations,
+@@ -726,6 +770,26 @@ export default function ChatScreen() {
+   const editMessage = useMutation((api as any).messages.editMessage);
+   const updateMessage = useMutation((api as any).messages.updateMessage);
+   const editTextMutation = useMutation((api as any).messages.editText);
++  // iter-333 group-post edit permissions (Phase 1). mode ∈ owner|open|approval.
++  const setEditModeMutation = useMutation((api as any).messages.setEditMode);
++  const [editModeTarget, setEditModeTarget] = useState<any | null>(null);
++  // iter-334 (Phase 2): propose / review edit workflow for "approval" mode.
++  const proposeEditMutation = useMutation((api as any).messages.proposeEdit);
++  const reviewEditMutation = useMutation((api as any).messages.reviewEdit);
++  const [proposingMessageId, setProposingMessageId] = useState<string | null>(null);
++  const [showPendingEdits, setShowPendingEdits] = useState(false);
++  const pendingEditsList = useQuery(
++    (api as any).messages.listPendingEdits,
++    conversationId ? { conversationId } : 'skip',
++  ) as any[] | undefined;
++  const pendingEditsCount = useQuery(
++    (api as any).messages.countPendingEdits,
++    conversationId ? { conversationId } : 'skip',
++  ) as number | undefined;
++  const myPendingForSelected = useQuery(
++    (api as any).messages.getMyPendingEdit,
++    selectedMsg?._id ? { messageId: selectedMsg._id } : 'skip',
++  ) as any;
+   // iter-147: canonical contract — toggleStar lives on `api.starred`,
+   // NOT `api.messages`. Args require BOTH `messageId` AND
+   // `conversationId` (server validates participant access).
+@@ -1438,12 +1502,26 @@ export default function ChatScreen() {
+     setSending(true);
+     const replyToMessageId = replyTo?._id;
+     const editTargetId = editingMessageId;
++    const proposeTargetId = proposingMessageId;
+     setText('');
+     setReplyTo(null);
+     setEditingMessageId(null);
++    setProposingMessageId(null);
+     resetComposerFormatting();
+ 
+     try {
++      if (proposeTargetId) {
++        // iter-334: member proposing an edit on an "approval"-mode post.
++        setSending(false);
++        try {
++          await proposeEditMutation({ messageId: proposeTargetId, text: formattedValue });
++          callDebug.push('EDIT', `proposeEdit on ${proposeTargetId.slice(-6)}`);
++          Alert.alert('Edit suggested', 'Your suggested edit was sent to the author for approval.');
++        } catch (proposeErr: any) {
++          Alert.alert('Could not suggest edit', proposeErr?.message || 'Please try again.');
++        }
++        return;
++      }
+       if (editTargetId) {
+         // EDIT mode — try to update the original message in place. If the
+         // backend exposes an edit mutation under any of the known names,
+@@ -2705,81 +2783,41 @@ export default function ChatScreen() {
+     const msg = selectedMsg;
+     if (!msg) return;
+     closeActionSheet();
+-    // Probe multiple backend endpoint names — different Convex deployments
+-    // expose pin under different names. Stop at the first success.
+-    const candidates: { label: string; run: () => Promise<unknown> }[] = [
+-      {
+-        label: 'messages.togglePin',
+-        run: () => (api as any).messages.togglePin
+-          ? (api as any).messages.togglePin({ messageId: msg._id })
+-          : Promise.reject(new Error('CouldNotFindFunction')),
+-      },
+-      {
+-        label: 'messages.pinMessage',
+-        run: () => (api as any).messages.pinMessage
+-          ? (api as any).messages.pinMessage({ messageId: msg._id })
+-          : Promise.reject(new Error('CouldNotFindFunction')),
+-      },
+-      {
+-        label: 'messages.pin',
+-        run: () => (api as any).messages.pin
+-          ? (api as any).messages.pin({ messageId: msg._id })
+-          : Promise.reject(new Error('CouldNotFindFunction')),
+-      },
+-      {
+-        label: 'conversations.pinMessage',
+-        run: () => (api as any).conversations?.pinMessage
+-          ? (api as any).conversations.pinMessage({
+-              conversationId,
+-              messageId: msg._id,
+-            })
+-          : Promise.reject(new Error('CouldNotFindFunction')),
+-      },
+-    ];
+-    let lastError: any = null;
+-    let pinned = false;
+-    for (const candidate of candidates) {
+-      try {
+-        await candidate.run();
+-        pinned = true;
+-        break;
+-      } catch (errorValue: any) {
+-        lastError = errorValue;
+-        const message = String(errorValue?.message || '');
+-        // Try the next variant only when the function literally
+-        // doesn't exist — permission / validation errors must NOT
+-        // fall through (we'd accidentally pin via a different path).
+-        if (
+-          !message.includes('CouldNotFindFunction') &&
+-          !message.toLowerCase().includes('not found')
+-        ) {
+-          break;
+-        }
+-      }
+-    }
+-    if (pinned) {
+-      Alert.alert('Pinned', 'This message will appear at the top of the chat.');
++    // iter-336: canonical group pinned-post contract. In groups only admins
++    // may pin/unpin (the server enforces this too); 1:1 chats allow either
++    // participant. Pinning replaces any existing pin (one per chat).
++    if (!canPinMessages) {
++      Alert.alert('Only admins can pin', 'Ask a group admin to pin or unpin posts.');
+       return;
+     }
+-    // Best-effort local fallback so the user gets an actionable response
+-    // even when the backend hasn't shipped any of the known mutations.
+-    // We just store the id in AsyncStorage keyed by conversationId — a
+-    // future iteration can wire this into the conversation header banner.
++    const isCurrentlyPinned = !!pinnedMessageId && pinnedMessageId === String(msg._id);
++    try {
++      if (isCurrentlyPinned) {
++        // Unpin — omit messageId.
++        await pinMessageMutation({ conversationId });
++        callDebug.push('PIN', `unpin ${String(msg._id).slice(-6)}`);
++      } else {
++        // Pin / replace the current pin.
++        await pinMessageMutation({ conversationId, messageId: msg._id });
++        callDebug.push('PIN', `pin ${String(msg._id).slice(-6)}`);
++      }
++    } catch (e: any) {
++      Alert.alert(
++        isCurrentlyPinned ? 'Could not unpin' : 'Could not pin',
++        friendlyConvexError(e, 'Please try again.'),
++      );
++    }
++  }, [selectedMsg, conversationId, canPinMessages, pinnedMessageId, pinMessageMutation]);
++
++  // iter-336: unpin from the pinned banner (admins in groups; either in 1:1).
++  const onUnpinBanner = useCallback(async () => {
+     try {
+-      const key = `smilers_local_pinned_${conversationId}`;
+-      const list = ((await readStoredJson(key, [])) as string[]) || [];
+-      const next = Array.isArray(list)
+-        ? Array.from(new Set([...list, String(msg._id)]))
+-        : [String(msg._id)];
+-      await writeStoredJson(key, next);
+-    } catch {
+-      /* swallow */
++      await pinMessageMutation({ conversationId });
++      callDebug.push('PIN', 'unpin via banner');
++    } catch (e: any) {
++      Alert.alert('Could not unpin', friendlyConvexError(e, 'Please try again.'));
+     }
+-    Alert.alert(
+-      'Pinned on this device',
+-      'Pin will sync across your devices once the backend deploys the pin endpoint.',
+-    );
+-  }, [selectedMsg, conversationId]);
++  }, [conversationId, pinMessageMutation]);
+ 
+   const onSelectMultiple = useCallback(() => {
+     const msg = selectedMsg;
+@@ -2837,10 +2875,79 @@ export default function ChatScreen() {
+ 
+   const cancelEdit = useCallback(() => {
+     setEditingMessageId(null);
++    setProposingMessageId(null);
+     setText('');
+     resetComposerFormatting();
+   }, [resetComposerFormatting]);
+ 
++  // iter-334 (Phase 2): member suggests an edit on an "approval"-mode post.
++  const onSuggestEdit = useCallback(() => {
++    const msg = selectedMsg;
++    closeActionSheet();
++    if (!msg?._id) return;
++    if (msg.type && msg.type !== 'text') {
++      Alert.alert('Not available', 'Only text posts can be edited.');
++      return;
++    }
++    setEditingMessageId(null);
++    setProposingMessageId(String(msg._id));
++    setText(stripRichTextTags(msg.text) || '');
++    setComposerFocused(true);
++  }, [selectedMsg]);
++
++  const handleReviewEdit = useCallback(
++    async (pendingEditId: string, decision: 'approve' | 'reject', proposerName?: string) => {
++      try {
++        await reviewEditMutation({ pendingEditId, decision });
++        callDebug.push('EDIT', `reviewEdit ${decision} ${String(pendingEditId).slice(-6)}`);
++        // Post a lightweight, human-readable notice so the whole group sees
++        // the outcome (syncs to web + native via a normal text message).
++        if (decision === 'approve' && conversationId) {
++          const who = (proposerName && proposerName.trim()) || 'A member';
++          try {
++            await sendMessage({
++              conversationId,
++              type: 'text',
++              text: `✏️ ${who}'s suggested edit was approved`,
++            });
++          } catch {}
++        }
++        try {
++          await refetchMessages();
++        } catch {}
++      } catch (e: any) {
++        Alert.alert('Review failed', e?.message || 'Could not review this edit.');
++      }
++    },
++    [reviewEditMutation, refetchMessages, sendMessage, conversationId],
++  );
++
++  // iter-333 (Phase 1): author opens the "Who can edit" picker for a group post.
++  const onWhoCanEdit = useCallback(() => {
++    const msg = selectedMsg;
++    closeActionSheet();
++    if (!msg?._id) return;
++    setEditModeTarget(msg);
++  }, [selectedMsg]);
++
++  const applyEditMode = useCallback(
++    async (mode: 'owner' | 'open' | 'approval') => {
++      const msg = editModeTarget;
++      setEditModeTarget(null);
++      if (!msg?._id) return;
++      try {
++        await setEditModeMutation({ messageId: msg._id, mode });
++        callDebug.push('EDIT', `setEditMode=${mode} on ${String(msg._id).slice(-6)}`);
++        try {
++          await refetchMessages();
++        } catch {}
++      } catch (e: any) {
++        Alert.alert('Could not update', e?.message || 'Failed to change edit permissions.');
++      }
++    },
++    [editModeTarget, setEditModeMutation, refetchMessages],
++  );
++
+   /**
+    * Attempt to call any of the known edit mutations the backend may expose.
+    * Different Convex deployments use different function names — try each
+@@ -3443,6 +3550,20 @@ export default function ChatScreen() {
+           <TouchableOpacity testID="chat-encryption-btn" onPress={() => router.push('/encryption' as any)} style={styles.headerIconButton}>
+             <Ionicons name="shield-checkmark-outline" size={20} color={Colors.white} />
+           </TouchableOpacity>
++          {pendingEditsCount && pendingEditsCount > 0 ? (
++            <TouchableOpacity
++              testID="chat-pending-edits-btn"
++              onPress={() => setShowPendingEdits(true)}
++              style={styles.headerIconButton}
++            >
++              <Feather name="edit-3" size={20} color={Colors.white} />
++              <View style={styles.pendingEditsBadge}>
++                <Text style={styles.pendingEditsBadgeText}>
++                  {pendingEditsCount > 9 ? '9+' : pendingEditsCount}
++                </Text>
++              </View>
++            </TouchableOpacity>
++          ) : null}
+           <TouchableOpacity testID="chat-menu-btn" onPress={() => setShowOptionsMenu(true)} style={styles.headerIconButton}>
+             <Feather name="more-vertical" size={20} color={Colors.white} />
+           </TouchableOpacity>
+@@ -3497,6 +3618,35 @@ export default function ChatScreen() {
+         );
+       })()}
+ 
++      {/* iter-336: group pinned post banner — visible to ALL members.
++          Admins (and either party in 1:1) get an unpin (✕) affordance. */}
++      {pinnedMessage ? (
++        <View style={styles.pinnedBanner} testID="chat-pinned-banner">
++          <Feather name="bookmark" size={16} color={Colors.primary} />
++          <TouchableOpacity
++            style={styles.flexOne}
++            activeOpacity={0.7}
++            onPress={() => jumpToMessage(pinnedMessageId)}
++            testID="chat-pinned-banner-jump"
++          >
++            <Text style={styles.pinnedBannerLabel}>Pinned message</Text>
++            <Text style={styles.pinnedBannerText} numberOfLines={1}>
++              {(() => {
++                const p = pinnedMessage.message || pinnedMessage;
++                const t = stripRichTextTags(p?.text);
++                if (t) return t;
++                return previewForMessageType(p?.type, typeof p?.text === 'string' ? p.text : null);
++              })()}
++            </Text>
++          </TouchableOpacity>
++          {canPinMessages ? (
++            <TouchableOpacity onPress={onUnpinBanner} hitSlop={10} testID="chat-unpin-btn">
++              <Feather name="x" size={18} color={Colors.textSecondary} />
++            </TouchableOpacity>
++          ) : null}
++        </View>
++      ) : null}
++
+       {/* iter-109 → iter-111: in-chat search bar — slides in below the
+           header when the search button is tapped. Live-filters the
+           message list by case-insensitive substring match. Kept as a
+@@ -3782,6 +3932,11 @@ export default function ChatScreen() {
+                       msg={item}
+                       isMine={item.senderId === effectiveMe?._id}
+                       myUserId={effectiveMe?._id}
++                      senderDisplayName={
++                        isGroupChat && item.senderId !== effectiveMe?._id
++                          ? resolveSenderName(item.senderId, item.senderName)
++                          : undefined
++                      }
+                       parentMsg={parentMsg}
+                       onPressParent={parentMsg ? () => jumpToMessage(parentId) : undefined}
+                       isJumpHighlighted={jumpHighlightId === String(item._id)}
+@@ -3948,6 +4103,21 @@ export default function ChatScreen() {
+             </View>
+           ) : null}
+ 
++          {proposingMessageId && isConversationAvailable ? (
++            <View style={styles.replyPill} testID="propose-preview-pill">
++              <View style={[styles.replyAccent, styles.editAccent]} />
++              <View style={styles.flexOne}>
++                <Text style={styles.replyLabel}>Suggesting an edit</Text>
++                <Text style={styles.replyText} numberOfLines={1}>
++                  Tap send to submit for the author's approval
++                </Text>
++              </View>
++              <TouchableOpacity onPress={cancelEdit} hitSlop={10} testID="propose-preview-close">
++                <Feather name="x" size={18} color={Colors.textSecondary} />
++              </TouchableOpacity>
++            </View>
++          ) : null}
++
+           {uploading ? (
+             <View style={styles.uploadBar} testID="uploading-bar">
+               <ActivityIndicator size="small" color={Colors.primary} />
+@@ -4338,12 +4508,37 @@ export default function ChatScreen() {
+ 
+       <MessageActionSheet
+         message={selectedMsg}
+-        canEdit={!!(isMineSelected && (selectedMsg?.type === 'text' || !selectedMsg?.type))}
++        canEdit={
++          !!(
++            (selectedMsg?.type === 'text' || !selectedMsg?.type) &&
++            (isMineSelected || selectedMsg?.editMode === 'open')
++          )
++        }
++        canSetEditMode={
++          !!(
++            isMineSelected &&
++            conversation?.type === 'group' &&
++            (selectedMsg?.type === 'text' || !selectedMsg?.type)
++          )
++        }
++        canSuggestEdit={
++          !!(
++            !isMineSelected &&
++            conversation?.type === 'group' &&
++            selectedMsg?.editMode === 'approval' &&
++            (selectedMsg?.type === 'text' || !selectedMsg?.type)
++          )
++        }
++        suggestPending={!!myPendingForSelected}
++        canPin={canPinMessages}
++        isPinned={!!pinnedMessageId && pinnedMessageId === String(selectedMsg?._id || '')}
+         onClose={closeActionSheet}
+         onPickReaction={onPickReaction}
+         onReply={onReply}
+         onCopy={onCopy}
+         onEdit={onEdit}
++        onWhoCanEdit={onWhoCanEdit}
++        onSuggestEdit={onSuggestEdit}
+         onForward={onForward}
+         onShare={onShare}
+         onSelectMultiple={onSelectMultiple}
+@@ -4354,6 +4549,16 @@ export default function ChatScreen() {
+         onDelete={onDelete}
+       />
+ 
++      <EditPermissionModals
++        editModeTarget={editModeTarget}
++        onCloseEditMode={() => setEditModeTarget(null)}
++        onApplyEditMode={applyEditMode}
++        showPendingEdits={showPendingEdits}
++        onClosePendingEdits={() => setShowPendingEdits(false)}
++        pendingEditsList={pendingEditsList}
++        onReviewEdit={handleReviewEdit}
++      />
++
+       {/* iter-292: rich Message Info sheet — Read by + media consumption
+           (Played/Watched/Viewed/Opened by), mirroring the web app. */}
+       <MessageInfoSheet
+@@ -4506,6 +4711,31 @@ export default function ChatScreen() {
+ }
+ 
+ const styles = StyleSheet.create({
++  pendingEditsBadge: {
++    position: 'absolute',
++    top: 2,
++    right: 2,
++    minWidth: 16,
++    height: 16,
++    borderRadius: 8,
++    backgroundColor: Colors.danger,
++    alignItems: 'center',
++    justifyContent: 'center',
++    paddingHorizontal: 3,
++  },
++  pendingEditsBadgeText: { color: Colors.white, fontSize: 10, fontWeight: '700' },
++  pinnedBanner: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    gap: 10,
++    paddingVertical: 8,
++    paddingHorizontal: 14,
++    backgroundColor: '#FFF7E6',
++    borderBottomWidth: StyleSheet.hairlineWidth,
++    borderBottomColor: Colors.border,
++  },
++  pinnedBannerLabel: { fontSize: 11, fontWeight: '700', color: Colors.primary },
++  pinnedBannerText: { fontSize: 14, color: Colors.textPrimary, marginTop: 1 },
+   // iter-169 web parity: conversation message area uses the dedicated
+   // `chatWallpaper` token (#F5F1E7) instead of the app body color.
+   container: { flex: 1, backgroundColor: Colors.chatWallpaper },
+diff --git a/frontend/app/diagnostic-logs.tsx b/frontend/app/diagnostic-logs.tsx
+index ee5bd3a9..2c26ef68 100644
+--- a/frontend/app/diagnostic-logs.tsx
++++ b/frontend/app/diagnostic-logs.tsx
+@@ -125,6 +125,7 @@ export default function DiagnosticLogsScreen() {
+     {},
+   ) as any[] | undefined;
+   const conversationsList = useQuery(api.conversations.listConversations, {}) as any[] | undefined;
++  const listGroupsData = useQuery((api as any).conversations.listGroups, {}) as any[] | undefined;
+   const [localVoiceTasks, setLocalVoiceTasks] = useState<Record<string, any> | null>(null);
+   useEffect(() => {
+     (async () => {
+@@ -202,12 +203,14 @@ export default function DiagnosticLogsScreen() {
+     }
+     lines.push(`device-matched: ${matched}/${shown.length} shown`);
+     lines.push('');
+-    lines.push('--- Group detection (listConversations) ---');
++    lines.push('--- Group detection ---');
+     const convs = Array.isArray(conversationsList) ? conversationsList : [];
+     const groups = convs.filter((c: any) => c && (c.isGroup === true || c.type === 'group' || (Array.isArray(c.participants) && c.participants.length > 2)));
+-    lines.push(`conversations: ${convs.length} · detected groups: ${groups.length}`);
+-    for (const g of groups.slice(0, 20)) {
+-      lines.push(`  "${g?.name || '(no name)'}" isGroup=${g?.isGroup} type=${g?.type}`);
++    const lg = Array.isArray(listGroupsData) ? listGroupsData : [];
++    lines.push(`listConversations: ${convs.length} · shape-detected groups: ${groups.length}`);
++    lines.push(`listGroups (authoritative): ${lg.length}`);
++    for (const g of lg.slice(0, 20)) {
++      lines.push(`  "${g?.name || '(no name)'}" id=${String(g?._id || '').slice(-6)}`);
+     }
+     lines.push('==================================');
+     return lines.join('\n');
+diff --git a/frontend/app/find-by-phone.tsx b/frontend/app/find-by-phone.tsx
+index 2c95d628..43711d52 100644
+--- a/frontend/app/find-by-phone.tsx
++++ b/frontend/app/find-by-phone.tsx
+@@ -44,6 +44,7 @@ import { api } from '../src/convexApi';
+ import { useAuth } from '../src/providers/AuthProvider';
+ import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+ import { buildInviteMessage, buildInviteUrl } from '../src/lib/inviteLink';
++import { friendlyConvexError } from '../src/lib/friendlyError';
+ import Header from '../src/components/Header';
+ import {
+   lookupUserByPhone,
+@@ -205,7 +206,7 @@ export default function FindByPhoneScreen() {
+           Alert.alert('Could not start chat', 'Server did not return a conversation id.');
+         }
+       } catch (errorValue: any) {
+-        Alert.alert('Could not start chat', errorValue?.message || 'Please try again later.');
++        Alert.alert('Could not start chat', friendlyConvexError(errorValue, 'Please try again later.'));
+       } finally {
+         setOpening(null);
+       }
+diff --git a/frontend/app/index.tsx b/frontend/app/index.tsx
+index efe84e35..29755def 100644
+--- a/frontend/app/index.tsx
++++ b/frontend/app/index.tsx
+@@ -1,14 +1,31 @@
+-import React, { useEffect } from 'react';
+-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
++import React, { useEffect, useState } from 'react';
++import {
++  View,
++  Text,
++  StyleSheet,
++  TouchableOpacity,
++  ActivityIndicator,
++  Modal,
++  TextInput,
++  KeyboardAvoidingView,
++  Platform,
++} from 'react-native';
+ import { SafeAreaView } from 'react-native-safe-area-context';
+ import { Feather, Ionicons } from '@expo/vector-icons';
+ import { useRouter } from 'expo-router';
+ import { useAuth } from '../src/providers/AuthProvider';
++import { setPendingReferralCode, getPendingReferralCode, isReferralLocked } from '../src/lib/referralAttribution';
+ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/theme';
+ 
+ export default function SignInScreen() {
+   const router = useRouter();
+   const { isAuthenticated, isLoading, signIn, lastError, authMode } = useAuth();
++  const [showReferral, setShowReferral] = useState(false);
++  const [refInput, setRefInput] = useState('');
++  const [savedCode, setSavedCode] = useState<string | null>(null);
++  // iter-338: a referral code can be redeemed only ONCE per user. When the
++  // backend has recorded a referrer, we hide manual entry entirely.
++  const [referralLocked, setReferralLocked] = useState(false);
+ 
+   useEffect(() => {
+     if (isAuthenticated) {
+@@ -16,6 +33,23 @@ export default function SignInScreen() {
+     }
+   }, [isAuthenticated, router]);
+ 
++  // Show any code already captured (deep-link / install referrer / prior entry).
++  useEffect(() => {
++    void getPendingReferralCode().then((c) => setSavedCode(c));
++    void isReferralLocked().then(setReferralLocked);
++  }, []);
++
++  const openReferral = () => {
++    setRefInput(savedCode || '');
++    setShowReferral(true);
++  };
++
++  const handleSaveReferral = async () => {
++    const code = await setPendingReferralCode(refInput);
++    setSavedCode(code);
++    setShowReferral(false);
++  };
++
+   const handleSignIn = async () => {
+     if (authMode === 'webview') {
+       router.push('/auth-webview');
+@@ -61,11 +95,76 @@ export default function SignInScreen() {
+               </>
+             )}
+           </TouchableOpacity>
++          {referralLocked ? (
++            <View style={styles.referralLink} testID="referral-code-applied">
++              <Text style={[styles.referralLinkText, styles.referralAppliedText]}>
++                ✓ Referral code applied
++              </Text>
++            </View>
++          ) : (
++            <TouchableOpacity
++              onPress={openReferral}
++              style={styles.referralLink}
++              activeOpacity={0.7}
++              testID="referral-code-link"
++            >
++              <Text style={styles.referralLinkText}>
++                {savedCode ? `Referral code: ${savedCode} · Change` : 'Do you have a referral code?'}
++              </Text>
++            </TouchableOpacity>
++          )}
++
+           <Text style={styles.terms}>
+             By continuing, you agree to our Terms of Service and Privacy Policy
+           </Text>
+         </View>
+       </View>
++
++      <Modal
++        visible={showReferral}
++        transparent
++        animationType="fade"
++        onRequestClose={() => setShowReferral(false)}
++      >
++        <KeyboardAvoidingView
++          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
++          style={styles.modalBackdrop}
++        >
++          <View style={styles.modalCard}>
++            <Text style={styles.modalTitle}>Enter referral code</Text>
++            <Text style={styles.modalSubtitle}>
++              Have a code from a friend? Enter it now — it&apos;ll be applied when you sign in.
++            </Text>
++            <TextInput
++              style={styles.modalInput}
++              value={refInput}
++              onChangeText={(t) => setRefInput(t.toUpperCase())}
++              placeholder="e.g. AB12CD34"
++              placeholderTextColor={Colors.textMuted}
++              autoCapitalize="characters"
++              autoCorrect={false}
++              maxLength={64}
++              testID="referral-code-input"
++            />
++            <View style={styles.modalActions}>
++              <TouchableOpacity
++                style={[styles.modalBtn, styles.modalBtnGhost]}
++                onPress={() => setShowReferral(false)}
++                testID="referral-cancel"
++              >
++                <Text style={styles.modalBtnGhostText}>Cancel</Text>
++              </TouchableOpacity>
++              <TouchableOpacity
++                style={[styles.modalBtn, styles.modalBtnPrimary]}
++                onPress={handleSaveReferral}
++                testID="referral-save"
++              >
++                <Text style={styles.modalBtnPrimaryText}>Save code</Text>
++              </TouchableOpacity>
++            </View>
++          </View>
++        </KeyboardAvoidingView>
++      </Modal>
+     </SafeAreaView>
+   );
+ }
+@@ -130,4 +229,59 @@ const styles = StyleSheet.create({
+     paddingHorizontal: Spacing.base,
+     lineHeight: 20,
+   },
++  referralLink: {
++    alignSelf: 'center',
++    paddingVertical: Spacing.sm,
++    marginBottom: Spacing.sm,
++  },
++  referralLinkText: {
++    fontSize: FontSize.base,
++    color: Colors.primary,
++    fontWeight: FontWeight.semibold,
++    textDecorationLine: 'underline',
++    textAlign: 'center',
++  },
++  referralAppliedText: {
++    color: Colors.textSecondary,
++    textDecorationLine: 'none',
++  },
++  modalBackdrop: {
++    flex: 1,
++    backgroundColor: 'rgba(0,0,0,0.55)',
++    alignItems: 'center',
++    justifyContent: 'center',
++    paddingHorizontal: Spacing.lg,
++  },
++  modalCard: {
++    width: '100%',
++    maxWidth: 420,
++    backgroundColor: Colors.white,
++    borderRadius: Radius.lg,
++    padding: Spacing.lg,
++  },
++  modalTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
++  modalSubtitle: {
++    fontSize: FontSize.sm,
++    color: Colors.textMuted,
++    marginTop: Spacing.xs,
++    marginBottom: Spacing.base,
++    lineHeight: 20,
++  },
++  modalInput: {
++    borderWidth: 1,
++    borderColor: Colors.border,
++    borderRadius: Radius.md,
++    paddingHorizontal: 14,
++    paddingVertical: 12,
++    fontSize: FontSize.lg,
++    color: Colors.textPrimary,
++    letterSpacing: 2,
++    fontWeight: FontWeight.semibold,
++  },
++  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: Spacing.base },
++  modalBtn: { paddingVertical: 12, paddingHorizontal: 18, borderRadius: Radius.md, minHeight: 44, justifyContent: 'center' },
++  modalBtnGhost: { backgroundColor: Colors.surface },
++  modalBtnGhostText: { color: Colors.textPrimary, fontWeight: FontWeight.semibold, fontSize: FontSize.base },
++  modalBtnPrimary: { backgroundColor: Colors.primary },
++  modalBtnPrimaryText: { color: '#3A2608', fontWeight: FontWeight.bold, fontSize: FontSize.base },
+ });
+diff --git a/frontend/app/mobile-money.tsx b/frontend/app/mobile-money.tsx
+new file mode 100644
+index 00000000..727116ad
+--- /dev/null
++++ b/frontend/app/mobile-money.tsx
+@@ -0,0 +1,348 @@
++/**
++ * Mobile Money payment request flow (user-facing).
++ * Pick plan → pick country (currency) → optional pay-from phone → see ≈ estimate
++ * → confirm → createRequest (authoritative amount) → success. Also lists the
++ * user's own requests with live status. Admin completes/declines manually.
++ */
++import React, { useMemo, useState } from 'react';
++import {
++  ActivityIndicator,
++  Alert,
++  KeyboardAvoidingView,
++  Modal,
++  Platform,
++  Pressable,
++  ScrollView,
++  StyleSheet,
++  Text,
++  TextInput,
++  TouchableOpacity,
++  View,
++} from 'react-native';
++import { SafeAreaView } from 'react-native-safe-area-context';
++import { Ionicons } from '@expo/vector-icons';
++import { router, useLocalSearchParams } from 'expo-router';
++import { useAction, useQuery } from 'convex/react';
++import { api } from '../src/convexApi';
++import { Colors, FontSize, FontWeight, Spacing, Radius } from '../src/theme';
++import {
++  MOBILE_MONEY_COUNTRIES,
++  PREMIUM_PLANS,
++  currencyForCountry,
++  estimateLocalAmount,
++  formatLocalAmount,
++} from '../src/lib/mobileMoney';
++import { friendlyConvexError } from '../src/lib/friendlyError';
++
++function StatusPill({ status }: { status: string }) {
++  const map: Record<string, { bg: string; fg: string; label: string }> = {
++    pending: { bg: '#FFF4E5', fg: '#B26A00', label: 'Pending' },
++    completed: { bg: '#E7F6EC', fg: '#1B7F3B', label: 'Completed' },
++    declined: { bg: '#FDECEC', fg: Colors.danger, label: 'Declined' },
++    cancelled: { bg: '#EEE', fg: Colors.textSecondary, label: 'Cancelled' },
++  };
++  const s = map[status] || map.cancelled;
++  return (
++    <View style={[styles.pill, { backgroundColor: s.bg }]}>
++      <Text style={[styles.pillText, { color: s.fg }]}>{s.label}</Text>
++    </View>
++  );
++}
++
++export default function MobileMoneyScreen() {
++  const params = useLocalSearchParams<{ variantId?: string; planLabel?: string; eur?: string }>();
++  const planKeys = Object.keys(PREMIUM_PLANS);
++  const [variantId, setVariantId] = useState<string>(
++    params.variantId && PREMIUM_PLANS[params.variantId] ? params.variantId : 'var_premium_yearly',
++  );
++  const [countryCode, setCountryCode] = useState('KE');
++  const [phone, setPhone] = useState('');
++  const [showCountry, setShowCountry] = useState(false);
++  const [submitting, setSubmitting] = useState(false);
++  const [success, setSuccess] = useState<{ amount: number; currency: string; planLabel: string } | null>(null);
++
++  const createRequest = useAction((api as any).mobileMoneyRequests?.createRequest);
++  const myRequests = useQuery((api as any).mobileMoneyRequests?.getMyRequests, {}) as any[] | undefined;
++
++  const plan = PREMIUM_PLANS[variantId];
++  const currency = currencyForCountry(countryCode);
++  const country = MOBILE_MONEY_COUNTRIES.find((c) => c.code === countryCode);
++  const estimate = useMemo(
++    () => estimateLocalAmount(plan.eur, currency),
++    [plan.eur, currency],
++  );
++
++  const submit = () => {
++    Alert.alert(
++      'Send payment request?',
++      `Plan: ${plan.label} (€${plan.eur})\nCountry: ${country?.name}\nEstimated total: ≈ ${formatLocalAmount(estimate, currency)}\n\nAn admin will contact you with mobile money details to complete the payment.`,
++      [
++        { text: 'Cancel', style: 'cancel' },
++        {
++          text: 'Send request',
++          onPress: async () => {
++            setSubmitting(true);
++            try {
++              const res: any = await createRequest({
++                variantId,
++                country: countryCode,
++                phone: phone.trim() ? phone.trim() : undefined,
++              });
++              setSuccess({
++                amount: res?.amount ?? estimate,
++                currency: res?.currency ?? currency,
++                planLabel: plan.label,
++              });
++            } catch (e: any) {
++              Alert.alert('Could not send request', friendlyConvexError(e, 'Please try again.'));
++            } finally {
++              setSubmitting(false);
++            }
++          },
++        },
++      ],
++    );
++  };
++
++  return (
++    <SafeAreaView style={styles.container} edges={['top']} testID="mobile-money-screen">
++      <View style={styles.header}>
++        <TouchableOpacity onPress={() => router.back()} hitSlop={10} testID="mm-back">
++          <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
++        </TouchableOpacity>
++        <Text style={styles.headerTitle}>Mobile Money</Text>
++        <View style={{ width: 24 }} />
++      </View>
++
++      <KeyboardAvoidingView style={styles.flexOne} behavior={Platform.select({ ios: 'padding', android: undefined })}>
++        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
++          {success ? (
++            <View style={styles.successCard} testID="mm-success">
++              <Ionicons name="checkmark-circle" size={56} color={Colors.primary} />
++              <Text style={styles.successTitle}>Request received</Text>
++              <Text style={styles.successAmount}>{formatLocalAmount(success.amount, success.currency)}</Text>
++              <Text style={styles.successBody}>
++                Your {success.planLabel} request has been sent. An admin will message you shortly with the
++                mobile money number to complete your payment. Your plan activates automatically once the
++                admin confirms.
++              </Text>
++              <TouchableOpacity style={styles.primaryBtn} onPress={() => setSuccess(null)} testID="mm-done">
++                <Text style={styles.primaryBtnText}>Done</Text>
++              </TouchableOpacity>
++            </View>
++          ) : (
++            <>
++              <Text style={styles.sectionTitle}>Choose duration</Text>
++              <View style={styles.planRow}>
++                {planKeys.map((k) => {
++                  const p = PREMIUM_PLANS[k];
++                  const active = variantId === k;
++                  return (
++                    <TouchableOpacity
++                      key={k}
++                      style={[styles.planCard, active ? styles.planCardActive : null]}
++                      onPress={() => setVariantId(k)}
++                      testID={`mm-plan-${k}`}
++                    >
++                      <Text style={[styles.planName, active ? styles.planNameActive : null]}>{p.label}</Text>
++                      <Text style={[styles.planPrice, active ? styles.planNameActive : null]}>€{p.eur}</Text>
++                    </TouchableOpacity>
++                  );
++                })}
++              </View>
++
++              <Text style={styles.sectionTitle}>Your country</Text>
++              <TouchableOpacity style={styles.pickerRow} onPress={() => setShowCountry(true)} testID="mm-country">
++                <Text style={styles.pickerValue}>
++                  {country ? `${country.name} (${country.currency})` : 'Select country'}
++                </Text>
++                <Ionicons name="chevron-down" size={18} color={Colors.textSecondary} />
++              </TouchableOpacity>
++
++              <Text style={styles.sectionTitle}>Mobile money number (optional)</Text>
++              <TextInput
++                style={styles.input}
++                value={phone}
++                onChangeText={setPhone}
++                placeholder="e.g. 0712345678"
++                placeholderTextColor={Colors.textMuted}
++                keyboardType="phone-pad"
++                testID="mm-phone"
++              />
++              <Text style={styles.hint}>Helps the admin match your payment. You can leave this blank.</Text>
++
++              <View style={styles.estimateBox}>
++                <Text style={styles.estimateLabel}>Estimated total</Text>
++                <Text style={styles.estimateAmount}>≈ {formatLocalAmount(estimate, currency)}</Text>
++                <Text style={styles.estimateSub}>{plan.label} · €{plan.eur} · final amount confirmed on submit</Text>
++              </View>
++
++              <TouchableOpacity
++                style={[styles.primaryBtn, submitting ? styles.primaryBtnDisabled : null]}
++                onPress={submit}
++                disabled={submitting}
++                testID="mm-submit"
++              >
++                {submitting ? (
++                  <ActivityIndicator color={Colors.white} />
++                ) : (
++                  <Text style={styles.primaryBtnText}>Request with mobile money</Text>
++                )}
++              </TouchableOpacity>
++            </>
++          )}
++
++          {/* My requests */}
++          {Array.isArray(myRequests) && myRequests.length > 0 ? (
++            <View style={styles.myRequests}>
++              <Text style={styles.sectionTitle}>Your requests</Text>
++              {myRequests.map((r: any) => (
++                <View key={String(r._id)} style={styles.reqRow} testID={`mm-my-${String(r._id).slice(-6)}`}>
++                  <View style={styles.flexOne}>
++                    <Text style={styles.reqPlan}>{r.planLabel || r.variantId}</Text>
++                    <Text style={styles.reqAmount}>{formatLocalAmount(r.amount, r.currency)} · {r.country}</Text>
++                  </View>
++                  <StatusPill status={r.status} />
++                </View>
++              ))}
++            </View>
++          ) : null}
++        </ScrollView>
++      </KeyboardAvoidingView>
++
++      {/* Country picker */}
++      <Modal visible={showCountry} transparent animationType="slide" onRequestClose={() => setShowCountry(false)}>
++        <Pressable style={styles.backdrop} onPress={() => setShowCountry(false)}>
++          <Pressable style={styles.countrySheet} onPress={() => {}}>
++            <Text style={styles.countryTitle}>Select country</Text>
++            <ScrollView>
++              {MOBILE_MONEY_COUNTRIES.map((c) => (
++                <TouchableOpacity
++                  key={c.code}
++                  style={styles.countryRow}
++                  onPress={() => {
++                    setCountryCode(c.code);
++                    setShowCountry(false);
++                  }}
++                  testID={`mm-country-${c.code}`}
++                >
++                  <Text style={styles.countryName}>{c.name}</Text>
++                  <Text style={styles.countryCurrency}>{c.currency}</Text>
++                  {countryCode === c.code ? (
++                    <Ionicons name="checkmark" size={18} color={Colors.primary} />
++                  ) : null}
++                </TouchableOpacity>
++              ))}
++            </ScrollView>
++          </Pressable>
++        </Pressable>
++      </Modal>
++    </SafeAreaView>
++  );
++}
++
++const styles = StyleSheet.create({
++  container: { flex: 1, backgroundColor: Colors.background },
++  flexOne: { flex: 1 },
++  header: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    justifyContent: 'space-between',
++    paddingHorizontal: Spacing.base,
++    paddingVertical: Spacing.md,
++    borderBottomWidth: StyleSheet.hairlineWidth,
++    borderBottomColor: Colors.border,
++  },
++  headerTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
++  scroll: { padding: Spacing.base, paddingBottom: 48 },
++  sectionTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textSecondary, marginTop: Spacing.lg, marginBottom: Spacing.sm },
++  planRow: { flexDirection: 'row', gap: 10 },
++  planCard: {
++    flex: 1,
++    borderWidth: 1,
++    borderColor: Colors.border,
++    borderRadius: Radius.md,
++    paddingVertical: 16,
++    alignItems: 'center',
++  },
++  planCardActive: { borderColor: Colors.primary, backgroundColor: '#F4FBF6' },
++  planName: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
++  planNameActive: { color: Colors.primary },
++  planPrice: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary, marginTop: 4 },
++  pickerRow: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    justifyContent: 'space-between',
++    borderWidth: 1,
++    borderColor: Colors.border,
++    borderRadius: Radius.md,
++    paddingHorizontal: 14,
++    paddingVertical: 14,
++  },
++  pickerValue: { fontSize: FontSize.base, color: Colors.textPrimary },
++  input: {
++    borderWidth: 1,
++    borderColor: Colors.border,
++    borderRadius: Radius.md,
++    paddingHorizontal: 14,
++    paddingVertical: 12,
++    fontSize: FontSize.base,
++    color: Colors.textPrimary,
++  },
++  hint: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 6 },
++  estimateBox: {
++    backgroundColor: '#F4FBF6',
++    borderRadius: Radius.md,
++    padding: Spacing.base,
++    marginTop: Spacing.lg,
++    alignItems: 'center',
++  },
++  estimateLabel: { fontSize: FontSize.sm, color: Colors.textSecondary },
++  estimateAmount: { fontSize: 28, fontWeight: FontWeight.bold, color: Colors.primary, marginTop: 4 },
++  estimateSub: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 4, textAlign: 'center' },
++  primaryBtn: {
++    backgroundColor: Colors.primary,
++    borderRadius: Radius.md,
++    paddingVertical: 16,
++    alignItems: 'center',
++    marginTop: Spacing.lg,
++  },
++  primaryBtnDisabled: { opacity: 0.6 },
++  primaryBtnText: { color: Colors.white, fontSize: FontSize.base, fontWeight: FontWeight.bold },
++  successCard: { alignItems: 'center', paddingVertical: 24, gap: 8 },
++  successTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
++  successAmount: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.primary },
++  successBody: { fontSize: FontSize.base, color: Colors.textSecondary, textAlign: 'center', marginTop: 6, lineHeight: 22 },
++  myRequests: { marginTop: Spacing.xl || 28 },
++  reqRow: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    justifyContent: 'space-between',
++    paddingVertical: 12,
++    borderBottomWidth: StyleSheet.hairlineWidth,
++    borderBottomColor: Colors.border,
++  },
++  reqPlan: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
++  reqAmount: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
++  pill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 },
++  pillText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold },
++  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
++  countrySheet: {
++    backgroundColor: Colors.white,
++    borderTopLeftRadius: 20,
++    borderTopRightRadius: 20,
++    padding: Spacing.base,
++    maxHeight: '70%',
++  },
++  countryTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary, marginBottom: 12 },
++  countryRow: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    gap: 10,
++    paddingVertical: 14,
++    borderBottomWidth: StyleSheet.hairlineWidth,
++    borderBottomColor: Colors.border,
++  },
++  countryName: { flex: 1, fontSize: FontSize.base, color: Colors.textPrimary },
++  countryCurrency: { fontSize: FontSize.sm, color: Colors.textSecondary },
++});
+diff --git a/frontend/app/premium.tsx b/frontend/app/premium.tsx
+index f9a950a6..29a4aff1 100644
+--- a/frontend/app/premium.tsx
++++ b/frontend/app/premium.tsx
+@@ -29,7 +29,7 @@ import {
+ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+ import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+ import { useLocalSearchParams, useRouter } from 'expo-router';
+-import { useAction, useMutation } from 'convex/react';
++import { useAction, useMutation, useQuery } from 'convex/react';
+ import * as WebBrowser from 'expo-web-browser';
+ import * as ExpoLinking from 'expo-linking';
+ import { api } from '../src/convexApi';
+@@ -139,6 +139,9 @@ export default function PremiumPage() {
+   const checkoutAction = useAction(
+     (api as any).premiumAction?.checkoutPremium,
+   );
++  // iter-340: quick status entry — the user's own mobile-money requests.
++  const myMoneyRequests = useQuery((api as any).mobileMoneyRequests?.getMyRequests, {}) as any[] | undefined;
++  const latestMoneyReq = Array.isArray(myMoneyRequests) && myMoneyRequests.length > 0 ? myMoneyRequests[0] : null;
+ 
+   useEffect(() => {
+     if (success === 'true') {
+@@ -400,9 +403,44 @@ export default function PremiumPage() {
+                 </>
+               )}
+             </TouchableOpacity>
++
++            {/* iter-339: manual Mobile Money alternative to card checkout. */}
++            <TouchableOpacity
++              style={styles.mobileMoneyBtn}
++              onPress={() =>
++                router.push({
++                  pathname: '/mobile-money',
++                  params: { variantId: selectedPlan.variantId },
++                } as any)
++              }
++              activeOpacity={0.85}
++              testID="premium-mobile-money"
++            >
++              <MaterialCommunityIcons name="cellphone" size={19} color={Colors.primary} />
++              <Text style={styles.mobileMoneyBtnText}>Pay with Mobile Money</Text>
++            </TouchableOpacity>
+           </>
+         ) : null}
+ 
++        {/* iter-340: quick access to the user's mobile-money request status. */}
++        {latestMoneyReq ? (
++          <TouchableOpacity
++            style={styles.myMoneyRow}
++            onPress={() => router.push('/mobile-money' as any)}
++            activeOpacity={0.7}
++            testID="premium-my-money-requests"
++          >
++            <MaterialCommunityIcons name="cellphone-check" size={20} color={Colors.primary} />
++            <View style={styles.flexOne}>
++              <Text style={styles.myMoneyTitle}>Your mobile money requests</Text>
++              <Text style={styles.myMoneySub} numberOfLines={1}>
++                Latest: {latestMoneyReq.planLabel || latestMoneyReq.variantId} · {String(latestMoneyReq.status).charAt(0).toUpperCase() + String(latestMoneyReq.status).slice(1)}
++              </Text>
++            </View>
++            <Feather name="chevron-right" size={18} color={Colors.textSecondary} />
++          </TouchableOpacity>
++        ) : null}
++
+         {/* Premium includes section (always shown) */}
+         <Text style={[styles.sectionLabel, { marginTop: Spacing.xl }]}>PREMIUM INCLUDES</Text>
+         <View style={styles.includesList}>
+@@ -630,6 +668,33 @@ const styles = StyleSheet.create({
+   },
+   subscribeBtnLoading: { opacity: 0.85 },
+   subscribeBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: '#3D2A00' },
++  mobileMoneyBtn: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    justifyContent: 'center',
++    gap: 8,
++    paddingVertical: 14,
++    marginTop: 12,
++    borderRadius: Radius.md,
++    borderWidth: 1.5,
++    borderColor: Colors.primary,
++  },
++  mobileMoneyBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.primary },
++  flexOne: { flex: 1 },
++  myMoneyRow: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    gap: 12,
++    backgroundColor: Colors.surface,
++    borderRadius: Radius.md,
++    borderWidth: StyleSheet.hairlineWidth,
++    borderColor: Colors.border,
++    paddingHorizontal: 14,
++    paddingVertical: 14,
++    marginTop: Spacing.lg,
++  },
++  myMoneyTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
++  myMoneySub: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
+ 
+   // Includes
+   includesList: { gap: 10 },
+diff --git a/frontend/app/user/[userId].tsx b/frontend/app/user/[userId].tsx
+index 48d91649..051b5fe8 100644
+--- a/frontend/app/user/[userId].tsx
++++ b/frontend/app/user/[userId].tsx
+@@ -16,9 +16,11 @@ import {
+ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+ import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+ import { useLocalSearchParams, useRouter } from 'expo-router';
+-import { useMutation, useQuery } from 'convex/react';
++import { useMutation, useQuery, useConvex } from 'convex/react';
+ import * as Clipboard from 'expo-clipboard';
+ import { api } from '../../src/convexApi';
++import { lookupUserByPhone } from '../../src/lib/phoneLookup';
++import { friendlyConvexError } from '../../src/lib/friendlyError';
+ import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
+ import { useAuth } from '../../src/providers/AuthProvider';
+ import { savePhotoToGallery } from '../../src/lib/savePhotoToGallery';
+@@ -98,10 +100,14 @@ export default function UserProfileScreen() {
+     isAuthenticated && hasValidConversationId,
+   );
+ 
+-  // Groups in common — filter the user's conversations to groups that include
+-  // the target user as a participant.
+-  const { data: conversationsList } = useSafeConvexQuery<any[]>(
+-    api.conversations.listConversations,
++  // Groups in common — use the SAME authoritative source as the Groups tab
++  // (api.conversations.listGroups). The old approach filtered
++  // listConversations by shape (isGroup/type/participants>2), but that query
++  // doesn't carry those flags reliably → 0 groups detected even when the
++  // viewer had many. listGroups returns the viewer's group conversations
++  // directly; GroupInCommonRow then verifies the target is a member.
++  const { data: myGroups } = useSafeConvexQuery<any[]>(
++    api.conversations.listGroups,
+     {},
+     [],
+     isAuthenticated,
+@@ -121,25 +127,55 @@ export default function UserProfileScreen() {
+     return { photos, videos, files };
+   }, [messagesPage]);
+ 
+-  // Candidate groups = all of the viewer's group conversations. Membership of
+-  // the *target* user can't be derived reliably from listConversations (group
+-  // rows don't always carry member IDs), so each row verifies via
+-  // getGroupMembers and reports back through `reportMembership`.
+-  const candidateGroups = useMemo(() => {
+-    if (!Array.isArray(conversationsList)) return [];
+-    // iter-317: match the EXACT group-detection used by the chats list
+-    // (chats.tsx L570) — groups are marked by `isGroup`, `type==='group'`, OR
+-    // simply having >2 participants. Earlier filters checked only the first
+-    // two, so `listConversations` (which returns groups as participant arrays)
+-    // detected 0 groups → Groups-in-Common was always empty.
+-    return conversationsList.filter(
+-      (c: any) =>
+-        c &&
+-        (c.isGroup === true ||
+-          c.type === 'group' ||
+-          (Array.isArray(c.participants) && c.participants.length > 2)),
+-    );
+-  }, [conversationsList]);
++  // Candidate groups = all of the viewer's group conversations (from
++  // listGroups). Membership of the *target* user is verified per-row via
++  // getGroupMembers (group rows don't always carry member IDs).
++  const candidateGroups = useMemo(
++    () => (Array.isArray(myGroups) ? myGroups.filter((g: any) => g && g._id) : []),
++    [myGroups],
++  );
++
++  // iter-324 (web-agent contract): the profile identifies people by PHONE, but
++  // group member lists hold ACCOUNT IDS. The old check compared the raw route
++  // param (which can be a phone/contact id) against account ids and always
++  // missed → "No shared groups yet". We build a set of ALL identities that
++  // point to the SAME account: the route param, the resolved `user._id`, and
++  // the account id we get by resolving the target's phone → account via
++  // `users.getByPhone`. GroupInCommonRow matches any of these (or a phone).
++  const convex = useConvex();
++  const targetPhoneE164 = useMemo(() => {
++    const raw = (user as any)?.phoneE164 || (user as any)?.phone || '';
++    if (typeof raw === 'string' && raw.trim()) return raw.trim();
++    // Route param itself may be a phone in some navigation paths.
++    const param = String(userId || '');
++    return /^\+?\d[\d\s-]{5,}$/.test(param) ? param : '';
++  }, [user, userId]);
++  const [phoneResolvedId, setPhoneResolvedId] = useState<string | null>(null);
++  useEffect(() => {
++    let alive = true;
++    if (!convex || !targetPhoneE164) {
++      setPhoneResolvedId(null);
++      return;
++    }
++    lookupUserByPhone(convex, targetPhoneE164)
++      .then((res) => {
++        if (alive) setPhoneResolvedId(res?._id ? String(res._id) : null);
++      })
++      .catch(() => {
++        if (alive) setPhoneResolvedId(null);
++      });
++    return () => {
++      alive = false;
++    };
++  }, [convex, targetPhoneE164]);
++  const targetUserIds = useMemo(() => {
++    const ids = new Set<string>();
++    if (userId) ids.add(String(userId));
++    if ((user as any)?._id) ids.add(String((user as any)._id));
++    if (phoneResolvedId) ids.add(phoneResolvedId);
++    return Array.from(ids);
++  }, [userId, user, phoneResolvedId]);
++
+   const [memberVerified, setMemberVerified] = useState<Record<string, boolean>>({});
+   const reportMembership = useCallback((convId: string, isMember: boolean) => {
+     setMemberVerified((prev) =>
+@@ -621,7 +657,8 @@ export default function UserProfileScreen() {
+               <GroupInCommonRow
+                 key={group._id}
+                 conv={group}
+-                targetUserId={String(userId)}
++                targetUserIds={targetUserIds}
++                targetPhoneE164={targetPhoneE164}
+                 onResolve={reportMembership}
+               />
+             ))}
+diff --git a/frontend/src/components/MediaBubble.tsx b/frontend/src/components/MediaBubble.tsx
+index aaa966ac..511ce095 100644
+--- a/frontend/src/components/MediaBubble.tsx
++++ b/frontend/src/components/MediaBubble.tsx
+@@ -183,6 +183,9 @@ interface BubbleProps {
+   // when it is the target of such a jump.
+   onPressParent?: () => void;
+   isJumpHighlighted?: boolean;
++  // iter-337: resolved sender name for GROUP incoming bubbles (device-contact
++  // name first, Google/account name fallback). Undefined → not shown.
++  senderDisplayName?: string;
+ }
+ 
+ export default function MediaBubble({
+@@ -200,6 +203,7 @@ export default function MediaBubble({
+   isActiveSearchMatch,
+   onPressParent,
+   isJumpHighlighted,
++  senderDisplayName,
+ }: BubbleProps) {
+   const time = msg._creationTime ? new Date(msg._creationTime) : new Date();
+   const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+@@ -385,6 +389,14 @@ export default function MediaBubble({
+           <Text style={[styles.encryptedText, { color: isOutgoing ? '#F6FFF9' : Colors.primary }]}>Encrypted</Text>
+         </View>
+ 
++        {/* iter-337: group sender name — only on incoming bubbles when the
++            parent resolved a name (device-contact name first, else Google). */}
++        {!isMine && senderDisplayName ? (
++          <Text style={styles.senderNameLabel} numberOfLines={1}>
++            {senderDisplayName}
++          </Text>
++        ) : null}
++
+         {/* iter-293: status-reply indicator. When a DM was sent as a reply to
+             someone's status, show a small banner so BOTH sender & receiver can
+             see it references a status (not a normal DM). Reads the
+@@ -1936,6 +1948,12 @@ const styles = StyleSheet.create({
+   bubbleText: { fontSize: FontSize.sm, lineHeight: 20, color: Colors.textPrimary },
+   encryptedRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4 },
+   encryptedText: { fontSize: 10, fontWeight: FontWeight.semibold },
++  senderNameLabel: {
++    fontSize: 13,
++    fontWeight: FontWeight.bold,
++    color: Colors.primary,
++    marginBottom: 2,
++  },
+   // iter-134: call log entry card (rendered when msg.type === 'call').
+   // Lives inside the existing bubble shell — only the body content changes.
+   callLogRow: {
+diff --git a/frontend/src/components/admin/MobileMoneyAdmin.tsx b/frontend/src/components/admin/MobileMoneyAdmin.tsx
+new file mode 100644
+index 00000000..e233b61b
+--- /dev/null
++++ b/frontend/src/components/admin/MobileMoneyAdmin.tsx
+@@ -0,0 +1,355 @@
++/**
++ * MobileMoneyAdmin — admin surface for manual mobile-money payment requests.
++ * Pending / History toggle, per-request Message / Complete / Decline actions.
++ * Wires the canonical mobileMoneyRequests contract; server auto-activates the
++ * plan on completeRequest.
++ */
++import React, { useMemo, useState } from 'react';
++import {
++  ActivityIndicator,
++  Alert,
++  Image,
++  Modal,
++  Pressable,
++  StyleSheet,
++  Text,
++  TextInput,
++  TouchableOpacity,
++  View,
++} from 'react-native';
++import { Ionicons } from '@expo/vector-icons';
++import { useMutation, useQuery } from 'convex/react';
++import { api } from '../../convexApi';
++import { Colors, FontSize, FontWeight, Spacing, Radius } from '../../theme';
++import { formatLocalAmount } from '../../lib/mobileMoney';
++import { friendlyConvexError } from '../../lib/friendlyError';
++
++function formatDate(iso?: string | null): string {
++  if (!iso) return '';
++  const d = new Date(iso);
++  if (isNaN(d.getTime())) return '';
++  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) +
++    ' · ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
++}
++
++function StatusPill({ status }: { status: string }) {
++  const map: Record<string, { bg: string; fg: string; label: string }> = {
++    pending: { bg: '#FFF4E5', fg: '#B26A00', label: 'Pending' },
++    completed: { bg: '#E7F6EC', fg: '#1B7F3B', label: 'Completed' },
++    declined: { bg: '#FDECEC', fg: Colors.danger, label: 'Declined' },
++    cancelled: { bg: '#EEE', fg: Colors.textSecondary, label: 'Cancelled' },
++  };
++  const s = map[status] || map.cancelled;
++  return (
++    <View style={[styles.pill, { backgroundColor: s.bg }]}>
++      <Text style={[styles.pillText, { color: s.fg }]}>{s.label}</Text>
++    </View>
++  );
++}
++
++function RequestCard({
++  req,
++  onMessage,
++  onComplete,
++  onDecline,
++  busy,
++}: {
++  req: any;
++  onMessage: (req: any) => void;
++  onComplete: (req: any) => void;
++  onDecline: (req: any) => void;
++  busy: boolean;
++}) {
++  const isPending = req.status === 'pending';
++  return (
++    <View style={styles.card} testID={`mm-request-${String(req._id).slice(-6)}`}>
++      <View style={styles.cardHeader}>
++        {req.userAvatar ? (
++          <Image source={{ uri: req.userAvatar }} style={styles.avatar} />
++        ) : (
++          <View style={[styles.avatar, styles.avatarFallback]}>
++            <Text style={styles.avatarInitial}>{(req.userName || '?').charAt(0).toUpperCase()}</Text>
++          </View>
++        )}
++        <View style={styles.flexOne}>
++          <Text style={styles.userName} numberOfLines={1}>{req.userName || 'Unknown user'}</Text>
++          {req.userEmail ? <Text style={styles.userEmail} numberOfLines={1}>{req.userEmail}</Text> : null}
++        </View>
++        <StatusPill status={req.status} />
++      </View>
++
++      <View style={styles.detailRow}>
++        <Text style={styles.planLabel}>{req.planLabel || req.variantId}</Text>
++        <Text style={styles.amount}>{formatLocalAmount(req.amount, req.currency)}</Text>
++      </View>
++      <View style={styles.detailRow}>
++        <Text style={styles.subMeta}>{req.country} · ≈ €{req.eurAmount}</Text>
++        {req.phone ? <Text style={styles.subMeta}>Pays from: {req.phone}</Text> : null}
++      </View>
++      <Text style={styles.dateText}>
++        {isPending ? 'Requested ' : req.status === 'completed' ? 'Completed ' : 'Closed '}
++        {formatDate(isPending ? req.createdAt : req.completedAt || req.createdAt)}
++      </Text>
++
++      {isPending ? (
++        <View style={styles.actionsRow}>
++          <TouchableOpacity
++            style={[styles.actionBtn, styles.messageBtn]}
++            onPress={() => onMessage(req)}
++            disabled={busy}
++            testID={`mm-message-${String(req._id).slice(-6)}`}
++          >
++            <Ionicons name="chatbubble-ellipses-outline" size={16} color={Colors.primary} />
++            <Text style={styles.messageBtnText}>Message</Text>
++          </TouchableOpacity>
++          <TouchableOpacity
++            style={[styles.actionBtn, styles.declineBtn]}
++            onPress={() => onDecline(req)}
++            disabled={busy}
++            testID={`mm-decline-${String(req._id).slice(-6)}`}
++          >
++            <Ionicons name="close" size={16} color={Colors.danger} />
++            <Text style={styles.declineBtnText}>Decline</Text>
++          </TouchableOpacity>
++          <TouchableOpacity
++            style={[styles.actionBtn, styles.completeBtn]}
++            onPress={() => onComplete(req)}
++            disabled={busy}
++            testID={`mm-complete-${String(req._id).slice(-6)}`}
++          >
++            <Ionicons name="checkmark" size={16} color={Colors.white} />
++            <Text style={styles.completeBtnText}>Complete</Text>
++          </TouchableOpacity>
++        </View>
++      ) : null}
++    </View>
++  );
++}
++
++export function MobileMoneyAdmin() {
++  const [view, setView] = useState<'pending' | 'history'>('pending');
++  const [busy, setBusy] = useState(false);
++  const [msgTarget, setMsgTarget] = useState<any | null>(null);
++  const [msgText, setMsgText] = useState('');
++  const [sending, setSending] = useState(false);
++
++  const pending = useQuery((api as any).mobileMoneyRequests?.listPendingRequests, {}) as any[] | undefined;
++  const history = useQuery((api as any).mobileMoneyRequests?.listRequestHistory, {}) as any[] | undefined;
++  const completeRequest = useMutation((api as any).mobileMoneyRequests?.completeRequest);
++  const declineRequest = useMutation((api as any).mobileMoneyRequests?.declineRequest);
++  const messageUsers = useMutation((api as any).admin?.messaging?.messageUsers);
++
++  const list = view === 'pending' ? pending : history;
++  const loading = list === undefined;
++
++  const openMessage = (req: any) => {
++    setMsgTarget(req);
++    setMsgText(
++      `Hi ${req.userName || ''}, to complete your ${req.planLabel} plan payment of ${formatLocalAmount(req.amount, req.currency)}, please send mobile money to: `,
++    );
++  };
++
++  const sendMessage = async () => {
++    if (!msgTarget || !msgText.trim()) return;
++    setSending(true);
++    try {
++      await messageUsers({ userIds: [msgTarget.userId], text: msgText.trim() });
++      setMsgTarget(null);
++      setMsgText('');
++      Alert.alert('Message sent', 'Payment instructions were sent to the user.');
++    } catch (e: any) {
++      Alert.alert('Could not send', friendlyConvexError(e, 'Please try again.'));
++    } finally {
++      setSending(false);
++    }
++  };
++
++  const doComplete = (req: any) => {
++    Alert.alert(
++      'Complete request?',
++      `This will close the request and automatically activate ${req.planLabel} for ${req.userName || 'the user'}.`,
++      [
++        { text: 'Cancel', style: 'cancel' },
++        {
++          text: 'Complete',
++          onPress: async () => {
++            setBusy(true);
++            try {
++              await completeRequest({ requestId: req._id });
++            } catch (e: any) {
++              Alert.alert('Could not complete', friendlyConvexError(e, 'Please try again.'));
++            } finally {
++              setBusy(false);
++            }
++          },
++        },
++      ],
++    );
++  };
++
++  const doDecline = (req: any) => {
++    Alert.alert(
++      'Decline request?',
++      `This rejects the request without granting ${req.planLabel}. The user can submit a new request.`,
++      [
++        { text: 'Cancel', style: 'cancel' },
++        {
++          text: 'Decline',
++          style: 'destructive',
++          onPress: async () => {
++            setBusy(true);
++            try {
++              await declineRequest({ requestId: req._id });
++            } catch (e: any) {
++              Alert.alert('Could not decline', friendlyConvexError(e, 'Please try again.'));
++            } finally {
++              setBusy(false);
++            }
++          },
++        },
++      ],
++    );
++  };
++
++  const pendingCount = Array.isArray(pending) ? pending.length : 0;
++
++  return (
++    <View style={styles.wrap}>
++      <View style={styles.toggle}>
++        <TouchableOpacity
++          style={[styles.toggleBtn, view === 'pending' ? styles.toggleBtnActive : null]}
++          onPress={() => setView('pending')}
++          testID="mm-toggle-pending"
++        >
++          <Text style={[styles.toggleText, view === 'pending' ? styles.toggleTextActive : null]}>
++            Pending{pendingCount ? ` (${pendingCount})` : ''}
++          </Text>
++        </TouchableOpacity>
++        <TouchableOpacity
++          style={[styles.toggleBtn, view === 'history' ? styles.toggleBtnActive : null]}
++          onPress={() => setView('history')}
++          testID="mm-toggle-history"
++        >
++          <Text style={[styles.toggleText, view === 'history' ? styles.toggleTextActive : null]}>History</Text>
++        </TouchableOpacity>
++      </View>
++
++      {loading ? (
++        <ActivityIndicator color={Colors.primary} style={{ marginTop: 32 }} />
++      ) : !list || list.length === 0 ? (
++        <View style={styles.empty}>
++          <Ionicons name="cash-outline" size={40} color={Colors.textMuted} />
++          <Text style={styles.emptyText}>
++            {view === 'pending' ? 'No pending payment requests.' : 'No past requests yet.'}
++          </Text>
++        </View>
++      ) : (
++        list.map((req: any) => (
++          <RequestCard
++            key={String(req._id)}
++            req={req}
++            busy={busy}
++            onMessage={openMessage}
++            onComplete={doComplete}
++            onDecline={doDecline}
++          />
++        ))
++      )}
++
++      {/* Message-user composer */}
++      <Modal visible={!!msgTarget} transparent animationType="fade" onRequestClose={() => setMsgTarget(null)}>
++        <Pressable style={styles.backdrop} onPress={() => setMsgTarget(null)}>
++          <Pressable style={styles.msgSheet} onPress={() => {}}>
++            <Text style={styles.msgTitle}>Message {msgTarget?.userName || 'user'}</Text>
++            <TextInput
++              style={styles.msgInput}
++              value={msgText}
++              onChangeText={setMsgText}
++              multiline
++              placeholder="Type payment instructions…"
++              placeholderTextColor={Colors.textMuted}
++              testID="mm-message-input"
++            />
++            <View style={styles.msgActions}>
++              <TouchableOpacity style={styles.msgCancel} onPress={() => setMsgTarget(null)}>
++                <Text style={styles.msgCancelText}>Cancel</Text>
++              </TouchableOpacity>
++              <TouchableOpacity
++                style={[styles.msgSend, (!msgText.trim() || sending) ? styles.msgSendDisabled : null]}
++                onPress={sendMessage}
++                disabled={!msgText.trim() || sending}
++                testID="mm-message-send"
++              >
++                {sending ? (
++                  <ActivityIndicator color={Colors.white} size="small" />
++                ) : (
++                  <Text style={styles.msgSendText}>Send</Text>
++                )}
++              </TouchableOpacity>
++            </View>
++          </Pressable>
++        </Pressable>
++      </Modal>
++    </View>
++  );
++}
++
++const styles = StyleSheet.create({
++  wrap: { padding: Spacing.md },
++  flexOne: { flex: 1 },
++  toggle: { flexDirection: 'row', backgroundColor: '#EDEDED', borderRadius: Radius.md, padding: 4, marginBottom: Spacing.md },
++  toggleBtn: { flex: 1, paddingVertical: 8, borderRadius: Radius.sm, alignItems: 'center' },
++  toggleBtnActive: { backgroundColor: Colors.white },
++  toggleText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textSecondary },
++  toggleTextActive: { color: Colors.primary },
++  empty: { alignItems: 'center', paddingVertical: 48, gap: 10 },
++  emptyText: { fontSize: FontSize.base, color: Colors.textMuted },
++  card: {
++    backgroundColor: Colors.white,
++    borderRadius: Radius.md,
++    padding: Spacing.md,
++    marginBottom: Spacing.md,
++    borderWidth: StyleSheet.hairlineWidth,
++    borderColor: Colors.border,
++  },
++  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
++  avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#EDEDED' },
++  avatarFallback: { alignItems: 'center', justifyContent: 'center' },
++  avatarInitial: { fontSize: 18, fontWeight: FontWeight.bold, color: Colors.textSecondary },
++  userName: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
++  userEmail: { fontSize: FontSize.xs, color: Colors.textMuted },
++  detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 },
++  planLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
++  amount: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.primary },
++  subMeta: { fontSize: FontSize.xs, color: Colors.textSecondary },
++  dateText: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 6 },
++  actionsRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
++  actionBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingVertical: 9, borderRadius: Radius.sm },
++  messageBtn: { flex: 1, borderWidth: 1, borderColor: Colors.primary },
++  messageBtnText: { color: Colors.primary, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
++  declineBtn: { flex: 1, borderWidth: 1, borderColor: Colors.danger },
++  declineBtnText: { color: Colors.danger, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
++  completeBtn: { flex: 1, backgroundColor: Colors.primary },
++  completeBtnText: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
++  pill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 },
++  pillText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold },
++  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 24 },
++  msgSheet: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: Spacing.lg },
++  msgTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary, marginBottom: 12 },
++  msgInput: {
++    borderWidth: 1,
++    borderColor: Colors.border,
++    borderRadius: Radius.sm,
++    padding: 12,
++    minHeight: 96,
++    textAlignVertical: 'top',
++    color: Colors.textPrimary,
++    fontSize: FontSize.base,
++  },
++  msgActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 14 },
++  msgCancel: { paddingVertical: 10, paddingHorizontal: 16 },
++  msgCancelText: { color: Colors.textSecondary, fontWeight: FontWeight.semibold },
++  msgSend: { backgroundColor: Colors.primary, paddingVertical: 10, paddingHorizontal: 22, borderRadius: Radius.sm, minWidth: 84, alignItems: 'center' },
++  msgSendDisabled: { opacity: 0.5 },
++  msgSendText: { color: Colors.white, fontWeight: FontWeight.bold },
++});
+diff --git a/frontend/src/components/chat/EditPermissionModals.tsx b/frontend/src/components/chat/EditPermissionModals.tsx
+new file mode 100644
+index 00000000..02b90110
+--- /dev/null
++++ b/frontend/src/components/chat/EditPermissionModals.tsx
+@@ -0,0 +1,179 @@
++/**
++ * EditPermissionModals (extracted iter-335, Chat Refactor) — the two group
++ * post edit-permission surfaces:
++ *   1. "Who can edit" picker (author sets owner|open|approval mode).
++ *   2. "Suggested edits" review list (author approves/rejects proposals).
++ * Logic is unchanged from app/chat/[conversationId].tsx; only moved here to
++ * shrink the mega-screen and isolate the feature.
++ */
++import React from 'react';
++import { Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
++import { Feather } from '@expo/vector-icons';
++import { Colors } from '../../theme';
++import { stripRichTextTags } from '../../lib/chatRichText';
++
++type EditMode = 'owner' | 'open' | 'approval';
++
++export function EditPermissionModals({
++  editModeTarget,
++  onCloseEditMode,
++  onApplyEditMode,
++  showPendingEdits,
++  onClosePendingEdits,
++  pendingEditsList,
++  onReviewEdit,
++}: {
++  editModeTarget: any | null;
++  onCloseEditMode: () => void;
++  onApplyEditMode: (mode: EditMode) => void;
++  showPendingEdits: boolean;
++  onClosePendingEdits: () => void;
++  pendingEditsList: any[] | undefined;
++  onReviewEdit: (pendingEditId: string, decision: 'approve' | 'reject', proposerName?: string) => void;
++}) {
++  return (
++    <>
++      {/* "Who can edit" picker for a group post (author). */}
++      <Modal visible={!!editModeTarget} transparent animationType="fade" onRequestClose={onCloseEditMode}>
++        <Pressable style={styles.editModeBackdrop} onPress={onCloseEditMode}>
++          <Pressable style={styles.editModeSheet} onPress={() => {}}>
++            <Text style={styles.editModeTitle}>Who can edit this post?</Text>
++            {(
++              [
++                { key: 'owner', label: 'Only me', hint: 'Just you can edit this post' },
++                { key: 'open', label: 'Anyone can edit', hint: 'Any member can edit directly' },
++                { key: 'approval', label: 'Anyone with my approval', hint: 'Members propose; you approve each edit' },
++              ] as const
++            ).map((opt) => {
++              const active = (editModeTarget?.editMode || 'owner') === opt.key;
++              return (
++                <TouchableOpacity
++                  key={opt.key}
++                  style={styles.editModeOption}
++                  onPress={() => onApplyEditMode(opt.key)}
++                  testID={`edit-mode-${opt.key}`}
++                >
++                  <View style={styles.flexOne}>
++                    <Text style={styles.editModeOptionLabel}>{opt.label}</Text>
++                    <Text style={styles.editModeOptionHint}>{opt.hint}</Text>
++                  </View>
++                  {active ? <Feather name="check" size={20} color={Colors.primary} /> : null}
++                </TouchableOpacity>
++              );
++            })}
++          </Pressable>
++        </Pressable>
++      </Modal>
++
++      {/* Author reviews member-proposed edits. */}
++      <Modal visible={showPendingEdits} transparent animationType="fade" onRequestClose={onClosePendingEdits}>
++        <Pressable style={styles.editModeBackdrop} onPress={onClosePendingEdits}>
++          <Pressable style={styles.pendingEditsSheet} onPress={() => {}}>
++            <Text style={styles.editModeTitle}>Suggested edits</Text>
++            {!pendingEditsList || pendingEditsList.length === 0 ? (
++              <Text style={styles.pendingEditsEmpty}>No pending edits to review.</Text>
++            ) : (
++              <ScrollView style={styles.pendingEditsScroll}>
++                {pendingEditsList.map((pe: any) => (
++                  <View key={String(pe._id)} style={styles.pendingEditItem}>
++                    <Text style={styles.pendingEditProposer}>
++                      {pe.proposerName || pe.proposer?.name || 'A member'} suggests:
++                    </Text>
++                    {pe.originalText ? (
++                      <Text style={styles.pendingEditOriginal} numberOfLines={3}>
++                        {stripRichTextTags(pe.originalText)}
++                      </Text>
++                    ) : null}
++                    <Text style={styles.pendingEditProposed} numberOfLines={6}>
++                      {stripRichTextTags(pe.proposedText || pe.text || '')}
++                    </Text>
++                    <View style={styles.pendingEditActions}>
++                      <TouchableOpacity
++                        style={[styles.pendingEditBtn, styles.pendingEditReject]}
++                        onPress={() => onReviewEdit(String(pe._id), 'reject')}
++                        testID={`pending-edit-reject-${String(pe._id).slice(-6)}`}
++                      >
++                        <Feather name="x" size={16} color={Colors.danger} />
++                        <Text style={styles.pendingEditRejectText}>Reject</Text>
++                      </TouchableOpacity>
++                      <TouchableOpacity
++                        style={[styles.pendingEditBtn, styles.pendingEditApprove]}
++                        onPress={() => onReviewEdit(String(pe._id), 'approve', pe.proposerName || pe.proposer?.name)}
++                        testID={`pending-edit-approve-${String(pe._id).slice(-6)}`}
++                      >
++                        <Feather name="check" size={16} color={Colors.white} />
++                        <Text style={styles.pendingEditApproveText}>Approve</Text>
++                      </TouchableOpacity>
++                    </View>
++                  </View>
++                ))}
++              </ScrollView>
++            )}
++          </Pressable>
++        </Pressable>
++      </Modal>
++    </>
++  );
++}
++
++const styles = StyleSheet.create({
++  flexOne: { flex: 1 },
++  editModeBackdrop: {
++    flex: 1,
++    backgroundColor: 'rgba(0,0,0,0.45)',
++    justifyContent: 'center',
++  },
++  editModeSheet: {
++    backgroundColor: Colors.surface,
++    borderRadius: 16,
++    padding: 20,
++    marginHorizontal: 24,
++  },
++  editModeTitle: { fontSize: 17, fontWeight: '700', color: Colors.textPrimary, marginBottom: 12 },
++  editModeOption: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    paddingVertical: 12,
++    borderTopWidth: StyleSheet.hairlineWidth,
++    borderTopColor: Colors.border,
++  },
++  editModeOptionLabel: { fontSize: 16, fontWeight: '600', color: Colors.textPrimary },
++  editModeOptionHint: { fontSize: 13, color: Colors.textMuted, marginTop: 2 },
++  pendingEditsSheet: {
++    backgroundColor: Colors.surface,
++    borderRadius: 16,
++    padding: 20,
++    marginHorizontal: 24,
++    maxHeight: '75%',
++  },
++  pendingEditsScroll: { marginTop: 8 },
++  pendingEditsEmpty: { fontSize: 14, color: Colors.textMuted, marginTop: 12 },
++  pendingEditItem: {
++    borderWidth: StyleSheet.hairlineWidth,
++    borderColor: Colors.border,
++    borderRadius: 12,
++    padding: 12,
++    marginBottom: 12,
++  },
++  pendingEditProposer: { fontSize: 13, fontWeight: '600', color: Colors.textPrimary },
++  pendingEditOriginal: {
++    fontSize: 13,
++    color: Colors.textMuted,
++    marginTop: 6,
++    textDecorationLine: 'line-through',
++  },
++  pendingEditProposed: { fontSize: 15, color: Colors.textPrimary, marginTop: 6 },
++  pendingEditActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 12 },
++  pendingEditBtn: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    gap: 6,
++    paddingVertical: 8,
++    paddingHorizontal: 14,
++    borderRadius: 8,
++  },
++  pendingEditReject: { borderWidth: 1, borderColor: Colors.danger },
++  pendingEditRejectText: { color: Colors.danger, fontWeight: '600', fontSize: 14 },
++  pendingEditApprove: { backgroundColor: Colors.primary },
++  pendingEditApproveText: { color: Colors.white, fontWeight: '600', fontSize: 14 },
++});
+diff --git a/frontend/src/components/chat/MessageActionSheet.tsx b/frontend/src/components/chat/MessageActionSheet.tsx
+index a5790655..f4716728 100644
+--- a/frontend/src/components/chat/MessageActionSheet.tsx
++++ b/frontend/src/components/chat/MessageActionSheet.tsx
+@@ -14,11 +14,18 @@ export const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'
+ export function MessageActionSheet({
+   message,
+   canEdit,
++  canSetEditMode,
++  canSuggestEdit,
++  suggestPending,
++  canPin,
++  isPinned,
+   onClose,
+   onPickReaction,
+   onReply,
+   onCopy,
+   onEdit,
++  onWhoCanEdit,
++  onSuggestEdit,
+   onForward,
+   onShare,
+   onSelectMultiple,
+@@ -30,11 +37,18 @@ export function MessageActionSheet({
+ }: {
+   message: any | null;
+   canEdit: boolean;
++  canSetEditMode?: boolean;
++  canSuggestEdit?: boolean;
++  suggestPending?: boolean;
++  canPin?: boolean;
++  isPinned?: boolean;
+   onClose: () => void;
+   onPickReaction: (emoji: string) => void;
+   onReply: () => void;
+   onCopy: () => void;
+   onEdit: () => void;
++  onWhoCanEdit?: () => void;
++  onSuggestEdit?: () => void;
+   onForward: () => void;
+   onShare: () => void;
+   onSelectMultiple: () => void;
+@@ -66,6 +80,17 @@ export function MessageActionSheet({
+             {canEdit ? (
+               <ActionRow icon="edit-2" lib="feather" label="Edit" onPress={onEdit} />
+             ) : null}
++            {canSetEditMode && onWhoCanEdit ? (
++              <ActionRow icon="shield" lib="feather" label="Who can edit" onPress={onWhoCanEdit} />
++            ) : null}
++            {canSuggestEdit && onSuggestEdit ? (
++              <ActionRow
++                icon="edit-3"
++                lib="feather"
++                label={suggestPending ? 'Edit suggested • awaiting approval' : 'Suggest edit'}
++                onPress={onSuggestEdit}
++              />
++            ) : null}
+             <ActionRow icon="corner-up-right" lib="feather" label="Forward" onPress={onForward} />
+             <ActionRow icon="share-2" lib="feather" label="Share" onPress={onShare} />
+             <ActionRow icon="check-square" lib="feather" label="Select multiple to forward" onPress={onSelectMultiple} />
+@@ -75,7 +100,14 @@ export function MessageActionSheet({
+               label={message?.starred ? 'Unstar' : 'Star'}
+               onPress={onStar}
+             />
+-            <ActionRow icon="bookmark" lib="feather" label="Pin" onPress={onPin} />
++            {canPin ? (
++              <ActionRow
++                icon="bookmark"
++                lib="feather"
++                label={isPinned ? 'Unpin' : 'Pin'}
++                onPress={onPin}
++              />
++            ) : null}
+             <ActionRow icon="smile" lib="feather" label="More reactions" onPress={onMoreReactions} />
+             <ActionRow icon="info" lib="feather" label="Message info" onPress={onMessageInfo} />
+             <ActionRow icon="trash-2" lib="feather" label="Delete message" onPress={onDelete} danger />
+diff --git a/frontend/src/components/chat/MessageBubble.tsx b/frontend/src/components/chat/MessageBubble.tsx
+index 60de33ea..ea6e2fc2 100644
+--- a/frontend/src/components/chat/MessageBubble.tsx
++++ b/frontend/src/components/chat/MessageBubble.tsx
+@@ -274,8 +274,17 @@ export function MessageBubble({
+               editedAtMs && Number.isFinite(editedAtMs)
+                 ? new Date(editedAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                 : timeStr;
++            // iter-333: when a group post was last edited by someone OTHER than
++            // the author, the backend resolves `lastEditedByName`. Show
++            // "edited by <name>"; otherwise fall back to "edited <time>".
++            const byName =
++              typeof msg.lastEditedByName === 'string' && msg.lastEditedByName.trim()
++                ? msg.lastEditedByName.trim()
++                : null;
+             return (
+-              <Text style={[styles.bubbleTime, styles.editedBadge]}>edited {editedTimeStr}</Text>
++              <Text style={[styles.bubbleTime, styles.editedBadge]}>
++                {byName ? `edited by ${byName}` : `edited ${editedTimeStr}`}
++              </Text>
+             );
+           })()}
+           <Text style={styles.bubbleTime}>{timeStr}</Text>
+diff --git a/frontend/src/components/user-profile/GroupInCommonRow.tsx b/frontend/src/components/user-profile/GroupInCommonRow.tsx
+index c5fee004..2b1477ea 100644
+--- a/frontend/src/components/user-profile/GroupInCommonRow.tsx
++++ b/frontend/src/components/user-profile/GroupInCommonRow.tsx
+@@ -15,11 +15,13 @@ import { Colors, FontSize, FontWeight } from '../../theme';
+  */
+ export default function GroupInCommonRow({
+   conv,
+-  targetUserId,
++  targetUserIds,
++  targetPhoneE164,
+   onResolve,
+ }: {
+   conv: any;
+-  targetUserId: string;
++  targetUserIds: string[];
++  targetPhoneE164?: string | null;
+   onResolve: (convId: string, isMember: boolean) => void;
+ }) {
+   const router = useRouter();
+@@ -30,21 +32,56 @@ export default function GroupInCommonRow({
+     !!conv?._id,
+   );
+   const isMember = useMemo(() => {
+-    const idOf = (p: any) => String(p?.userId || p?._id || p?.id || '');
++    const idSet = new Set((targetUserIds || []).map((id) => String(id)));
++    // Members from getGroupMembers come in several shapes across the backend:
++    // flat ({ userId, _id, phone }) OR nested ({ user: { _id, userId, phone } }).
++    // Collect EVERY id alias so we don't miss the account id (mirrors the
++    // resolution used in app/group/[id].tsx which handles m.user._id too).
++    const idsOf = (p: any): string[] =>
++      [
++        p?.userId,
++        p?._id,
++        p?.id,
++        p?.accountId,
++        p?.memberId,
++        p?.user?._id,
++        p?.user?.userId,
++        p?.user?.id,
++      ]
++        .filter(Boolean)
++        .map((v) => String(v));
++    const phonesOf = (p: any): any[] => [
++      p?.phoneE164,
++      p?.phone,
++      p?.user?.phoneE164,
++      p?.user?.phone,
++    ];
++    // Last-9-digits key handles country-code variance (e.g. Ghana +233).
++    const digitsKey = (v: any) => {
++      const d = String(v || '').replace(/\D/g, '');
++      return d.length >= 9 ? d.slice(-9) : '';
++    };
++    const targetDigits = digitsKey(targetPhoneE164);
++    const matches = (m: any) => {
++      if (idsOf(m).some((cid) => idSet.has(cid))) return true;
++      if (!targetDigits) return false;
++      return phonesOf(m).some((ph) => digitsKey(ph) === targetDigits);
++    };
++
+     if (Array.isArray(members) && members.length > 0) {
+-      return members.some((m: any) => idOf(m) === String(targetUserId));
++      return members.some((m: any) => matches(m));
+     }
+     // Fallback to any member ids embedded on the conversation object itself.
+     const ids = [
+       ...(Array.isArray(conv?.participantIds) ? conv.participantIds : []),
+       ...(Array.isArray(conv?.memberIds) ? conv.memberIds : []),
+-      ...(Array.isArray(conv?.participants) ? conv.participants.map(idOf) : []),
+-      ...(Array.isArray(conv?.members) ? conv.members.map(idOf) : []),
++      ...(Array.isArray(conv?.participants) ? conv.participants.flatMap(idsOf) : []),
++      ...(Array.isArray(conv?.members) ? conv.members.flatMap(idsOf) : []),
+     ]
+       .filter(Boolean)
+       .map(String);
+-    return ids.includes(String(targetUserId));
+-  }, [members, conv, targetUserId]);
++    return ids.some((id) => idSet.has(id));
++  }, [members, conv, targetUserIds, targetPhoneE164]);
+ 
+   useEffect(() => {
+     onResolve(String(conv?._id), isMember);
+diff --git a/frontend/src/lib/friendlyError.ts b/frontend/src/lib/friendlyError.ts
+new file mode 100644
+index 00000000..dda51397
+--- /dev/null
++++ b/frontend/src/lib/friendlyError.ts
+@@ -0,0 +1,39 @@
++/**
++ * friendlyConvexError — maps raw Convex/network error strings into short,
++ * user-facing messages.
++ *
++ * Convex surfaces backend failures as opaque strings like:
++ *   "[CONVEX M(conversations:getOrCreateDirect)] [Request ID: ...] Server Error"
++ * Showing that verbatim in an Alert is confusing. This helper detects the
++ * common failure shapes and returns a friendly sentence, falling back to the
++ * caller-supplied default for anything genuinely informative.
++ */
++export function friendlyConvexError(error: any, fallback = 'Something went wrong. Please try again.'): string {
++  const raw = String(error?.message || error || '').trim();
++  if (!raw) return fallback;
++
++  const lower = raw.toLowerCase();
++
++  // Opaque Convex server crash — no actionable detail for the user.
++  if (lower.includes('server error') || lower.includes('called by client')) {
++    return "We couldn't reach the server just now. Please check your connection and try again.";
++  }
++  // Network / timeout conditions.
++  if (
++    lower.includes('network request failed') ||
++    lower.includes('failed to fetch') ||
++    lower.includes('timeout') ||
++    lower.includes('offline')
++  ) {
++    return 'No internet connection. Please check your network and try again.';
++  }
++  // Auth expiry.
++  if (lower.includes('unauthenticated') || lower.includes('not authenticated') || lower.includes('unauthorized')) {
++    return 'Your session expired. Please sign in again.';
++  }
++
++  // A ConvexError with a human message (short, no bracketed request id) is
++  // usually meaningful — surface it. Otherwise use the fallback.
++  if (raw.startsWith('[CONVEX') || raw.includes('Request ID:')) return fallback;
++  return raw.length > 0 && raw.length <= 160 ? raw : fallback;
++}
+diff --git a/frontend/src/lib/mobileMoney.ts b/frontend/src/lib/mobileMoney.ts
+new file mode 100644
+index 00000000..0c913d16
+--- /dev/null
++++ b/frontend/src/lib/mobileMoney.ts
+@@ -0,0 +1,81 @@
++/**
++ * Mobile Money shared constants — verbatim mirror of the web app's
++ * convex/lib/mobileMoney.ts so the native estimate never drifts from the
++ * backend. The authoritative amount always comes back from
++ * api.mobileMoneyRequests.createRequest; these values only drive the ≈ estimate
++ * shown before submitting and the country picker.
++ */
++
++export type MobileMoneyCountry = { code: string; name: string; currency: string };
++
++export const MOBILE_MONEY_COUNTRIES: MobileMoneyCountry[] = [
++  { code: 'KE', name: 'Kenya', currency: 'KES' },
++  { code: 'GH', name: 'Ghana', currency: 'GHS' },
++  { code: 'UG', name: 'Uganda', currency: 'UGX' },
++  { code: 'TZ', name: 'Tanzania', currency: 'TZS' },
++  { code: 'RW', name: 'Rwanda', currency: 'RWF' },
++  { code: 'ZM', name: 'Zambia', currency: 'ZMW' },
++  { code: 'ZA', name: 'South Africa', currency: 'ZAR' },
++  { code: 'NG', name: 'Nigeria', currency: 'NGN' },
++  { code: 'CI', name: "Côte d'Ivoire", currency: 'XOF' },
++  { code: 'SN', name: 'Senegal', currency: 'XOF' },
++  { code: 'CM', name: 'Cameroon', currency: 'XAF' },
++  { code: 'BF', name: 'Burkina Faso', currency: 'XOF' },
++  { code: 'ML', name: 'Mali', currency: 'XOF' },
++  { code: 'BJ', name: 'Benin', currency: 'XOF' },
++  { code: 'TG', name: 'Togo', currency: 'XOF' },
++  { code: 'GA', name: 'Gabon', currency: 'XAF' },
++  { code: 'MW', name: 'Malawi', currency: 'MWK' },
++];
++
++/** EUR → local currency fallback rates (used only for the ≈ estimate). */
++export const FALLBACK_EUR_RATES: Record<string, number> = {
++  KES: 140,
++  GHS: 16,
++  UGX: 4100,
++  TZS: 2800,
++  RWF: 1500,
++  ZMW: 29,
++  ZAR: 20,
++  NGN: 1700,
++  XOF: 655,
++  XAF: 655,
++  MWK: 1900,
++};
++
++const ZERO_DECIMAL_CURRENCIES = ['UGX', 'RWF', 'XOF', 'XAF', 'TZS', 'MWK'];
++
++/** Rounding rule matching the web backend exactly. */
++export function roundLocalAmount(amount: number, currency: string): number {
++  if (ZERO_DECIMAL_CURRENCIES.includes(currency)) {
++    return Math.max(1, Math.round(amount));
++  }
++  return Math.max(1, Math.round(amount * 100) / 100);
++}
++
++/** Client-side ≈ estimate shown before submitting (authoritative value is
++ *  returned by createRequest). */
++export function estimateLocalAmount(eurAmount: number, currency: string): number {
++  return roundLocalAmount(eurAmount * (FALLBACK_EUR_RATES[currency] ?? 1), currency);
++}
++
++export type PremiumPlan = { variantId: string; eur: number; months: number; label: string };
++
++export const PREMIUM_PLANS: Record<string, PremiumPlan> = {
++  var_premium_monthly: { variantId: 'var_premium_monthly', eur: 3, months: 1, label: 'Monthly' },
++  var_premium_6months: { variantId: 'var_premium_6months', eur: 15, months: 6, label: '6 Months' },
++  var_premium_yearly: { variantId: 'var_premium_yearly', eur: 24, months: 12, label: 'Yearly' },
++};
++
++export function currencyForCountry(code: string): string {
++  return MOBILE_MONEY_COUNTRIES.find((c) => c.code === code)?.currency || '';
++}
++
++/** Compact money label, e.g. "KES 3,360" or "GHS 48.00". */
++export function formatLocalAmount(amount: number, currency: string): string {
++  const zero = ZERO_DECIMAL_CURRENCIES.includes(currency);
++  const n = zero
++    ? Math.round(amount).toLocaleString('en-US')
++    : Number(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
++  return `${currency} ${n}`;
++}
+diff --git a/frontend/src/lib/referralAttribution.ts b/frontend/src/lib/referralAttribution.ts
+index e3a25fd1..601a5e0a 100644
+--- a/frontend/src/lib/referralAttribution.ts
++++ b/frontend/src/lib/referralAttribution.ts
+@@ -23,6 +23,22 @@ import { useAuth } from '../providers/AuthProvider';
+ 
+ const CAPTURED_KEY = 'smilers_install_referrer_captured';
+ const PENDING_CODE_KEY = 'smilers_pending_referral_code';
++// iter-338: once a referral has been definitively applied for this user (or the
++// backend reports the user already has a referrer), we lock manual entry so a
++// code can only ever be redeemed ONCE. Drives hiding the Sign-In "Do you have a
++// referral code?" link. The backend (earnings.trackReferral / getMyReferralState)
++// is the source of truth; this flag mirrors it for the pre-auth Sign-In screen.
++const REFERRAL_LOCKED_KEY = 'smilers_referral_locked';
++
++/** True once this user has redeemed (or already had) a referrer — manual entry
++ *  should be hidden. */
++export async function isReferralLocked(): Promise<boolean> {
++  try {
++    return (await AsyncStorage.getItem(REFERRAL_LOCKED_KEY)) === '1';
++  } catch {
++    return false;
++  }
++}
+ 
+ /** Parse `ref=CODE` out of a Play install-referrer string (it may also be
+  * the default `utm_source=google-play&utm_medium=organic` for organic
+@@ -62,6 +78,31 @@ async function stashPendingCode(code: string | null): Promise<void> {
+   }
+ }
+ 
++/** iter-332 — MANUAL entry from the Sign-In screen ("Do you have a referral
++ *  code?"). Unlike install/deep-link capture, an explicit user entry OVERWRITES
++ *  any pending code. Returns the normalized code (or null if empty/invalid).
++ *  `ReferralAttribution` then credits it via earnings.trackReferral once the
++ *  user authenticates — same path as the web app's ?ref=CODE flow. */
++export async function setPendingReferralCode(raw: string): Promise<string | null> {
++  const code = (raw || '').trim().toUpperCase().slice(0, 64);
++  if (!code) return null;
++  try {
++    await AsyncStorage.setItem(PENDING_CODE_KEY, code);
++  } catch {
++    /* best-effort */
++  }
++  return code;
++}
++
++/** Read the currently-stored pending referral code (for prefill/display). */
++export async function getPendingReferralCode(): Promise<string | null> {
++  try {
++    return await AsyncStorage.getItem(PENDING_CODE_KEY);
++  } catch {
++    return null;
++  }
++}
++
+ /** Capture a `?ref=CODE` query param from the app's open/deep-link URL
+  *  (mirrors the web app's `?ref=CODE` → localStorage flow). */
+ async function captureDeepLinkRef(url?: string | null): Promise<void> {
+@@ -128,6 +169,20 @@ export function ReferralAttribution() {
+       if (consumingRef.current) return;
+       consumingRef.current = true;
+       try {
++        // First, honor the backend's source of truth: if this user already
++        // has a referrer, lock manual entry forever and drop any pending code
++        // (covers users referred via web / another device / a prior session).
++        try {
++          const state: any = await convex.query((api as any).earnings.getMyReferralState, {});
++          if (state?.hasReferrer === true) {
++            await AsyncStorage.setItem(REFERRAL_LOCKED_KEY, '1');
++            await AsyncStorage.removeItem(PENDING_CODE_KEY);
++            return;
++          }
++        } catch {
++          /* state query unavailable — fall through to the trackReferral path */
++        }
++
+         const code = await AsyncStorage.getItem(PENDING_CODE_KEY);
+         if (!code) return;
+         const result: any = await convex.mutation((api as any).earnings.trackReferral, {
+@@ -139,8 +194,14 @@ export function ReferralAttribution() {
+           consumingRef.current = false;
+           return;
+         }
+-        // Any definitive outcome (incl. unknown shapes) → clear.
++        // Any definitive outcome (incl. unknown shapes) → clear the pending code.
+         await AsyncStorage.removeItem(PENDING_CODE_KEY);
++        // Lock manual entry ONLY when a referrer is now set (applied) or was
++        // already set (already_referred). invalid_code / self_referral stay
++        // UNLOCKED so the user can still try a valid code once.
++        if (status === 'applied' || status === 'already_referred') {
++          await AsyncStorage.setItem(REFERRAL_LOCKED_KEY, '1');
++        }
+       } catch {
+         // Network/transient error — leave the pending code; retried later.
+         consumingRef.current = false;
