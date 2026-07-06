@@ -1077,3 +1077,9 @@ compiles; Sign-In renders. Native-only — verify on EAS device build.
 - One pinned post per chat — pinning replaces the previous; unpinning clears it. Banner (`getPinnedMessage`) shows at top of chat, visible to all members; admins get an unpin (✕) affordance.
 - Canonical contract: `conversations.pinMessage({ conversationId, messageId })` pin/replace; `conversations.pinMessage({ conversationId })` unpin; `conversations.getPinnedMessage({ conversationId })` read banner.
 - Files: `app/chat/[conversationId].tsx` (queries, onPin/onUnpinBanner, banner), `src/components/chat/MessageActionSheet.tsx` (canPin/isPinned → Pin/Unpin row).
+
+## Mobile Money Payment Requests — iter-339
+- Users: Premium screen → "Pay with Mobile Money" → app/mobile-money.tsx: pick plan (Monthly/6-Months/Yearly), pick country (17 African countries, default KE), optional pay-from phone, ≈ estimate, confirm → mobileMoneyRequests.createRequest (action) → success screen w/ authoritative amount+currency. getMyRequests lists own requests w/ status.
+- Admin: app/admin.tsx new "Payments" tab (badge = countPendingRequests) → src/components/admin/MobileMoneyAdmin.tsx: Pending/History toggle; per-request Message (admin.messaging.messageUsers) / Complete (completeRequest → auto-activates plan) / Decline (declineRequest). Completed/declined move to History.
+- Shared constants mirrored verbatim from web convex/lib/mobileMoney.ts in src/lib/mobileMoney.ts (MOBILE_MONEY_COUNTRIES, FALLBACK_EUR_RATES, roundLocalAmount, PREMIUM_PLANS). country=ISO alpha-2; phone omitted (undefined) when blank.
+- Files: src/lib/mobileMoney.ts, app/mobile-money.tsx, src/components/admin/MobileMoneyAdmin.tsx, app/premium.tsx, app/admin.tsx. Backend Convex funcs assumed deployed on web side.
