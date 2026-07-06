@@ -183,6 +183,9 @@ interface BubbleProps {
   // when it is the target of such a jump.
   onPressParent?: () => void;
   isJumpHighlighted?: boolean;
+  // iter-337: resolved sender name for GROUP incoming bubbles (device-contact
+  // name first, Google/account name fallback). Undefined → not shown.
+  senderDisplayName?: string;
 }
 
 export default function MediaBubble({
@@ -200,6 +203,7 @@ export default function MediaBubble({
   isActiveSearchMatch,
   onPressParent,
   isJumpHighlighted,
+  senderDisplayName,
 }: BubbleProps) {
   const time = msg._creationTime ? new Date(msg._creationTime) : new Date();
   const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -384,6 +388,14 @@ export default function MediaBubble({
           <Ionicons name="shield-checkmark-outline" size={12} color={isOutgoing ? '#F6FFF9' : Colors.primary} />
           <Text style={[styles.encryptedText, { color: isOutgoing ? '#F6FFF9' : Colors.primary }]}>Encrypted</Text>
         </View>
+
+        {/* iter-337: group sender name — only on incoming bubbles when the
+            parent resolved a name (device-contact name first, else Google). */}
+        {!isMine && senderDisplayName ? (
+          <Text style={styles.senderNameLabel} numberOfLines={1}>
+            {senderDisplayName}
+          </Text>
+        ) : null}
 
         {/* iter-293: status-reply indicator. When a DM was sent as a reply to
             someone's status, show a small banner so BOTH sender & receiver can
@@ -1936,6 +1948,12 @@ const styles = StyleSheet.create({
   bubbleText: { fontSize: FontSize.sm, lineHeight: 20, color: Colors.textPrimary },
   encryptedRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4 },
   encryptedText: { fontSize: 10, fontWeight: FontWeight.semibold },
+  senderNameLabel: {
+    fontSize: 13,
+    fontWeight: FontWeight.bold,
+    color: Colors.primary,
+    marginBottom: 2,
+  },
   // iter-134: call log entry card (rendered when msg.type === 'call').
   // Lives inside the existing bubble shell — only the body content changes.
   callLogRow: {

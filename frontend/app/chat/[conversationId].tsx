@@ -77,7 +77,7 @@ import { appendDiaryEntry, chatMessageToDiaryEntry } from '../../src/lib/diarySt
 import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
 import { notifyEventPush, previewForMessageType } from '../../src/lib/notifyPush';
 import { reportConvexUserIdForPush } from '../../src/push/useEmergentPush';
-import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
+import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName, getResolvedDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { getLanguageByCode } from '../../src/lib/languages';
 import {
@@ -440,6 +440,26 @@ export default function ChatScreen() {
   // iter-176: device address-book name takes priority for the chat
   // header title (1:1 chats only — group titles are untouched).
   const deviceContactIndex = useDeviceContactIndex();
+  // iter-337: resolve a group message sender's display name. Device address-
+  // book name takes priority (matched via the viewer's saved contact record,
+  // which carries the phone), falling back to the Smilers/Google account name
+  // the message already carries. Mirrors group/[id].tsx's displayNameForMember.
+  const resolveSenderName = useCallback(
+    (senderId: any, fallbackName?: string): string => {
+      const uid = String(senderId || '');
+      const fb = (fallbackName && String(fallbackName).trim()) || 'Member';
+      const record = getSavedContactRecord(contacts, { userId: uid });
+      const base = record || {};
+      return getResolvedDisplayName(
+        { ...base, name: base.name || fb, displayName: base.displayName || fb },
+        deviceContactIndex,
+        lookupDeviceContactName,
+        fb,
+      );
+    },
+    [contacts, deviceContactIndex],
+  );
+
   const refetchMessages = useCallback(async () => {}, []);
   const { data: conversationsForForward } = useSafeConvexQuery<any[]>(
     api.conversations.listConversations,
@@ -3912,6 +3932,11 @@ export default function ChatScreen() {
                       msg={item}
                       isMine={item.senderId === effectiveMe?._id}
                       myUserId={effectiveMe?._id}
+                      senderDisplayName={
+                        isGroupChat && item.senderId !== effectiveMe?._id
+                          ? resolveSenderName(item.senderId, item.senderName)
+                          : undefined
+                      }
                       parentMsg={parentMsg}
                       onPressParent={parentMsg ? () => jumpToMessage(parentId) : undefined}
                       isJumpHighlighted={jumpHighlightId === String(item._id)}
