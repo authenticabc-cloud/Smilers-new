@@ -37,7 +37,7 @@ MODIFIED files:
 - app/user/[userId].tsx              (Groups-in-common now uses api.conversations.listGroups; friendly errors)
 - src/components/user-profile/GroupInCommonRow.tsx  (robust member id/phone matching, nested shapes)
 - app/(tabs)/contacts.tsx            (friendly error on open-chat)
-- app/(tabs)/ads.tsx                 (rev2 — "Pay with Mobile Money" button in the Buy Clicks modal → /ad-clicks-payment)
+- app/(tabs)/ads.tsx                 (rev2 — "Pay with Mobile Money" button in the Buy Clicks modal → /ad-clicks-payment; + a "Mobile Money top-ups" status card on the My Ads tab reading api.adClickRequests.getMyRequests)
 - app/find-by-phone.tsx              (friendly error on start-chat)
 - app/diagnostic-logs.tsx            (group-detection diagnostics: listGroups authoritative)
 - src/lib/referralAttribution.ts     (referral once-per-user lock)
