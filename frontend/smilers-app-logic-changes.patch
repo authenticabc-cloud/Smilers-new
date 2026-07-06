@@ -1,3 +1,82 @@
+diff --git a/frontend/app/(tabs)/ads.tsx b/frontend/app/(tabs)/ads.tsx
+index b83e63c3..425017fb 100644
+--- a/frontend/app/(tabs)/ads.tsx
++++ b/frontend/app/(tabs)/ads.tsx
+@@ -353,6 +353,19 @@ export default function AdsScreen() {
+         quantity={purchaseQty}
+         onChangeQuantity={setPurchaseQty}
+         onConfirm={onConfirmPurchase}
++        onMobileMoney={() => {
++          const ad = purchaseAd;
++          if (!ad) return;
++          setPurchaseAd(null);
++          router.push({
++            pathname: '/ad-clicks-payment',
++            params: {
++              adId: ad._id,
++              adTitle: ad.productName || ad.businessName || 'your ad',
++              clicks: String(purchaseQty),
++            },
++          } as any);
++        }}
+         onClose={() => (!purchasing ? setPurchaseAd(null) : undefined)}
+         submitting={purchasing}
+       />
+@@ -368,6 +381,7 @@ function BuyClicksModal({
+   quantity,
+   onChangeQuantity,
+   onConfirm,
++  onMobileMoney,
+   onClose,
+   submitting,
+ }: {
+@@ -375,6 +389,7 @@ function BuyClicksModal({
+   quantity: number;
+   onChangeQuantity: (q: number) => void;
+   onConfirm: () => void;
++  onMobileMoney: () => void;
+   onClose: () => void;
+   submitting: boolean;
+ }) {
+@@ -451,6 +466,19 @@ function BuyClicksModal({
+           >
+             <Text style={styles.payBtnText}>{submitting ? 'Opening checkout…' : `Pay €${total}`}</Text>
+           </TouchableOpacity>
++
++          {/* Manual Mobile Money alternative to card checkout. */}
++          <TouchableOpacity
++            style={styles.mobileMoneyBtn}
++            onPress={onMobileMoney}
++            disabled={submitting}
++            activeOpacity={0.85}
++            testID="buy-clicks-mobile-money"
++          >
++            <MaterialCommunityIcons name="cellphone" size={19} color={Colors.primary} />
++            <Text style={styles.mobileMoneyBtnText}>Pay with Mobile Money</Text>
++          </TouchableOpacity>
++
+           <Text style={styles.payDisclaimer}>
+             You&apos;ll complete payment securely in your browser, then return to the app.
+           </Text>
+@@ -1098,6 +1126,18 @@ const styles = StyleSheet.create({
+     alignItems: 'center',
+   },
+   payBtnDisabled: { opacity: 0.6 },
++  mobileMoneyBtn: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    justifyContent: 'center',
++    gap: 8,
++    paddingVertical: 13,
++    marginTop: 10,
++    borderRadius: Radius.lg,
++    borderWidth: 1.5,
++    borderColor: Colors.primary,
++  },
++  mobileMoneyBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.primary },
+   payBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.headerBg },
+   payDisclaimer: { fontSize: FontSize.xs, color: Colors.textMuted, textAlign: 'center', marginTop: 10 },
+ });
 diff --git a/frontend/app/(tabs)/contacts.tsx b/frontend/app/(tabs)/contacts.tsx
 index 3e77ad2f..9e83e330 100644
 --- a/frontend/app/(tabs)/contacts.tsx
@@ -19,15 +98,328 @@ index 3e77ad2f..9e83e330 100644
      }
    };
  
+diff --git a/frontend/app/ad-clicks-payment.tsx b/frontend/app/ad-clicks-payment.tsx
+new file mode 100644
+index 00000000..ec1d72d5
+--- /dev/null
++++ b/frontend/app/ad-clicks-payment.tsx
+@@ -0,0 +1,307 @@
++/**
++ * Ad-clicks mobile money payment request (user-facing).
++ * Mirrors the premium mobile-money flow but grants paid ad clicks (€0.04 each)
++ * to a specific ad. Pick country → optional pay-from phone → ≈ estimate →
++ * confirm → adClickRequests.createRequest → success. Admin completes manually.
++ */
++import React, { useMemo, useState } from 'react';
++import {
++  ActivityIndicator,
++  Alert,
++  KeyboardAvoidingView,
++  Modal,
++  Platform,
++  Pressable,
++  ScrollView,
++  StyleSheet,
++  Text,
++  TextInput,
++  TouchableOpacity,
++  View,
++} from 'react-native';
++import { SafeAreaView } from 'react-native-safe-area-context';
++import { Ionicons } from '@expo/vector-icons';
++import { router, useLocalSearchParams } from 'expo-router';
++import { useAction, useQuery } from 'convex/react';
++import { api } from '../src/convexApi';
++import { Colors, FontSize, FontWeight, Spacing, Radius } from '../src/theme';
++import {
++  MOBILE_MONEY_COUNTRIES,
++  AD_CLICK_PRICE_EUR,
++  currencyForCountry,
++  estimateAdClicksAmount,
++  formatLocalAmount,
++} from '../src/lib/mobileMoney';
++import { friendlyConvexError } from '../src/lib/friendlyError';
++
++function StatusPill({ status }: { status: string }) {
++  const map: Record<string, { bg: string; fg: string; label: string }> = {
++    pending: { bg: '#FFF4E5', fg: '#B26A00', label: 'Pending' },
++    completed: { bg: '#E7F6EC', fg: '#1B7F3B', label: 'Completed' },
++    declined: { bg: '#FDECEC', fg: Colors.danger, label: 'Declined' },
++    cancelled: { bg: '#EEE', fg: Colors.textSecondary, label: 'Cancelled' },
++  };
++  const s = map[status] || map.cancelled;
++  return (
++    <View style={[styles.pill, { backgroundColor: s.bg }]}>
++      <Text style={[styles.pillText, { color: s.fg }]}>{s.label}</Text>
++    </View>
++  );
++}
++
++export default function AdClicksPaymentScreen() {
++  const params = useLocalSearchParams<{ adId?: string; adTitle?: string; clicks?: string }>();
++  const adId = String(params.adId || '');
++  const adTitle = params.adTitle ? String(params.adTitle) : 'your ad';
++  const clicks = Math.max(1, parseInt(String(params.clicks || '50'), 10) || 50);
++
++  const [countryCode, setCountryCode] = useState('KE');
++  const [phone, setPhone] = useState('');
++  const [showCountry, setShowCountry] = useState(false);
++  const [submitting, setSubmitting] = useState(false);
++  const [success, setSuccess] = useState<{ amount: number; currency: string } | null>(null);
++
++  const createRequest = useAction((api as any).adClickRequests?.createRequest);
++  const myRequests = useQuery((api as any).adClickRequests?.getMyRequests, {}) as any[] | undefined;
++
++  const currency = currencyForCountry(countryCode);
++  const country = MOBILE_MONEY_COUNTRIES.find((c) => c.code === countryCode);
++  const estimate = useMemo(() => estimateAdClicksAmount(clicks, currency), [clicks, currency]);
++  const eur = (clicks * AD_CLICK_PRICE_EUR).toFixed(2);
++
++  const submit = () => {
++    if (!adId) {
++      Alert.alert('Missing ad', 'Please start from your ad again.');
++      return;
++    }
++    Alert.alert(
++      'Send payment request?',
++      `Ad: ${adTitle}\nClicks: ${clicks} (€${eur})\nCountry: ${country?.name}\nEstimated total: ≈ ${formatLocalAmount(estimate, currency)}\n\nAn admin will contact you with mobile money details. Your clicks are credited automatically once confirmed.`,
++      [
++        { text: 'Cancel', style: 'cancel' },
++        {
++          text: 'Send request',
++          onPress: async () => {
++            setSubmitting(true);
++            try {
++              const res: any = await createRequest({
++                adId,
++                clicks,
++                country: countryCode,
++                phone: phone.trim() ? phone.trim() : undefined,
++              });
++              setSuccess({ amount: res?.amount ?? estimate, currency: res?.currency ?? currency });
++            } catch (e: any) {
++              Alert.alert('Could not send request', friendlyConvexError(e, 'Please try again.'));
++            } finally {
++              setSubmitting(false);
++            }
++          },
++        },
++      ],
++    );
++  };
++
++  return (
++    <SafeAreaView style={styles.container} edges={['top']} testID="ad-clicks-payment-screen">
++      <View style={styles.header}>
++        <TouchableOpacity onPress={() => router.back()} hitSlop={10} testID="admm-back">
++          <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
++        </TouchableOpacity>
++        <Text style={styles.headerTitle}>Buy clicks · Mobile Money</Text>
++        <View style={{ width: 24 }} />
++      </View>
++
++      <KeyboardAvoidingView style={styles.flexOne} behavior={Platform.select({ ios: 'padding', android: undefined })}>
++        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
++          {success ? (
++            <View style={styles.successCard} testID="admm-success">
++              <Ionicons name="checkmark-circle" size={56} color={Colors.primary} />
++              <Text style={styles.successTitle}>Request received</Text>
++              <Text style={styles.successAmount}>{formatLocalAmount(success.amount, success.currency)}</Text>
++              <Text style={styles.successBody}>
++                Your request for {clicks} clicks on “{adTitle}” has been sent. An admin will message you
++                shortly with the mobile money number. The clicks are credited to your ad automatically once
++                the admin confirms.
++              </Text>
++              <TouchableOpacity style={styles.primaryBtn} onPress={() => router.back()} testID="admm-done">
++                <Text style={styles.primaryBtnText}>Done</Text>
++              </TouchableOpacity>
++            </View>
++          ) : (
++            <>
++              <View style={styles.summaryCard}>
++                <Text style={styles.summaryTitle} numberOfLines={2}>{adTitle}</Text>
++                <View style={styles.summaryRow}>
++                  <Text style={styles.summaryLabel}>{clicks} clicks × €{AD_CLICK_PRICE_EUR.toFixed(2)}</Text>
++                  <Text style={styles.summaryEur}>€{eur}</Text>
++                </View>
++              </View>
++
++              <Text style={styles.sectionTitle}>Your country</Text>
++              <TouchableOpacity style={styles.pickerRow} onPress={() => setShowCountry(true)} testID="admm-country">
++                <Text style={styles.pickerValue}>
++                  {country ? `${country.name} (${country.currency})` : 'Select country'}
++                </Text>
++                <Ionicons name="chevron-down" size={18} color={Colors.textSecondary} />
++              </TouchableOpacity>
++
++              <Text style={styles.sectionTitle}>Mobile money number (optional)</Text>
++              <TextInput
++                style={styles.input}
++                value={phone}
++                onChangeText={setPhone}
++                placeholder="e.g. 0712345678"
++                placeholderTextColor={Colors.textMuted}
++                keyboardType="phone-pad"
++                testID="admm-phone"
++              />
++              <Text style={styles.hint}>Helps the admin match your payment. You can leave this blank.</Text>
++
++              <View style={styles.estimateBox}>
++                <Text style={styles.estimateLabel}>Estimated total</Text>
++                <Text style={styles.estimateAmount}>≈ {formatLocalAmount(estimate, currency)}</Text>
++                <Text style={styles.estimateSub}>{clicks} clicks · €{eur} · final amount confirmed on submit</Text>
++              </View>
++
++              <TouchableOpacity
++                style={[styles.primaryBtn, submitting ? styles.primaryBtnDisabled : null]}
++                onPress={submit}
++                disabled={submitting}
++                testID="admm-submit"
++              >
++                {submitting ? (
++                  <ActivityIndicator color={Colors.white} />
++                ) : (
++                  <Text style={styles.primaryBtnText}>Request with mobile money</Text>
++                )}
++              </TouchableOpacity>
++            </>
++          )}
++
++          {Array.isArray(myRequests) && myRequests.length > 0 ? (
++            <View style={styles.myRequests}>
++              <Text style={styles.sectionTitle}>Your ad-click requests</Text>
++              {myRequests.map((r: any) => (
++                <View key={String(r._id)} style={styles.reqRow} testID={`admm-my-${String(r._id).slice(-6)}`}>
++                  <View style={styles.flexOne}>
++                    <Text style={styles.reqPlan} numberOfLines={1}>{r.adTitle || r.ad?.productName || 'Ad'}</Text>
++                    <Text style={styles.reqAmount}>
++                      {r.clicks ?? r.quantity} clicks · {formatLocalAmount(r.amount, r.currency)} · {r.country}
++                    </Text>
++                  </View>
++                  <StatusPill status={r.status} />
++                </View>
++              ))}
++            </View>
++          ) : null}
++        </ScrollView>
++      </KeyboardAvoidingView>
++
++      <Modal visible={showCountry} transparent animationType="slide" onRequestClose={() => setShowCountry(false)}>
++        <Pressable style={styles.backdrop} onPress={() => setShowCountry(false)}>
++          <Pressable style={styles.countrySheet} onPress={() => {}}>
++            <Text style={styles.countryTitle}>Select country</Text>
++            <ScrollView>
++              {MOBILE_MONEY_COUNTRIES.map((c) => (
++                <TouchableOpacity
++                  key={c.code}
++                  style={styles.countryRow}
++                  onPress={() => {
++                    setCountryCode(c.code);
++                    setShowCountry(false);
++                  }}
++                  testID={`admm-country-${c.code}`}
++                >
++                  <Text style={styles.countryName}>{c.name}</Text>
++                  <Text style={styles.countryCurrency}>{c.currency}</Text>
++                  {countryCode === c.code ? <Ionicons name="checkmark" size={18} color={Colors.primary} /> : null}
++                </TouchableOpacity>
++              ))}
++            </ScrollView>
++          </Pressable>
++        </Pressable>
++      </Modal>
++    </SafeAreaView>
++  );
++}
++
++const styles = StyleSheet.create({
++  container: { flex: 1, backgroundColor: Colors.background },
++  flexOne: { flex: 1 },
++  header: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    justifyContent: 'space-between',
++    paddingHorizontal: Spacing.base,
++    paddingVertical: Spacing.md,
++    borderBottomWidth: StyleSheet.hairlineWidth,
++    borderBottomColor: Colors.border,
++  },
++  headerTitle: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textPrimary },
++  scroll: { padding: Spacing.base, paddingBottom: 48 },
++  summaryCard: { backgroundColor: Colors.surface, borderRadius: Radius.md, padding: Spacing.base, borderWidth: StyleSheet.hairlineWidth, borderColor: Colors.border },
++  summaryTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
++  summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 },
++  summaryLabel: { fontSize: FontSize.sm, color: Colors.textSecondary },
++  summaryEur: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
++  sectionTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textSecondary, marginTop: Spacing.lg, marginBottom: Spacing.sm },
++  pickerRow: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    justifyContent: 'space-between',
++    borderWidth: 1,
++    borderColor: Colors.border,
++    borderRadius: Radius.md,
++    paddingHorizontal: 14,
++    paddingVertical: 14,
++  },
++  pickerValue: { fontSize: FontSize.base, color: Colors.textPrimary },
++  input: {
++    borderWidth: 1,
++    borderColor: Colors.border,
++    borderRadius: Radius.md,
++    paddingHorizontal: 14,
++    paddingVertical: 12,
++    fontSize: FontSize.base,
++    color: Colors.textPrimary,
++  },
++  hint: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 6 },
++  estimateBox: { backgroundColor: '#F4FBF6', borderRadius: Radius.md, padding: Spacing.base, marginTop: Spacing.lg, alignItems: 'center' },
++  estimateLabel: { fontSize: FontSize.sm, color: Colors.textSecondary },
++  estimateAmount: { fontSize: 28, fontWeight: FontWeight.bold, color: Colors.primary, marginTop: 4 },
++  estimateSub: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 4, textAlign: 'center' },
++  primaryBtn: { backgroundColor: Colors.primary, borderRadius: Radius.md, paddingVertical: 16, alignItems: 'center', marginTop: Spacing.lg },
++  primaryBtnDisabled: { opacity: 0.6 },
++  primaryBtnText: { color: Colors.white, fontSize: FontSize.base, fontWeight: FontWeight.bold },
++  successCard: { alignItems: 'center', paddingVertical: 24, gap: 8 },
++  successTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
++  successAmount: { fontSize: 30, fontWeight: FontWeight.bold, color: Colors.primary },
++  successBody: { fontSize: FontSize.base, color: Colors.textSecondary, textAlign: 'center', marginTop: 6, lineHeight: 22 },
++  myRequests: { marginTop: Spacing.xl },
++  reqRow: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    justifyContent: 'space-between',
++    paddingVertical: 12,
++    borderBottomWidth: StyleSheet.hairlineWidth,
++    borderBottomColor: Colors.border,
++  },
++  reqPlan: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
++  reqAmount: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
++  pill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 },
++  pillText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold },
++  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
++  countrySheet: { backgroundColor: Colors.white, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: Spacing.base, maxHeight: '70%' },
++  countryTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary, marginBottom: 12 },
++  countryRow: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    gap: 10,
++    paddingVertical: 14,
++    borderBottomWidth: StyleSheet.hairlineWidth,
++    borderBottomColor: Colors.border,
++  },
++  countryName: { flex: 1, fontSize: FontSize.base, color: Colors.textPrimary },
++  countryCurrency: { fontSize: FontSize.sm, color: Colors.textSecondary },
++});
 diff --git a/frontend/app/admin.tsx b/frontend/app/admin.tsx
-index 048401d5..8113a8f7 100644
+index 048401d5..2f3d50f7 100644
 --- a/frontend/app/admin.tsx
 +++ b/frontend/app/admin.tsx
 @@ -18,12 +18,13 @@ import { Ionicons } from '@expo/vector-icons';
  import { useRouter } from 'expo-router';
  import { useMutation } from 'convex/react';
  import Header from '../src/components/Header';
-+import { MobileMoneyAdmin } from '../src/components/admin/MobileMoneyAdmin';
++import { PaymentsAdmin } from '../src/components/admin/PaymentsAdmin';
  import { api } from '../src/convexApi';
  import { useAuth } from '../src/providers/AuthProvider';
  import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
@@ -38,7 +430,7 @@ index 048401d5..8113a8f7 100644
  type AdsSubTab = 'review' | 'codes';
  
  // iter-136: canonical shape returned by `api.admin.queries.getStats`
-@@ -178,6 +179,13 @@ export default function AdminDashboard() {
+@@ -178,6 +179,20 @@ export default function AdminDashboard() {
      refetch: refetchDevReports,
      loading: devReportsLoading,
    } = useSafeConvexQuery<DevReportItem[]>(api.devotionals.listPendingReports, {}, [], isAdmin);
@@ -49,22 +441,29 @@ index 048401d5..8113a8f7 100644
 +    0,
 +    isAdmin,
 +  );
++  const { data: pendingAdCount } = useSafeConvexQuery<number>(
++    (api as any).adClickRequests?.countPendingRequests,
++    {},
++    0,
++    isAdmin,
++  );
++  const pendingPaymentsCount = (pendingMoneyCount || 0) + (pendingAdCount || 0);
  
    // Mutations — iter-140b: canonical names.
    // `updateUserRole({ userId, role })` replaces the old `setRole`. The
-@@ -415,6 +423,7 @@ export default function AdminDashboard() {
+@@ -415,6 +430,7 @@ export default function AdminDashboard() {
      { key: 'ads', label: 'Ads', icon: 'megaphone-outline', badge: pendingAds?.length },
      { key: 'devotions', label: 'Devotions', icon: 'book-outline', badge: pendingDevReports?.length },
      { key: 'premium', label: 'Premium', icon: 'star-outline' },
-+    { key: 'payments', label: 'Payments', icon: 'cash-outline', badge: pendingMoneyCount || undefined },
++    { key: 'payments', label: 'Payments', icon: 'cash-outline', badge: pendingPaymentsCount || undefined },
      { key: 'activity', label: 'Activity', icon: 'pulse-outline' },
    ];
  
-@@ -499,6 +508,7 @@ export default function AdminDashboard() {
+@@ -499,6 +515,7 @@ export default function AdminDashboard() {
            />
          ) : null}
          {tab === 'premium' ? <PremiumTab isAdmin={isAdmin} /> : null}
-+        {tab === 'payments' ? <MobileMoneyAdmin /> : null}
++        {tab === 'payments' ? <PaymentsAdmin /> : null}
          {tab === 'activity' ? <ActivityTab isAdmin={isAdmin} /> : null}
          {tab === 'devotions' ? (
            <DevotionsTab
@@ -1458,19 +1857,19 @@ index aaa966ac..511ce095 100644
    // iter-134: call log entry card (rendered when msg.type === 'call').
    // Lives inside the existing bubble shell — only the body content changes.
    callLogRow: {
-diff --git a/frontend/src/components/admin/MobileMoneyAdmin.tsx b/frontend/src/components/admin/MobileMoneyAdmin.tsx
+diff --git a/frontend/src/components/admin/PaymentRequestsPanel.tsx b/frontend/src/components/admin/PaymentRequestsPanel.tsx
 new file mode 100644
-index 00000000..e233b61b
+index 00000000..2468994b
 --- /dev/null
-+++ b/frontend/src/components/admin/MobileMoneyAdmin.tsx
-@@ -0,0 +1,355 @@
++++ b/frontend/src/components/admin/PaymentRequestsPanel.tsx
+@@ -0,0 +1,297 @@
 +/**
-+ * MobileMoneyAdmin — admin surface for manual mobile-money payment requests.
-+ * Pending / History toggle, per-request Message / Complete / Decline actions.
-+ * Wires the canonical mobileMoneyRequests contract; server auto-activates the
-+ * plan on completeRequest.
++ * PaymentRequestsPanel — generic admin panel for manual payment requests
++ * (premium OR ad-clicks). Pending/History toggle + per-request
++ * Message / Complete / Decline. The type-specific bits (which Convex functions,
++ * the middle detail rows, confirm/message copy) come from `config`.
 + */
-+import React, { useMemo, useState } from 'react';
++import React, { useState } from 'react';
 +import {
 +  ActivityIndicator,
 +  Alert,
@@ -1485,17 +1884,35 @@ index 00000000..e233b61b
 +} from 'react-native';
 +import { Ionicons } from '@expo/vector-icons';
 +import { useMutation, useQuery } from 'convex/react';
-+import { api } from '../../convexApi';
 +import { Colors, FontSize, FontWeight, Spacing, Radius } from '../../theme';
 +import { formatLocalAmount } from '../../lib/mobileMoney';
 +import { friendlyConvexError } from '../../lib/friendlyError';
++
++export type PaymentPanelConfig = {
++  listPending: any;
++  listHistory: any;
++  complete: any;
++  decline: any;
++  messageUsers: any;
++  emptyPending: string;
++  emptyHistory: string;
++  /** Type-specific label for the item (e.g. plan label or ad title). */
++  itemTitle: (req: any) => string;
++  /** Confirmation body shown before Complete. */
++  completeBody: (req: any) => string;
++  /** Prefilled admin message text. */
++  messageTemplate: (req: any) => string;
++};
 +
 +function formatDate(iso?: string | null): string {
 +  if (!iso) return '';
 +  const d = new Date(iso);
 +  if (isNaN(d.getTime())) return '';
-+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) +
-+    ' · ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
++  return (
++    d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) +
++    ' · ' +
++    d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
++  );
 +}
 +
 +function StatusPill({ status }: { status: string }) {
@@ -1513,106 +1930,26 @@ index 00000000..e233b61b
 +  );
 +}
 +
-+function RequestCard({
-+  req,
-+  onMessage,
-+  onComplete,
-+  onDecline,
-+  busy,
-+}: {
-+  req: any;
-+  onMessage: (req: any) => void;
-+  onComplete: (req: any) => void;
-+  onDecline: (req: any) => void;
-+  busy: boolean;
-+}) {
-+  const isPending = req.status === 'pending';
-+  return (
-+    <View style={styles.card} testID={`mm-request-${String(req._id).slice(-6)}`}>
-+      <View style={styles.cardHeader}>
-+        {req.userAvatar ? (
-+          <Image source={{ uri: req.userAvatar }} style={styles.avatar} />
-+        ) : (
-+          <View style={[styles.avatar, styles.avatarFallback]}>
-+            <Text style={styles.avatarInitial}>{(req.userName || '?').charAt(0).toUpperCase()}</Text>
-+          </View>
-+        )}
-+        <View style={styles.flexOne}>
-+          <Text style={styles.userName} numberOfLines={1}>{req.userName || 'Unknown user'}</Text>
-+          {req.userEmail ? <Text style={styles.userEmail} numberOfLines={1}>{req.userEmail}</Text> : null}
-+        </View>
-+        <StatusPill status={req.status} />
-+      </View>
-+
-+      <View style={styles.detailRow}>
-+        <Text style={styles.planLabel}>{req.planLabel || req.variantId}</Text>
-+        <Text style={styles.amount}>{formatLocalAmount(req.amount, req.currency)}</Text>
-+      </View>
-+      <View style={styles.detailRow}>
-+        <Text style={styles.subMeta}>{req.country} · ≈ €{req.eurAmount}</Text>
-+        {req.phone ? <Text style={styles.subMeta}>Pays from: {req.phone}</Text> : null}
-+      </View>
-+      <Text style={styles.dateText}>
-+        {isPending ? 'Requested ' : req.status === 'completed' ? 'Completed ' : 'Closed '}
-+        {formatDate(isPending ? req.createdAt : req.completedAt || req.createdAt)}
-+      </Text>
-+
-+      {isPending ? (
-+        <View style={styles.actionsRow}>
-+          <TouchableOpacity
-+            style={[styles.actionBtn, styles.messageBtn]}
-+            onPress={() => onMessage(req)}
-+            disabled={busy}
-+            testID={`mm-message-${String(req._id).slice(-6)}`}
-+          >
-+            <Ionicons name="chatbubble-ellipses-outline" size={16} color={Colors.primary} />
-+            <Text style={styles.messageBtnText}>Message</Text>
-+          </TouchableOpacity>
-+          <TouchableOpacity
-+            style={[styles.actionBtn, styles.declineBtn]}
-+            onPress={() => onDecline(req)}
-+            disabled={busy}
-+            testID={`mm-decline-${String(req._id).slice(-6)}`}
-+          >
-+            <Ionicons name="close" size={16} color={Colors.danger} />
-+            <Text style={styles.declineBtnText}>Decline</Text>
-+          </TouchableOpacity>
-+          <TouchableOpacity
-+            style={[styles.actionBtn, styles.completeBtn]}
-+            onPress={() => onComplete(req)}
-+            disabled={busy}
-+            testID={`mm-complete-${String(req._id).slice(-6)}`}
-+          >
-+            <Ionicons name="checkmark" size={16} color={Colors.white} />
-+            <Text style={styles.completeBtnText}>Complete</Text>
-+          </TouchableOpacity>
-+        </View>
-+      ) : null}
-+    </View>
-+  );
-+}
-+
-+export function MobileMoneyAdmin() {
++export function PaymentRequestsPanel({ config }: { config: PaymentPanelConfig }) {
 +  const [view, setView] = useState<'pending' | 'history'>('pending');
 +  const [busy, setBusy] = useState(false);
 +  const [msgTarget, setMsgTarget] = useState<any | null>(null);
 +  const [msgText, setMsgText] = useState('');
 +  const [sending, setSending] = useState(false);
 +
-+  const pending = useQuery((api as any).mobileMoneyRequests?.listPendingRequests, {}) as any[] | undefined;
-+  const history = useQuery((api as any).mobileMoneyRequests?.listRequestHistory, {}) as any[] | undefined;
-+  const completeRequest = useMutation((api as any).mobileMoneyRequests?.completeRequest);
-+  const declineRequest = useMutation((api as any).mobileMoneyRequests?.declineRequest);
-+  const messageUsers = useMutation((api as any).admin?.messaging?.messageUsers);
++  const pending = useQuery(config.listPending, {}) as any[] | undefined;
++  const history = useQuery(config.listHistory, {}) as any[] | undefined;
++  const completeRequest = useMutation(config.complete);
++  const declineRequest = useMutation(config.decline);
++  const messageUsers = useMutation(config.messageUsers);
 +
 +  const list = view === 'pending' ? pending : history;
 +  const loading = list === undefined;
++  const pendingCount = Array.isArray(pending) ? pending.length : 0;
 +
 +  const openMessage = (req: any) => {
 +    setMsgTarget(req);
-+    setMsgText(
-+      `Hi ${req.userName || ''}, to complete your ${req.planLabel} plan payment of ${formatLocalAmount(req.amount, req.currency)}, please send mobile money to: `,
-+    );
++    setMsgText(config.messageTemplate(req));
 +  };
 +
 +  const sendMessage = async () => {
@@ -1631,53 +1968,43 @@ index 00000000..e233b61b
 +  };
 +
 +  const doComplete = (req: any) => {
-+    Alert.alert(
-+      'Complete request?',
-+      `This will close the request and automatically activate ${req.planLabel} for ${req.userName || 'the user'}.`,
-+      [
-+        { text: 'Cancel', style: 'cancel' },
-+        {
-+          text: 'Complete',
-+          onPress: async () => {
-+            setBusy(true);
-+            try {
-+              await completeRequest({ requestId: req._id });
-+            } catch (e: any) {
-+              Alert.alert('Could not complete', friendlyConvexError(e, 'Please try again.'));
-+            } finally {
-+              setBusy(false);
-+            }
-+          },
++    Alert.alert('Complete request?', config.completeBody(req), [
++      { text: 'Cancel', style: 'cancel' },
++      {
++        text: 'Complete',
++        onPress: async () => {
++          setBusy(true);
++          try {
++            await completeRequest({ requestId: req._id });
++          } catch (e: any) {
++            Alert.alert('Could not complete', friendlyConvexError(e, 'Please try again.'));
++          } finally {
++            setBusy(false);
++          }
 +        },
-+      ],
-+    );
++      },
++    ]);
 +  };
 +
 +  const doDecline = (req: any) => {
-+    Alert.alert(
-+      'Decline request?',
-+      `This rejects the request without granting ${req.planLabel}. The user can submit a new request.`,
-+      [
-+        { text: 'Cancel', style: 'cancel' },
-+        {
-+          text: 'Decline',
-+          style: 'destructive',
-+          onPress: async () => {
-+            setBusy(true);
-+            try {
-+              await declineRequest({ requestId: req._id });
-+            } catch (e: any) {
-+              Alert.alert('Could not decline', friendlyConvexError(e, 'Please try again.'));
-+            } finally {
-+              setBusy(false);
-+            }
-+          },
++    Alert.alert('Decline request?', 'This rejects the request without granting anything. The user can submit a new one.', [
++      { text: 'Cancel', style: 'cancel' },
++      {
++        text: 'Decline',
++        style: 'destructive',
++        onPress: async () => {
++          setBusy(true);
++          try {
++            await declineRequest({ requestId: req._id });
++          } catch (e: any) {
++            Alert.alert('Could not decline', friendlyConvexError(e, 'Please try again.'));
++          } finally {
++            setBusy(false);
++          }
 +        },
-+      ],
-+    );
++      },
++    ]);
 +  };
-+
-+  const pendingCount = Array.isArray(pending) ? pending.length : 0;
 +
 +  return (
 +    <View style={styles.wrap}>
@@ -1685,7 +2012,6 @@ index 00000000..e233b61b
 +        <TouchableOpacity
 +          style={[styles.toggleBtn, view === 'pending' ? styles.toggleBtnActive : null]}
 +          onPress={() => setView('pending')}
-+          testID="mm-toggle-pending"
 +        >
 +          <Text style={[styles.toggleText, view === 'pending' ? styles.toggleTextActive : null]}>
 +            Pending{pendingCount ? ` (${pendingCount})` : ''}
@@ -1694,7 +2020,6 @@ index 00000000..e233b61b
 +        <TouchableOpacity
 +          style={[styles.toggleBtn, view === 'history' ? styles.toggleBtnActive : null]}
 +          onPress={() => setView('history')}
-+          testID="mm-toggle-history"
 +        >
 +          <Text style={[styles.toggleText, view === 'history' ? styles.toggleTextActive : null]}>History</Text>
 +        </TouchableOpacity>
@@ -1705,24 +2030,62 @@ index 00000000..e233b61b
 +      ) : !list || list.length === 0 ? (
 +        <View style={styles.empty}>
 +          <Ionicons name="cash-outline" size={40} color={Colors.textMuted} />
-+          <Text style={styles.emptyText}>
-+            {view === 'pending' ? 'No pending payment requests.' : 'No past requests yet.'}
-+          </Text>
++          <Text style={styles.emptyText}>{view === 'pending' ? config.emptyPending : config.emptyHistory}</Text>
 +        </View>
 +      ) : (
-+        list.map((req: any) => (
-+          <RequestCard
-+            key={String(req._id)}
-+            req={req}
-+            busy={busy}
-+            onMessage={openMessage}
-+            onComplete={doComplete}
-+            onDecline={doDecline}
-+          />
-+        ))
++        list.map((req: any) => {
++          const isPending = req.status === 'pending';
++          return (
++            <View key={String(req._id)} style={styles.card} testID={`pr-${String(req._id).slice(-6)}`}>
++              <View style={styles.cardHeader}>
++                {req.userAvatar ? (
++                  <Image source={{ uri: req.userAvatar }} style={styles.avatar} />
++                ) : (
++                  <View style={[styles.avatar, styles.avatarFallback]}>
++                    <Text style={styles.avatarInitial}>{(req.userName || '?').charAt(0).toUpperCase()}</Text>
++                  </View>
++                )}
++                <View style={styles.flexOne}>
++                  <Text style={styles.userName} numberOfLines={1}>{req.userName || 'Unknown user'}</Text>
++                  {req.userEmail ? <Text style={styles.userEmail} numberOfLines={1}>{req.userEmail}</Text> : null}
++                </View>
++                <StatusPill status={req.status} />
++              </View>
++
++              <View style={styles.detailRow}>
++                <Text style={styles.itemTitle} numberOfLines={1}>{config.itemTitle(req)}</Text>
++                <Text style={styles.amount}>{formatLocalAmount(req.amount, req.currency)}</Text>
++              </View>
++              <View style={styles.detailRow}>
++                <Text style={styles.subMeta}>{req.country} · ≈ €{req.eurAmount}</Text>
++                {req.phone ? <Text style={styles.subMeta}>Pays from: {req.phone}</Text> : null}
++              </View>
++              <Text style={styles.dateText}>
++                {isPending ? 'Requested ' : req.status === 'completed' ? 'Completed ' : 'Closed '}
++                {formatDate(isPending ? req.createdAt : req.completedAt || req.createdAt)}
++              </Text>
++
++              {isPending ? (
++                <View style={styles.actionsRow}>
++                  <TouchableOpacity style={[styles.actionBtn, styles.messageBtn]} onPress={() => openMessage(req)} disabled={busy}>
++                    <Ionicons name="chatbubble-ellipses-outline" size={16} color={Colors.primary} />
++                    <Text style={styles.messageBtnText}>Message</Text>
++                  </TouchableOpacity>
++                  <TouchableOpacity style={[styles.actionBtn, styles.declineBtn]} onPress={() => doDecline(req)} disabled={busy}>
++                    <Ionicons name="close" size={16} color={Colors.danger} />
++                    <Text style={styles.declineBtnText}>Decline</Text>
++                  </TouchableOpacity>
++                  <TouchableOpacity style={[styles.actionBtn, styles.completeBtn]} onPress={() => doComplete(req)} disabled={busy}>
++                    <Ionicons name="checkmark" size={16} color={Colors.white} />
++                    <Text style={styles.completeBtnText}>Complete</Text>
++                  </TouchableOpacity>
++                </View>
++              ) : null}
++            </View>
++          );
++        })
 +      )}
 +
-+      {/* Message-user composer */}
 +      <Modal visible={!!msgTarget} transparent animationType="fade" onRequestClose={() => setMsgTarget(null)}>
 +        <Pressable style={styles.backdrop} onPress={() => setMsgTarget(null)}>
 +          <Pressable style={styles.msgSheet} onPress={() => {}}>
@@ -1734,7 +2097,6 @@ index 00000000..e233b61b
 +              multiline
 +              placeholder="Type payment instructions…"
 +              placeholderTextColor={Colors.textMuted}
-+              testID="mm-message-input"
 +            />
 +            <View style={styles.msgActions}>
 +              <TouchableOpacity style={styles.msgCancel} onPress={() => setMsgTarget(null)}>
@@ -1744,13 +2106,8 @@ index 00000000..e233b61b
 +                style={[styles.msgSend, (!msgText.trim() || sending) ? styles.msgSendDisabled : null]}
 +                onPress={sendMessage}
 +                disabled={!msgText.trim() || sending}
-+                testID="mm-message-send"
 +              >
-+                {sending ? (
-+                  <ActivityIndicator color={Colors.white} size="small" />
-+                ) : (
-+                  <Text style={styles.msgSendText}>Send</Text>
-+                )}
++                {sending ? <ActivityIndicator color={Colors.white} size="small" /> : <Text style={styles.msgSendText}>Send</Text>}
 +              </TouchableOpacity>
 +            </View>
 +          </Pressable>
@@ -1769,23 +2126,16 @@ index 00000000..e233b61b
 +  toggleText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textSecondary },
 +  toggleTextActive: { color: Colors.primary },
 +  empty: { alignItems: 'center', paddingVertical: 48, gap: 10 },
-+  emptyText: { fontSize: FontSize.base, color: Colors.textMuted },
-+  card: {
-+    backgroundColor: Colors.white,
-+    borderRadius: Radius.md,
-+    padding: Spacing.md,
-+    marginBottom: Spacing.md,
-+    borderWidth: StyleSheet.hairlineWidth,
-+    borderColor: Colors.border,
-+  },
++  emptyText: { fontSize: FontSize.base, color: Colors.textMuted, textAlign: 'center' },
++  card: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: Spacing.md, marginBottom: Spacing.md, borderWidth: StyleSheet.hairlineWidth, borderColor: Colors.border },
 +  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
 +  avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#EDEDED' },
 +  avatarFallback: { alignItems: 'center', justifyContent: 'center' },
 +  avatarInitial: { fontSize: 18, fontWeight: FontWeight.bold, color: Colors.textSecondary },
 +  userName: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
 +  userEmail: { fontSize: FontSize.xs, color: Colors.textMuted },
-+  detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 },
-+  planLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
++  detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 2, gap: 8 },
++  itemTitle: { flex: 1, fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
 +  amount: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.primary },
 +  subMeta: { fontSize: FontSize.xs, color: Colors.textSecondary },
 +  dateText: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 6 },
@@ -1802,22 +2152,105 @@ index 00000000..e233b61b
 +  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 24 },
 +  msgSheet: { backgroundColor: Colors.white, borderRadius: Radius.md, padding: Spacing.lg },
 +  msgTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary, marginBottom: 12 },
-+  msgInput: {
-+    borderWidth: 1,
-+    borderColor: Colors.border,
-+    borderRadius: Radius.sm,
-+    padding: 12,
-+    minHeight: 96,
-+    textAlignVertical: 'top',
-+    color: Colors.textPrimary,
-+    fontSize: FontSize.base,
-+  },
++  msgInput: { borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.sm, padding: 12, minHeight: 96, textAlignVertical: 'top', color: Colors.textPrimary, fontSize: FontSize.base },
 +  msgActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 14 },
 +  msgCancel: { paddingVertical: 10, paddingHorizontal: 16 },
 +  msgCancelText: { color: Colors.textSecondary, fontWeight: FontWeight.semibold },
 +  msgSend: { backgroundColor: Colors.primary, paddingVertical: 10, paddingHorizontal: 22, borderRadius: Radius.sm, minWidth: 84, alignItems: 'center' },
 +  msgSendDisabled: { opacity: 0.5 },
 +  msgSendText: { color: Colors.white, fontWeight: FontWeight.bold },
++});
+diff --git a/frontend/src/components/admin/PaymentsAdmin.tsx b/frontend/src/components/admin/PaymentsAdmin.tsx
+new file mode 100644
+index 00000000..e1ca74b3
+--- /dev/null
++++ b/frontend/src/components/admin/PaymentsAdmin.tsx
+@@ -0,0 +1,86 @@
++/**
++ * PaymentsAdmin — admin "Payments" tab. Segments between Premium subscription
++ * requests and Ad-click requests, each rendered by the shared
++ * PaymentRequestsPanel wired to its own Convex functions.
++ */
++import React, { useState } from 'react';
++import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
++import { api } from '../../convexApi';
++import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../theme';
++import { PaymentRequestsPanel, PaymentPanelConfig } from './PaymentRequestsPanel';
++import { formatLocalAmount } from '../../lib/mobileMoney';
++
++const premiumConfig: PaymentPanelConfig = {
++  listPending: (api as any).mobileMoneyRequests?.listPendingRequests,
++  listHistory: (api as any).mobileMoneyRequests?.listRequestHistory,
++  complete: (api as any).mobileMoneyRequests?.completeRequest,
++  decline: (api as any).mobileMoneyRequests?.declineRequest,
++  messageUsers: (api as any).admin?.messaging?.messageUsers,
++  emptyPending: 'No pending premium payment requests.',
++  emptyHistory: 'No past premium requests yet.',
++  itemTitle: (r) => r.planLabel || r.variantId || 'Premium',
++  completeBody: (r) =>
++    `This will close the request and automatically activate ${r.planLabel || 'the plan'} for ${r.userName || 'the user'}.`,
++  messageTemplate: (r) =>
++    `Hi ${r.userName || ''}, to complete your ${r.planLabel} plan payment of ${formatLocalAmount(r.amount, r.currency)}, please send mobile money to: `,
++};
++
++const adConfig: PaymentPanelConfig = {
++  listPending: (api as any).adClickRequests?.listPendingRequests,
++  listHistory: (api as any).adClickRequests?.listRequestHistory,
++  complete: (api as any).adClickRequests?.completeRequest,
++  decline: (api as any).adClickRequests?.declineRequest,
++  messageUsers: (api as any).admin?.messaging?.messageUsers,
++  emptyPending: 'No pending ad-click requests.',
++  emptyHistory: 'No past ad-click requests yet.',
++  itemTitle: (r) => `${r.adTitle || r.ad?.productName || 'Ad'} · ${r.clicks ?? r.quantity ?? 0} clicks`,
++  completeBody: (r) =>
++    `This will close the request and automatically credit ${r.clicks ?? r.quantity ?? 0} clicks to “${r.adTitle || r.ad?.productName || 'the ad'}” for ${r.userName || 'the user'}.`,
++  messageTemplate: (r) =>
++    `Hi ${r.userName || ''}, to complete your purchase of ${r.clicks ?? r.quantity} ad clicks (${formatLocalAmount(r.amount, r.currency)}), please send mobile money to: `,
++};
++
++export function PaymentsAdmin() {
++  const [segment, setSegment] = useState<'premium' | 'ads'>('premium');
++  return (
++    <View>
++      <View style={styles.segment}>
++        <TouchableOpacity
++          style={[styles.segBtn, segment === 'premium' ? styles.segBtnActive : null]}
++          onPress={() => setSegment('premium')}
++          testID="payments-seg-premium"
++        >
++          <Text style={[styles.segText, segment === 'premium' ? styles.segTextActive : null]}>Premium</Text>
++        </TouchableOpacity>
++        <TouchableOpacity
++          style={[styles.segBtn, segment === 'ads' ? styles.segBtnActive : null]}
++          onPress={() => setSegment('ads')}
++          testID="payments-seg-ads"
++        >
++          <Text style={[styles.segText, segment === 'ads' ? styles.segTextActive : null]}>Ad Clicks</Text>
++        </TouchableOpacity>
++      </View>
++      <PaymentRequestsPanel config={segment === 'premium' ? premiumConfig : adConfig} />
++    </View>
++  );
++}
++
++const styles = StyleSheet.create({
++  segment: {
++    flexDirection: 'row',
++    gap: 8,
++    paddingHorizontal: Spacing.md,
++    paddingTop: Spacing.md,
++  },
++  segBtn: {
++    flex: 1,
++    paddingVertical: 10,
++    borderRadius: Radius.md,
++    borderWidth: 1,
++    borderColor: Colors.border,
++    alignItems: 'center',
++  },
++  segBtnActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
++  segText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textSecondary },
++  segTextActive: { color: Colors.white },
 +});
 diff --git a/frontend/src/components/chat/EditPermissionModals.tsx b/frontend/src/components/chat/EditPermissionModals.tsx
 new file mode 100644
@@ -2233,10 +2666,10 @@ index 00000000..dda51397
 +}
 diff --git a/frontend/src/lib/mobileMoney.ts b/frontend/src/lib/mobileMoney.ts
 new file mode 100644
-index 00000000..0c913d16
+index 00000000..62d0de9f
 --- /dev/null
 +++ b/frontend/src/lib/mobileMoney.ts
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,89 @@
 +/**
 + * Mobile Money shared constants — verbatim mirror of the web app's
 + * convex/lib/mobileMoney.ts so the native estimate never drifts from the
@@ -2308,6 +2741,14 @@ index 00000000..0c913d16
 +
 +export function currencyForCountry(code: string): string {
 +  return MOBILE_MONEY_COUNTRIES.find((c) => c.code === code)?.currency || '';
++}
++
++/** Ad-click price (EUR per paid click) — mirrors the web app. */
++export const AD_CLICK_PRICE_EUR = 0.04;
++
++/** ≈ estimate for buying `clicks` paid ad clicks, in local currency. */
++export function estimateAdClicksAmount(clicks: number, currency: string): number {
++  return estimateLocalAmount(clicks * AD_CLICK_PRICE_EUR, currency);
 +}
 +
 +/** Compact money label, e.g. "KES 3,360" or "GHS 48.00". */

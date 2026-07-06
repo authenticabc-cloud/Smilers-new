@@ -1,10 +1,14 @@
-# Smilers — changes to merge into Ashwini's native build (2026-07-06)
+# Smilers — changes to merge into Ashwini's native build (2026-07-06, rev 2)
 
 These are the fixes made in the Emergent codebase that the current APK is missing.
 Split into two groups so you do NOT accidentally overwrite your newer native
 call/notification work.
 
 Baseline for all diffs: commit 21cc30a3 (2026-07-03 23:11 UTC).
+
+> rev 2 (2026-07-06): added the Ad-Clicks Mobile Money flow and wired its
+> entry point into the Ads "Buy clicks" modal. `MobileMoneyAdmin.tsx` was
+> REMOVED (superseded — see below). Re-generate/re-apply the patch.
 
 ---
 
@@ -15,9 +19,15 @@ These do NOT touch the call/notification/WebRTC layer. Apply the patch
 NEW files:
 - src/components/chat/EditPermissionModals.tsx
 - src/lib/friendlyError.ts
-- src/lib/mobileMoney.ts
-- app/mobile-money.tsx
-- src/components/admin/MobileMoneyAdmin.tsx
+- src/lib/mobileMoney.ts                       (now also exports AD_CLICK_PRICE_EUR + estimateAdClicksAmount)
+- app/mobile-money.tsx                         (Premium mobile-money request screen)
+- app/ad-clicks-payment.tsx                    (NEW rev2 — Ad-clicks mobile-money request screen, €0.04/click)
+- src/components/admin/PaymentRequestsPanel.tsx (NEW rev2 — generic admin panel: premium OR ad-clicks)
+- src/components/admin/PaymentsAdmin.tsx        (NEW rev2 — admin "Payments" tab, Premium/Ad-Clicks segments)
+
+REMOVED files:
+- src/components/admin/MobileMoneyAdmin.tsx    (⚠️ rev2 — DELETE this if you took rev1. It is superseded by
+  PaymentsAdmin + PaymentRequestsPanel and is no longer imported anywhere.)
 
 MODIFIED files:
 - app/chat/[conversationId].tsx      (group post edit approval Phase 2; group pinned-post banner + admin gate; group sender-name display; + CRASH FIX: added `Modal, Pressable` to the react-native import)
@@ -27,16 +37,20 @@ MODIFIED files:
 - app/user/[userId].tsx              (Groups-in-common now uses api.conversations.listGroups; friendly errors)
 - src/components/user-profile/GroupInCommonRow.tsx  (robust member id/phone matching, nested shapes)
 - app/(tabs)/contacts.tsx            (friendly error on open-chat)
+- app/(tabs)/ads.tsx                 (rev2 — "Pay with Mobile Money" button in the Buy Clicks modal → /ad-clicks-payment)
 - app/find-by-phone.tsx              (friendly error on start-chat)
 - app/diagnostic-logs.tsx            (group-detection diagnostics: listGroups authoritative)
 - src/lib/referralAttribution.ts     (referral once-per-user lock)
 - app/index.tsx                      (Sign-in: hide referral entry once redeemed)
 - app/premium.tsx                    ("Pay with Mobile Money" button + "Your requests" entry)
-- app/admin.tsx                      (new "Payments" tab + pending badge)
+- app/admin.tsx                      (new "Payments" tab renders <PaymentsAdmin/> + pending badge = mobileMoneyRequests + adClickRequests)
 
 To apply the patch inside your repo:
     git apply --3way smilers-app-logic-changes.patch
 (or `patch -p1 < smilers-app-logic-changes.patch`)
+
+If you previously applied rev1, also run:
+    git rm src/components/admin/MobileMoneyAdmin.tsx   # superseded, no longer imported
 
 ---
 
