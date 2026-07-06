@@ -353,6 +353,19 @@ export default function AdsScreen() {
         quantity={purchaseQty}
         onChangeQuantity={setPurchaseQty}
         onConfirm={onConfirmPurchase}
+        onMobileMoney={() => {
+          const ad = purchaseAd;
+          if (!ad) return;
+          setPurchaseAd(null);
+          router.push({
+            pathname: '/ad-clicks-payment',
+            params: {
+              adId: ad._id,
+              adTitle: ad.productName || ad.businessName || 'your ad',
+              clicks: String(purchaseQty),
+            },
+          } as any);
+        }}
         onClose={() => (!purchasing ? setPurchaseAd(null) : undefined)}
         submitting={purchasing}
       />
@@ -368,6 +381,7 @@ function BuyClicksModal({
   quantity,
   onChangeQuantity,
   onConfirm,
+  onMobileMoney,
   onClose,
   submitting,
 }: {
@@ -375,6 +389,7 @@ function BuyClicksModal({
   quantity: number;
   onChangeQuantity: (q: number) => void;
   onConfirm: () => void;
+  onMobileMoney: () => void;
   onClose: () => void;
   submitting: boolean;
 }) {
@@ -451,6 +466,19 @@ function BuyClicksModal({
           >
             <Text style={styles.payBtnText}>{submitting ? 'Opening checkout…' : `Pay €${total}`}</Text>
           </TouchableOpacity>
+
+          {/* Manual Mobile Money alternative to card checkout. */}
+          <TouchableOpacity
+            style={styles.mobileMoneyBtn}
+            onPress={onMobileMoney}
+            disabled={submitting}
+            activeOpacity={0.85}
+            testID="buy-clicks-mobile-money"
+          >
+            <MaterialCommunityIcons name="cellphone" size={19} color={Colors.primary} />
+            <Text style={styles.mobileMoneyBtnText}>Pay with Mobile Money</Text>
+          </TouchableOpacity>
+
           <Text style={styles.payDisclaimer}>
             You&apos;ll complete payment securely in your browser, then return to the app.
           </Text>
@@ -1098,6 +1126,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   payBtnDisabled: { opacity: 0.6 },
+  mobileMoneyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 13,
+    marginTop: 10,
+    borderRadius: Radius.lg,
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+  },
+  mobileMoneyBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.primary },
   payBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.headerBg },
   payDisclaimer: { fontSize: FontSize.xs, color: Colors.textMuted, textAlign: 'center', marginTop: 10 },
 });
