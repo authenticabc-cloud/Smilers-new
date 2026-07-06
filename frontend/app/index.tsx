@@ -14,7 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../src/providers/AuthProvider';
-import { setPendingReferralCode, getPendingReferralCode } from '../src/lib/referralAttribution';
+import { setPendingReferralCode, getPendingReferralCode, isReferralLocked } from '../src/lib/referralAttribution';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/theme';
 
 export default function SignInScreen() {
@@ -23,6 +23,9 @@ export default function SignInScreen() {
   const [showReferral, setShowReferral] = useState(false);
   const [refInput, setRefInput] = useState('');
   const [savedCode, setSavedCode] = useState<string | null>(null);
+  // iter-338: a referral code can be redeemed only ONCE per user. When the
+  // backend has recorded a referrer, we hide manual entry entirely.
+  const [referralLocked, setReferralLocked] = useState(false);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -33,6 +36,7 @@ export default function SignInScreen() {
   // Show any code already captured (deep-link / install referrer / prior entry).
   useEffect(() => {
     void getPendingReferralCode().then((c) => setSavedCode(c));
+    void isReferralLocked().then(setReferralLocked);
   }, []);
 
   const openReferral = () => {
@@ -91,16 +95,24 @@ export default function SignInScreen() {
               </>
             )}
           </TouchableOpacity>
-          <TouchableOpacity
-            onPress={openReferral}
-            style={styles.referralLink}
-            activeOpacity={0.7}
-            testID="referral-code-link"
-          >
-            <Text style={styles.referralLinkText}>
-              {savedCode ? `Referral code: ${savedCode} · Change` : 'Do you have a referral code?'}
-            </Text>
-          </TouchableOpacity>
+          {referralLocked ? (
+            <View style={styles.referralLink} testID="referral-code-applied">
+              <Text style={[styles.referralLinkText, styles.referralAppliedText]}>
+                ✓ Referral code applied
+              </Text>
+            </View>
+          ) : (
+            <TouchableOpacity
+              onPress={openReferral}
+              style={styles.referralLink}
+              activeOpacity={0.7}
+              testID="referral-code-link"
+            >
+              <Text style={styles.referralLinkText}>
+                {savedCode ? `Referral code: ${savedCode} · Change` : 'Do you have a referral code?'}
+              </Text>
+            </TouchableOpacity>
+          )}
 
           <Text style={styles.terms}>
             By continuing, you agree to our Terms of Service and Privacy Policy
@@ -228,6 +240,10 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.semibold,
     textDecorationLine: 'underline',
     textAlign: 'center',
+  },
+  referralAppliedText: {
+    color: Colors.textSecondary,
+    textDecorationLine: 'none',
   },
   modalBackdrop: {
     flex: 1,

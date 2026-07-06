@@ -23,6 +23,22 @@ import { useAuth } from '../providers/AuthProvider';
 
 const CAPTURED_KEY = 'smilers_install_referrer_captured';
 const PENDING_CODE_KEY = 'smilers_pending_referral_code';
+// iter-338: once a referral has been definitively applied for this user (or the
+// backend reports the user already has a referrer), we lock manual entry so a
+// code can only ever be redeemed ONCE. Drives hiding the Sign-In "Do you have a
+// referral code?" link. The backend (earnings.trackReferral / getMyReferralState)
+// is the source of truth; this flag mirrors it for the pre-auth Sign-In screen.
+const REFERRAL_LOCKED_KEY = 'smilers_referral_locked';
+
+/** True once this user has redeemed (or already had) a referrer — manual entry
+ *  should be hidden. */
+export async function isReferralLocked(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(REFERRAL_LOCKED_KEY)) === '1';
+  } catch {
+    return false;
+  }
+}
 
 /** Parse `ref=CODE` out of a Play install-referrer string (it may also be
  * the default `utm_source=google-play&utm_medium=organic` for organic
@@ -153,6 +169,20 @@ export function ReferralAttribution() {
       if (consumingRef.current) return;
       consumingRef.current = true;
       try {
+        // First, honor the backend's source of truth: if this user already
+        // has a referrer, lock manual entry forever and drop any pending code
+        // (covers users referred via web / another device / a prior session).
+        try {
+          const state: any = await convex.query((api as any).earnings.getMyReferralState, {});
+          if (state?.hasReferrer === true) {
+            await AsyncStorage.setItem(REFERRAL_LOCKED_KEY, '1');
+            await AsyncStorage.removeItem(PENDING_CODE_KEY);
+            return;
+          }
+        } catch {
+          /* state query unavailable — fall through to the trackReferral path */
+        }
+
         const code = await AsyncStorage.getItem(PENDING_CODE_KEY);
         if (!code) return;
         const result: any = await convex.mutation((api as any).earnings.trackReferral, {
@@ -164,8 +194,14 @@ export function ReferralAttribution() {
           consumingRef.current = false;
           return;
         }
-        // Any definitive outcome (incl. unknown shapes) → clear.
+        // Any definitive outcome (incl. unknown shapes) → clear the pending code.
         await AsyncStorage.removeItem(PENDING_CODE_KEY);
+        // Lock manual entry ONLY when a referrer is now set (applied) or was
+        // already set (already_referred). invalid_code / self_referral stay
+        // UNLOCKED so the user can still try a valid code once.
+        if (status === 'applied' || status === 'already_referred') {
+          await AsyncStorage.setItem(REFERRAL_LOCKED_KEY, '1');
+        }
       } catch {
         // Network/transient error — leave the pending code; retried later.
         consumingRef.current = false;
