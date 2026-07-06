@@ -1,4 +1,4 @@
-# Smilers — changes to merge into Ashwini's native build (2026-07-06, rev 2)
+# Smilers — changes to merge into Ashwini's native build (2026-07-06, rev 3)
 
 These are the fixes made in the Emergent codebase that the current APK is missing.
 Split into two groups so you do NOT accidentally overwrite your newer native
@@ -8,7 +8,10 @@ Baseline for all diffs: commit 21cc30a3 (2026-07-03 23:11 UTC).
 
 > rev 2 (2026-07-06): added the Ad-Clicks Mobile Money flow and wired its
 > entry point into the Ads "Buy clicks" modal. `MobileMoneyAdmin.tsx` was
-> REMOVED (superseded — see below). Re-generate/re-apply the patch.
+> REMOVED (superseded — see below).
+> rev 3 (2026-07-06): FAQ/support updates, "Mobile Money top-ups" card on My
+> Ads, corrected support email, and HID the two diagnostic rows in Settings
+> for the Play Store launch. Re-generate/re-apply the patch.
 
 ---
 
@@ -44,6 +47,9 @@ MODIFIED files:
 - app/index.tsx                      (Sign-in: hide referral entry once redeemed)
 - app/premium.tsx                    ("Pay with Mobile Money" button + "Your requests" entry)
 - app/admin.tsx                      (new "Payments" tab renders <PaymentsAdmin/> + pending badge = mobileMoneyRequests + adClickRequests)
+- src/lib/faqs.ts                    (rev3 — NEW "Premium & payments" FAQ category incl. Mobile Money for Premium + ad clicks; + recent-feature FAQs: add-participant calls, call waiting, pinned posts, group edit approvals, group sender names)
+- app/help.tsx                       (rev3 — footer support email fixed to support.smilers@gmail.com)
+- app/settings.tsx                   (rev3 — HID the "Diagnostic Logs" & "Call Diagnostics" rows for the Play Store launch; routes/screens still exist, just unlinked)
 
 To apply the patch inside your repo:
     git apply --3way smilers-app-logic-changes.patch
@@ -51,6 +57,12 @@ To apply the patch inside your repo:
 
 If you previously applied rev1, also run:
     git rm src/components/admin/MobileMoneyAdmin.tsx   # superseded, no longer imported
+
+## Smilers AI (external — Hercules web app)
+The in-app AI Assistant runs on the Hercules backend (`api.ai.chat.generateResponse`),
+NOT in this repo. See **SMILERS_AI_KNOWLEDGE_FOR_HERCULES.md** for the knowledge /
+system-prompt additions the Hercules team should apply so the AI can answer the new
+Premium / Mobile Money and group/call questions consistently with the in-app FAQ.
 
 ---
 
