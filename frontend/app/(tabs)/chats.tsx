@@ -285,6 +285,20 @@ export default function ChatsScreen() {
     return [...pinned.map((p) => p.c), ...rest];
   }, [pinVoiceTasks, voiceTaskOrder, visibleList]);
 
+  // Draft bump: conversations with an unsent draft float to the top so the
+  // user can pick up where they paused. Skipped when Voice-Task pinning is on
+  // (that's an explicit ordering the user chose). Stable — relative order
+  // within the drafted / non-drafted groups is preserved.
+  const finalList = useMemo(() => {
+    if (pinVoiceTasks) return orderedList;
+    if (!drafts || Object.keys(drafts).length === 0) return orderedList;
+    const withDraft: any[] = [];
+    const without: any[] = [];
+    orderedList.forEach((c: any) => (drafts[String(c?._id)] ? withDraft.push(c) : without.push(c)));
+    if (withDraft.length === 0) return orderedList;
+    return [...withDraft, ...without];
+  }, [pinVoiceTasks, orderedList, drafts]);
+
   const handleArchive = useCallback(
     async (conversationId: string) => {
       try {
@@ -417,7 +431,7 @@ export default function ChatsScreen() {
       </Modal>
 
       <FlatList
-        data={orderedList}
+        data={finalList}
         keyExtractor={(item: any) => item._id}
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={

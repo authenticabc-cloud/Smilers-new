@@ -5,6 +5,9 @@ Newest first. All changes are captured in `smilers-app-logic-changes.patch`
 `MERGE_FOR_ASHWINI.md`.
 
 ## 2026-07-07
+- **Chats list draft-bump ordering:** conversations with an unsent draft now
+  float to the top of the Chats list (yields to Voice-Task pin order when
+  that's enabled). File: `app/(tabs)/chats.tsx`.
 - **Chats list "Draft:" indicator:** conversation rows now show a red
   "Draft:" preview (text, or "📷 Photo" for image-only drafts) when there's an
   unsent composer draft — WhatsApp-style. Refreshes when the list regains focus.
