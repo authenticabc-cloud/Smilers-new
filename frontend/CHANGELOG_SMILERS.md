@@ -5,6 +5,12 @@ Newest first. All changes are captured in `smilers-app-logic-changes.patch`
 `MERGE_FOR_ASHWINI.md`.
 
 ## 2026-07-08
+- **Status views not counting (FIXED):** the viewer screen's `markViewed` effect
+  was keyed only on `[idx, isMine]`, so when the stories array finished loading
+  AFTER the first render (async Convex fetch) the effect never re-ran and the
+  first/only status was never marked viewed. Now also keyed on the current
+  status id (per-id `viewedRef` guard still prevents echo re-fires). File:
+  `app/status-view/[userId].tsx`.
 - **Group message sender name fix:** in group chats a sender's name no longer
   falls back to the generic "Member" label. `resolveSenderName` now enriches the
   sender from `api.conversations.getGroupMembers` (real Smilers/Google account

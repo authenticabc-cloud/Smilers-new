@@ -351,10 +351,15 @@ function StatusViewScreenInner() {
     if (!key || viewedRef.current.has(key)) return;
     viewedRef.current.add(key);
     markViewed({ statusId: current._id || current.id || current.statusId }).catch(() => {});
-    // Keyed on `idx` (not `current`) + a once-per-id guard so a data echo
-    // from the mutation can't re-trigger this and reset the timer.
+    // iter-339: key on the CURRENT status id (not just `idx`) so the mark fires
+    // once the stories array finishes loading AFTER mount — previously the
+    // effect only depended on [idx, isMine], so if `current` was still
+    // undefined on the first render (async Convex fetch) it exited early and
+    // never re-ran, leaving the first/only status never marked viewed ("views
+    // not counting"). The `viewedRef` per-id guard still prevents a data echo
+    // from the mutation re-firing it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idx, isMine]);
+  }, [idx, isMine, current?._id, current?.id, current?.statusId]);
 
   useEffect(() => {
     if (!current) return;

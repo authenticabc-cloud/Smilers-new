@@ -2150,6 +2150,87 @@ index 6d84c311..cc0cb8e9 100644
    { key: 'lockscreen-wake', route: '/lockscreen-wake', title: 'Lockscreen Wake', sub: 'Allow incoming calls to wake the locked screen', icon: 'cellphone-screenshot', lib: 'mc' },
    { key: 'privacy', route: '/privacy', title: 'Privacy', sub: 'Last seen, profile photo, about', icon: 'shield-outline', lib: 'ion' },
    { key: 'app-lock', route: '/app-lock', title: 'App Lock', sub: 'PIN code and biometric unlock', icon: 'fingerprint', lib: 'mc' },
+diff --git a/frontend/app/status-view/[userId].tsx b/frontend/app/status-view/[userId].tsx
+index 7dc7476c..96fe3f0e 100644
+--- a/frontend/app/status-view/[userId].tsx
++++ b/frontend/app/status-view/[userId].tsx
+@@ -351,10 +351,15 @@ function StatusViewScreenInner() {
+     if (!key || viewedRef.current.has(key)) return;
+     viewedRef.current.add(key);
+     markViewed({ statusId: current._id || current.id || current.statusId }).catch(() => {});
+-    // Keyed on `idx` (not `current`) + a once-per-id guard so a data echo
+-    // from the mutation can't re-trigger this and reset the timer.
++    // iter-339: key on the CURRENT status id (not just `idx`) so the mark fires
++    // once the stories array finishes loading AFTER mount — previously the
++    // effect only depended on [idx, isMine], so if `current` was still
++    // undefined on the first render (async Convex fetch) it exited early and
++    // never re-ran, leaving the first/only status never marked viewed ("views
++    // not counting"). The `viewedRef` per-id guard still prevents a data echo
++    // from the mutation re-firing it.
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+-  }, [idx, isMine]);
++  }, [idx, isMine, current?._id, current?.id, current?.statusId]);
+ 
+   useEffect(() => {
+     if (!current) return;
+@@ -491,7 +496,27 @@ function StatusViewScreenInner() {
+   const isTextStory = readStoryType(current) === 'text';
+   const bg = isTextStory ? readStoryBg(current) : '#000';
+   const fg = isTextStory ? readStoryFg(current) : '#FFFFFF';
+-  const viewsCount = current.views?.length || current.viewCount || 0;
++  // iter-330: the backend returns the viewer list + count under SEVERAL aliases
++  // (views / viewers / viewedBy / seenBy, and viewCount / viewsCount / seenCount).
++  // Reading only `views` made the owner see "0 viewers" whenever the backend
++  // used a different field name. Resolve all of them.
++  const viewerList: any[] = Array.isArray(current.views)
++    ? current.views
++    : Array.isArray(current.viewers)
++      ? current.viewers
++      : Array.isArray(current.viewedBy)
++        ? current.viewedBy
++        : Array.isArray(current.seenBy)
++          ? current.seenBy
++          : [];
++  const viewsCount =
++    Number(
++      current.viewCount ??
++        current.viewsCount ??
++        current.seenCount ??
++        current.viewsTotal ??
++        (Array.isArray(current.views) ? current.views.length : undefined),
++    ) || viewerList.length || 0;
+ 
+   return (
+     <View
+@@ -641,11 +666,14 @@ function StatusViewScreenInner() {
+             <View style={styles.grabber} />
+             <Text style={styles.viewersSheetTitle}>Seen by {viewsCount}</Text>
+             <FlatList
+-              data={current.views || []}
+-              keyExtractor={(viewer: any, viewerIndex: number) => viewer?.userId || String(viewerIndex)}
++              data={viewerList}
++              keyExtractor={(viewer: any, viewerIndex: number) =>
++                viewer?.userId || viewer?._id || viewer?.viewer || String(viewerIndex)
++              }
+               contentContainerStyle={styles.viewersList}
+               renderItem={({ item }: any) => {
+-                const viewerName = resolveContactName(item?.userId, item?.name || 'User');
++                const viewerId = item?.userId || item?._id || item?.viewer || item?.viewerId;
++                const viewerName = resolveContactName(viewerId, item?.name || item?.displayName || 'User');
+                 return (
+                   <View style={styles.viewerRow}>
+                     <View style={styles.viewerAvatar}>
+@@ -653,7 +681,9 @@ function StatusViewScreenInner() {
+                     </View>
+                     <View style={styles.flexOne}>
+                       <Text style={styles.viewerName}>{viewerName}</Text>
+-                      <Text style={styles.viewerTime}>{timeAgo(item?.viewedAt || Date.now())}</Text>
++                      <Text style={styles.viewerTime}>
++                        {timeAgo(item?.viewedAt || item?.at || item?.seenAt || Date.now())}
++                      </Text>
+                     </View>
+                   </View>
+                 );
 diff --git a/frontend/app/user/[userId].tsx b/frontend/app/user/[userId].tsx
 index 48d91649..051b5fe8 100644
 --- a/frontend/app/user/[userId].tsx
