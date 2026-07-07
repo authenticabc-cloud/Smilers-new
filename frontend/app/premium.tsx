@@ -477,26 +477,25 @@ export default function PremiumPage() {
           />
         </View>
 
-        {/* Redeem code block — hidden once Premium is already active, since a
-            re-redeem always fails on the backend. */}
-        {!status.hasAccess ? (
-          <TouchableOpacity
-            style={styles.redeemHeader}
-            onPress={() => setShowRedeem((v) => !v)}
-            activeOpacity={0.85}
-            testID="premium-redeem-toggle"
-          >
-            <Feather name="gift" size={20} color={Colors.primary} />
-            <Text style={styles.redeemHeaderText}>Have a code? Redeem here</Text>
-            <Feather
-              name={showRedeem ? 'chevron-up' : 'chevron-down'}
-              size={20}
-              color={Colors.textSecondary}
-            />
-          </TouchableOpacity>
-        ) : null}
+        {/* Redeem code block — always visible. If Premium is already active,
+            handleRedeem short-circuits with a friendly "nothing to redeem" note
+            instead of calling the backend (which rejects a re-redeem). */}
+        <TouchableOpacity
+          style={styles.redeemHeader}
+          onPress={() => setShowRedeem((v) => !v)}
+          activeOpacity={0.85}
+          testID="premium-redeem-toggle"
+        >
+          <Feather name="gift" size={20} color={Colors.primary} />
+          <Text style={styles.redeemHeaderText}>Have a code? Redeem here</Text>
+          <Feather
+            name={showRedeem ? 'chevron-up' : 'chevron-down'}
+            size={20}
+            color={Colors.textSecondary}
+          />
+        </TouchableOpacity>
 
-        {!status.hasAccess && showRedeem ? (
+        {showRedeem ? (
           <View style={styles.redeemForm}>
             <TextInput
               style={styles.redeemInput}

@@ -1711,7 +1711,7 @@ index 00000000..727116ad
 +  countryCurrency: { fontSize: FontSize.sm, color: Colors.textSecondary },
 +});
 diff --git a/frontend/app/premium.tsx b/frontend/app/premium.tsx
-index f9a950a6..29a4aff1 100644
+index f9a950a6..a25a7a80 100644
 --- a/frontend/app/premium.tsx
 +++ b/frontend/app/premium.tsx
 @@ -29,7 +29,7 @@ import {
@@ -1778,7 +1778,52 @@ index f9a950a6..29a4aff1 100644
          {/* Premium includes section (always shown) */}
          <Text style={[styles.sectionLabel, { marginTop: Spacing.xl }]}>PREMIUM INCLUDES</Text>
          <View style={styles.includesList}>
-@@ -630,6 +668,33 @@ const styles = StyleSheet.create({
+@@ -439,26 +477,25 @@ export default function PremiumPage() {
+           />
+         </View>
+ 
+-        {/* Redeem code block — hidden once Premium is already active, since a
+-            re-redeem always fails on the backend. */}
+-        {!status.hasAccess ? (
+-          <TouchableOpacity
+-            style={styles.redeemHeader}
+-            onPress={() => setShowRedeem((v) => !v)}
+-            activeOpacity={0.85}
+-            testID="premium-redeem-toggle"
+-          >
+-            <Feather name="gift" size={20} color={Colors.primary} />
+-            <Text style={styles.redeemHeaderText}>Have a code? Redeem here</Text>
+-            <Feather
+-              name={showRedeem ? 'chevron-up' : 'chevron-down'}
+-              size={20}
+-              color={Colors.textSecondary}
+-            />
+-          </TouchableOpacity>
+-        ) : null}
++        {/* Redeem code block — always visible. If Premium is already active,
++            handleRedeem short-circuits with a friendly "nothing to redeem" note
++            instead of calling the backend (which rejects a re-redeem). */}
++        <TouchableOpacity
++          style={styles.redeemHeader}
++          onPress={() => setShowRedeem((v) => !v)}
++          activeOpacity={0.85}
++          testID="premium-redeem-toggle"
++        >
++          <Feather name="gift" size={20} color={Colors.primary} />
++          <Text style={styles.redeemHeaderText}>Have a code? Redeem here</Text>
++          <Feather
++            name={showRedeem ? 'chevron-up' : 'chevron-down'}
++            size={20}
++            color={Colors.textSecondary}
++          />
++        </TouchableOpacity>
+ 
+-        {!status.hasAccess && showRedeem ? (
++        {showRedeem ? (
+           <View style={styles.redeemForm}>
+             <TextInput
+               style={styles.redeemInput}
+@@ -630,6 +667,33 @@ const styles = StyleSheet.create({
    },
    subscribeBtnLoading: { opacity: 0.85 },
    subscribeBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: '#3D2A00' },
