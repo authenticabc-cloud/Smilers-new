@@ -96,3 +96,54 @@ Notes:
   so it won't interfere with the full-screen controls tap-catcher.
 - **Native only** — RTCView doesn't render on web/Expo Go, so this must be
   verified on a device build.
+
+---
+
+## iter-338 — 3 additional call-layer changes (2026-07-08)
+
+All three live in `app/call/[conversationId].tsx` (+ two small helper files).
+Keep these SEPARATE from your native push/call integration merge.
+
+### A) Call-waiting FOREGROUND video routing (fixes "audio-only" bug)
+Symptom the user reported: after **Hold current & Accept incoming**, they could
+hear/speak on the accepted call but saw **no video** — the screen still tried to
+render the HELD primary call's streams.
+
+Fix: derive the foreground call and route ALL video through it.
+```js
+const foregroundIsSecondary =
+  !!secondaryInfo && (heldSide === 'primary' || primaryEndedPromoted);
+const displayRemoteURL = foregroundIsSecondary
+  ? secondary.remoteStreamURL || remoteStreamURL
+  : remoteStreamURL;
+const displayLocalURL = foregroundIsSecondary
+  ? secondary.localStreamURL || localStreamURL   // NEW: secondary local stream
+  : localStreamURL;
+const foregroundCallType = foregroundIsSecondary
+  ? (secondaryInfo?.callType || callType) : callType;
+const foregroundActive = foregroundIsSecondary
+  ? (secondary.connected || isActive) : isActive;
+// gate uses the FOREGROUND type/active, not the primary:
+const showVideo = foregroundCallType === 'video' && foregroundActive && RTCViewImpl != null;
+```
+`src/lib/call/useSecondaryCall.ts` now also wires `onLocalStream` and returns
+`localStreamURL` (previously only `remoteStreamURL`). The mini/pip/full-screen
+surfaces all read `displayRemoteURL` / `displayLocalURL` now.
+
+### B) Persist self-view PiP position across calls
+New helper `src/lib/call/selfViewPosition.ts` (AsyncStorage). On PanResponder
+release we `saveSelfViewPos({tx, ty})`; on mount (once bounds are known) we
+`loadSelfViewPos()` and `pipPan.setValue(clamped)`. Re-clamped to current bounds
+so an old position never lands off-screen.
+
+### C) Double-tap PiP to swap local/remote feeds
+`pipSwapped` state (default false). A `Pressable` inside the PiP wrapper calls
+`handlePipTap()` which toggles `pipSwapped` on a <300ms second tap. Render:
+```js
+const mainVideoURL = pipSwapped ? displayLocalURL : displayRemoteURL;
+const selfViewURL   = pipSwapped ? displayRemoteURL : displayLocalURL;
+// main mirror = pipSwapped ; self mirror = !pipSwapped
+```
+Single taps still fall through to the drag / controls tap-catcher.
+
+**Native only** — all three require a device build (RTCView + real 2nd call).

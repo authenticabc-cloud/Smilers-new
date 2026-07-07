@@ -4,6 +4,25 @@ Newest first. All changes are captured in `smilers-app-logic-changes.patch`
 (baseline commit 21cc30a3) and summarised for the native dev in
 `MERGE_FOR_ASHWINI.md`.
 
+## 2026-07-08
+- **Group message sender name fix:** in group chats a sender's name no longer
+  falls back to the generic "Member" label. `resolveSenderName` now enriches the
+  sender from `api.conversations.getGroupMembers` (real Smilers/Google account
+  name + phone), with the viewer's device-contact name still taking priority.
+  File: `app/chat/[conversationId].tsx`.
+- **Call-waiting video fix (audio-only bug):** after "Hold current & Accept
+  incoming", the accepted (secondary) call now correctly owns the full-screen
+  video — remote feed, self-view, and the `showVideo` gate all route through the
+  FOREGROUND call (primary vs. secondary) instead of the held primary. Fixes the
+  "I can hear/speak but see no video" report. `useSecondaryCall` now also exposes
+  `localStreamURL`. Native-only (RTCView). Files: `app/call/[conversationId].tsx`,
+  `src/lib/call/useSecondaryCall.ts`. Handoff: `CALL_SELFVIEW_DRAG_FOR_ASHWINI.md`.
+- **Self-view PiP: persist position + double-tap to swap:** the dragged PiP spot
+  is now saved to AsyncStorage and restored on the next call; double-tapping the
+  PiP swaps the local/remote feeds (local goes full-screen, remote shrinks into
+  the PiP). Native-only. Files: `app/call/[conversationId].tsx`,
+  `src/lib/call/selfViewPosition.ts`.
+
 ## 2026-07-07
 - **Draggable video-call self-view:** the local camera preview (PiP) can now be
   dragged anywhere on screen during a video call and snaps to stay fully

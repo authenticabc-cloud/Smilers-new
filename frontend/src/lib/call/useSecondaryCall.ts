@@ -51,6 +51,7 @@ export function useSecondaryCall({
   const sessionRef = useRef<CallSession | null>(null);
   const startedRef = useRef<string | null>(null);
   const [remoteStreamURL, setRemoteStreamURL] = useState<string | null>(null);
+  const [localStreamURL, setLocalStreamURL] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [held, setHeldState] = useState(false);
 
@@ -94,6 +95,11 @@ export function useSecondaryCall({
           onRemoteStream: (stream) => {
             try {
               setRemoteStreamURL((stream as any).toURL());
+            } catch {}
+          },
+          onLocalStream: (stream) => {
+            try {
+              setLocalStreamURL((stream as any).toURL());
             } catch {}
           },
           onConnectionStateChange: (state) => {
@@ -176,6 +182,7 @@ export function useSecondaryCall({
     sessionRef.current = null;
     startedRef.current = null;
     setRemoteStreamURL(null);
+    setLocalStreamURL(null);
     setConnected(false);
     setHeldState(false);
     if (opts?.endOnServer && id) {
@@ -193,5 +200,5 @@ export function useSecondaryCall({
     };
   }, []);
 
-  return { remoteStreamURL, connected, held, setHeld, teardown, session: sessionRef };
+  return { remoteStreamURL, localStreamURL, connected, held, setHeld, teardown, session: sessionRef };
 }

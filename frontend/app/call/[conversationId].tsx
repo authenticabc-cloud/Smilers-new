@@ -56,6 +56,7 @@ import { setPipParams, enterPip, isPipSupported, useIsInPip } from '../../src/li
 import { callHost, useCallHost } from '../../src/lib/call/callHost';
 import { setActiveCall } from '../../src/lib/call/activeCallRegistry';
 import { useSecondaryCall, SecondaryCallInfo } from '../../src/lib/call/useSecondaryCall';
+import { loadSelfViewPos, saveSelfViewPos } from '../../src/lib/call/selfViewPosition';
 import CallWaitingOverlay from '../../src/components/call/CallWaitingOverlay';
 
 type CallType = 'voice' | 'video';
@@ -160,7 +161,9 @@ export function CallScreenInner() {
 
   // ── Draggable self-view (video PiP) ───────────────────────────────────────
   // The local camera preview can be dragged anywhere on screen and snaps to
-  // stay fully visible. Position is session-only (resets each call). Anchored
+  // stay fully visible. iter-338: the final position is PERSISTED to
+  // AsyncStorage and restored on the next call. Double-tapping the preview
+  // SWAPS the local and remote feeds (self-view ↔ main video). Anchored
   // bottom-right by styles.pipWrap; we apply a translate on top of that.
   const PIP_W = 96;
   const PIP_H = 130;
@@ -169,6 +172,11 @@ export function CallScreenInner() {
   const PIP_EDGE = 8; // keep this far from screen edges
   const PIP_TOP_SAFE = 54; // clear the status bar / notch
   const pipPan = useRef(new RNAnimated.ValueXY({ x: 0, y: 0 })).current;
+  const pipPosRestoredRef = useRef(false);
+  // iter-338: double-tap-to-swap state. When true the MAIN video area shows the
+  // local camera and the self-view PiP shows the remote feed.
+  const [pipSwapped, setPipSwapped] = useState(false);
+  const lastPipTapRef = useRef(0);
   const pipBounds = useMemo(() => {
     const defaultLeft = windowWidth - PIP_RIGHT - PIP_W;
     const defaultTop = windowHeight - PIP_BOTTOM - PIP_H;
@@ -179,6 +187,29 @@ export function CallScreenInner() {
       maxTy: windowHeight - PIP_H - PIP_EDGE - defaultTop,
     };
   }, [windowWidth, windowHeight]);
+  // Restore the saved self-view position once bounds are known (re-clamped to
+  // the current screen so an old position never lands off-screen).
+  useEffect(() => {
+    if (pipPosRestoredRef.current) return;
+    pipPosRestoredRef.current = true;
+    void loadSelfViewPos().then((saved) => {
+      if (!saved) return;
+      const x = Math.min(pipBounds.maxTx, Math.max(pipBounds.minTx, saved.tx));
+      const y = Math.min(pipBounds.maxTy, Math.max(pipBounds.minTy, saved.ty));
+      pipPan.setValue({ x, y });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pipBounds]);
+  // Double-tap the self-view to swap the local/remote feeds.
+  const handlePipTap = useCallback(() => {
+    const now = Date.now();
+    if (now - lastPipTapRef.current < 300) {
+      lastPipTapRef.current = 0;
+      setPipSwapped((prev) => !prev);
+    } else {
+      lastPipTapRef.current = now;
+    }
+  }, []);
   const pipPanResponder = useMemo(
     () =>
       PanResponder.create({
@@ -203,6 +234,8 @@ export function CallScreenInner() {
             friction: 7,
             tension: 60,
           }).start();
+          // Persist so the next call restores this spot.
+          saveSelfViewPos({ tx: clampedX, ty: clampedY });
         },
       }),
     [pipBounds, pipPan],
@@ -1807,12 +1840,38 @@ export function CallScreenInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeCall?.status, secondaryInfo]);
 
+  // iter-338: which call is currently the FOREGROUND (visible) one? After the
+  // user Holds the primary call and Accepts the incoming one (heldSide ===
+  // 'primary'), or after the primary call ends and the held call is promoted,
+  // the SECONDARY call owns the screen. All foreground video must then route
+  // through the secondary session's streams / call type — otherwise the user
+  // hears audio but sees no video (the bug reported by the user).
+  const foregroundIsSecondary =
+    !!secondaryInfo && (heldSide === 'primary' || primaryEndedPromoted);
   // The remote stream shown in the MAIN video area: the secondary call when it
   // is the foreground call (primary held) or after the primary call ended.
-  const displayRemoteURL =
-    secondaryInfo && (heldSide === 'primary' || primaryEndedPromoted)
-      ? secondary.remoteStreamURL || remoteStreamURL
-      : remoteStreamURL;
+  const displayRemoteURL = foregroundIsSecondary
+    ? secondary.remoteStreamURL || remoteStreamURL
+    : remoteStreamURL;
+  // The self-view stream: secondary's local camera when it is foreground.
+  const displayLocalURL = foregroundIsSecondary
+    ? secondary.localStreamURL || localStreamURL
+    : localStreamURL;
+  // The foreground call's TYPE (voice/video) and active state — used to gate the
+  // video surface so it reflects the accepted incoming call, not the held one.
+  const foregroundCallType = foregroundIsSecondary
+    ? secondaryInfo?.callType || callType
+    : callType;
+  const foregroundActive = foregroundIsSecondary
+    ? secondary.connected || isActive
+    : isActive;
+  // iter-338: double-tap-to-swap. `pipSwapped` flips which feed occupies the
+  // MAIN surface vs the small self-view PiP. When swapped the local camera goes
+  // full-screen (mirrored) and the remote feed shrinks into the PiP.
+  const mainVideoURL = pipSwapped ? displayLocalURL : displayRemoteURL;
+  const mainVideoMirror = pipSwapped; // local is mirrored, remote is not
+  const selfViewURL = pipSwapped ? displayRemoteURL : displayLocalURL;
+  const selfViewMirror = !pipSwapped;
   // ─────────────────────────────────────────────────────────────────────────
 
   // Auto-answer when arriving via the call-waiting "End & Accept" flow
@@ -2405,7 +2464,7 @@ export function CallScreenInner() {
     return statusText;
   }, [isActive, isIncoming, isOutgoingRinging, permissionDenied, statusText]);
 
-  const showVideo = callType === 'video' && isActive && RTCViewImpl != null;
+  const showVideo = foregroundCallType === 'video' && foregroundActive && RTCViewImpl != null;
 
   // Reveal controls and (re)start the auto-hide countdown. Tap on the video
   // surface toggles them; while connected video keeps playing they fade out
@@ -2493,8 +2552,8 @@ export function CallScreenInner() {
         {/* Remote (other participant) fills the top; self-view is attached
             BELOW it (see popoutSelfStrip) rather than covering their face. */}
         <View style={styles.popoutRemote}>
-          {showVideo && remoteStreamURL ? (
-            <RTCViewImpl key={`remote-mini-${remoteVideoGen}`} streamURL={remoteStreamURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror={false} />
+          {showVideo && displayRemoteURL ? (
+            <RTCViewImpl key={`remote-mini-${remoteVideoGen}`} streamURL={displayRemoteURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror={false} />
           ) : (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
               <View style={{ width: 56, height: 56, borderRadius: 28, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' }}>
@@ -2527,8 +2586,8 @@ export function CallScreenInner() {
         </View>
         {/* Self-view — rectangle attached directly below the remote frame. */}
         <View style={styles.popoutSelfStrip} pointerEvents="none">
-          {showVideo && localStreamURL && !cameraOff ? (
-            <RTCViewImpl streamURL={localStreamURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror />
+          {showVideo && displayLocalURL && !cameraOff ? (
+            <RTCViewImpl streamURL={displayLocalURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror />
           ) : (
             <View style={styles.popoutSelfOff}>
               <Feather name="video-off" size={14} color="rgba(255,255,255,0.7)" />
@@ -2548,8 +2607,8 @@ export function CallScreenInner() {
     return (
       <View style={styles.popoutRoot} testID="pip-call-surface">
         <View style={styles.popoutRemote}>
-          {showVideo && remoteStreamURL ? (
-            <RTCViewImpl key={`remote-pip-${remoteVideoGen}`} streamURL={remoteStreamURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror={false} />
+          {showVideo && displayRemoteURL ? (
+            <RTCViewImpl key={`remote-pip-${remoteVideoGen}`} streamURL={displayRemoteURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror={false} />
           ) : (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
               <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' }}>
@@ -2559,8 +2618,8 @@ export function CallScreenInner() {
           )}
         </View>
         <View style={styles.popoutSelfStrip} pointerEvents="none">
-          {showVideo && localStreamURL && !cameraOff ? (
-            <RTCViewImpl streamURL={localStreamURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror />
+          {showVideo && displayLocalURL && !cameraOff ? (
+            <RTCViewImpl streamURL={displayLocalURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror />
           ) : (
             <View style={styles.popoutSelfOff}>
               <Feather name="video-off" size={16} color="rgba(255,255,255,0.7)" />
@@ -2587,14 +2646,14 @@ export function CallScreenInner() {
         title="Add to call"
       />
       {/* Video layer or gradient + avatar */}
-      {showVideo && displayRemoteURL ? (
+      {showVideo && mainVideoURL ? (
         <View style={styles.videoLayer}>
           <RTCViewImpl
-            key={`remote-${remoteVideoGen}`}
-            streamURL={displayRemoteURL}
+            key={`main-${pipSwapped ? 'local' : 'remote'}-${remoteVideoGen}`}
+            streamURL={mainVideoURL}
             style={StyleSheet.absoluteFill}
             objectFit="cover"
-            mirror={false}
+            mirror={mainVideoMirror}
           />
           {/* Full-screen tap catcher — toggles the auto-hiding controls.
               Sits above the remote video but below the PiP/overlays so the
@@ -2604,19 +2663,33 @@ export function CallScreenInner() {
             onPress={toggleControls}
             testID="video-tap-catcher"
           />
-          {/* Local picture-in-picture — draggable self-view. */}
-          {localStreamURL && !cameraOff ? (
+          {/* Local picture-in-picture — draggable self-view. Double-tap swaps
+              it with the main feed. */}
+          {selfViewURL ? (
             <RNAnimated.View
               style={[styles.pipWrap, { transform: pipPan.getTranslateTransform() }]}
               {...pipPanResponder.panHandlers}
               testID="call-self-view"
             >
-              <RTCViewImpl
-                streamURL={localStreamURL}
+              <Pressable
                 style={StyleSheet.absoluteFill}
-                objectFit="cover"
-                mirror
-              />
+                onPress={handlePipTap}
+                testID="call-self-view-tap"
+              >
+                {!pipSwapped && cameraOff ? (
+                  <View style={styles.popoutSelfOff}>
+                    <Feather name="video-off" size={18} color="rgba(255,255,255,0.7)" />
+                  </View>
+                ) : (
+                  <RTCViewImpl
+                    key={`self-${pipSwapped ? 'remote' : 'local'}-${remoteVideoGen}`}
+                    streamURL={selfViewURL}
+                    style={StyleSheet.absoluteFill}
+                    objectFit="cover"
+                    mirror={selfViewMirror}
+                  />
+                )}
+              </Pressable>
             </RNAnimated.View>
           ) : null}
           {/* Top overlay: name + duration (fades with controls) */}

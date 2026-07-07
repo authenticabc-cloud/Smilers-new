@@ -400,6 +400,13 @@ export default function ChatScreen() {
     (api as any).groupAdmin?.getGroupAdminInfo,
     canQueryConversation && isGroupChat ? { conversationId } : 'skip',
   ) as any;
+  // iter-338: group members carry each sender's Smilers/Google account name
+  // (and phone for device-contact resolution). Used by resolveSenderName so a
+  // group message never falls back to the generic "Member" label.
+  const groupMembers = useQuery(
+    (api as any).conversations?.getGroupMembers,
+    canQueryConversation && isGroupChat ? { conversationId } : 'skip',
+  ) as any[] | undefined;
   const canPinMessages = isGroupChat ? !!groupAdminInfo?.isAdmin : true;
   const pinnedMessageId = pinnedMessage
     ? String(pinnedMessage._id || pinnedMessage.messageId || pinnedMessage.message?._id || '')
@@ -442,16 +449,38 @@ export default function ChatScreen() {
   // iter-176: device address-book name takes priority for the chat
   // header title (1:1 chats only — group titles are untouched).
   const deviceContactIndex = useDeviceContactIndex();
-  // iter-337: resolve a group message sender's display name. Device address-
-  // book name takes priority (matched via the viewer's saved contact record,
-  // which carries the phone), falling back to the Smilers/Google account name
-  // the message already carries. Mirrors group/[id].tsx's displayNameForMember.
+  // iter-338: index group members by userId so we can resolve a sender's
+  // real account name + phone from the message's senderId alone.
+  const groupMemberById = useMemo(() => {
+    const map = new Map<string, any>();
+    (Array.isArray(groupMembers) ? groupMembers : []).forEach((m: any) => {
+      const uid = String(m?.userId || m?._id || m?.user?._id || '');
+      if (uid) map.set(uid, m);
+    });
+    return map;
+  }, [groupMembers]);
+  // iter-337/338: resolve a group message sender's display name. Device address-
+  // book name takes priority (matched via the viewer's saved contact record OR
+  // the group member's phone), falling back to the sender's Smilers/Google
+  // account name — NOT the generic "Member" label. Mirrors group/[id].tsx's
+  // displayNameForMember.
   const resolveSenderName = useCallback(
     (senderId: any, fallbackName?: string): string => {
       const uid = String(senderId || '');
-      const fb = (fallbackName && String(fallbackName).trim()) || 'Member';
+      const member = groupMemberById.get(uid) || {};
       const record = getSavedContactRecord(contacts, { userId: uid });
-      const base = record || {};
+      // Prefer the actual account name over the generic message fallback.
+      const memberName =
+        (member?.name && String(member.name).trim()) ||
+        (member?.displayName && String(member.displayName).trim()) ||
+        '';
+      const fb =
+        memberName ||
+        (fallbackName && String(fallbackName).trim()) ||
+        'Member';
+      // Merge the saved-contact record (viewer's phonebook) over the group
+      // member profile so phone numbers from either source enable device lookup.
+      const base = { ...member, ...(record || {}) };
       return getResolvedDisplayName(
         { ...base, name: base.name || fb, displayName: base.displayName || fb },
         deviceContactIndex,
@@ -459,7 +488,7 @@ export default function ChatScreen() {
         fb,
       );
     },
-    [contacts, deviceContactIndex],
+    [contacts, deviceContactIndex, groupMemberById],
   );
 
   const refetchMessages = useCallback(async () => {}, []);

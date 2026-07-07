@@ -726,7 +726,7 @@ index 048401d5..2f3d50f7 100644
          {tab === 'devotions' ? (
            <DevotionsTab
 diff --git a/frontend/app/chat/[conversationId].tsx b/frontend/app/chat/[conversationId].tsx
-index de2a29a2..62619851 100644
+index de2a29a2..47023e47 100644
 --- a/frontend/app/chat/[conversationId].tsx
 +++ b/frontend/app/chat/[conversationId].tsx
 @@ -8,7 +8,9 @@ import {
@@ -766,7 +766,7 @@ index de2a29a2..62619851 100644
  import { ChatOptionsMenu } from '../../src/components/chat/ChatOptionsMenu';
  import { SwipeToReply } from '../../src/components/chat/SwipeToReply';
  import { MessageActionSheet } from '../../src/components/chat/MessageActionSheet';
-@@ -378,6 +384,26 @@ export default function ChatScreen() {
+@@ -378,6 +384,33 @@ export default function ChatScreen() {
      canQueryConversation ? { conversationId, paginationOpts: { numItems: 50, cursor: null } } : 'skip'
    ) as any;
    const messagesLoading = canQueryConversation && messagesPage === undefined;
@@ -786,6 +786,13 @@ index de2a29a2..62619851 100644
 +    (api as any).groupAdmin?.getGroupAdminInfo,
 +    canQueryConversation && isGroupChat ? { conversationId } : 'skip',
 +  ) as any;
++  // iter-338: group members carry each sender's Smilers/Google account name
++  // (and phone for device-contact resolution). Used by resolveSenderName so a
++  // group message never falls back to the generic "Member" label.
++  const groupMembers = useQuery(
++    (api as any).conversations?.getGroupMembers,
++    canQueryConversation && isGroupChat ? { conversationId } : 'skip',
++  ) as any[] | undefined;
 +  const canPinMessages = isGroupChat ? !!groupAdminInfo?.isAdmin : true;
 +  const pinnedMessageId = pinnedMessage
 +    ? String(pinnedMessage._id || pinnedMessage.messageId || pinnedMessage.message?._id || '')
@@ -793,20 +800,42 @@ index de2a29a2..62619851 100644
    // iter 156: call-log pills in chat timeline (per Smilers web parity).
    // Backed by canonical contract api.calls.listCallLogsForConversation.
    // iter-180: switched from one-shot useSafeConvexQuery to a LIVE
-@@ -416,6 +442,26 @@ export default function ChatScreen() {
+@@ -416,6 +449,48 @@ export default function ChatScreen() {
    // iter-176: device address-book name takes priority for the chat
    // header title (1:1 chats only — group titles are untouched).
    const deviceContactIndex = useDeviceContactIndex();
-+  // iter-337: resolve a group message sender's display name. Device address-
-+  // book name takes priority (matched via the viewer's saved contact record,
-+  // which carries the phone), falling back to the Smilers/Google account name
-+  // the message already carries. Mirrors group/[id].tsx's displayNameForMember.
++  // iter-338: index group members by userId so we can resolve a sender's
++  // real account name + phone from the message's senderId alone.
++  const groupMemberById = useMemo(() => {
++    const map = new Map<string, any>();
++    (Array.isArray(groupMembers) ? groupMembers : []).forEach((m: any) => {
++      const uid = String(m?.userId || m?._id || m?.user?._id || '');
++      if (uid) map.set(uid, m);
++    });
++    return map;
++  }, [groupMembers]);
++  // iter-337/338: resolve a group message sender's display name. Device address-
++  // book name takes priority (matched via the viewer's saved contact record OR
++  // the group member's phone), falling back to the sender's Smilers/Google
++  // account name — NOT the generic "Member" label. Mirrors group/[id].tsx's
++  // displayNameForMember.
 +  const resolveSenderName = useCallback(
 +    (senderId: any, fallbackName?: string): string => {
 +      const uid = String(senderId || '');
-+      const fb = (fallbackName && String(fallbackName).trim()) || 'Member';
++      const member = groupMemberById.get(uid) || {};
 +      const record = getSavedContactRecord(contacts, { userId: uid });
-+      const base = record || {};
++      // Prefer the actual account name over the generic message fallback.
++      const memberName =
++        (member?.name && String(member.name).trim()) ||
++        (member?.displayName && String(member.displayName).trim()) ||
++        '';
++      const fb =
++        memberName ||
++        (fallbackName && String(fallbackName).trim()) ||
++        'Member';
++      // Merge the saved-contact record (viewer's phonebook) over the group
++      // member profile so phone numbers from either source enable device lookup.
++      const base = { ...member, ...(record || {}) };
 +      return getResolvedDisplayName(
 +        { ...base, name: base.name || fb, displayName: base.displayName || fb },
 +        deviceContactIndex,
@@ -814,13 +843,13 @@ index de2a29a2..62619851 100644
 +        fb,
 +      );
 +    },
-+    [contacts, deviceContactIndex],
++    [contacts, deviceContactIndex, groupMemberById],
 +  );
 +
    const refetchMessages = useCallback(async () => {}, []);
    const { data: conversationsForForward } = useSafeConvexQuery<any[]>(
      api.conversations.listConversations,
-@@ -726,6 +772,26 @@ export default function ChatScreen() {
+@@ -726,6 +801,26 @@ export default function ChatScreen() {
    const editMessage = useMutation((api as any).messages.editMessage);
    const updateMessage = useMutation((api as any).messages.updateMessage);
    const editTextMutation = useMutation((api as any).messages.editText);
@@ -847,7 +876,7 @@ index de2a29a2..62619851 100644
    // iter-147: canonical contract — toggleStar lives on `api.starred`,
    // NOT `api.messages`. Args require BOTH `messageId` AND
    // `conversationId` (server validates participant access).
-@@ -756,6 +822,89 @@ export default function ChatScreen() {
+@@ -756,6 +851,89 @@ export default function ChatScreen() {
    // composer to normal send mode. See iter-97 fix.
    const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
  
@@ -937,7 +966,7 @@ index de2a29a2..62619851 100644
    const messages: any[] = useMemo(() => {
      const page = messagesPage as any;
      const arr = page?.page || page || [];
-@@ -1438,12 +1587,26 @@ export default function ChatScreen() {
+@@ -1438,12 +1616,26 @@ export default function ChatScreen() {
      setSending(true);
      const replyToMessageId = replyTo?._id;
      const editTargetId = editingMessageId;
@@ -964,7 +993,7 @@ index de2a29a2..62619851 100644
        if (editTargetId) {
          // EDIT mode — try to update the original message in place. If the
          // backend exposes an edit mutation under any of the known names,
-@@ -2705,81 +2868,41 @@ export default function ChatScreen() {
+@@ -2705,81 +2897,41 @@ export default function ChatScreen() {
      const msg = selectedMsg;
      if (!msg) return;
      closeActionSheet();
@@ -1077,7 +1106,7 @@ index de2a29a2..62619851 100644
  
    const onSelectMultiple = useCallback(() => {
      const msg = selectedMsg;
-@@ -2837,10 +2960,79 @@ export default function ChatScreen() {
+@@ -2837,10 +2989,79 @@ export default function ChatScreen() {
  
    const cancelEdit = useCallback(() => {
      setEditingMessageId(null);
@@ -1157,7 +1186,7 @@ index de2a29a2..62619851 100644
    /**
     * Attempt to call any of the known edit mutations the backend may expose.
     * Different Convex deployments use different function names — try each
-@@ -3443,6 +3635,20 @@ export default function ChatScreen() {
+@@ -3443,6 +3664,20 @@ export default function ChatScreen() {
            <TouchableOpacity testID="chat-encryption-btn" onPress={() => router.push('/encryption' as any)} style={styles.headerIconButton}>
              <Ionicons name="shield-checkmark-outline" size={20} color={Colors.white} />
            </TouchableOpacity>
@@ -1178,7 +1207,7 @@ index de2a29a2..62619851 100644
            <TouchableOpacity testID="chat-menu-btn" onPress={() => setShowOptionsMenu(true)} style={styles.headerIconButton}>
              <Feather name="more-vertical" size={20} color={Colors.white} />
            </TouchableOpacity>
-@@ -3497,6 +3703,35 @@ export default function ChatScreen() {
+@@ -3497,6 +3732,35 @@ export default function ChatScreen() {
          );
        })()}
  
@@ -1214,7 +1243,7 @@ index de2a29a2..62619851 100644
        {/* iter-109 → iter-111: in-chat search bar — slides in below the
            header when the search button is tapped. Live-filters the
            message list by case-insensitive substring match. Kept as a
-@@ -3782,6 +4017,11 @@ export default function ChatScreen() {
+@@ -3782,6 +4046,11 @@ export default function ChatScreen() {
                        msg={item}
                        isMine={item.senderId === effectiveMe?._id}
                        myUserId={effectiveMe?._id}
@@ -1226,7 +1255,7 @@ index de2a29a2..62619851 100644
                        parentMsg={parentMsg}
                        onPressParent={parentMsg ? () => jumpToMessage(parentId) : undefined}
                        isJumpHighlighted={jumpHighlightId === String(item._id)}
-@@ -3948,6 +4188,21 @@ export default function ChatScreen() {
+@@ -3948,6 +4217,21 @@ export default function ChatScreen() {
              </View>
            ) : null}
  
@@ -1248,7 +1277,7 @@ index de2a29a2..62619851 100644
            {uploading ? (
              <View style={styles.uploadBar} testID="uploading-bar">
                <ActivityIndicator size="small" color={Colors.primary} />
-@@ -4338,12 +4593,37 @@ export default function ChatScreen() {
+@@ -4338,12 +4622,37 @@ export default function ChatScreen() {
  
        <MessageActionSheet
          message={selectedMsg}
@@ -1287,7 +1316,7 @@ index de2a29a2..62619851 100644
          onForward={onForward}
          onShare={onShare}
          onSelectMultiple={onSelectMultiple}
-@@ -4354,6 +4634,16 @@ export default function ChatScreen() {
+@@ -4354,6 +4663,16 @@ export default function ChatScreen() {
          onDelete={onDelete}
        />
  
@@ -1304,7 +1333,7 @@ index de2a29a2..62619851 100644
        {/* iter-292: rich Message Info sheet — Read by + media consumption
            (Played/Watched/Viewed/Opened by), mirroring the web app. */}
        <MessageInfoSheet
-@@ -4506,6 +4796,31 @@ export default function ChatScreen() {
+@@ -4506,6 +4825,31 @@ export default function ChatScreen() {
  }
  
  const styles = StyleSheet.create({
