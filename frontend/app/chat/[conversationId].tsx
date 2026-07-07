@@ -837,6 +837,7 @@ export default function ChatScreen() {
 
   const draftHydratedRef = useRef(false);
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestDraftRef = useRef<{ conversationId: string; draft: any } | null>(null);
 
   // Hydrate the stored draft once per conversation open.
   useEffect(() => {
@@ -867,15 +868,18 @@ export default function ChatScreen() {
   useEffect(() => {
     if (!conversationId || !draftHydratedRef.current) return;
     if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
+    const draft = {
+      text,
+      replyTo,
+      pendingImages,
+      editingMessageId,
+      draftBold,
+      draftColor,
+    };
+    // Mirror the latest draft so we can flush it immediately on unmount (e.g.
+    // the user hits Back within the debounce window).
+    latestDraftRef.current = { conversationId: String(conversationId), draft };
     draftSaveTimerRef.current = setTimeout(() => {
-      const draft = {
-        text,
-        replyTo,
-        pendingImages,
-        editingMessageId,
-        draftBold,
-        draftColor,
-      };
       if (isChatDraftEmpty(draft)) {
         void clearChatDraft(String(conversationId));
       } else {
@@ -886,6 +890,20 @@ export default function ChatScreen() {
       if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
     };
   }, [conversationId, text, replyTo, pendingImages, editingMessageId, draftBold, draftColor]);
+
+  // Flush the latest draft immediately when the chat unmounts, so a quick Back
+  // tap during the debounce window still persists (or clears) it.
+  useEffect(() => {
+    return () => {
+      const pending = latestDraftRef.current;
+      if (!pending || !pending.conversationId) return;
+      if (isChatDraftEmpty(pending.draft)) {
+        void clearChatDraft(pending.conversationId);
+      } else {
+        void saveChatDraft(pending.conversationId, pending.draft);
+      }
+    };
+  }, []);
 
   const messages: any[] = useMemo(() => {
     const page = messagesPage as any;

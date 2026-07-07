@@ -47,6 +47,7 @@ MODIFIED files:
 - src/components/user-profile/GroupInCommonRow.tsx  (robust member id/phone matching, nested shapes)
 - app/(tabs)/contacts.tsx            (friendly error on open-chat)
 - app/(tabs)/ads.tsx                 (rev2 — "Pay with Mobile Money" button in the Buy Clicks modal → /ad-clicks-payment; + a "Mobile Money top-ups" status card on the My Ads tab reading api.adClickRequests.getMyRequests)
+- app/(tabs)/chats.tsx               (rev4 — "Draft:" preview on chat rows for conversations with an unsent composer draft; refreshed on focus via loadAllChatDrafts)
 - app/find-by-phone.tsx              (friendly error on start-chat)
 - app/diagnostic-logs.tsx            (group-detection diagnostics: listGroups authoritative)
 - src/lib/referralAttribution.ts     (referral once-per-user lock)

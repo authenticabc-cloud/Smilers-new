@@ -76,3 +76,41 @@ export async function clearChatDraft(conversationId: string): Promise<void> {
     /* best-effort */
   }
 }
+
+export interface DraftPreview {
+  text?: string;
+  hasImages?: boolean;
+}
+
+/**
+ * Read every stored conversation draft in one pass and return a map of
+ * { conversationId: { text, hasImages } } for the Chats-list "Draft:" preview.
+ * Only non-empty drafts are included.
+ */
+export async function loadAllChatDrafts(): Promise<Record<string, DraftPreview>> {
+  const out: Record<string, DraftPreview> = {};
+  try {
+    const prefix = 'smilers:chat_draft:v1:';
+    const keys = (await AsyncStorage.getAllKeys()).filter((k) => k.startsWith(prefix));
+    if (keys.length === 0) return out;
+    const pairs = await AsyncStorage.multiGet(keys);
+    for (const [key, raw] of pairs) {
+      if (!raw) continue;
+      let draft: ChatDraft | null = null;
+      try {
+        draft = JSON.parse(raw) as ChatDraft;
+      } catch {
+        continue;
+      }
+      if (!draft || isChatDraftEmpty(draft)) continue;
+      const conversationId = key.slice(prefix.length);
+      out[conversationId] = {
+        text: typeof draft.text === 'string' ? draft.text.trim() : '',
+        hasImages: Array.isArray(draft.pendingImages) && draft.pendingImages.length > 0,
+      };
+    }
+  } catch {
+    /* best-effort */
+  }
+  return out;
+}

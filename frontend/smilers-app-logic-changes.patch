@@ -190,6 +190,101 @@ index b83e63c3..aa087d31 100644
    payBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.headerBg },
    payDisclaimer: { fontSize: FontSize.xs, color: Colors.textMuted, textAlign: 'center', marginTop: 10 },
  });
+diff --git a/frontend/app/(tabs)/chats.tsx b/frontend/app/(tabs)/chats.tsx
+index 00eaad86..78b58d7f 100644
+--- a/frontend/app/(tabs)/chats.tsx
++++ b/frontend/app/(tabs)/chats.tsx
+@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Mod
+ import { SafeAreaView } from 'react-native-safe-area-context';
+ import { Swipeable, RectButton } from 'react-native-gesture-handler';
+ import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+-import { useRouter } from 'expo-router';
++import { useRouter, useFocusEffect } from 'expo-router';
+ import { useQuery, useConvex } from 'convex/react';
+ import Header from '../../src/components/Header';
+ import Avatar from '../../src/components/Avatar';
+@@ -17,6 +17,7 @@ import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
+ import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName } from '../../src/lib/displayName';
+ import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
+ import { readCacheMeta, writeCache } from '../../src/lib/offlineCache';
++import { loadAllChatDrafts, type DraftPreview } from '../../src/lib/chatDrafts';
+ import AsyncStorage from '@react-native-async-storage/async-storage';
+ import OfflineBanner from '../../src/components/OfflineBanner';
+ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
+@@ -73,6 +74,21 @@ export default function ChatsScreen() {
+   const me = useQuery(api.users.getCurrentUser, {});
+   const contacts = useQuery(api.contacts.getContacts, {});
+   const conversations = useQuery(api.conversations.listConversations);
++  // Composer drafts per conversation — refreshed whenever the list regains
++  // focus (e.g. returning from a chat where a draft was started/cleared) so the
++  // "Draft:" preview stays in sync.
++  const [drafts, setDrafts] = useState<Record<string, DraftPreview>>({});
++  useFocusEffect(
++    useCallback(() => {
++      let alive = true;
++      void loadAllChatDrafts().then((map) => {
++        if (alive) setDrafts(map);
++      });
++      return () => {
++        alive = false;
++      };
++    }, []),
++  );
+   // Voice Task roster (positions 1..10) — used to optionally pin those
+   // contacts' chats to the top in the same order they occupy in Voice Tasks.
+   const voiceTaskRows = useQuery(
+@@ -491,6 +507,7 @@ export default function ChatsScreen() {
+               item={item}
+               currentUserId={me?._id}
+               contacts={contacts}
++              draft={drafts[String(item._id)]}
+               onPress={() => router.push(`/chat/${item._id}` as any)}
+             />
+           </SwipeToArchive>
+@@ -580,7 +597,7 @@ function peerIsOnline(item: any): boolean {
+   return Date.now() - t < 120000; // online if seen within 2 min
+ }
+ 
+-function ConversationRow({ item, currentUserId, contacts, onPress }: { item: any; currentUserId?: string; contacts?: any[]; onPress: () => void }) {
++function ConversationRow({ item, currentUserId, contacts, draft, onPress }: { item: any; currentUserId?: string; contacts?: any[]; draft?: DraftPreview; onPress: () => void }) {
+   // iter-176: Device address-book name beats both the saved-contact name
+   // AND the Smilers display name. e.g. if your phone has the other user
+   // saved as "ABC Albania", you'll see "ABC Albania" here instead of the
+@@ -639,9 +656,20 @@ function ConversationRow({ item, currentUserId, contacts, onPress }: { item: any
+       <Avatar name={name} size={52} uri={photoUri} online={peerIsOnline(item)} />
+       <View style={styles.rowMiddle}>
+         <Text style={styles.rowTitle}>{name}</Text>
+-        <Text style={[styles.rowSubtitle, typingLabel ? styles.rowTyping : null]} numberOfLines={1}>
+-          {typingLabel || item.lastMessageText || 'Start chatting…'}
+-        </Text>
++        {typingLabel ? (
++          <Text style={[styles.rowSubtitle, styles.rowTyping]} numberOfLines={1}>
++            {typingLabel}
++          </Text>
++        ) : draft ? (
++          <Text style={styles.rowSubtitle} numberOfLines={1}>
++            <Text style={styles.draftPrefix}>Draft: </Text>
++            {draft.text || (draft.hasImages ? '📷 Photo' : '')}
++          </Text>
++        ) : (
++          <Text style={styles.rowSubtitle} numberOfLines={1}>
++            {item.lastMessageText || 'Start chatting…'}
++          </Text>
++        )}
+       </View>
+       <Text style={styles.rowTime}>{relTime(item.lastMessageTime)}</Text>
+     </TouchableOpacity>
+@@ -733,6 +761,10 @@ const styles = StyleSheet.create({
+     fontSize: FontSize.sm,
+     color: Colors.textSecondary,
+   },
++  draftPrefix: {
++    color: Colors.danger,
++    fontWeight: FontWeight.semibold,
++  },
+   rowTyping: {
+     color: Colors.primary,
+     fontStyle: 'italic',
 diff --git a/frontend/app/(tabs)/contacts.tsx b/frontend/app/(tabs)/contacts.tsx
 index 3e77ad2f..9e83e330 100644
 --- a/frontend/app/(tabs)/contacts.tsx
@@ -601,7 +696,7 @@ index 048401d5..2f3d50f7 100644
          {tab === 'devotions' ? (
            <DevotionsTab
 diff --git a/frontend/app/chat/[conversationId].tsx b/frontend/app/chat/[conversationId].tsx
-index de2a29a2..cc051de8 100644
+index de2a29a2..62619851 100644
 --- a/frontend/app/chat/[conversationId].tsx
 +++ b/frontend/app/chat/[conversationId].tsx
 @@ -8,7 +8,9 @@ import {
@@ -722,7 +817,7 @@ index de2a29a2..cc051de8 100644
    // iter-147: canonical contract — toggleStar lives on `api.starred`,
    // NOT `api.messages`. Args require BOTH `messageId` AND
    // `conversationId` (server validates participant access).
-@@ -756,6 +822,71 @@ export default function ChatScreen() {
+@@ -756,6 +822,89 @@ export default function ChatScreen() {
    // composer to normal send mode. See iter-97 fix.
    const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
  
@@ -741,6 +836,7 @@ index de2a29a2..cc051de8 100644
 +
 +  const draftHydratedRef = useRef(false);
 +  const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
++  const latestDraftRef = useRef<{ conversationId: string; draft: any } | null>(null);
 +
 +  // Hydrate the stored draft once per conversation open.
 +  useEffect(() => {
@@ -771,15 +867,18 @@ index de2a29a2..cc051de8 100644
 +  useEffect(() => {
 +    if (!conversationId || !draftHydratedRef.current) return;
 +    if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
++    const draft = {
++      text,
++      replyTo,
++      pendingImages,
++      editingMessageId,
++      draftBold,
++      draftColor,
++    };
++    // Mirror the latest draft so we can flush it immediately on unmount (e.g.
++    // the user hits Back within the debounce window).
++    latestDraftRef.current = { conversationId: String(conversationId), draft };
 +    draftSaveTimerRef.current = setTimeout(() => {
-+      const draft = {
-+        text,
-+        replyTo,
-+        pendingImages,
-+        editingMessageId,
-+        draftBold,
-+        draftColor,
-+      };
 +      if (isChatDraftEmpty(draft)) {
 +        void clearChatDraft(String(conversationId));
 +      } else {
@@ -791,10 +890,24 @@ index de2a29a2..cc051de8 100644
 +    };
 +  }, [conversationId, text, replyTo, pendingImages, editingMessageId, draftBold, draftColor]);
 +
++  // Flush the latest draft immediately when the chat unmounts, so a quick Back
++  // tap during the debounce window still persists (or clears) it.
++  useEffect(() => {
++    return () => {
++      const pending = latestDraftRef.current;
++      if (!pending || !pending.conversationId) return;
++      if (isChatDraftEmpty(pending.draft)) {
++        void clearChatDraft(pending.conversationId);
++      } else {
++        void saveChatDraft(pending.conversationId, pending.draft);
++      }
++    };
++  }, []);
++
    const messages: any[] = useMemo(() => {
      const page = messagesPage as any;
      const arr = page?.page || page || [];
-@@ -1438,12 +1569,26 @@ export default function ChatScreen() {
+@@ -1438,12 +1587,26 @@ export default function ChatScreen() {
      setSending(true);
      const replyToMessageId = replyTo?._id;
      const editTargetId = editingMessageId;
@@ -821,7 +934,7 @@ index de2a29a2..cc051de8 100644
        if (editTargetId) {
          // EDIT mode — try to update the original message in place. If the
          // backend exposes an edit mutation under any of the known names,
-@@ -2705,81 +2850,41 @@ export default function ChatScreen() {
+@@ -2705,81 +2868,41 @@ export default function ChatScreen() {
      const msg = selectedMsg;
      if (!msg) return;
      closeActionSheet();
@@ -891,7 +1004,15 @@ index de2a29a2..cc051de8 100644
 -    // We just store the id in AsyncStorage keyed by conversationId — a
 -    // future iteration can wire this into the conversation header banner.
 +    const isCurrentlyPinned = !!pinnedMessageId && pinnedMessageId === String(msg._id);
-+    try {
+     try {
+-      const key = `smilers_local_pinned_${conversationId}`;
+-      const list = ((await readStoredJson(key, [])) as string[]) || [];
+-      const next = Array.isArray(list)
+-        ? Array.from(new Set([...list, String(msg._id)]))
+-        : [String(msg._id)];
+-      await writeStoredJson(key, next);
+-    } catch {
+-      /* swallow */
 +      if (isCurrentlyPinned) {
 +        // Unpin — omit messageId.
 +        await pinMessageMutation({ conversationId });
@@ -906,35 +1027,27 @@ index de2a29a2..cc051de8 100644
 +        isCurrentlyPinned ? 'Could not unpin' : 'Could not pin',
 +        friendlyConvexError(e, 'Please try again.'),
 +      );
-+    }
-+  }, [selectedMsg, conversationId, canPinMessages, pinnedMessageId, pinMessageMutation]);
-+
-+  // iter-336: unpin from the pinned banner (admins in groups; either in 1:1).
-+  const onUnpinBanner = useCallback(async () => {
-     try {
--      const key = `smilers_local_pinned_${conversationId}`;
--      const list = ((await readStoredJson(key, [])) as string[]) || [];
--      const next = Array.isArray(list)
--        ? Array.from(new Set([...list, String(msg._id)]))
--        : [String(msg._id)];
--      await writeStoredJson(key, next);
--    } catch {
--      /* swallow */
-+      await pinMessageMutation({ conversationId });
-+      callDebug.push('PIN', 'unpin via banner');
-+    } catch (e: any) {
-+      Alert.alert('Could not unpin', friendlyConvexError(e, 'Please try again.'));
      }
 -    Alert.alert(
 -      'Pinned on this device',
 -      'Pin will sync across your devices once the backend deploys the pin endpoint.',
 -    );
 -  }, [selectedMsg, conversationId]);
++  }, [selectedMsg, conversationId, canPinMessages, pinnedMessageId, pinMessageMutation]);
++
++  // iter-336: unpin from the pinned banner (admins in groups; either in 1:1).
++  const onUnpinBanner = useCallback(async () => {
++    try {
++      await pinMessageMutation({ conversationId });
++      callDebug.push('PIN', 'unpin via banner');
++    } catch (e: any) {
++      Alert.alert('Could not unpin', friendlyConvexError(e, 'Please try again.'));
++    }
 +  }, [conversationId, pinMessageMutation]);
  
    const onSelectMultiple = useCallback(() => {
      const msg = selectedMsg;
-@@ -2837,10 +2942,79 @@ export default function ChatScreen() {
+@@ -2837,10 +2960,79 @@ export default function ChatScreen() {
  
    const cancelEdit = useCallback(() => {
      setEditingMessageId(null);
@@ -1014,7 +1127,7 @@ index de2a29a2..cc051de8 100644
    /**
     * Attempt to call any of the known edit mutations the backend may expose.
     * Different Convex deployments use different function names — try each
-@@ -3443,6 +3617,20 @@ export default function ChatScreen() {
+@@ -3443,6 +3635,20 @@ export default function ChatScreen() {
            <TouchableOpacity testID="chat-encryption-btn" onPress={() => router.push('/encryption' as any)} style={styles.headerIconButton}>
              <Ionicons name="shield-checkmark-outline" size={20} color={Colors.white} />
            </TouchableOpacity>
@@ -1035,7 +1148,7 @@ index de2a29a2..cc051de8 100644
            <TouchableOpacity testID="chat-menu-btn" onPress={() => setShowOptionsMenu(true)} style={styles.headerIconButton}>
              <Feather name="more-vertical" size={20} color={Colors.white} />
            </TouchableOpacity>
-@@ -3497,6 +3685,35 @@ export default function ChatScreen() {
+@@ -3497,6 +3703,35 @@ export default function ChatScreen() {
          );
        })()}
  
@@ -1071,7 +1184,7 @@ index de2a29a2..cc051de8 100644
        {/* iter-109 → iter-111: in-chat search bar — slides in below the
            header when the search button is tapped. Live-filters the
            message list by case-insensitive substring match. Kept as a
-@@ -3782,6 +3999,11 @@ export default function ChatScreen() {
+@@ -3782,6 +4017,11 @@ export default function ChatScreen() {
                        msg={item}
                        isMine={item.senderId === effectiveMe?._id}
                        myUserId={effectiveMe?._id}
@@ -1083,7 +1196,7 @@ index de2a29a2..cc051de8 100644
                        parentMsg={parentMsg}
                        onPressParent={parentMsg ? () => jumpToMessage(parentId) : undefined}
                        isJumpHighlighted={jumpHighlightId === String(item._id)}
-@@ -3948,6 +4170,21 @@ export default function ChatScreen() {
+@@ -3948,6 +4188,21 @@ export default function ChatScreen() {
              </View>
            ) : null}
  
@@ -1105,7 +1218,7 @@ index de2a29a2..cc051de8 100644
            {uploading ? (
              <View style={styles.uploadBar} testID="uploading-bar">
                <ActivityIndicator size="small" color={Colors.primary} />
-@@ -4338,12 +4575,37 @@ export default function ChatScreen() {
+@@ -4338,12 +4593,37 @@ export default function ChatScreen() {
  
        <MessageActionSheet
          message={selectedMsg}
@@ -1144,7 +1257,7 @@ index de2a29a2..cc051de8 100644
          onForward={onForward}
          onShare={onShare}
          onSelectMultiple={onSelectMultiple}
-@@ -4354,6 +4616,16 @@ export default function ChatScreen() {
+@@ -4354,6 +4634,16 @@ export default function ChatScreen() {
          onDelete={onDelete}
        />
  
@@ -1161,7 +1274,7 @@ index de2a29a2..cc051de8 100644
        {/* iter-292: rich Message Info sheet — Read by + media consumption
            (Played/Watched/Viewed/Opened by), mirroring the web app. */}
        <MessageInfoSheet
-@@ -4506,6 +4778,31 @@ export default function ChatScreen() {
+@@ -4506,6 +4796,31 @@ export default function ChatScreen() {
  }
  
  const styles = StyleSheet.create({
@@ -2970,10 +3083,10 @@ index c5fee004..2b1477ea 100644
      onResolve(String(conv?._id), isMember);
 diff --git a/frontend/src/lib/chatDrafts.ts b/frontend/src/lib/chatDrafts.ts
 new file mode 100644
-index 00000000..24634f90
+index 00000000..eea62c44
 --- /dev/null
 +++ b/frontend/src/lib/chatDrafts.ts
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,116 @@
 +/**
 + * chatDrafts — per-conversation composer draft persistence.
 + *
@@ -3051,6 +3164,44 @@ index 00000000..24634f90
 +  } catch {
 +    /* best-effort */
 +  }
++}
++
++export interface DraftPreview {
++  text?: string;
++  hasImages?: boolean;
++}
++
++/**
++ * Read every stored conversation draft in one pass and return a map of
++ * { conversationId: { text, hasImages } } for the Chats-list "Draft:" preview.
++ * Only non-empty drafts are included.
++ */
++export async function loadAllChatDrafts(): Promise<Record<string, DraftPreview>> {
++  const out: Record<string, DraftPreview> = {};
++  try {
++    const prefix = 'smilers:chat_draft:v1:';
++    const keys = (await AsyncStorage.getAllKeys()).filter((k) => k.startsWith(prefix));
++    if (keys.length === 0) return out;
++    const pairs = await AsyncStorage.multiGet(keys);
++    for (const [key, raw] of pairs) {
++      if (!raw) continue;
++      let draft: ChatDraft | null = null;
++      try {
++        draft = JSON.parse(raw) as ChatDraft;
++      } catch {
++        continue;
++      }
++      if (!draft || isChatDraftEmpty(draft)) continue;
++      const conversationId = key.slice(prefix.length);
++      out[conversationId] = {
++        text: typeof draft.text === 'string' ? draft.text.trim() : '',
++        hasImages: Array.isArray(draft.pendingImages) && draft.pendingImages.length > 0,
++      };
++    }
++  } catch {
++    /* best-effort */
++  }
++  return out;
 +}
 diff --git a/frontend/src/lib/faqs.ts b/frontend/src/lib/faqs.ts
 index 01b59732..62f03f8d 100644

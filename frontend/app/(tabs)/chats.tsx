@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Mod
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Swipeable, RectButton } from 'react-native-gesture-handler';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useQuery, useConvex } from 'convex/react';
 import Header from '../../src/components/Header';
 import Avatar from '../../src/components/Avatar';
@@ -17,6 +17,7 @@ import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName } from '../../src/lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { readCacheMeta, writeCache } from '../../src/lib/offlineCache';
+import { loadAllChatDrafts, type DraftPreview } from '../../src/lib/chatDrafts';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import OfflineBanner from '../../src/components/OfflineBanner';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
@@ -73,6 +74,21 @@ export default function ChatsScreen() {
   const me = useQuery(api.users.getCurrentUser, {});
   const contacts = useQuery(api.contacts.getContacts, {});
   const conversations = useQuery(api.conversations.listConversations);
+  // Composer drafts per conversation — refreshed whenever the list regains
+  // focus (e.g. returning from a chat where a draft was started/cleared) so the
+  // "Draft:" preview stays in sync.
+  const [drafts, setDrafts] = useState<Record<string, DraftPreview>>({});
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      void loadAllChatDrafts().then((map) => {
+        if (alive) setDrafts(map);
+      });
+      return () => {
+        alive = false;
+      };
+    }, []),
+  );
   // Voice Task roster (positions 1..10) — used to optionally pin those
   // contacts' chats to the top in the same order they occupy in Voice Tasks.
   const voiceTaskRows = useQuery(
@@ -491,6 +507,7 @@ export default function ChatsScreen() {
               item={item}
               currentUserId={me?._id}
               contacts={contacts}
+              draft={drafts[String(item._id)]}
               onPress={() => router.push(`/chat/${item._id}` as any)}
             />
           </SwipeToArchive>
@@ -580,7 +597,7 @@ function peerIsOnline(item: any): boolean {
   return Date.now() - t < 120000; // online if seen within 2 min
 }
 
-function ConversationRow({ item, currentUserId, contacts, onPress }: { item: any; currentUserId?: string; contacts?: any[]; onPress: () => void }) {
+function ConversationRow({ item, currentUserId, contacts, draft, onPress }: { item: any; currentUserId?: string; contacts?: any[]; draft?: DraftPreview; onPress: () => void }) {
   // iter-176: Device address-book name beats both the saved-contact name
   // AND the Smilers display name. e.g. if your phone has the other user
   // saved as "ABC Albania", you'll see "ABC Albania" here instead of the
@@ -639,9 +656,20 @@ function ConversationRow({ item, currentUserId, contacts, onPress }: { item: any
       <Avatar name={name} size={52} uri={photoUri} online={peerIsOnline(item)} />
       <View style={styles.rowMiddle}>
         <Text style={styles.rowTitle}>{name}</Text>
-        <Text style={[styles.rowSubtitle, typingLabel ? styles.rowTyping : null]} numberOfLines={1}>
-          {typingLabel || item.lastMessageText || 'Start chatting…'}
-        </Text>
+        {typingLabel ? (
+          <Text style={[styles.rowSubtitle, styles.rowTyping]} numberOfLines={1}>
+            {typingLabel}
+          </Text>
+        ) : draft ? (
+          <Text style={styles.rowSubtitle} numberOfLines={1}>
+            <Text style={styles.draftPrefix}>Draft: </Text>
+            {draft.text || (draft.hasImages ? '📷 Photo' : '')}
+          </Text>
+        ) : (
+          <Text style={styles.rowSubtitle} numberOfLines={1}>
+            {item.lastMessageText || 'Start chatting…'}
+          </Text>
+        )}
       </View>
       <Text style={styles.rowTime}>{relTime(item.lastMessageTime)}</Text>
     </TouchableOpacity>
@@ -732,6 +760,10 @@ const styles = StyleSheet.create({
   rowSubtitle: {
     fontSize: FontSize.sm,
     color: Colors.textSecondary,
+  },
+  draftPrefix: {
+    color: Colors.danger,
+    fontWeight: FontWeight.semibold,
   },
   rowTyping: {
     color: Colors.primary,

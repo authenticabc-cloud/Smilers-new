@@ -5,6 +5,10 @@ Newest first. All changes are captured in `smilers-app-logic-changes.patch`
 `MERGE_FOR_ASHWINI.md`.
 
 ## 2026-07-07
+- **Chats list "Draft:" indicator:** conversation rows now show a red
+  "Draft:" preview (text, or "📷 Photo" for image-only drafts) when there's an
+  unsent composer draft — WhatsApp-style. Refreshes when the list regains focus.
+  Files: `src/lib/chatDrafts.ts` (loadAllChatDrafts), `app/(tabs)/chats.tsx`.
 - **Resume where you left off (chat drafts):** the composer now saves per
   conversation — unsent text, staged photos/files (not yet sent), the message
   you're replying to, an in-progress edit, and text formatting. Leaving the
