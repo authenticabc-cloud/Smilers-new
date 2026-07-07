@@ -84,6 +84,7 @@ overwrite. Diff each against your version and take only what you don't already h
 - app/call/[conversationId].tsx      ⚠️ contains one important CRASH FIX from us: `MaterialCommunityIcons` was USED but not imported (the Call-Waiting hold/swap indicator would crash). Ensure your import line includes it:
       import { Feather, Ionicons, MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
   (The rest of this file is Call-Waiting Phase 2 — you likely already have equivalent/newer.)
+  ⭐ rev5 (2026-07-07): the SELF-VIEW is now DRAGGABLE during a video call. Because this is your file, the change is given as focused edits (not a full-file diff) in **CALL_SELFVIEW_DRAG_FOR_ASHWINI.md** — apply those 3 edits to your version.
 - src/components/call/CallWaitingOverlay.tsx
 - src/lib/call/useSecondaryCall.ts
 - src/lib/call/activeCallRegistry.ts

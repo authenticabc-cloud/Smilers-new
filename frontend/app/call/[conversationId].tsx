@@ -5,6 +5,7 @@ import {
   Animated as RNAnimated,
   AppState,
   BackHandler,
+  PanResponder,
   Platform,
   Pressable,
   StyleSheet,
@@ -155,7 +156,57 @@ export function CallScreenInner() {
   // iter-297: suppress the "lock when leaving" PIN re-lock while a call is on
   // screen (WebRTC's frequent background/active flips were re-locking the app).
   useEffect(() => callActivity.enter(), []);
-  const { height: windowHeight } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+
+  // ── Draggable self-view (video PiP) ───────────────────────────────────────
+  // The local camera preview can be dragged anywhere on screen and snaps to
+  // stay fully visible. Position is session-only (resets each call). Anchored
+  // bottom-right by styles.pipWrap; we apply a translate on top of that.
+  const PIP_W = 96;
+  const PIP_H = 130;
+  const PIP_RIGHT = Spacing.base;
+  const PIP_BOTTOM = 168;
+  const PIP_EDGE = 8; // keep this far from screen edges
+  const PIP_TOP_SAFE = 54; // clear the status bar / notch
+  const pipPan = useRef(new RNAnimated.ValueXY({ x: 0, y: 0 })).current;
+  const pipBounds = useMemo(() => {
+    const defaultLeft = windowWidth - PIP_RIGHT - PIP_W;
+    const defaultTop = windowHeight - PIP_BOTTOM - PIP_H;
+    return {
+      minTx: PIP_EDGE - defaultLeft,
+      maxTx: windowWidth - PIP_W - PIP_EDGE - defaultLeft,
+      minTy: PIP_TOP_SAFE - defaultTop,
+      maxTy: windowHeight - PIP_H - PIP_EDGE - defaultTop,
+    };
+  }, [windowWidth, windowHeight]);
+  const pipPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        // Only claim the gesture once the finger actually moves, so a tap on
+        // the preview doesn't get swallowed.
+        onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 4 || Math.abs(g.dy) > 4,
+        onPanResponderGrant: () => {
+          pipPan.extractOffset();
+        },
+        onPanResponderMove: RNAnimated.event([null, { dx: pipPan.x, dy: pipPan.y }], {
+          useNativeDriver: false,
+        }),
+        onPanResponderRelease: () => {
+          pipPan.flattenOffset();
+          const x = (pipPan.x as any)._value as number;
+          const y = (pipPan.y as any)._value as number;
+          const clampedX = Math.min(pipBounds.maxTx, Math.max(pipBounds.minTx, x));
+          const clampedY = Math.min(pipBounds.maxTy, Math.max(pipBounds.minTy, y));
+          RNAnimated.spring(pipPan, {
+            toValue: { x: clampedX, y: clampedY },
+            useNativeDriver: false,
+            friction: 7,
+            tension: 60,
+          }).start();
+        },
+      }),
+    [pipBounds, pipPan],
+  );
   const { isAuthenticated } = useAuth();
   // Params now come from the callHost store (this component is rendered by
   // <CallHost/> at the app root), not from route params — see the shim above.
@@ -2553,16 +2604,20 @@ export function CallScreenInner() {
             onPress={toggleControls}
             testID="video-tap-catcher"
           />
-          {/* Local picture-in-picture */}
+          {/* Local picture-in-picture — draggable self-view. */}
           {localStreamURL && !cameraOff ? (
-            <View style={styles.pipWrap} pointerEvents="none">
+            <RNAnimated.View
+              style={[styles.pipWrap, { transform: pipPan.getTranslateTransform() }]}
+              {...pipPanResponder.panHandlers}
+              testID="call-self-view"
+            >
               <RTCViewImpl
                 streamURL={localStreamURL}
                 style={StyleSheet.absoluteFill}
                 objectFit="cover"
                 mirror
               />
-            </View>
+            </RNAnimated.View>
           ) : null}
           {/* Top overlay: name + duration (fades with controls) */}
           <RNAnimated.View

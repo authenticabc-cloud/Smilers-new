@@ -5,6 +5,10 @@ Newest first. All changes are captured in `smilers-app-logic-changes.patch`
 `MERGE_FOR_ASHWINI.md`.
 
 ## 2026-07-07
+- **Draggable video-call self-view:** the local camera preview (PiP) can now be
+  dragged anywhere on screen during a video call and snaps to stay fully
+  visible (session-only position). Native-only (RTCView). File:
+  `app/call/[conversationId].tsx`. Handoff: `CALL_SELFVIEW_DRAG_FOR_ASHWINI.md`.
 - **Chats list draft-bump ordering:** conversations with an unsent draft now
   float to the top of the Chats list (yields to Voice-Task pin order when
   that's enabled). File: `app/(tabs)/chats.tsx`.
