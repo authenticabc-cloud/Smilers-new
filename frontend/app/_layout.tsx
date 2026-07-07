@@ -25,6 +25,7 @@ import VoiceCommandLauncher from '../src/components/VoiceCommandLauncher';
 import IncomingScreenShareModal from '../src/components/IncomingScreenShareModal';
 import CallHost from '../src/components/call/CallHost';
 import CallReturnBanner from '../src/components/call/CallReturnBanner';
+import ResumeLastRoute from '../src/components/ResumeLastRoute';
 import { recordTouchActivity } from '../src/lib/touchActivity';
 import { applyInterFontPatch } from '../src/lib/fontPatch';
 import {
@@ -423,6 +424,7 @@ export default function RootLayout() {
             <GlobalNotificationServices />
             <PresenceHeartbeat />
             <ShareIntentRouter />
+            <ResumeLastRoute />
             <CallWakeBootstrap />
             <StatusBar style="light" backgroundColor={Colors.headerBg} />
             <AppLockGate>

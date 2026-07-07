@@ -97,6 +97,8 @@ import {
   writeStoredJson,
 } from '../../src/lib/settingsStorage';
 import { formatLastSeenLabel } from '../../src/lib/presence';
+import { loadChatDraft, saveChatDraft, clearChatDraft, isChatDraftEmpty } from '../../src/lib/chatDrafts';
+import { rememberChatRoute } from '../../src/lib/lastRoute';
 import { translateIncomingMessageText } from '../../src/lib/translation';
 import { uploadFile } from '../../src/lib/uploadFile';
 import { useAuth } from '../../src/providers/AuthProvider';
@@ -819,6 +821,71 @@ export default function ChatScreen() {
   // message. Clearing this id (Cancel or successful save) returns the
   // composer to normal send mode. See iter-97 fix.
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+
+  // ── Composer draft persistence ────────────────────────────────────────────
+  // Save whatever the user has started (text, staged photos, reply target,
+  // in-progress edit, formatting) per conversation so leaving the chat — or the
+  // app — never loses it. On return the composer rehydrates exactly where they
+  // paused. See src/lib/chatDrafts.ts.
+  // Remember this conversation as the "resume target" so a full app restart
+  // reopens it (see src/lib/lastRoute.ts + ResumeLastRoute in _layout).
+  useEffect(() => {
+    if (conversationId && hasValidConversationId) {
+      void rememberChatRoute(`/chat/${conversationId}`);
+    }
+  }, [conversationId, hasValidConversationId]);
+
+  const draftHydratedRef = useRef(false);
+  const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Hydrate the stored draft once per conversation open.
+  useEffect(() => {
+    draftHydratedRef.current = false;
+    if (!conversationId) return;
+    let alive = true;
+    void loadChatDraft(String(conversationId)).then((draft) => {
+      if (!alive) return;
+      if (draft && !isChatDraftEmpty(draft)) {
+        if (typeof draft.text === 'string' && draft.text.length > 0) setText(draft.text);
+        if (draft.replyTo) setReplyTo(draft.replyTo);
+        if (Array.isArray(draft.pendingImages) && draft.pendingImages.length > 0) {
+          setPendingImages(draft.pendingImages);
+        }
+        if (draft.editingMessageId) setEditingMessageId(draft.editingMessageId);
+        if (typeof draft.draftBold === 'boolean') setDraftBold(draft.draftBold);
+        if (draft.draftColor) setDraftColor(draft.draftColor as DraftTextColorKey);
+      }
+      draftHydratedRef.current = true;
+    });
+    return () => {
+      alive = false;
+    };
+  }, [conversationId]);
+
+  // Persist the draft (debounced) whenever any composer field changes — but
+  // only after hydration, so the initial empty state never wipes a saved draft.
+  useEffect(() => {
+    if (!conversationId || !draftHydratedRef.current) return;
+    if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
+    draftSaveTimerRef.current = setTimeout(() => {
+      const draft = {
+        text,
+        replyTo,
+        pendingImages,
+        editingMessageId,
+        draftBold,
+        draftColor,
+      };
+      if (isChatDraftEmpty(draft)) {
+        void clearChatDraft(String(conversationId));
+      } else {
+        void saveChatDraft(String(conversationId), draft);
+      }
+    }, 400);
+    return () => {
+      if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
+    };
+  }, [conversationId, text, replyTo, pendingImages, editingMessageId, draftBold, draftColor]);
 
   const messages: any[] = useMemo(() => {
     const page = messagesPage as any;
