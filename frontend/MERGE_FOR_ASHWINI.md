@@ -11,7 +11,10 @@ Baseline for all diffs: commit 21cc30a3 (2026-07-03 23:11 UTC).
 > REMOVED (superseded — see below).
 > rev 3 (2026-07-06): FAQ/support updates, "Mobile Money top-ups" card on My
 > Ads, corrected support email, and HID the two diagnostic rows in Settings
-> for the Play Store launch. Re-generate/re-apply the patch.
+> for the Play Store launch.
+> rev 4 (2026-07-07): "Resume where you left off" — per-conversation composer
+> drafts + reopen-last-chat on cold start; restored the always-visible Premium
+> "Redeem code" button. Re-generate/re-apply the patch.
 
 ---
 
@@ -27,6 +30,9 @@ NEW files:
 - app/ad-clicks-payment.tsx                    (NEW rev2 — Ad-clicks mobile-money request screen, €0.04/click)
 - src/components/admin/PaymentRequestsPanel.tsx (NEW rev2 — generic admin panel: premium OR ad-clicks)
 - src/components/admin/PaymentsAdmin.tsx        (NEW rev2 — admin "Payments" tab, Premium/Ad-Clicks segments)
+- src/lib/chatDrafts.ts                         (NEW rev4 — per-conversation composer draft save/load/clear)
+- src/lib/lastRoute.ts                          (NEW rev4 — remember last chat for cold-start resume)
+- src/components/ResumeLastRoute.tsx            (NEW rev4 — one-shot reopen-last-chat; mounted in app/_layout.tsx)
 
 REMOVED files:
 - src/components/admin/MobileMoneyAdmin.tsx    (⚠️ rev2 — DELETE this if you took rev1. It is superseded by
@@ -50,6 +56,9 @@ MODIFIED files:
 - src/lib/faqs.ts                    (rev3 — NEW "Premium & payments" FAQ category incl. Mobile Money for Premium + ad clicks; + recent-feature FAQs: add-participant calls, call waiting, pinned posts, group edit approvals, group sender names)
 - app/help.tsx                       (rev3 — footer support email fixed to support.smilers@gmail.com)
 - app/settings.tsx                   (rev3 — HID the "Diagnostic Logs" & "Call Diagnostics" rows for the Play Store launch; routes/screens still exist, just unlinked)
+- app/chat/[conversationId].tsx      (rev4 — ALSO: composer DRAFT persistence — hydration + debounced save of text/replyTo/pendingImages/editingMessageId/formatting per conversation; + rememberChatRoute() on open)
+- app/_layout.tsx                    (rev4 — mounts <ResumeLastRoute/> globally to reopen the last chat on cold start. ⚠️ CALL/PUSH-adjacent file — merge with care; the only change is the added import + one <ResumeLastRoute/> line next to <ShareIntentRouter/>)
+- app/premium.tsx                    (rev4 — ALSO: "Have a code? Redeem here" button restored to ALWAYS visible (was hidden when Premium already active))
 
 To apply the patch inside your repo:
     git apply --3way smilers-app-logic-changes.patch

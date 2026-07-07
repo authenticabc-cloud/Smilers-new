@@ -211,6 +211,26 @@ index 3e77ad2f..9e83e330 100644
      }
    };
  
+diff --git a/frontend/app/_layout.tsx b/frontend/app/_layout.tsx
+index 9f1a1576..1ebdb0fe 100644
+--- a/frontend/app/_layout.tsx
++++ b/frontend/app/_layout.tsx
+@@ -25,6 +25,7 @@ import VoiceCommandLauncher from '../src/components/VoiceCommandLauncher';
+ import IncomingScreenShareModal from '../src/components/IncomingScreenShareModal';
+ import CallHost from '../src/components/call/CallHost';
+ import CallReturnBanner from '../src/components/call/CallReturnBanner';
++import ResumeLastRoute from '../src/components/ResumeLastRoute';
+ import { recordTouchActivity } from '../src/lib/touchActivity';
+ import { applyInterFontPatch } from '../src/lib/fontPatch';
+ import {
+@@ -423,6 +424,7 @@ export default function RootLayout() {
+             <GlobalNotificationServices />
+             <PresenceHeartbeat />
+             <ShareIntentRouter />
++            <ResumeLastRoute />
+             <CallWakeBootstrap />
+             <StatusBar style="light" backgroundColor={Colors.headerBg} />
+             <AppLockGate>
 diff --git a/frontend/app/ad-clicks-payment.tsx b/frontend/app/ad-clicks-payment.tsx
 new file mode 100644
 index 00000000..ec1d72d5
@@ -581,7 +601,7 @@ index 048401d5..2f3d50f7 100644
          {tab === 'devotions' ? (
            <DevotionsTab
 diff --git a/frontend/app/chat/[conversationId].tsx b/frontend/app/chat/[conversationId].tsx
-index de2a29a2..88bd6b1e 100644
+index de2a29a2..cc051de8 100644
 --- a/frontend/app/chat/[conversationId].tsx
 +++ b/frontend/app/chat/[conversationId].tsx
 @@ -8,7 +8,9 @@ import {
@@ -603,7 +623,16 @@ index de2a29a2..88bd6b1e 100644
  import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
  import { getLanguageByCode } from '../../src/lib/languages';
  import {
-@@ -109,6 +111,8 @@ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src
+@@ -95,6 +97,8 @@ import {
+   writeStoredJson,
+ } from '../../src/lib/settingsStorage';
+ import { formatLastSeenLabel } from '../../src/lib/presence';
++import { loadChatDraft, saveChatDraft, clearChatDraft, isChatDraftEmpty } from '../../src/lib/chatDrafts';
++import { rememberChatRoute } from '../../src/lib/lastRoute';
+ import { translateIncomingMessageText } from '../../src/lib/translation';
+ import { uploadFile } from '../../src/lib/uploadFile';
+ import { useAuth } from '../../src/providers/AuthProvider';
+@@ -109,6 +113,8 @@ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src
  import { formatChatDayChip, isSameCalendarDay } from '../../src/lib/chatFormat';
  import { CallPill } from '../../src/components/chat/CallPill';
  import { RecordingPlaybackModal } from '../../src/components/chat/RecordingPlayback';
@@ -612,7 +641,7 @@ index de2a29a2..88bd6b1e 100644
  import { ChatOptionsMenu } from '../../src/components/chat/ChatOptionsMenu';
  import { SwipeToReply } from '../../src/components/chat/SwipeToReply';
  import { MessageActionSheet } from '../../src/components/chat/MessageActionSheet';
-@@ -378,6 +382,26 @@ export default function ChatScreen() {
+@@ -378,6 +384,26 @@ export default function ChatScreen() {
      canQueryConversation ? { conversationId, paginationOpts: { numItems: 50, cursor: null } } : 'skip'
    ) as any;
    const messagesLoading = canQueryConversation && messagesPage === undefined;
@@ -639,7 +668,7 @@ index de2a29a2..88bd6b1e 100644
    // iter 156: call-log pills in chat timeline (per Smilers web parity).
    // Backed by canonical contract api.calls.listCallLogsForConversation.
    // iter-180: switched from one-shot useSafeConvexQuery to a LIVE
-@@ -416,6 +440,26 @@ export default function ChatScreen() {
+@@ -416,6 +442,26 @@ export default function ChatScreen() {
    // iter-176: device address-book name takes priority for the chat
    // header title (1:1 chats only — group titles are untouched).
    const deviceContactIndex = useDeviceContactIndex();
@@ -666,7 +695,7 @@ index de2a29a2..88bd6b1e 100644
    const refetchMessages = useCallback(async () => {}, []);
    const { data: conversationsForForward } = useSafeConvexQuery<any[]>(
      api.conversations.listConversations,
-@@ -726,6 +770,26 @@ export default function ChatScreen() {
+@@ -726,6 +772,26 @@ export default function ChatScreen() {
    const editMessage = useMutation((api as any).messages.editMessage);
    const updateMessage = useMutation((api as any).messages.updateMessage);
    const editTextMutation = useMutation((api as any).messages.editText);
@@ -693,7 +722,79 @@ index de2a29a2..88bd6b1e 100644
    // iter-147: canonical contract — toggleStar lives on `api.starred`,
    // NOT `api.messages`. Args require BOTH `messageId` AND
    // `conversationId` (server validates participant access).
-@@ -1438,12 +1502,26 @@ export default function ChatScreen() {
+@@ -756,6 +822,71 @@ export default function ChatScreen() {
+   // composer to normal send mode. See iter-97 fix.
+   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+ 
++  // ── Composer draft persistence ────────────────────────────────────────────
++  // Save whatever the user has started (text, staged photos, reply target,
++  // in-progress edit, formatting) per conversation so leaving the chat — or the
++  // app — never loses it. On return the composer rehydrates exactly where they
++  // paused. See src/lib/chatDrafts.ts.
++  // Remember this conversation as the "resume target" so a full app restart
++  // reopens it (see src/lib/lastRoute.ts + ResumeLastRoute in _layout).
++  useEffect(() => {
++    if (conversationId && hasValidConversationId) {
++      void rememberChatRoute(`/chat/${conversationId}`);
++    }
++  }, [conversationId, hasValidConversationId]);
++
++  const draftHydratedRef = useRef(false);
++  const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
++
++  // Hydrate the stored draft once per conversation open.
++  useEffect(() => {
++    draftHydratedRef.current = false;
++    if (!conversationId) return;
++    let alive = true;
++    void loadChatDraft(String(conversationId)).then((draft) => {
++      if (!alive) return;
++      if (draft && !isChatDraftEmpty(draft)) {
++        if (typeof draft.text === 'string' && draft.text.length > 0) setText(draft.text);
++        if (draft.replyTo) setReplyTo(draft.replyTo);
++        if (Array.isArray(draft.pendingImages) && draft.pendingImages.length > 0) {
++          setPendingImages(draft.pendingImages);
++        }
++        if (draft.editingMessageId) setEditingMessageId(draft.editingMessageId);
++        if (typeof draft.draftBold === 'boolean') setDraftBold(draft.draftBold);
++        if (draft.draftColor) setDraftColor(draft.draftColor as DraftTextColorKey);
++      }
++      draftHydratedRef.current = true;
++    });
++    return () => {
++      alive = false;
++    };
++  }, [conversationId]);
++
++  // Persist the draft (debounced) whenever any composer field changes — but
++  // only after hydration, so the initial empty state never wipes a saved draft.
++  useEffect(() => {
++    if (!conversationId || !draftHydratedRef.current) return;
++    if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
++    draftSaveTimerRef.current = setTimeout(() => {
++      const draft = {
++        text,
++        replyTo,
++        pendingImages,
++        editingMessageId,
++        draftBold,
++        draftColor,
++      };
++      if (isChatDraftEmpty(draft)) {
++        void clearChatDraft(String(conversationId));
++      } else {
++        void saveChatDraft(String(conversationId), draft);
++      }
++    }, 400);
++    return () => {
++      if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
++    };
++  }, [conversationId, text, replyTo, pendingImages, editingMessageId, draftBold, draftColor]);
++
+   const messages: any[] = useMemo(() => {
+     const page = messagesPage as any;
+     const arr = page?.page || page || [];
+@@ -1438,12 +1569,26 @@ export default function ChatScreen() {
      setSending(true);
      const replyToMessageId = replyTo?._id;
      const editTargetId = editingMessageId;
@@ -720,7 +821,7 @@ index de2a29a2..88bd6b1e 100644
        if (editTargetId) {
          // EDIT mode — try to update the original message in place. If the
          // backend exposes an edit mutation under any of the known names,
-@@ -2705,81 +2783,41 @@ export default function ChatScreen() {
+@@ -2705,81 +2850,41 @@ export default function ChatScreen() {
      const msg = selectedMsg;
      if (!msg) return;
      closeActionSheet();
@@ -833,7 +934,7 @@ index de2a29a2..88bd6b1e 100644
  
    const onSelectMultiple = useCallback(() => {
      const msg = selectedMsg;
-@@ -2837,10 +2875,79 @@ export default function ChatScreen() {
+@@ -2837,10 +2942,79 @@ export default function ChatScreen() {
  
    const cancelEdit = useCallback(() => {
      setEditingMessageId(null);
@@ -913,7 +1014,7 @@ index de2a29a2..88bd6b1e 100644
    /**
     * Attempt to call any of the known edit mutations the backend may expose.
     * Different Convex deployments use different function names — try each
-@@ -3443,6 +3550,20 @@ export default function ChatScreen() {
+@@ -3443,6 +3617,20 @@ export default function ChatScreen() {
            <TouchableOpacity testID="chat-encryption-btn" onPress={() => router.push('/encryption' as any)} style={styles.headerIconButton}>
              <Ionicons name="shield-checkmark-outline" size={20} color={Colors.white} />
            </TouchableOpacity>
@@ -934,7 +1035,7 @@ index de2a29a2..88bd6b1e 100644
            <TouchableOpacity testID="chat-menu-btn" onPress={() => setShowOptionsMenu(true)} style={styles.headerIconButton}>
              <Feather name="more-vertical" size={20} color={Colors.white} />
            </TouchableOpacity>
-@@ -3497,6 +3618,35 @@ export default function ChatScreen() {
+@@ -3497,6 +3685,35 @@ export default function ChatScreen() {
          );
        })()}
  
@@ -970,7 +1071,7 @@ index de2a29a2..88bd6b1e 100644
        {/* iter-109 → iter-111: in-chat search bar — slides in below the
            header when the search button is tapped. Live-filters the
            message list by case-insensitive substring match. Kept as a
-@@ -3782,6 +3932,11 @@ export default function ChatScreen() {
+@@ -3782,6 +3999,11 @@ export default function ChatScreen() {
                        msg={item}
                        isMine={item.senderId === effectiveMe?._id}
                        myUserId={effectiveMe?._id}
@@ -982,7 +1083,7 @@ index de2a29a2..88bd6b1e 100644
                        parentMsg={parentMsg}
                        onPressParent={parentMsg ? () => jumpToMessage(parentId) : undefined}
                        isJumpHighlighted={jumpHighlightId === String(item._id)}
-@@ -3948,6 +4103,21 @@ export default function ChatScreen() {
+@@ -3948,6 +4170,21 @@ export default function ChatScreen() {
              </View>
            ) : null}
  
@@ -1004,7 +1105,7 @@ index de2a29a2..88bd6b1e 100644
            {uploading ? (
              <View style={styles.uploadBar} testID="uploading-bar">
                <ActivityIndicator size="small" color={Colors.primary} />
-@@ -4338,12 +4508,37 @@ export default function ChatScreen() {
+@@ -4338,12 +4575,37 @@ export default function ChatScreen() {
  
        <MessageActionSheet
          message={selectedMsg}
@@ -1043,7 +1144,7 @@ index de2a29a2..88bd6b1e 100644
          onForward={onForward}
          onShare={onShare}
          onSelectMultiple={onSelectMultiple}
-@@ -4354,6 +4549,16 @@ export default function ChatScreen() {
+@@ -4354,6 +4616,16 @@ export default function ChatScreen() {
          onDelete={onDelete}
        />
  
@@ -1060,7 +1161,7 @@ index de2a29a2..88bd6b1e 100644
        {/* iter-292: rich Message Info sheet — Read by + media consumption
            (Played/Watched/Viewed/Opened by), mirroring the web app. */}
        <MessageInfoSheet
-@@ -4506,6 +4711,31 @@ export default function ChatScreen() {
+@@ -4506,6 +4778,31 @@ export default function ChatScreen() {
  }
  
  const styles = StyleSheet.create({
@@ -2048,6 +2149,63 @@ index aaa966ac..511ce095 100644
    // iter-134: call log entry card (rendered when msg.type === 'call').
    // Lives inside the existing bubble shell — only the body content changes.
    callLogRow: {
+diff --git a/frontend/src/components/ResumeLastRoute.tsx b/frontend/src/components/ResumeLastRoute.tsx
+new file mode 100644
+index 00000000..31dae8c1
+--- /dev/null
++++ b/frontend/src/components/ResumeLastRoute.tsx
+@@ -0,0 +1,51 @@
++import { useEffect, useRef } from 'react';
++import { usePathname, useRouter } from 'expo-router';
++import { useAuth } from '../providers/AuthProvider';
++import { consumeResumableChatRoute } from '../lib/lastRoute';
++
++// Module-scoped so it only ever runs ONCE per app launch (cold start). A warm
++// foreground resume keeps the navigation stack in memory, so there's nothing
++// to restore then.
++let resumeAttempted = false;
++
++/**
++ * On a cold start, if the user was last inside a chat conversation, reopen it
++ * on top of the Chats list so they land back where they paused. Fires exactly
++ * once, only when we're on the post-login landing screen (`/chats`), so it
++ * never hijacks share-intent / incoming-call / deep-link cold starts (which
++ * route elsewhere).
++ */
++export default function ResumeLastRoute() {
++  const { isAuthenticated, isLoading } = useAuth();
++  const router = useRouter();
++  const pathname = usePathname();
++  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
++
++  useEffect(() => {
++    if (resumeAttempted) return;
++    if (isLoading || !isAuthenticated) return;
++    // Only the default post-login landing qualifies as "just cold-started".
++    if (pathname !== '/chats') return;
++
++    resumeAttempted = true;
++    (async () => {
++      const route = await consumeResumableChatRoute();
++      if (!route) return;
++      // Let the tabs settle, then confirm the user hasn't navigated away in the
++      // meantime (e.g. a share-intent/call push landed first).
++      timerRef.current = setTimeout(() => {
++        try {
++          router.push(route as any);
++        } catch {
++          /* ignore */
++        }
++      }, 350);
++    })();
++
++    return () => {
++      if (timerRef.current) clearTimeout(timerRef.current);
++    };
++  }, [isAuthenticated, isLoading, pathname, router]);
++
++  return null;
++}
 diff --git a/frontend/src/components/admin/PaymentRequestsPanel.tsx b/frontend/src/components/admin/PaymentRequestsPanel.tsx
 new file mode 100644
 index 00000000..2468994b
@@ -2810,6 +2968,90 @@ index c5fee004..2b1477ea 100644
  
    useEffect(() => {
      onResolve(String(conv?._id), isMember);
+diff --git a/frontend/src/lib/chatDrafts.ts b/frontend/src/lib/chatDrafts.ts
+new file mode 100644
+index 00000000..24634f90
+--- /dev/null
++++ b/frontend/src/lib/chatDrafts.ts
+@@ -0,0 +1,78 @@
++/**
++ * chatDrafts — per-conversation composer draft persistence.
++ *
++ * Saves whatever the user has started (typed text, staged photos/files not yet
++ * sent, the message they're replying to, an in-progress edit, and text
++ * formatting) so that leaving the conversation — to another chat or out of the
++ * app entirely — never loses their work. When they return to that conversation
++ * the composer is rehydrated exactly where they left off.
++ *
++ * Storage is a small JSON blob per conversation in AsyncStorage. Draft photo
++ * URIs point at the OS image-picker cache; if the OS has since evicted a cached
++ * file the send simply fails gracefully (same as any stale pick), so we never
++ * block on it — the intent (plan 3a) is "remember the selection and send on
++ * resume", not "resume a mid-flight byte transfer".
++ */
++import AsyncStorage from '@react-native-async-storage/async-storage';
++import { readStoredJson, writeStoredJson } from './settingsStorage';
++
++export interface PendingImageDraft {
++  uri: string;
++  mimeType: string;
++  caption: string;
++}
++
++export interface ChatDraft {
++  text?: string;
++  replyTo?: any | null;
++  pendingImages?: PendingImageDraft[];
++  editingMessageId?: string | null;
++  draftBold?: boolean;
++  draftColor?: string | null;
++  updatedAt?: number;
++}
++
++const keyFor = (conversationId: string) => `smilers:chat_draft:v1:${conversationId}`;
++
++export function isChatDraftEmpty(draft: ChatDraft | null | undefined): boolean {
++  if (!draft) return true;
++  const hasText = !!(draft.text && draft.text.trim().length > 0);
++  const hasImages = Array.isArray(draft.pendingImages) && draft.pendingImages.length > 0;
++  const hasReply = !!draft.replyTo;
++  const hasEdit = !!draft.editingMessageId;
++  return !hasText && !hasImages && !hasReply && !hasEdit;
++}
++
++export async function loadChatDraft(conversationId: string): Promise<ChatDraft | null> {
++  if (!conversationId) return null;
++  try {
++    const draft = await readStoredJson(keyFor(conversationId), null);
++    return draft && typeof draft === 'object' ? (draft as ChatDraft) : null;
++  } catch {
++    return null;
++  }
++}
++
++export async function saveChatDraft(conversationId: string, draft: ChatDraft): Promise<void> {
++  if (!conversationId) return;
++  // Never leave an empty shell behind — clear instead so the chat list / next
++  // open doesn't think there's a draft when there isn't.
++  if (isChatDraftEmpty(draft)) {
++    await clearChatDraft(conversationId);
++    return;
++  }
++  try {
++    await writeStoredJson(keyFor(conversationId), { ...draft, updatedAt: Date.now() });
++  } catch {
++    /* best-effort */
++  }
++}
++
++export async function clearChatDraft(conversationId: string): Promise<void> {
++  if (!conversationId) return;
++  try {
++    await AsyncStorage.removeItem(keyFor(conversationId));
++  } catch {
++    /* best-effort */
++  }
++}
 diff --git a/frontend/src/lib/faqs.ts b/frontend/src/lib/faqs.ts
 index 01b59732..62f03f8d 100644
 --- a/frontend/src/lib/faqs.ts
@@ -2956,6 +3198,57 @@ index 00000000..dda51397
 +  // usually meaningful — surface it. Otherwise use the fallback.
 +  if (raw.startsWith('[CONVEX') || raw.includes('Request ID:')) return fallback;
 +  return raw.length > 0 && raw.length <= 160 ? raw : fallback;
++}
+diff --git a/frontend/src/lib/lastRoute.ts b/frontend/src/lib/lastRoute.ts
+new file mode 100644
+index 00000000..53d4be35
+--- /dev/null
++++ b/frontend/src/lib/lastRoute.ts
+@@ -0,0 +1,45 @@
++/**
++ * lastRoute — remember the conversation the user was last viewing so a full
++ * app restart (process killed by the OS, force-close, crash) reopens it
++ * instead of dumping them back on the Chats list.
++ *
++ * Scope is deliberately narrow: we only remember/restore a CHAT conversation
++ * (the flow the user explicitly asked for) to avoid interfering with the app's
++ * intricate cold-start routing for incoming calls, share-intents and deep
++ * links. Backgrounding/foregrounding never loses the navigation stack (React
++ * Navigation keeps it in memory), so this only matters on a true cold start.
++ */
++import AsyncStorage from '@react-native-async-storage/async-storage';
++
++const KEY = 'smilers:last_route:v1';
++// Only auto-resume a route saved within this window — resuming a chat you
++// opened days ago would feel wrong.
++const MAX_AGE_MS = 6 * 60 * 60 * 1000; // 6 hours
++
++interface LastRoute {
++  path: string; // e.g. "/chat/abc123"
++  at: number;
++}
++
++export async function rememberChatRoute(path: string): Promise<void> {
++  try {
++    if (!path || !path.startsWith('/chat/')) return;
++    const value: LastRoute = { path, at: Date.now() };
++    await AsyncStorage.setItem(KEY, JSON.stringify(value));
++  } catch {
++    /* best-effort */
++  }
++}
++
++export async function consumeResumableChatRoute(): Promise<string | null> {
++  try {
++    const raw = await AsyncStorage.getItem(KEY);
++    if (!raw) return null;
++    const parsed = JSON.parse(raw) as LastRoute;
++    if (!parsed?.path || !parsed.path.startsWith('/chat/')) return null;
++    if (!parsed.at || Date.now() - parsed.at > MAX_AGE_MS) return null;
++    return parsed.path;
++  } catch {
++    return null;
++  }
 +}
 diff --git a/frontend/src/lib/mobileMoney.ts b/frontend/src/lib/mobileMoney.ts
 new file mode 100644
