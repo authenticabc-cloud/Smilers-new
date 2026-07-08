@@ -2161,7 +2161,7 @@ index 6d84c311..cc0cb8e9 100644
    { key: 'privacy', route: '/privacy', title: 'Privacy', sub: 'Last seen, profile photo, about', icon: 'shield-outline', lib: 'ion' },
    { key: 'app-lock', route: '/app-lock', title: 'App Lock', sub: 'PIN code and biometric unlock', icon: 'fingerprint', lib: 'mc' },
 diff --git a/frontend/app/status-view/[userId].tsx b/frontend/app/status-view/[userId].tsx
-index 7dc7476c..0d178b11 100644
+index 7dc7476c..97f235b3 100644
 --- a/frontend/app/status-view/[userId].tsx
 +++ b/frontend/app/status-view/[userId].tsx
 @@ -351,10 +351,15 @@ function StatusViewScreenInner() {
@@ -2212,7 +2212,7 @@ index 7dc7476c..0d178b11 100644
  
    return (
      <View
-@@ -641,11 +666,34 @@ function StatusViewScreenInner() {
+@@ -641,23 +666,20 @@ function StatusViewScreenInner() {
              <View style={styles.grabber} />
              <Text style={styles.viewersSheetTitle}>Seen by {viewsCount}</Text>
              <FlatList
@@ -2226,44 +2226,104 @@ index 7dc7476c..0d178b11 100644
 +                String(viewerIndex)
 +              }
                contentContainerStyle={styles.viewersList}
-               renderItem={({ item }: any) => {
+-              renderItem={({ item }: any) => {
 -                const viewerName = resolveContactName(item?.userId, item?.name || 'User');
-+                // A viewer entry may be a raw userId string OR an object with
-+                // the id + name/phone/viewedAt under several backend aliases.
-+                const entry = typeof item === 'string' ? { userId: item } : (item || {});
-+                const viewerId =
-+                  entry.userId || entry._id || entry.viewer || entry.viewerId || entry.user?._id;
-+                const embeddedName =
-+                  entry.name ||
-+                  entry.displayName ||
-+                  entry.userName ||
-+                  entry.viewerName ||
-+                  entry.user?.name ||
-+                  entry.user?.displayName ||
-+                  'User';
-+                const viewerName = resolveContactName(viewerId, embeddedName, {
-+                  phoneE164: entry.phoneE164 || entry.phone || entry.user?.phoneE164,
-+                  phone: entry.phone || entry.user?.phone,
-+                });
-+                const viewedTs =
-+                  entry.viewedAt ?? entry.at ?? entry.seenAt ?? entry.viewedAtMs ?? entry._creationTime;
-                 return (
-                   <View style={styles.viewerRow}>
-                     <View style={styles.viewerAvatar}>
-@@ -653,7 +701,7 @@ function StatusViewScreenInner() {
-                     </View>
-                     <View style={styles.flexOne}>
-                       <Text style={styles.viewerName}>{viewerName}</Text>
+-                return (
+-                  <View style={styles.viewerRow}>
+-                    <View style={styles.viewerAvatar}>
+-                      <Text style={styles.viewerAvatarText}>{(viewerName || '?').charAt(0).toUpperCase()}</Text>
+-                    </View>
+-                    <View style={styles.flexOne}>
+-                      <Text style={styles.viewerName}>{viewerName}</Text>
 -                      <Text style={styles.viewerTime}>{timeAgo(item?.viewedAt || Date.now())}</Text>
-+                      <Text style={styles.viewerTime}>{timeAgo(viewedTs)}</Text>
-                     </View>
-                   </View>
-                 );
-@@ -955,7 +1003,20 @@ function StoryVideoPlayer({
+-                    </View>
+-                  </View>
+-                );
+-              }}
++              renderItem={({ item }: any) => (
++                <StatusViewerRow
++                  item={item}
++                  resolveContactName={resolveContactName}
++                />
++              )}
+               ListEmptyComponent={<Text style={styles.viewerEmpty}>No one has viewed this yet.</Text>}
+             />
+           </Pressable>
+@@ -955,7 +977,90 @@ function StoryVideoPlayer({
    );
  }
  
 -function timeAgo(ms: number): string {
++/**
++ * StatusViewerRow — one row in the owner's "Seen by" sheet.
++ *
++ * A viewer entry from the backend may be a raw userId string OR an object
++ * `{ userId, viewedAt?, name? }`. Names/avatars are NOT reliably embedded in
++ * `getMyStatuses`, so we resolve them the way the web app does: fetch the
++ * viewer's user doc via `api.users.getUserById` and prefer the device-contact
++ * name (via `resolveContactName`) → their Smilers/Google account name. The
++ * timestamp is only shown when the entry carries a real `viewedAt` value.
++ */
++function StatusViewerRow({
++  item,
++  resolveContactName,
++}: {
++  item: any;
++  resolveContactName: (id: string | null | undefined, fallback: string, extra?: any) => string;
++}) {
++  const entry = typeof item === 'string' ? { userId: item } : (item || {});
++  const viewerId = String(
++    entry.userId || entry._id || entry.viewer || entry.viewerId || entry.user?._id || '',
++  );
++  const { data: fetchedUser } = useSafeConvexQuery<any | null>(
++    api.users.getUserById,
++    viewerId ? { userId: viewerId } : {},
++    null,
++    !!viewerId,
++  );
++
++  const accountName =
++    entry.name ||
++    entry.displayName ||
++    entry.userName ||
++    entry.viewerName ||
++    entry.user?.name ||
++    entry.user?.displayName ||
++    fetchedUser?.name ||
++    fetchedUser?.displayName ||
++    fetchedUser?.fullName ||
++    'User';
++  const viewerName = resolveContactName(viewerId, accountName, {
++    phoneE164: entry.phoneE164 || entry.phone || fetchedUser?.phoneE164 || fetchedUser?.phone,
++    phone: entry.phone || fetchedUser?.phone,
++  });
++  const avatarUrl =
++    entry.avatarUrl || entry.user?.avatarUrl || fetchedUser?.avatarUrl || fetchedUser?.photoUrl || '';
++
++  // Only show a timestamp when a real view time is present — otherwise it would
++  // misleadingly render "just now" for every viewer.
++  const rawTs = entry.viewedAt ?? entry.at ?? entry.seenAt ?? entry.viewedAtMs;
++  const hasTs =
++    (typeof rawTs === 'number' && Number.isFinite(rawTs)) ||
++    (typeof rawTs === 'string' && Number.isFinite(Date.parse(rawTs)));
++
++  return (
++    <View style={styles.viewerRow}>
++      {avatarUrl ? (
++        <Image source={{ uri: avatarUrl }} style={styles.viewerAvatar} />
++      ) : (
++        <View style={styles.viewerAvatar}>
++          <Text style={styles.viewerAvatarText}>{(viewerName || '?').charAt(0).toUpperCase()}</Text>
++        </View>
++      )}
++      <View style={styles.flexOne}>
++        <Text style={styles.viewerName}>{viewerName}</Text>
++        {hasTs ? <Text style={styles.viewerTime}>{timeAgo(rawTs)}</Text> : null}
++      </View>
++    </View>
++  );
++}
++
 +function timeAgo(value: number | string | null | undefined): string {
 +  // Accept ms-epoch numbers (Convex `_creationTime`), ISO strings, or
 +  // seconds-epoch numbers. Anything unparseable → "just now" (never "NaN").
@@ -2509,6 +2569,161 @@ index 00000000..31dae8c1
 +
 +  return null;
 +}
+diff --git a/frontend/src/components/UpdateBanner.tsx b/frontend/src/components/UpdateBanner.tsx
+new file mode 100644
+index 00000000..d8998e87
+--- /dev/null
++++ b/frontend/src/components/UpdateBanner.tsx
+@@ -0,0 +1,149 @@
++import React from 'react';
++import { View, Text, TouchableOpacity, StyleSheet, Linking, Platform } from 'react-native';
++import { useSafeAreaInsets } from 'react-native-safe-area-context';
++import { Ionicons } from '@expo/vector-icons';
++
++import { Colors, Spacing, Radius, FontSize, FontWeight } from '../theme';
++import { useUpdateBanner } from '../lib/appVersion';
++
++/**
++ * UpdateBanner — a dismissible "Update available" banner shown at the top of
++ * the app on launch when a newer version has been published. Mounted once at
++ * the app root. Links to the Play Store (Android) / App Store (iOS). A forced
++ * update (below min supported version) hides the dismiss button.
++ *
++ * Renders nothing when the app is up to date, offline, or already dismissed
++ * this session.
++ */
++export default function UpdateBanner() {
++  const insets = useSafeAreaInsets();
++  const { visible, forceUpdate, latestVersion, storeUrl, releaseNotes, dismiss } =
++    useUpdateBanner();
++
++  if (!visible) return null;
++
++  const openStore = () => {
++    if (storeUrl) {
++      Linking.openURL(storeUrl).catch(() => {});
++    }
++  };
++
++  return (
++    <View
++      style={[styles.wrap, { paddingTop: insets.top + Spacing.sm }]}
++      testID="update-banner"
++    >
++      <View style={styles.row}>
++        <View style={styles.iconCircle}>
++          <Ionicons name="cloud-download-outline" size={20} color={Colors.headerBg} />
++        </View>
++        <View style={styles.textCol}>
++          <Text style={styles.title}>
++            {forceUpdate ? 'Update required' : 'Update available'}
++          </Text>
++          <Text style={styles.subtitle} numberOfLines={2}>
++            {releaseNotes
++              ? releaseNotes
++              : `A new version (${latestVersion || 'latest'}) of Smilers is ready to install.`}
++          </Text>
++        </View>
++      </View>
++      <View style={styles.actions}>
++        {!forceUpdate ? (
++          <TouchableOpacity
++            onPress={dismiss}
++            style={styles.laterBtn}
++            hitSlop={10}
++            testID="update-banner-later"
++          >
++            <Text style={styles.laterText}>Later</Text>
++          </TouchableOpacity>
++        ) : null}
++        <TouchableOpacity
++          onPress={openStore}
++          style={styles.updateBtn}
++          testID="update-banner-update"
++        >
++          <Text style={styles.updateText}>
++            {Platform.OS === 'ios' ? 'Update' : 'Update now'}
++          </Text>
++        </TouchableOpacity>
++      </View>
++    </View>
++  );
++}
++
++const styles = StyleSheet.create({
++  wrap: {
++    position: 'absolute',
++    top: 0,
++    left: 0,
++    right: 0,
++    zIndex: 1000,
++    elevation: 12,
++    backgroundColor: Colors.primary,
++    paddingHorizontal: Spacing.base,
++    paddingBottom: Spacing.md,
++    borderBottomLeftRadius: Radius.lg,
++    borderBottomRightRadius: Radius.lg,
++    shadowColor: Colors.black,
++    shadowOpacity: 0.18,
++    shadowRadius: 8,
++    shadowOffset: { width: 0, height: 3 },
++  },
++  row: {
++    flexDirection: 'row',
++    alignItems: 'center',
++  },
++  iconCircle: {
++    width: 40,
++    height: 40,
++    borderRadius: 20,
++    backgroundColor: Colors.white,
++    alignItems: 'center',
++    justifyContent: 'center',
++    marginRight: Spacing.md,
++  },
++  textCol: { flex: 1 },
++  title: {
++    color: Colors.headerBg,
++    fontSize: FontSize.base,
++    fontWeight: FontWeight.bold,
++  },
++  subtitle: {
++    color: Colors.headerBg,
++    fontSize: FontSize.sm,
++    marginTop: 2,
++    opacity: 0.85,
++  },
++  actions: {
++    flexDirection: 'row',
++    justifyContent: 'flex-end',
++    alignItems: 'center',
++    marginTop: Spacing.sm,
++    gap: Spacing.sm,
++  },
++  laterBtn: {
++    paddingVertical: Spacing.sm,
++    paddingHorizontal: Spacing.base,
++    borderRadius: Radius.pill,
++  },
++  laterText: {
++    color: Colors.headerBg,
++    fontSize: FontSize.sm,
++    fontWeight: FontWeight.semibold,
++  },
++  updateBtn: {
++    paddingVertical: Spacing.sm,
++    paddingHorizontal: Spacing.lg,
++    borderRadius: Radius.pill,
++    backgroundColor: Colors.headerBg,
++    minHeight: 44,
++    justifyContent: 'center',
++  },
++  updateText: {
++    color: Colors.white,
++    fontSize: FontSize.sm,
++    fontWeight: FontWeight.bold,
++  },
++});
 diff --git a/frontend/src/components/admin/PaymentRequestsPanel.tsx b/frontend/src/components/admin/PaymentRequestsPanel.tsx
 new file mode 100644
 index 00000000..2468994b
@@ -3271,6 +3486,142 @@ index c5fee004..2b1477ea 100644
  
    useEffect(() => {
      onResolve(String(conv?._id), isMember);
+diff --git a/frontend/src/lib/appVersion.ts b/frontend/src/lib/appVersion.ts
+new file mode 100644
+index 00000000..685d46eb
+--- /dev/null
++++ b/frontend/src/lib/appVersion.ts
+@@ -0,0 +1,130 @@
++/**
++ * appVersion.ts — "update available" detection for the in-app banner.
++ *
++ * On launch the app fetches GET /api/app-version (served by the FastAPI
++ * backend) and compares the bundled app version against the latest published
++ * one. When the bundled version is older we surface a dismissible banner that
++ * deep-links to the correct store (Play Store on Android, App Store on iOS).
++ *
++ * The dismissal is IN-MEMORY only (session-scoped) per the product decision:
++ * the banner reappears on the next launch until the user actually updates.
++ */
++import { useEffect, useState } from 'react';
++import { Platform } from 'react-native';
++import Constants from 'expo-constants';
++
++const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/$/, '');
++
++export type AppVersionInfo = {
++  latestVersion: string;
++  minSupportedVersion: string;
++  androidUrl: string;
++  iosUrl: string;
++  forceUpdate: boolean;
++  releaseNotes: string;
++};
++
++/** Version bundled into THIS build (from app.json → expo.version).
++ *  Returns '' when it can't be determined (e.g. web preview) so callers can
++ *  choose NOT to show the update banner rather than trigger a false positive. */
++export function getCurrentAppVersion(): string {
++  const v =
++    (Constants.expoConfig as any)?.version ||
++    (Constants as any)?.nativeAppVersion ||
++    (Constants.manifest2 as any)?.extra?.expoClient?.version ||
++    '';
++  return String(v || '');
++}
++
++/**
++ * Compare two dotted version strings. Returns:
++ *   -1 if a < b, 0 if equal, 1 if a > b.
++ * Non-numeric / missing segments are treated as 0 so "2.2" == "2.2.0".
++ */
++export function compareVersions(a: string, b: string): number {
++  const pa = String(a || '0').split('.').map((n) => parseInt(n, 10) || 0);
++  const pb = String(b || '0').split('.').map((n) => parseInt(n, 10) || 0);
++  const len = Math.max(pa.length, pb.length);
++  for (let i = 0; i < len; i += 1) {
++    const x = pa[i] || 0;
++    const y = pb[i] || 0;
++    if (x < y) return -1;
++    if (x > y) return 1;
++  }
++  return 0;
++}
++
++async function fetchAppVersion(signal?: AbortSignal): Promise<AppVersionInfo | null> {
++  if (!BACKEND_URL) return null;
++  try {
++    const res = await fetch(`${BACKEND_URL}/api/app-version`, { signal });
++    if (!res.ok) return null;
++    const data = (await res.json()) as AppVersionInfo;
++    if (!data || typeof data.latestVersion !== 'string') return null;
++    return data;
++  } catch {
++    return null;
++  }
++}
++
++// Session-scoped dismissal so the banner returns on the next cold start.
++let dismissedThisSession = false;
++
++export type UpdateBannerState = {
++  visible: boolean;
++  forceUpdate: boolean;
++  latestVersion: string;
++  currentVersion: string;
++  releaseNotes: string;
++  storeUrl: string;
++  dismiss: () => void;
++};
++
++/**
++ * useUpdateBanner — drives the root <UpdateBanner/>. Fetches once on mount,
++ * decides whether an update banner should show, and exposes a session-scoped
++ * dismiss handler. Fails silent (never blocks the app) when offline.
++ */
++export function useUpdateBanner(): UpdateBannerState {
++  const [info, setInfo] = useState<AppVersionInfo | null>(null);
++  const [dismissed, setDismissed] = useState(dismissedThisSession);
++  const currentVersion = getCurrentAppVersion();
++
++  useEffect(() => {
++    const controller = new AbortController();
++    void fetchAppVersion(controller.signal).then((data) => {
++      if (data) setInfo(data);
++    });
++    return () => controller.abort();
++  }, []);
++
++  const storeUrl =
++    Platform.OS === 'ios' ? info?.iosUrl || '' : info?.androidUrl || '';
++  // Only compare when we actually know THIS build's version — otherwise (e.g.
++  // web preview where expoConfig.version is unavailable) never show the banner.
++  const knownCurrent = !!currentVersion && currentVersion !== '0.0.0';
++  const updateAvailable =
++    knownCurrent && !!info && compareVersions(currentVersion, info.latestVersion) < 0;
++  const forceUpdate =
++    knownCurrent &&
++    !!info &&
++    (info.forceUpdate ||
++      compareVersions(currentVersion, info.minSupportedVersion) < 0);
++  // A forced update can't be dismissed.
++  const visible = updateAvailable && (!dismissed || forceUpdate);
++
++  const dismiss = () => {
++    dismissedThisSession = true;
++    setDismissed(true);
++  };
++
++  return {
++    visible,
++    forceUpdate,
++    latestVersion: info?.latestVersion || '',
++    currentVersion,
++    releaseNotes: info?.releaseNotes || '',
++    storeUrl,
++    dismiss,
++  };
++}
 diff --git a/frontend/src/lib/chatDrafts.ts b/frontend/src/lib/chatDrafts.ts
 new file mode 100644
 index 00000000..eea62c44

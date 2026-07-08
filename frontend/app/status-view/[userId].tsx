@@ -674,38 +674,12 @@ function StatusViewScreenInner() {
                 String(viewerIndex)
               }
               contentContainerStyle={styles.viewersList}
-              renderItem={({ item }: any) => {
-                // A viewer entry may be a raw userId string OR an object with
-                // the id + name/phone/viewedAt under several backend aliases.
-                const entry = typeof item === 'string' ? { userId: item } : (item || {});
-                const viewerId =
-                  entry.userId || entry._id || entry.viewer || entry.viewerId || entry.user?._id;
-                const embeddedName =
-                  entry.name ||
-                  entry.displayName ||
-                  entry.userName ||
-                  entry.viewerName ||
-                  entry.user?.name ||
-                  entry.user?.displayName ||
-                  'User';
-                const viewerName = resolveContactName(viewerId, embeddedName, {
-                  phoneE164: entry.phoneE164 || entry.phone || entry.user?.phoneE164,
-                  phone: entry.phone || entry.user?.phone,
-                });
-                const viewedTs =
-                  entry.viewedAt ?? entry.at ?? entry.seenAt ?? entry.viewedAtMs ?? entry._creationTime;
-                return (
-                  <View style={styles.viewerRow}>
-                    <View style={styles.viewerAvatar}>
-                      <Text style={styles.viewerAvatarText}>{(viewerName || '?').charAt(0).toUpperCase()}</Text>
-                    </View>
-                    <View style={styles.flexOne}>
-                      <Text style={styles.viewerName}>{viewerName}</Text>
-                      <Text style={styles.viewerTime}>{timeAgo(viewedTs)}</Text>
-                    </View>
-                  </View>
-                );
-              }}
+              renderItem={({ item }: any) => (
+                <StatusViewerRow
+                  item={item}
+                  resolveContactName={resolveContactName}
+                />
+              )}
               ListEmptyComponent={<Text style={styles.viewerEmpty}>No one has viewed this yet.</Text>}
             />
           </Pressable>
@@ -1000,6 +974,76 @@ function StoryVideoPlayer({
       contentFit="contain"
       nativeControls={false}
     />
+  );
+}
+
+/**
+ * StatusViewerRow — one row in the owner's "Seen by" sheet.
+ *
+ * A viewer entry from the backend may be a raw userId string OR an object
+ * `{ userId, viewedAt?, name? }`. Names/avatars are NOT reliably embedded in
+ * `getMyStatuses`, so we resolve them the way the web app does: fetch the
+ * viewer's user doc via `api.users.getUserById` and prefer the device-contact
+ * name (via `resolveContactName`) → their Smilers/Google account name. The
+ * timestamp is only shown when the entry carries a real `viewedAt` value.
+ */
+function StatusViewerRow({
+  item,
+  resolveContactName,
+}: {
+  item: any;
+  resolveContactName: (id: string | null | undefined, fallback: string, extra?: any) => string;
+}) {
+  const entry = typeof item === 'string' ? { userId: item } : (item || {});
+  const viewerId = String(
+    entry.userId || entry._id || entry.viewer || entry.viewerId || entry.user?._id || '',
+  );
+  const { data: fetchedUser } = useSafeConvexQuery<any | null>(
+    api.users.getUserById,
+    viewerId ? { userId: viewerId } : {},
+    null,
+    !!viewerId,
+  );
+
+  const accountName =
+    entry.name ||
+    entry.displayName ||
+    entry.userName ||
+    entry.viewerName ||
+    entry.user?.name ||
+    entry.user?.displayName ||
+    fetchedUser?.name ||
+    fetchedUser?.displayName ||
+    fetchedUser?.fullName ||
+    'User';
+  const viewerName = resolveContactName(viewerId, accountName, {
+    phoneE164: entry.phoneE164 || entry.phone || fetchedUser?.phoneE164 || fetchedUser?.phone,
+    phone: entry.phone || fetchedUser?.phone,
+  });
+  const avatarUrl =
+    entry.avatarUrl || entry.user?.avatarUrl || fetchedUser?.avatarUrl || fetchedUser?.photoUrl || '';
+
+  // Only show a timestamp when a real view time is present — otherwise it would
+  // misleadingly render "just now" for every viewer.
+  const rawTs = entry.viewedAt ?? entry.at ?? entry.seenAt ?? entry.viewedAtMs;
+  const hasTs =
+    (typeof rawTs === 'number' && Number.isFinite(rawTs)) ||
+    (typeof rawTs === 'string' && Number.isFinite(Date.parse(rawTs)));
+
+  return (
+    <View style={styles.viewerRow}>
+      {avatarUrl ? (
+        <Image source={{ uri: avatarUrl }} style={styles.viewerAvatar} />
+      ) : (
+        <View style={styles.viewerAvatar}>
+          <Text style={styles.viewerAvatarText}>{(viewerName || '?').charAt(0).toUpperCase()}</Text>
+        </View>
+      )}
+      <View style={styles.flexOne}>
+        <Text style={styles.viewerName}>{viewerName}</Text>
+        {hasTs ? <Text style={styles.viewerTime}>{timeAgo(rawTs)}</Text> : null}
+      </View>
+    </View>
   );
 }
 

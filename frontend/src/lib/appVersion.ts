@@ -24,13 +24,16 @@ export type AppVersionInfo = {
   releaseNotes: string;
 };
 
-/** Version bundled into THIS build (from app.json → expo.version). */
+/** Version bundled into THIS build (from app.json → expo.version).
+ *  Returns '' when it can't be determined (e.g. web preview) so callers can
+ *  choose NOT to show the update banner rather than trigger a false positive. */
 export function getCurrentAppVersion(): string {
   const v =
     (Constants.expoConfig as any)?.version ||
     (Constants as any)?.nativeAppVersion ||
+    (Constants.manifest2 as any)?.extra?.expoClient?.version ||
     '';
-  return String(v || '0.0.0');
+  return String(v || '');
 }
 
 /**
@@ -97,9 +100,13 @@ export function useUpdateBanner(): UpdateBannerState {
 
   const storeUrl =
     Platform.OS === 'ios' ? info?.iosUrl || '' : info?.androidUrl || '';
+  // Only compare when we actually know THIS build's version — otherwise (e.g.
+  // web preview where expoConfig.version is unavailable) never show the banner.
+  const knownCurrent = !!currentVersion && currentVersion !== '0.0.0';
   const updateAvailable =
-    !!info && compareVersions(currentVersion, info.latestVersion) < 0;
+    knownCurrent && !!info && compareVersions(currentVersion, info.latestVersion) < 0;
   const forceUpdate =
+    knownCurrent &&
     !!info &&
     (info.forceUpdate ||
       compareVersions(currentVersion, info.minSupportedVersion) < 0);

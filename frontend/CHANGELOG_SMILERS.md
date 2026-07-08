@@ -15,6 +15,13 @@ Newest first. All changes are captured in `smilers-app-logic-changes.patch`
   `GET /api/app-version` endpoint in `backend/server.py` (env-overridable via
   `SMILERS_LATEST_VERSION` / `SMILERS_ANDROID_URL` / `SMILERS_IOS_URL` /
   `SMILERS_MIN_VERSION` / `SMILERS_FORCE_UPDATE` / `SMILERS_RELEASE_NOTES`).
+- **Status "Seen by" — real viewer names + times:** the viewers sheet now
+  fetches each viewer's profile via `api.users.getUserById` (new
+  `StatusViewerRow` component) and resolves the name the WhatsApp/web way —
+  device-contact name → their Smilers/Google account name (with avatar when
+  available) — instead of the generic "User". The timestamp is shown only when
+  the view entry carries a real `viewedAt` (no more misleading "just now").
+  File: `app/status-view/[userId].tsx`.
 - **Status "Seen by" polish:** viewer time no longer shows "NaN d ago"
   (`timeAgo` now coerces ISO-string / seconds-epoch timestamps, falling back to
   "just now"); viewer name resolution broadened (more backend aliases + saved
