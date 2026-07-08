@@ -2161,7 +2161,7 @@ index 6d84c311..cc0cb8e9 100644
    { key: 'privacy', route: '/privacy', title: 'Privacy', sub: 'Last seen, profile photo, about', icon: 'shield-outline', lib: 'ion' },
    { key: 'app-lock', route: '/app-lock', title: 'App Lock', sub: 'PIN code and biometric unlock', icon: 'fingerprint', lib: 'mc' },
 diff --git a/frontend/app/status-view/[userId].tsx b/frontend/app/status-view/[userId].tsx
-index 7dc7476c..97f235b3 100644
+index 7dc7476c..24845b1e 100644
 --- a/frontend/app/status-view/[userId].tsx
 +++ b/frontend/app/status-view/[userId].tsx
 @@ -351,10 +351,15 @@ function StatusViewScreenInner() {
@@ -2249,7 +2249,7 @@ index 7dc7476c..97f235b3 100644
                ListEmptyComponent={<Text style={styles.viewerEmpty}>No one has viewed this yet.</Text>}
              />
            </Pressable>
-@@ -955,7 +977,90 @@ function StoryVideoPlayer({
+@@ -955,7 +977,101 @@ function StoryVideoPlayer({
    );
  }
  
@@ -2300,11 +2300,22 @@ index 7dc7476c..97f235b3 100644
 +  const avatarUrl =
 +    entry.avatarUrl || entry.user?.avatarUrl || fetchedUser?.avatarUrl || fetchedUser?.photoUrl || '';
 +
-+  // Only show a timestamp when a real view time is present — otherwise it would
-+  // misleadingly render "just now" for every viewer.
-+  const rawTs = entry.viewedAt ?? entry.at ?? entry.seenAt ?? entry.viewedAtMs;
++  // Show the view time when the entry carries one. The backend spec stores it
++  // as `viewedAt` (ms); we also accept common aliases. When none is present we
++  // render nothing rather than a misleading "just now".
++  const rawTs =
++    entry.viewedAt ??
++    entry.viewedAtMs ??
++    entry.at ??
++    entry.seenAt ??
++    entry.seenAtMs ??
++    entry.timestamp ??
++    entry.time ??
++    entry.createdAt ??
++    entry._creationTime ??
++    entry.user?.viewedAt;
 +  const hasTs =
-+    (typeof rawTs === 'number' && Number.isFinite(rawTs)) ||
++    (typeof rawTs === 'number' && Number.isFinite(rawTs) && rawTs > 0) ||
 +    (typeof rawTs === 'string' && Number.isFinite(Date.parse(rawTs)));
 +
 +  return (
