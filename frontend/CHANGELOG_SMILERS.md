@@ -5,6 +5,21 @@ Newest first. All changes are captured in `smilers-app-logic-changes.patch`
 `MERGE_FOR_ASHWINI.md`.
 
 ## 2026-07-08
+- **In-app "Update available" banner:** on launch the app calls
+  `GET /api/app-version` (FastAPI) and, if the bundled `expo.version` is older
+  than the published `latestVersion`, shows a dismissible top banner linking to
+  the Play Store (Android) / App Store (iOS). "Later" hides it for the session
+  (returns next launch); a `forceUpdate`/below-`minSupportedVersion` release
+  hides "Later". NEW files: `src/lib/appVersion.ts`,
+  `src/components/UpdateBanner.tsx`; mounted in `app/_layout.tsx`. BACKEND: new
+  `GET /api/app-version` endpoint in `backend/server.py` (env-overridable via
+  `SMILERS_LATEST_VERSION` / `SMILERS_ANDROID_URL` / `SMILERS_IOS_URL` /
+  `SMILERS_MIN_VERSION` / `SMILERS_FORCE_UPDATE` / `SMILERS_RELEASE_NOTES`).
+- **Status "Seen by" polish:** viewer time no longer shows "NaN d ago"
+  (`timeAgo` now coerces ISO-string / seconds-epoch timestamps, falling back to
+  "just now"); viewer name resolution broadened (more backend aliases + saved
+  contact / device name) so it only shows "User" when the viewer is truly
+  unknown. File: `app/status-view/[userId].tsx`.
 - **Status views not counting (FIXED):** the viewer screen's `markViewed` effect
   was keyed only on `[idx, isMine]`, so when the stories array finished loading
   AFTER the first render (async Convex fetch) the effect never re-ran and the

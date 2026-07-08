@@ -337,17 +337,19 @@ index 3e77ad2f..9e83e330 100644
    };
  
 diff --git a/frontend/app/_layout.tsx b/frontend/app/_layout.tsx
-index 9f1a1576..1ebdb0fe 100644
+index 9f1a1576..38817700 100644
 --- a/frontend/app/_layout.tsx
 +++ b/frontend/app/_layout.tsx
-@@ -25,6 +25,7 @@ import VoiceCommandLauncher from '../src/components/VoiceCommandLauncher';
+@@ -25,7 +25,8 @@ import VoiceCommandLauncher from '../src/components/VoiceCommandLauncher';
  import IncomingScreenShareModal from '../src/components/IncomingScreenShareModal';
  import CallHost from '../src/components/call/CallHost';
  import CallReturnBanner from '../src/components/call/CallReturnBanner';
+-import { recordTouchActivity } from '../src/lib/touchActivity';
 +import ResumeLastRoute from '../src/components/ResumeLastRoute';
- import { recordTouchActivity } from '../src/lib/touchActivity';
++import UpdateBanner from '../src/components/UpdateBanner';import { recordTouchActivity } from '../src/lib/touchActivity';
  import { applyInterFontPatch } from '../src/lib/fontPatch';
  import {
+   installGlobalDiagnostics,
 @@ -423,6 +424,7 @@ export default function RootLayout() {
              <GlobalNotificationServices />
              <PresenceHeartbeat />
@@ -356,6 +358,14 @@ index 9f1a1576..1ebdb0fe 100644
              <CallWakeBootstrap />
              <StatusBar style="light" backgroundColor={Colors.headerBg} />
              <AppLockGate>
+@@ -486,6 +488,7 @@ export default function RootLayout() {
+             <IncomingScreenShareModal />
+             <CallHost />
+             <CallReturnBanner />
++            <UpdateBanner />
+               </View>
+             </AppLockGate>
+             </DeviceContactBridge>
 diff --git a/frontend/app/ad-clicks-payment.tsx b/frontend/app/ad-clicks-payment.tsx
 new file mode 100644
 index 00000000..ec1d72d5
@@ -2151,7 +2161,7 @@ index 6d84c311..cc0cb8e9 100644
    { key: 'privacy', route: '/privacy', title: 'Privacy', sub: 'Last seen, profile photo, about', icon: 'shield-outline', lib: 'ion' },
    { key: 'app-lock', route: '/app-lock', title: 'App Lock', sub: 'PIN code and biometric unlock', icon: 'fingerprint', lib: 'mc' },
 diff --git a/frontend/app/status-view/[userId].tsx b/frontend/app/status-view/[userId].tsx
-index 7dc7476c..96fe3f0e 100644
+index 7dc7476c..0d178b11 100644
 --- a/frontend/app/status-view/[userId].tsx
 +++ b/frontend/app/status-view/[userId].tsx
 @@ -351,10 +351,15 @@ function StatusViewScreenInner() {
@@ -2202,7 +2212,7 @@ index 7dc7476c..96fe3f0e 100644
  
    return (
      <View
-@@ -641,11 +666,14 @@ function StatusViewScreenInner() {
+@@ -641,11 +666,34 @@ function StatusViewScreenInner() {
              <View style={styles.grabber} />
              <Text style={styles.viewersSheetTitle}>Seen by {viewsCount}</Text>
              <FlatList
@@ -2210,27 +2220,67 @@ index 7dc7476c..96fe3f0e 100644
 -              keyExtractor={(viewer: any, viewerIndex: number) => viewer?.userId || String(viewerIndex)}
 +              data={viewerList}
 +              keyExtractor={(viewer: any, viewerIndex: number) =>
-+                viewer?.userId || viewer?._id || viewer?.viewer || String(viewerIndex)
++                (typeof viewer === 'string'
++                  ? viewer
++                  : viewer?.userId || viewer?._id || viewer?.viewer || viewer?.viewerId) ||
++                String(viewerIndex)
 +              }
                contentContainerStyle={styles.viewersList}
                renderItem={({ item }: any) => {
 -                const viewerName = resolveContactName(item?.userId, item?.name || 'User');
-+                const viewerId = item?.userId || item?._id || item?.viewer || item?.viewerId;
-+                const viewerName = resolveContactName(viewerId, item?.name || item?.displayName || 'User');
++                // A viewer entry may be a raw userId string OR an object with
++                // the id + name/phone/viewedAt under several backend aliases.
++                const entry = typeof item === 'string' ? { userId: item } : (item || {});
++                const viewerId =
++                  entry.userId || entry._id || entry.viewer || entry.viewerId || entry.user?._id;
++                const embeddedName =
++                  entry.name ||
++                  entry.displayName ||
++                  entry.userName ||
++                  entry.viewerName ||
++                  entry.user?.name ||
++                  entry.user?.displayName ||
++                  'User';
++                const viewerName = resolveContactName(viewerId, embeddedName, {
++                  phoneE164: entry.phoneE164 || entry.phone || entry.user?.phoneE164,
++                  phone: entry.phone || entry.user?.phone,
++                });
++                const viewedTs =
++                  entry.viewedAt ?? entry.at ?? entry.seenAt ?? entry.viewedAtMs ?? entry._creationTime;
                  return (
                    <View style={styles.viewerRow}>
                      <View style={styles.viewerAvatar}>
-@@ -653,7 +681,9 @@ function StatusViewScreenInner() {
+@@ -653,7 +701,7 @@ function StatusViewScreenInner() {
                      </View>
                      <View style={styles.flexOne}>
                        <Text style={styles.viewerName}>{viewerName}</Text>
 -                      <Text style={styles.viewerTime}>{timeAgo(item?.viewedAt || Date.now())}</Text>
-+                      <Text style={styles.viewerTime}>
-+                        {timeAgo(item?.viewedAt || item?.at || item?.seenAt || Date.now())}
-+                      </Text>
++                      <Text style={styles.viewerTime}>{timeAgo(viewedTs)}</Text>
                      </View>
                    </View>
                  );
+@@ -955,7 +1003,20 @@ function StoryVideoPlayer({
+   );
+ }
+ 
+-function timeAgo(ms: number): string {
++function timeAgo(value: number | string | null | undefined): string {
++  // Accept ms-epoch numbers (Convex `_creationTime`), ISO strings, or
++  // seconds-epoch numbers. Anything unparseable → "just now" (never "NaN").
++  let ms: number;
++  if (typeof value === 'number') {
++    ms = value;
++  } else if (typeof value === 'string') {
++    ms = Date.parse(value);
++  } else {
++    ms = NaN;
++  }
++  if (!Number.isFinite(ms)) return 'just now';
++  // Coerce seconds-epoch (10-digit) to ms.
++  if (ms > 0 && ms < 1e12) ms = ms * 1000;
+   const diff = Math.max(0, Date.now() - ms);
+   const seconds = Math.floor(diff / 1000);
+   if (seconds < 60) return 'just now';
 diff --git a/frontend/app/user/[userId].tsx b/frontend/app/user/[userId].tsx
 index 48d91649..051b5fe8 100644
 --- a/frontend/app/user/[userId].tsx

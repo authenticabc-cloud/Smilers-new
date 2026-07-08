@@ -2695,6 +2695,48 @@ async def safe_browsing_check(payload: SafeBrowsingCheckRequest):
     return SafeBrowsingCheckResponse(matches=cached + new_matches)
 
 
+# ── App version / update banner (Play Store + App Store) ──────────────────
+# The mobile client calls GET /api/app-version on launch and, if its bundled
+# version is older than `latestVersion`, shows a dismissible "Update available"
+# banner linking to the correct store. Bump these when a new build ships —
+# either via env vars (no redeploy of code) or by editing the defaults here.
+#   - SMILERS_LATEST_VERSION   : latest published version, e.g. "2.3.0"
+#   - SMILERS_MIN_VERSION      : oldest still-supported version (below → force)
+#   - SMILERS_ANDROID_URL      : Play Store listing (or direct APK) URL
+#   - SMILERS_IOS_URL          : App Store listing URL (empty until live)
+#   - SMILERS_FORCE_UPDATE     : "1" to force-block below latestVersion
+#   - SMILERS_RELEASE_NOTES    : short changelog shown in the banner
+_ANDROID_PACKAGE = "com.smilers.app"
+APP_VERSION_CONFIG = {
+    "latestVersion": os.environ.get("SMILERS_LATEST_VERSION", "2.2.17"),
+    "minSupportedVersion": os.environ.get("SMILERS_MIN_VERSION", "0.0.0"),
+    "androidUrl": os.environ.get(
+        "SMILERS_ANDROID_URL",
+        f"https://play.google.com/store/apps/details?id={_ANDROID_PACKAGE}",
+    ),
+    "iosUrl": os.environ.get("SMILERS_IOS_URL", ""),
+    "forceUpdate": os.environ.get("SMILERS_FORCE_UPDATE", "0") == "1",
+    "releaseNotes": os.environ.get("SMILERS_RELEASE_NOTES", ""),
+}
+
+
+class AppVersionResponse(BaseModel):
+    latestVersion: str
+    minSupportedVersion: str
+    androidUrl: str
+    iosUrl: str
+    forceUpdate: bool
+    releaseNotes: str
+
+
+@api_router.get("/app-version", response_model=AppVersionResponse)
+async def get_app_version():
+    """Latest published app version + store links for the in-app update banner.
+    Values are env-overridable so a new release can be announced without a code
+    change (set SMILERS_LATEST_VERSION and restart the backend)."""
+    return AppVersionResponse(**APP_VERSION_CONFIG)
+
+
 # Include the router in the main app
 app.include_router(api_router)
 
