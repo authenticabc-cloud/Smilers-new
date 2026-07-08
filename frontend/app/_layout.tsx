@@ -65,6 +65,23 @@ if (Platform.OS === 'android') {
   }).catch(() => {});
 }
 
+// Ensure the message channel always exists before any FCM message push
+// arrives — same reasoning as the 'default' channel above. Without this,
+// messages delivered before the first app open (React never mounted) fall
+// back to the 'default' channel and play the wrong sound.
+if (Platform.OS === 'android') {
+  Notifications.setNotificationChannelAsync('messages-v4-message_notification', {
+    name: 'Messages',
+    importance: Notifications.AndroidImportance.HIGH,
+    sound: 'message_notification',
+    vibrationPattern: [0, 250, 250, 250],
+    lightColor: '#E4B53B',
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+    enableVibrate: true,
+    showBadge: true,
+  }).catch(() => {});
+}
+
 // ⚡ Initialize Sentry as early as possible — this MUST happen at the very
 // top of the JS bundle (before any other code runs) so it can install its
 // native crash handlers in time to capture errors during the rest of the

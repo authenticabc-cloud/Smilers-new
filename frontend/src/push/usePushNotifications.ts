@@ -4,6 +4,11 @@ import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import * as TaskManager from 'expo-task-manager';
+// Side-effect import: ensures backgroundTaskSetup stays in the Metro bundle
+// graph even if tree-shaking would otherwise drop it. The task handler and
+// Notifee call event handlers MUST be registered at module scope (not just
+// inside this hook) so they run in the headless JS context on killed-app FCM.
+import './backgroundTaskSetup';
 import { useRouter } from 'expo-router';
 import { useConvexAuth, useMutation } from 'convex/react';
 import { api } from '../convexApi';
@@ -16,6 +21,10 @@ import {
   wasAlreadyPrompted,
   markPrompted,
   openFullScreenIntentSettings,
+  shouldCheckBatteryOptimization,
+  wasBatteryOptPrompted,
+  markBatteryOptPrompted,
+  requestBatteryOptimizationExemption,
 } from '../lib/fullScreenIntentPermission';
 
 // Foreground display behavior — show banner but DON'T let the OS play the
@@ -24,14 +33,22 @@ import {
 // hook's custom Smilers tone. The system sound won by a few ms, producing the
 // "default beep then Smilers tone" double-sound. The in-app hook owns
 // foreground sound, so silence the OS here.
+//
+// Call pushes are DATA-ONLY on Android. When Expo's bridge delivers one to
+// the foreground notification handler it would auto-create a plain system
+// banner (no buttons, title = payload.title = "Incoming voice call") for
+// every FCM retry. Notifee owns call rendering — suppress the Expo banner for
+// type:"call" so we never get the "default multiple notifications" alongside
+// the Notifee full-screen ring.
 if (Platform.OS !== 'web') {
   Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: false,
-      shouldSetBadge: true,
-    }),
+    handleNotification: async (notification) => {
+      const type = (notification.request.content.data as Record<string, unknown>)?.type;
+      if (type === 'call' || type === 'call-declined' || type === 'call-cancelled') {
+        return { shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false };
+      }
+      return { shouldShowBanner: true, shouldShowList: true, shouldPlaySound: false, shouldSetBadge: true };
+    },
   });
 }
 
@@ -265,7 +282,15 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
     taskObject;
   const payload = normalizeNotificationPayload(rawPayload);
   const type = toNonEmptyString(payload.type);
-  if (type !== 'call' && type !== 'message') {
+  if (type !== 'call' && type !== 'message' && type !== 'call-declined') {
+    return;
+  }
+
+  // call-declined: callee tapped Decline from the notification tray while
+  // caller's app is backgrounded. Intercept silently — no banner, no action.
+  // The foreground addNotificationReceivedListener handles this when caller
+  // is active; if caller is also backgrounded, Convex cron expires the call.
+  if (type === 'call-declined') {
     return;
   }
 
@@ -414,41 +439,8 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
   });
 }
 
-if (Platform.OS !== 'web' && !runtimeScope.__smilersNotificationTaskDefined) {
-  runtimeScope.__smilersNotificationTaskDefined = true;
-  TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }: any) => {
-    if (error) {
-      console.warn('[push] Background notification task error:', error?.message || error);
-      return;
-    }
-
-    if (runtimeScope.__smilersAppState === 'active') {
-      // iter-248: in the FOREGROUND, only bail for non-CALL pushes. Call pushes
-      // are sent data-only, which bypasses the foreground notification listener
-      // entirely, and the Convex live-query path has proven unreliable at
-      // surfacing the ring — so let CALL pushes fall through to
-      // presentBackgroundLocalNotification (the Notifee Answer/Decline ring is
-      // idempotent by call id, so it won't double-ring with the Convex path).
-      try {
-        const probe = normalizeNotificationPayload(
-          (data as any)?.notification?.request?.content?.data ||
-            (data as any)?.data ||
-            data ||
-            {},
-        );
-        if (toNonEmptyString(probe.type) !== 'call') return;
-      } catch {
-        return;
-      }
-    }
-
-    try {
-      await presentBackgroundLocalNotification(data);
-    } catch (taskError: any) {
-      console.warn('[push] Background notification scheduling failed:', taskError?.message || taskError);
-    }
-  });
-}
+// TaskManager.defineTask for BACKGROUND_NOTIFICATION_TASK has been moved to
+// backgroundTaskSetup.ts so it runs in the headless JS context (killed app).
 
 function resolveMessageChannelSound(notificationSoundId?: string | null) {
   switch (notificationSoundId) {
@@ -621,6 +613,38 @@ export function usePushNotifications() {
         ],
       );
     }, 4000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [hasAuthSession]);
+
+  // Battery optimization exemption prompt.
+  // Fires 6 seconds after the user logs in (staggered after the 4s full-screen
+  // intent prompt). Shown once per install. On Android, tapping "Allow" opens
+  // the system dialog that whitelists Smilers from battery optimization — this
+  // is the primary fix for calls not ringing when the app is killed on OEM
+  // devices (Motorola, Samsung, Xiaomi) that aggressively kill background tasks.
+  useEffect(() => {
+    if (!hasAuthSession) return undefined;
+    if (!shouldCheckBatteryOptimization()) return undefined;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      if (cancelled) return;
+      if (await wasBatteryOptPrompted()) return;
+      await markBatteryOptPrompted();
+      Alert.alert(
+        'Allow calls when app is closed',
+        'To receive incoming Smilers calls even when the app is closed, allow it to run in the background without battery restrictions.',
+        [
+          { text: 'Not now', style: 'cancel' },
+          {
+            text: 'Allow',
+            onPress: () => { void requestBatteryOptimizationExemption(); },
+          },
+        ],
+      );
+    }, 6000);
     return () => {
       cancelled = true;
       clearTimeout(timer);
@@ -1113,6 +1137,18 @@ export function usePushNotifications() {
           console.warn('[push] markDelivered failed:', errorValue?.message || errorValue);
         });
       }
+      // call-declined arrives at the CALLER's device when the callee taps Decline
+      // from the notification tray (background/killed state). Call declineCall so
+      // Convex updates the call record and the caller's call screen ends immediately.
+      if (type === 'call-declined') {
+        const dcCallId =
+          toNonEmptyString(payload.callId) || toNonEmptyString(payload.conversationId);
+        if (dcCallId) {
+          declineCall({ callId: dcCallId }).catch((e: any) => {
+            console.warn('[push] call-declined: declineCall failed', e?.message || e);
+          });
+        }
+      }
       // iter-186: desktop login approval arriving while the app is OPEN —
       // contract section 2: "If the app is in the foreground, show the
       // prompt in-app". Requests expire in 2 minutes, so route straight
@@ -1150,7 +1186,12 @@ export function usePushNotifications() {
                 toNonEmptyString(payload.twilio_caller_identity) ||
                 toNonEmptyString(payload.callerId) ||
                 '',
-              callerName: getDisplayNameFromPayload(payload) || 'Smilers user',
+              callerName:
+                toNonEmptyString(payload.callerName) ||
+                toNonEmptyString(payload.callerDisplayName) ||
+                toNonEmptyString(payload.displayName) ||
+                toNonEmptyString(payload.senderName) ||
+                'Smilers user',
               callType: isVideo ? 'video' : 'voice',
               conversationId: conversationId || '',
               twilioRoom: toNonEmptyString(payload.twilio_room_name) || '',

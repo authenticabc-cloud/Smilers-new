@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only override: allow cleartext HTTP for Metro bundler on any local
+  network address (WiFi or USB). This file is ONLY included in debug builds;
+  release builds use src/main/res/xml/network_security_config.xml which keeps
+  cleartextTrafficPermitted="false".
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system"/>
+            <certificates src="user"/>
+        </trust-anchors>
+    </base-config>
+</network-security-config>

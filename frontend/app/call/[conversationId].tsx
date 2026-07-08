@@ -1346,6 +1346,37 @@ export function CallScreenInner() {
       try {
         if (activeCall?.status === 'ringing') {
           await declineCall({ callId: id });
+          // Caller cancelling during ringing: send call-cancelled FCM to the callee
+          // so their Kotlin ring notification is dismissed immediately (< 2s) rather
+          // than waiting for the 35s ring-timeout runnable.
+          if (isCaller) {
+            const ac = activeCall as any;
+            const calleeId = String(
+              ac?.calleeId ||
+              ac?.calleeUserId ||
+              ac?.recipientId ||
+              ac?.recipientUserId ||
+              (fetchedOtherUser as any)?._id ||
+              (conversation as any)?.otherUser?._id ||
+              '',
+            );
+            if (calleeId) {
+              const myName = String(
+                (me as any)?.displayName ||
+                (me as any)?.name ||
+                (me as any)?.fullName ||
+                'Smilers user',
+              );
+              notifyEventPush({
+                recipients: [calleeId],
+                event: 'call-cancelled',
+                title: myName,
+                message: 'Call ended',
+                conversationId,
+                callId: conversationId, // ring FCM used conversationId as callId
+              });
+            }
+          }
         } else {
           await endCall({ callId: id });
         }
@@ -1367,7 +1398,7 @@ export function CallScreenInner() {
       // pruning expired signaling rows automatically.
     }
     callHost.end();
-  }, [activeCall?.status, callId, declineCall, endCall, router, callDurationSec, callType, engagement]);
+  }, [activeCall, callId, declineCall, endCall, router, callDurationSec, callType, engagement, isCaller, fetchedOtherUser, conversation, me, conversationId]);
 
   const handleDecline = useCallback(async () => {
     const id = callId;
@@ -1412,18 +1443,24 @@ export function CallScreenInner() {
 
     if (
       activeCall &&
-      (activeCall.status === 'ended' || activeCall.status === 'declined') &&
-      sessionRef.current
+      (activeCall.status === 'ended' || activeCall.status === 'declined')
     ) {
-      sessionRef.current.close();
-      sessionRef.current = null;
-      initStartedRef.current = false;
+      // Close WebRTC session only if one was established (active calls). During
+      // the ringing phase sessionRef.current is null — the session is only
+      // created after the callee answers — so we guard it separately to avoid
+      // blocking the UI teardown when the call is declined before answer.
+      if (sessionRef.current) {
+        sessionRef.current.close();
+        sessionRef.current = null;
+        initStartedRef.current = false;
+      }
       if (inCallStartedRef.current) {
         InCallAudio.stop();
         inCallStartedRef.current = false;
         callDebug.push('AUDIO', 'InCallManager.stop() (remote-ended)');
       }
-      // Give the user 700ms to see the "Call ended" state before popping
+      // Give the user 700ms to see the "Call ended" / "Declined" state before popping.
+      // This now fires even when sessionRef is null (call declined while still ringing).
       const timeoutId = setTimeout(() => callHost.end(), 700);
       return () => clearTimeout(timeoutId);
     }

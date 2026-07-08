@@ -18,7 +18,7 @@
  *   3. It plays the user's configured ringtone (not the message tone).
  */
 
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -57,6 +57,7 @@ export default function IncomingCallScreen() {
     callId?: string;
     convexCallId?: string;
     autoAnswer?: string;
+    action?: string;
   }>();
 
   const room = String(params.room || '');
@@ -71,6 +72,7 @@ export default function IncomingCallScreen() {
   const convexCallId = String(params.convexCallId || '');
   const notifeeCallId = String(params.callId || '');
   const autoAnswer = String(params.autoAnswer || '0') === '1';
+  const autoDecline = String(params.action || '') === 'decline';
 
   // The callee's OWN identity — what they join Twilio with. Using the real
   // Convex user id is what lets the caller resolve a friendly name.
@@ -79,6 +81,27 @@ export default function IncomingCallScreen() {
 
   const answerCall = useMutation((api as any).calls.answerCall);
   const declineCall = useMutation((api as any).calls.declineCall);
+
+  // Query the live incoming call for two reasons:
+  // 1. autoDecline path: get the real Convex call _id when convexCallId is absent
+  //    (Kotlin only has the FCM callId, not the Convex document _id).
+  // 2. autoAnswer path: the relay FCM can post the ring notification before the
+  //    direct FCM arrives with twilio_room_name, so the Answer deeplink URL may
+  //    have room=''. Resolve it from Convex so the call can proceed.
+  const incomingCallLookup = useQuery(
+    (api as any).calls.getIncomingCall,
+    (autoDecline && !convexCallId) || (autoAnswer && !room) ? {} : 'skip',
+  ) as any;
+  const resolvedConvexCallId = convexCallId ||
+    (incomingCallLookup?._id ? String(incomingCallLookup._id) : '');
+  // room from the URL param (normal path) or resolved from Convex (race-condition fallback).
+  const resolvedRoom = room || String(
+    incomingCallLookup?.twilioRoomName ||
+    incomingCallLookup?.twilioRoom ||
+    incomingCallLookup?.twilio_room_name ||
+    incomingCallLookup?.roomName ||
+    ''
+  );
 
   const handledRef = useRef(false);
 
@@ -102,9 +125,21 @@ export default function IncomingCallScreen() {
     cancelNotifee();
   }, [cancelNotifee]);
 
+  // Set global decline flag as early as possible (layout phase) so
+  // useIncomingCallListener in the root layout doesn't re-push the call screen
+  // after the decline deeplink brings the app to foreground.
+  useLayoutEffect(() => {
+    if (!autoDecline) return;
+    try {
+      const declinedMap: Map<string, number> = ((globalThis as any).__smilersDeclinedByConv ??= new Map());
+      if (conversationId) declinedMap.set(conversationId, Date.now());
+      if (notifeeCallId) declinedMap.set(`callId:${notifeeCallId}`, Date.now());
+    } catch {}
+  }, [autoDecline, conversationId, notifeeCallId]);
+
   const goToCall = useCallback(() => {
     if (handledRef.current) return;
-    if (!room) return;
+    if (!resolvedRoom) return;
     // Wait until we know our own user id so we join with a resolvable
     // identity (and so the caller sees our name, not a code).
     if (!myId) return;
@@ -118,41 +153,63 @@ export default function IncomingCallScreen() {
     recordDiagnostic({
       tag: 'TWILIO-CALL',
       source: 'incoming-screen',
-      message: `answer room=${room} identity=${myId} video=${isVideo}`,
+      message: `answer room=${resolvedRoom} identity=${myId} video=${isVideo}`,
     });
     const url =
-      `/twilio-call?room=${encodeURIComponent(room)}` +
+      `/twilio-call?room=${encodeURIComponent(resolvedRoom)}` +
       `&identity=${encodeURIComponent(myId)}` +
       `&isCaller=0&isVideo=${isVideo ? '1' : '0'}` +
       `&title=${encodeURIComponent(callerName)}`;
     router.replace(url as any);
-  }, [room, myId, convexCallId, answerCall, isVideo, callerName, router, cancelNotifee]);
+  }, [resolvedRoom, myId, convexCallId, answerCall, isVideo, callerName, router, cancelNotifee]);
 
   const handleDecline = useCallback(() => {
     if (handledRef.current) return;
     handledRef.current = true;
+    // Mark this conversation as declined globally so useIncomingCallListener
+    // doesn't re-route to the call screen after we navigate home.
+    try {
+      const declinedMap: Map<string, number> = ((globalThis as any).__smilersDeclinedByConv ??= new Map());
+      if (conversationId) declinedMap.set(conversationId, Date.now());
+      if (notifeeCallId) declinedMap.set(`callId:${notifeeCallId}`, Date.now());
+    } catch {}
     cancelNotifee();
-    // Completing the Twilio room is what stops the caller ringing even if
-    // we never joined; the Convex decline is supplementary.
     if (room) endTwilioCall(room).catch(() => {});
-    if (convexCallId) {
-      try {
-        void declineCall({ callId: convexCallId });
-      } catch {}
+    if (resolvedConvexCallId) {
+      try { void declineCall({ callId: resolvedConvexCallId }); } catch {}
     }
     recordDiagnostic({
       tag: 'TWILIO-CALL',
       source: 'incoming-screen',
-      message: `decline room=${room}`,
+      message: `decline room=${room} convexId=${resolvedConvexCallId || 'none'}`,
     });
-    if (router.canGoBack()) router.back();
-    else router.replace('/');
-  }, [room, convexCallId, declineCall, router, cancelNotifee]);
+    router.replace('/');
+  }, [room, resolvedConvexCallId, declineCall, router, cancelNotifee, conversationId, notifeeCallId]);
 
   // Explicit accept from the notification → join the moment we know our id.
   useEffect(() => {
     if (autoAnswer && myId && !handledRef.current) goToCall();
   }, [autoAnswer, myId, goToCall]);
+
+  // Decline from the native notification Decline button. When convexCallId is
+  // absent (notification path), wait for the Convex lookup to resolve so
+  // declineCall fires with the real _id before we navigate home. A 2-second
+  // timeout ensures we navigate even if the query never resolves.
+  useEffect(() => {
+    if (!autoDecline || handledRef.current) return;
+    // If we already have the Convex ID (from URL or resolved query), decline now.
+    if (resolvedConvexCallId || convexCallId) { handleDecline(); return; }
+    // Otherwise wait — handleDecline will be re-created when resolvedConvexCallId resolves.
+  }, [autoDecline, handleDecline, resolvedConvexCallId, convexCallId]);
+
+  // Safety net: decline without Convex ID if the lookup takes too long
+  useEffect(() => {
+    if (!autoDecline || convexCallId) return;
+    const t = setTimeout(() => {
+      if (!handledRef.current) handleDecline();
+    }, 2000);
+    return () => clearTimeout(t);
+  }, [autoDecline, convexCallId, handleDecline]);
 
   // Missed-call safety net: auto-dismiss after the ring window.
   useEffect(() => {
@@ -161,6 +218,17 @@ export default function IncomingCallScreen() {
     }, RING_TIMEOUT_MS);
     return () => clearTimeout(t);
   }, [handleDecline]);
+
+  // autoDecline: render a minimal "Declining…" state while handleDecline runs.
+  if (autoDecline) {
+    return (
+      <View style={[styles.container, styles.center]}>
+        <CallBackground variant="incoming" />
+        <ActivityIndicator size="large" color="#e74c3c" />
+        <Text style={styles.connectingText}>Declining…</Text>
+      </View>
+    );
+  }
 
   // autoAnswer: render a minimal "Connecting…" state (no buttons / ring).
   if (autoAnswer) {

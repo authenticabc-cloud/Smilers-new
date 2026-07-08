@@ -107,3 +107,12 @@ backend/downloads/smilers-frontend.zip
 .env
 .env.*
 *.env
+
+# Local development overrides (e.g., for local testing of cloud functions)
+.env.local
+
+# Backlog
+backlog/
+documents/
+.claude/
+

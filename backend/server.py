@@ -462,14 +462,27 @@ class WebRtcRingRequest(BaseModel):
     conversation_id: str = Field(..., min_length=1)
     is_video: bool = False
     call_id: str | None = None
+    # Device-reachable public backend URL, sent by the mobile caller so the
+    # callee's native receiver can POST call-declined back (see /calls/ring).
+    backend_url: str | None = None
 
 
 @api_router.post("/calls/ring")
-async def webrtc_ring(payload: WebRtcRingRequest):
+async def webrtc_ring(payload: WebRtcRingRequest, request: Request):
     if not payload.callee_identities:
         return {"scheduled": False, "reason": "no-callees"}
     display_name = payload.caller_display_name or "Smilers User"
     call_id = payload.call_id or payload.conversation_id
+    # Public base URL of THIS backend, so the callee's native CallActionReceiver
+    # knows where to POST the `call-declined` event (it reads `backendUrl` from
+    # the ring notification extras). Prefer the URL the mobile caller sends (it
+    # knows the correct device-reachable public host); only fall back to the
+    # request host (which behind the ingress may be an internal cluster domain).
+    backend_url = (payload.backend_url or "").strip().rstrip("/")
+    if not backend_url:
+        backend_url = str(request.base_url).rstrip("/")
+    if backend_url.startswith("http://"):
+        backend_url = "https://" + backend_url[len("http://"):]
     push_data = {
         "title": display_name,
         "message": "Incoming video call" if payload.is_video else "Incoming call",
@@ -481,6 +494,8 @@ async def webrtc_ring(payload: WebRtcRingRequest):
         "conversationId": payload.conversation_id,
         "twilio_is_video": "1" if payload.is_video else "0",
         "twilio_caller_identity": payload.caller_identity,
+        # Where the native receiver POSTs call-declined (it appends the API path).
+        "backendUrl": backend_url,
         # NO twilio_room_name → the Notifee wake routes to /call/<conversationId>
         # (the WebRTC screen), not /twilio-call.
         "action_url": f"/call/{payload.conversation_id}",
@@ -499,7 +514,7 @@ async def webrtc_ring(payload: WebRtcRingRequest):
             logger.info(
                 f"webrtc-ring pushed to {len(payload.callee_identities)} callees: "
                 f"tokens={stats.get('token_count')} ok={stats.get('success_count')} "
-                f"err={stats.get('error_count')}"
+                f"err={stats.get('error_count')} backendUrl={backend_url}"
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception(f"webrtc-ring: push failed (non-fatal): {exc}")
@@ -861,6 +876,58 @@ async def download_frontend_zip():
         path=str(zip_path),
         media_type="application/zip",
         filename="smilers-frontend.zip",
+    )
+
+
+@api_router.get("/download/frontend-part/{idx}")
+async def download_frontend_part(idx: str):
+    """Serve a single ~4MB chunk of the frontend zip so a flaky connection can
+    download (and retry) each part individually. Reassemble locally with:
+        cat smilers-frontend.zip.part* > smilers-frontend.zip
+    `idx` must be a two-digit part number, e.g. "00", "01", ... "05".
+    """
+    from fastapi.responses import FileResponse
+    if not (len(idx) == 2 and idx.isdigit()):
+        raise HTTPException(status_code=400, detail="Bad part index")
+    name = f"smilers-frontend.zip.part{idx}"
+    part_path = Path(__file__).parent / "downloads" / "parts" / name
+    if not part_path.exists():
+        raise HTTPException(status_code=404, detail="Part not found")
+    return FileResponse(
+        path=str(part_path),
+        media_type="application/octet-stream",
+        filename=name,
+    )
+
+
+@api_router.get("/download/freelancer-handover")
+async def download_freelancer_handover():
+    """Serve the call-notifications handover document (Markdown) so it can be
+    downloaded and attached/shared with the native freelancer."""
+    from fastapi.responses import FileResponse
+    doc_path = Path(__file__).parent / "downloads" / "Smilers-Call-Notifications-Handover.md"
+    if not doc_path.exists():
+        raise HTTPException(status_code=404, detail="Handover doc not found")
+    return FileResponse(
+        path=str(doc_path),
+        media_type="text/markdown",
+        filename="Smilers-Call-Notifications-Handover.md",
+    )
+
+
+@api_router.get("/download/server-py")
+async def download_server_py():
+    """Serve the CURRENT backend server.py so it can be downloaded and shared
+    with the freelancer (reflects the live, deployed code — including the
+    call-cancelled event)."""
+    from fastapi.responses import FileResponse
+    src_path = Path(__file__).resolve()
+    if not src_path.exists():
+        raise HTTPException(status_code=404, detail="server.py not found")
+    return FileResponse(
+        path=str(src_path),
+        media_type="text/x-python",
+        filename="server.py",
     )
 
 
@@ -1523,6 +1590,11 @@ def _derive_push_routing(data: dict) -> dict[str, str]:
         out["type"] = "missed-call"
     elif explicit_type == "message":
         out["type"] = "message"
+    elif explicit_type in ("call-cancelled", "call-declined"):
+        # Control signals — preserve exactly so the callee/caller Kotlin handler
+        # routes them correctly. Without this they get overridden to "call" or
+        # "message" by the has_call_metadata / channel-detection fallback below.
+        out["type"] = explicit_type
 
     action_url = str(data.get("action_url") or "")
     if not action_url.startswith("/"):
@@ -1792,11 +1864,18 @@ async def send_push(
                     "isConference",
                     "conversationId",
                     "displayName",
+                    "backendUrl",
                 ):
                     _v = data.get(_k)
                     if _v is not None and _k not in fcm_data:
                         fcm_data[_k] = str(_v)
                 is_call_push = routing.get("type") == "call"
+                # call-cancelled / call-declined are silent control signals: send
+                # data-only so Android does not auto-display a banner or play a
+                # ringtone. The Kotlin SmilersCallNotificationService intercepts them
+                # directly via handleIntent and handles the UI (dismiss ring, show
+                # missed-call, etc.).
+                is_silent_control = routing.get("type") in ("call-cancelled", "call-declined")
 
                 # iter-199: collapse Convex-trigger + caller-device call
                 # pushes into ONE ring per recipient (25 s window).
@@ -1860,7 +1939,7 @@ async def send_push(
                         # carry a notification block so they display normally.
                         # NOTE: apps force-stopped from Settings can't run JS, so
                         # those won't ring — an accepted Android platform limit.
-                        android_data_only=is_call_push,
+                        android_data_only=is_call_push or is_silent_control,
                     )
                     for t, ch in zip(tokens, resolved_channels)
                 ]
@@ -2108,9 +2187,9 @@ class NotifyEventBody(BaseModel):
     `convex_user_id` field captured at registration."""
 
     recipients: List[str]
-    event: str  # "message" | "call" | "missed-call"
-    title: str
-    message: str
+    event: str  # "message" | "call" | "missed-call" | "call-cancelled" | "call-declined"
+    title: str | None = None
+    message: str | None = None
     conversation_id: str | None = None
     call_id: str | None = None
     call_type: str | None = None  # "voice" | "video"
@@ -2127,7 +2206,7 @@ async def notify_event(body: NotifyEventBody):
         raise HTTPException(400, "recipients is required")
     if len(recipients) > 20:
         recipients = recipients[:20]
-    event = body.event if body.event in ("message", "call", "missed-call") else "message"
+    event = body.event if body.event in ("message", "call", "missed-call", "call-cancelled", "call-declined") else "message"
     title = (body.title or "").strip()[:120] or "Smilers"
     message = (body.message or "").strip()[:300] or (
         "Incoming call" if event == "call" else "New message"
@@ -2144,7 +2223,7 @@ async def notify_event(body: NotifyEventBody):
             params.append(f"type={body.call_type}")
         if params:
             action_url += "?" + "&".join(params)
-    elif event == "missed-call":
+    elif event in ("missed-call", "call-cancelled", "call-declined"):
         action_url = f"/chat/{conv}" if conv else "/notifications"
     else:
         action_url = f"/chat/{conv}" if conv else "/notifications"
@@ -2171,6 +2250,24 @@ async def notify_event(body: NotifyEventBody):
             data["displayName"] = display
     elif event == "missed-call":
         data["type"] = "missed-call"
+        if conv:
+            data["conversationId"] = conv
+    elif event == "call-cancelled":
+        # Caller hung up during ringing — tell the callee's device to cancel
+        # the ring notification immediately instead of waiting for its 35s
+        # timeout, then surface a missed call.
+        data["type"] = "call-cancelled"
+        if body.call_id:
+            data["callId"] = str(body.call_id)
+        if conv:
+            data["conversationId"] = conv
+    elif event == "call-declined":
+        # Callee tapped Decline (often from the notification tray via the
+        # native CallActionReceiver) — tell the CALLER's device to stop the
+        # outgoing-call UI / ringback immediately.
+        data["type"] = "call-declined"
+        if body.call_id:
+            data["callId"] = str(body.call_id)
         if conv:
             data["conversationId"] = conv
 
