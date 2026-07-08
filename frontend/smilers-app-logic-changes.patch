@@ -3655,10 +3655,10 @@ index 00000000..685d46eb
 +}
 diff --git a/frontend/src/lib/chatDrafts.ts b/frontend/src/lib/chatDrafts.ts
 new file mode 100644
-index 00000000..eea62c44
+index 00000000..6d1f9c08
 --- /dev/null
 +++ b/frontend/src/lib/chatDrafts.ts
-@@ -0,0 +1,116 @@
+@@ -0,0 +1,120 @@
 +/**
 + * chatDrafts — per-conversation composer draft persistence.
 + *
@@ -3675,7 +3675,6 @@ index 00000000..eea62c44
 + * resume", not "resume a mid-flight byte transfer".
 + */
 +import AsyncStorage from '@react-native-async-storage/async-storage';
-+import { readStoredJson, writeStoredJson } from './settingsStorage';
 +
 +export interface PendingImageDraft {
 +  uri: string;
@@ -3707,7 +3706,9 @@ index 00000000..eea62c44
 +export async function loadChatDraft(conversationId: string): Promise<ChatDraft | null> {
 +  if (!conversationId) return null;
 +  try {
-+    const draft = await readStoredJson(keyFor(conversationId), null);
++    const raw = await AsyncStorage.getItem(keyFor(conversationId));
++    if (!raw) return null;
++    const draft = JSON.parse(raw);
 +    return draft && typeof draft === 'object' ? (draft as ChatDraft) : null;
 +  } catch {
 +    return null;
@@ -3723,7 +3724,10 @@ index 00000000..eea62c44
 +    return;
 +  }
 +  try {
-+    await writeStoredJson(keyFor(conversationId), { ...draft, updatedAt: Date.now() });
++    await AsyncStorage.setItem(
++      keyFor(conversationId),
++      JSON.stringify({ ...draft, updatedAt: Date.now() }),
++    );
 +  } catch {
 +    /* best-effort */
 +  }

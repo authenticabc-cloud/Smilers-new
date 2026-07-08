@@ -213,17 +213,28 @@ export function CallScreenInner() {
   const pipPanResponder = useMemo(
     () =>
       PanResponder.create({
-        // Only claim the gesture once the finger actually moves, so a tap on
-        // the preview doesn't get swallowed.
-        onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 4 || Math.abs(g.dy) > 4,
+        // iter-340: claim the gesture at TOUCH START (capture) so neither the
+        // RTCView child nor the full-screen controls tap-catcher sibling can
+        // swallow it — the previous move-only claim never fired because a child
+        // Pressable grabbed the responder first, leaving the PiP un-draggable.
+        onStartShouldSetPanResponder: () => true,
+        onStartShouldSetPanResponderCapture: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponderCapture: () => true,
+        onPanResponderTerminationRequest: () => false,
         onPanResponderGrant: () => {
           pipPan.extractOffset();
         },
         onPanResponderMove: RNAnimated.event([null, { dx: pipPan.x, dy: pipPan.y }], {
           useNativeDriver: false,
         }),
-        onPanResponderRelease: () => {
+        onPanResponderRelease: (_e, g) => {
           pipPan.flattenOffset();
+          // A negligible move = a tap → route to double-tap-to-swap handler.
+          if (Math.abs(g.dx) <= 6 && Math.abs(g.dy) <= 6) {
+            handlePipTap();
+            return;
+          }
           const x = (pipPan.x as any)._value as number;
           const y = (pipPan.y as any)._value as number;
           const clampedX = Math.min(pipBounds.maxTx, Math.max(pipBounds.minTx, x));
@@ -238,7 +249,7 @@ export function CallScreenInner() {
           saveSelfViewPos({ tx: clampedX, ty: clampedY });
         },
       }),
-    [pipBounds, pipPan],
+    [pipBounds, pipPan, handlePipTap],
   );
   const { isAuthenticated } = useAuth();
   // Params now come from the callHost store (this component is rendered by
@@ -2664,32 +2675,27 @@ export function CallScreenInner() {
             testID="video-tap-catcher"
           />
           {/* Local picture-in-picture — draggable self-view. Double-tap swaps
-              it with the main feed. */}
+              it with the main feed. The PanResponder owns ALL touches (drag +
+              tap) so there is no child Pressable to steal the gesture. */}
           {selfViewURL ? (
             <RNAnimated.View
               style={[styles.pipWrap, { transform: pipPan.getTranslateTransform() }]}
               {...pipPanResponder.panHandlers}
               testID="call-self-view"
             >
-              <Pressable
-                style={StyleSheet.absoluteFill}
-                onPress={handlePipTap}
-                testID="call-self-view-tap"
-              >
-                {!pipSwapped && cameraOff ? (
-                  <View style={styles.popoutSelfOff}>
-                    <Feather name="video-off" size={18} color="rgba(255,255,255,0.7)" />
-                  </View>
-                ) : (
-                  <RTCViewImpl
-                    key={`self-${pipSwapped ? 'remote' : 'local'}-${remoteVideoGen}`}
-                    streamURL={selfViewURL}
-                    style={StyleSheet.absoluteFill}
-                    objectFit="cover"
-                    mirror={selfViewMirror}
-                  />
-                )}
-              </Pressable>
+              {!pipSwapped && cameraOff ? (
+                <View style={styles.popoutSelfOff}>
+                  <Feather name="video-off" size={18} color="rgba(255,255,255,0.7)" />
+                </View>
+              ) : (
+                <RTCViewImpl
+                  key={`self-${pipSwapped ? 'remote' : 'local'}-${remoteVideoGen}`}
+                  streamURL={selfViewURL}
+                  style={StyleSheet.absoluteFill}
+                  objectFit="cover"
+                  mirror={selfViewMirror}
+                />
+              )}
             </RNAnimated.View>
           ) : null}
           {/* Top overlay: name + duration (fades with controls) */}

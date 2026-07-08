@@ -5,6 +5,19 @@ Newest first. All changes are captured in `smilers-app-logic-changes.patch`
 `MERGE_FOR_ASHWINI.md`.
 
 ## 2026-07-08
+- **Chat draft NOT saving (real fix, iter-340):** `saveChatDraft`/`loadChatDraft`
+  were writing/reading through `settingsStorage` which uses **SecureStore** on
+  native — but SecureStore rejects keys containing colons, and the draft key is
+  `smilers:chat_draft:v1:<id>`, so every write threw and was swallowed (worked on
+  web via localStorage, silently failed on the APK). They now use **AsyncStorage**
+  directly, consistent with `clearChatDraft`/`loadAllChatDrafts`. This is why
+  drafts vanished on the device. File: `src/lib/chatDrafts.ts`.
+- **Self-view PiP now draggable (real fix, iter-340):** the double-tap `Pressable`
+  added in iter-338 was stealing the touch responder, blocking the drag. The
+  `PanResponder` now claims the gesture at touch-start (capture) and detects
+  double-tap inside the release handler instead of a child Pressable. Drag +
+  double-tap-to-swap + position persistence all work now. Native only. File:
+  `app/call/[conversationId].tsx` (see `CALL_SELFVIEW_DRAG_FOR_ASHWINI.md`).
 - **Chat draft — background-flush hardening (iter-340):** the composer draft is
   now also written synchronously when the app goes to `background`/`inactive`
   (via `AppState`), not only on unmount/debounce. This closes the gap where a

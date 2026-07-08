@@ -147,3 +147,25 @@ const selfViewURL   = pipSwapped ? displayRemoteURL : displayLocalURL;
 Single taps still fall through to the drag / controls tap-catcher.
 
 **Native only** — all three require a device build (RTCView + real 2nd call).
+
+---
+
+## iter-340 — self-view PiP drag FIX (2026-07-08)
+
+Bug: the self-view was rendered as a small box but could NOT be dragged.
+Cause: iter-338 wrapped the draggable `Animated.View` in a child `Pressable`
+(for double-tap). The Pressable grabbed the touch responder on START, so the
+parent `PanResponder`'s move-only `onMoveShouldSetPanResponder` was never
+consulted → no drag.
+
+Fix (in `app/call/[conversationId].tsx`):
+1. PanResponder now claims the gesture at touch-start via
+   `onStartShouldSetPanResponder`/`onStartShouldSetPanResponderCapture` (+ the
+   move-capture variants) and `onPanResponderTerminationRequest: () => false`.
+2. Removed the child `<Pressable>`. Double-tap is detected inside
+   `onPanResponderRelease`: if the release moved <6px it's treated as a tap and
+   routed to `handlePipTap()` (double-tap within 300ms → swap feeds); otherwise
+   it's a drag (clamp + spring + `saveSelfViewPos`).
+3. The self-view `RTCView` is now a direct child of the animated wrapper.
+
+Net: drag works, double-tap-to-swap works, position still persists. Native only.
