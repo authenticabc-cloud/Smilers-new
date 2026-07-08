@@ -26,7 +26,7 @@ import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { getResolvedDisplayName, getSavedContactRecord } from '../../src/lib/displayName';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
-import { recordDiagnostic } from '../../src/lib/diagnostics';
+import { recordDiagnostic, flushDiagnostics } from '../../src/lib/diagnostics';
 import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
 
 
@@ -58,6 +58,10 @@ const DEFAULT_DURATION_MS = 5000;
 const MAX_VIDEO_DURATION_MS = 30000;
 // iter-317: WhatsApp-style quick status reactions (sent as a status-reply DM).
 const STATUS_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+
+// TEMP DIAG (iter-339): one-shot flag so we log the viewer-entry shape only
+// once per app session (not on every render). Remove with the diag block.
+let viewerShapeLogged = false;
 
 // iter-267: the web status contract exposes type under `type` OR `kind`, text
 // under `content` OR `text`, and colors under `backgroundColor`/`textColor` OR
@@ -517,6 +521,21 @@ function StatusViewScreenInner() {
         current.viewsTotal ??
         (Array.isArray(current.views) ? current.views.length : undefined),
     ) || viewerList.length || 0;
+
+  // TEMP DIAG (iter-339): dump the raw shape of the FIRST viewer entry + the
+  // status object keys so we can see which field carries the view timestamp.
+  // Guarded by a module flag (NOT a hook — this runs after early returns).
+  if (isMine && showViewers && viewerList.length > 0 && !viewerShapeLogged) {
+    viewerShapeLogged = true;
+    try {
+      recordDiagnostic({
+        tag: 'INFO',
+        source: 'status-view/viewer-shape',
+        message: `entry=${JSON.stringify(viewerList[0]).slice(0, 300)} | statusKeys=${Object.keys(current || {}).join(',')}`,
+      });
+      void flushDiagnostics();
+    } catch {}
+  }
 
   return (
     <View
