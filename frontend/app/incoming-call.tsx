@@ -174,17 +174,23 @@ export default function IncomingCallScreen() {
       if (notifeeCallId) declinedMap.set(`callId:${notifeeCallId}`, Date.now());
     } catch {}
     cancelNotifee();
-    if (room) endTwilioCall(room).catch(() => {});
-    if (resolvedConvexCallId) {
-      try { void declineCall({ callId: resolvedConvexCallId }); } catch {}
-    }
+    // sml-007: use resolvedRoom (falls back to the Convex lookup), not the
+    // raw `room` param — the relay-FCM race documented above for goToCall
+    // applies here too. Using the unresolved `room` meant a raw room=''
+    // silently skipped endTwilioCall entirely, so the Twilio room was never
+    // completed and the caller sat on the ring screen for the full 35s
+    // no-answer timeout instead of ending immediately.
     recordDiagnostic({
       tag: 'TWILIO-CALL',
       source: 'incoming-screen',
-      message: `decline room=${room} convexId=${resolvedConvexCallId || 'none'}`,
+      message: `decline room=${room || '(empty)'} resolvedRoom=${resolvedRoom || '(empty)'} convexId=${resolvedConvexCallId || 'none'}`,
     });
+    if (resolvedRoom) endTwilioCall(resolvedRoom).catch(() => {});
+    if (resolvedConvexCallId) {
+      try { void declineCall({ callId: resolvedConvexCallId }); } catch {}
+    }
     router.replace('/');
-  }, [room, resolvedConvexCallId, declineCall, router, cancelNotifee, conversationId, notifeeCallId]);
+  }, [room, resolvedRoom, resolvedConvexCallId, declineCall, router, cancelNotifee, conversationId, notifeeCallId]);
 
   // Explicit accept from the notification → join the moment we know our id.
   useEffect(() => {
