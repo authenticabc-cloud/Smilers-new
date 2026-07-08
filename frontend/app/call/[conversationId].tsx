@@ -2,8 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  Animated as RNAnimated,
   AppState,
   BackHandler,
+  PanResponder,
   Platform,
   Pressable,
   StyleSheet,
@@ -14,13 +16,18 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Feather, Ionicons, MaterialIcons } from '@expo/vector-icons';
+import { Feather, Ionicons, MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery } from 'convex/react';
 import { Camera } from 'expo-camera';
 import { setAudioModeAsync } from 'expo-audio';
 import CallBackground from '../../src/components/CallBackground';
+import InviteContactPicker from '../../src/components/InviteContactPicker';
+import { stashCallHandoff } from '../../src/lib/call/handoff';
 import { InCallAudio } from '../../src/lib/webrtc/inCallManager';
+import * as Haptics from 'expo-haptics';
+import { useKeepAwake } from 'expo-keep-awake';
+import { callActivity } from '../../src/lib/callActivity';
 import Animated, {
   Easing,
   cancelAnimation,
@@ -47,6 +54,10 @@ import { Colors, FontSize, FontWeight, Shadow, Spacing } from '../../src/theme';
 import { useRingtonePlayer } from '../../src/lib/ringtone/useRingtonePlayer';
 import { setPipParams, enterPip, isPipSupported, useIsInPip } from '../../src/lib/pip';
 import { callHost, useCallHost } from '../../src/lib/call/callHost';
+import { setActiveCall } from '../../src/lib/call/activeCallRegistry';
+import { useSecondaryCall, SecondaryCallInfo } from '../../src/lib/call/useSecondaryCall';
+import { loadSelfViewPos, saveSelfViewPos } from '../../src/lib/call/selfViewPosition';
+import CallWaitingOverlay from '../../src/components/call/CallWaitingOverlay';
 
 type CallType = 'voice' | 'video';
 type AudioOutputRoute = 'earpiece' | 'speaker' | 'bluetooth';
@@ -120,10 +131,15 @@ export default function CallScreen() {
       if (typeof v === 'string') flat[key] = v;
     });
     callHost.start(flat);
-    // Pop this empty shim route; if there's nothing to pop (cold start from a
-    // push), land on the chats tab so the overlay has a screen behind it.
-    if (router.canGoBack()) router.back();
-    else router.replace('/(tabs)/chats' as any);
+    // Defer popping the shim until AFTER callHost's state update propagates to
+    // <CallHost/> (which renders the live call). Popping synchronously in the
+    // same turn can make CallHost briefly observe `params: null` and unmount /
+    // remount CallScreenInner, dropping taps on the Answer button (the
+    // intermittent "Answer not responding" report).
+    requestAnimationFrame(() => {
+      if (router.canGoBack()) router.back();
+      else router.replace('/(tabs)/chats' as any);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
@@ -133,7 +149,97 @@ export default function CallScreen() {
 
 export function CallScreenInner() {
   const router = useRouter();
-  const { height: windowHeight } = useWindowDimensions();
+  // iter-296: keep the screen awake for the whole call (belt-and-suspenders
+  // alongside InCallManager.setKeepScreenOn — on some Android devices the
+  // native wake-lock alone wasn't holding, so the device kept auto-locking
+  // mid-call). This Activity-level FLAG_KEEP_SCREEN_ON releases on unmount.
+  useKeepAwake();
+  // iter-297: suppress the "lock when leaving" PIN re-lock while a call is on
+  // screen (WebRTC's frequent background/active flips were re-locking the app).
+  useEffect(() => callActivity.enter(), []);
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+
+  // ── Draggable self-view (video PiP) ───────────────────────────────────────
+  // The local camera preview can be dragged anywhere on screen and snaps to
+  // stay fully visible. iter-338: the final position is PERSISTED to
+  // AsyncStorage and restored on the next call. Double-tapping the preview
+  // SWAPS the local and remote feeds (self-view ↔ main video). Anchored
+  // bottom-right by styles.pipWrap; we apply a translate on top of that.
+  const PIP_W = 96;
+  const PIP_H = 130;
+  const PIP_RIGHT = Spacing.base;
+  const PIP_BOTTOM = 168;
+  const PIP_EDGE = 8; // keep this far from screen edges
+  const PIP_TOP_SAFE = 54; // clear the status bar / notch
+  const pipPan = useRef(new RNAnimated.ValueXY({ x: 0, y: 0 })).current;
+  const pipPosRestoredRef = useRef(false);
+  // iter-338: double-tap-to-swap state. When true the MAIN video area shows the
+  // local camera and the self-view PiP shows the remote feed.
+  const [pipSwapped, setPipSwapped] = useState(false);
+  const lastPipTapRef = useRef(0);
+  const pipBounds = useMemo(() => {
+    const defaultLeft = windowWidth - PIP_RIGHT - PIP_W;
+    const defaultTop = windowHeight - PIP_BOTTOM - PIP_H;
+    return {
+      minTx: PIP_EDGE - defaultLeft,
+      maxTx: windowWidth - PIP_W - PIP_EDGE - defaultLeft,
+      minTy: PIP_TOP_SAFE - defaultTop,
+      maxTy: windowHeight - PIP_H - PIP_EDGE - defaultTop,
+    };
+  }, [windowWidth, windowHeight]);
+  // Restore the saved self-view position once bounds are known (re-clamped to
+  // the current screen so an old position never lands off-screen).
+  useEffect(() => {
+    if (pipPosRestoredRef.current) return;
+    pipPosRestoredRef.current = true;
+    void loadSelfViewPos().then((saved) => {
+      if (!saved) return;
+      const x = Math.min(pipBounds.maxTx, Math.max(pipBounds.minTx, saved.tx));
+      const y = Math.min(pipBounds.maxTy, Math.max(pipBounds.minTy, saved.ty));
+      pipPan.setValue({ x, y });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pipBounds]);
+  // Double-tap the self-view to swap the local/remote feeds.
+  const handlePipTap = useCallback(() => {
+    const now = Date.now();
+    if (now - lastPipTapRef.current < 300) {
+      lastPipTapRef.current = 0;
+      setPipSwapped((prev) => !prev);
+    } else {
+      lastPipTapRef.current = now;
+    }
+  }, []);
+  const pipPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        // Only claim the gesture once the finger actually moves, so a tap on
+        // the preview doesn't get swallowed.
+        onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 4 || Math.abs(g.dy) > 4,
+        onPanResponderGrant: () => {
+          pipPan.extractOffset();
+        },
+        onPanResponderMove: RNAnimated.event([null, { dx: pipPan.x, dy: pipPan.y }], {
+          useNativeDriver: false,
+        }),
+        onPanResponderRelease: () => {
+          pipPan.flattenOffset();
+          const x = (pipPan.x as any)._value as number;
+          const y = (pipPan.y as any)._value as number;
+          const clampedX = Math.min(pipBounds.maxTx, Math.max(pipBounds.minTx, x));
+          const clampedY = Math.min(pipBounds.maxTy, Math.max(pipBounds.minTy, y));
+          RNAnimated.spring(pipPan, {
+            toValue: { x: clampedX, y: clampedY },
+            useNativeDriver: false,
+            friction: 7,
+            tension: 60,
+          }).start();
+          // Persist so the next call restores this spot.
+          saveSelfViewPos({ tx: clampedX, ty: clampedY });
+        },
+      }),
+    [pipBounds, pipPan],
+  );
   const { isAuthenticated } = useAuth();
   // Params now come from the callHost store (this component is rendered by
   // <CallHost/> at the app root), not from route params — see the shim above.
@@ -149,6 +255,7 @@ export function CallScreenInner() {
     role: rawRoleParam,
     convId: rawConvIdParam,
     peerUserId: rawPeerUserIdParam,
+    answer: rawAnswerParam,
   } = (hostParams || {}) as Record<string, string | undefined>;
   const conversationId = Array.isArray(rawConversationId) ? rawConversationId[0] : rawConversationId;
   const typeParam = Array.isArray(rawTypeParam) ? rawTypeParam[0] : rawTypeParam;
@@ -257,6 +364,7 @@ export function CallScreenInner() {
   // hangup. See useEngagementTracker for thresholds (must connect).
   const engagement = useEngagementTracker();
   const declineCall = useMutation(api.calls.declineCall);
+  const inviteToCall = useMutation((api as any).callInvites.invite);
   const requestVideoUpgrade = useMutation((api as any).calls.requestVideoUpgrade);
   // Backend-confirmed contract (June 2025): `api.calls.heartbeat({ callId })`
   // is wired up to a 60s cron that auto-`ends` calls without a recent ping.
@@ -364,6 +472,9 @@ export function CallScreenInner() {
   }, [flushScreenSignalQueue]);
 
   const [callId, setCallId] = useState<string | null>(null);
+  // Optimistic feedback for the incoming-call Answer button so a tap always
+  // registers visibly even before the answerCall mutation / status flip lands.
+  const [answering, setAnswering] = useState(false);
   const [callType, setCallType] = useState<CallType>(requestedType);
   const [localStreamURL, setLocalStreamURL] = useState<string | null>(null);
   const [remoteStreamURL, setRemoteStreamURL] = useState<string | null>(null);
@@ -405,10 +516,39 @@ export function CallScreenInner() {
   const [callDurationSec, setCallDurationSec] = useState(0);
   const [audioModeReady, setAudioModeReady] = useState(false);
   const [screenReady, setScreenReady] = useState(Platform.OS !== 'android');
+
+  // ── Immersive video: auto-hide call controls ───────────────────────────
+  // During a connected video call the top info bar + bottom controls fade out
+  // after a few seconds of no interaction, and reappear on a screen tap.
+  const CONTROLS_AUTO_HIDE_MS = 4000;
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const controlsOpacity = useRef(new RNAnimated.Value(1)).current;
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearHideTimer = useCallback(() => {
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+  }, []);
+  const fadeControls = useCallback(
+    (toVisible: boolean) => {
+      setControlsVisible(toVisible);
+      RNAnimated.timing(controlsOpacity, {
+        toValue: toVisible ? 1 : 0,
+        duration: 220,
+        useNativeDriver: true,
+      }).start();
+    },
+    [controlsOpacity],
+  );
+
   const [RTCViewImpl, setRTCViewImpl] = useState<any>(null);
   const [CallSessionCtor, setCallSessionCtor] = useState<any>(null);
 
   const sessionRef = useRef<any>(null);
+  // The resolved remote 1:1 partner id — captured for seamless conference
+  // handoff (we hand this peer's live connection over to the mesh).
+  const partnerUserIdRef = useRef<string | null>(null);
   const initStartedRef = useRef(false);
   // iter-189 screen-share signaling queue. The sharer enters this screen
   // IMMEDIATELY after `requestScreenShare` — before the recipient accepts —
@@ -614,6 +754,25 @@ export function CallScreenInner() {
   );
   const isOutgoingRinging = isCaller && activeCall?.status === 'ringing';
   const isActive = activeCall?.status === 'active';
+
+  // Latch the incoming state so the Answer/Decline controls don't vanish for a
+  // frame if `isIncoming` momentarily flickers false (e.g. `me`/`activeCall`
+  // reactive queries resolving out of order). The latch clears once the call is
+  // answered, ended, declined, or gone — so in-call/normal controls take over.
+  const [incomingLatched, setIncomingLatched] = useState(false);
+  useEffect(() => {
+    if (isIncoming) {
+      setIncomingLatched(true);
+    } else if (
+      !activeCall ||
+      activeCall.status === 'active' ||
+      activeCall.status === 'ended' ||
+      activeCall.status === 'declined'
+    ) {
+      setIncomingLatched(false);
+    }
+  }, [isIncoming, activeCall]);
+  const isIncomingControls = isIncoming || (incomingLatched && !isActive);
 
   // iter-187: keep the session-suppression ref in sync with the role.
   // While an incoming call rings we hold the native audio session back so
@@ -860,6 +1019,7 @@ export function CallScreenInner() {
         initStartedRef.current = false;
         return;
       }
+      partnerUserIdRef.current = remoteUserId;
 
       // Request permissions
       try {
@@ -1401,7 +1561,7 @@ export function CallScreenInner() {
   }, [activeCall, callId, declineCall, endCall, router, callDurationSec, callType, engagement, isCaller, fetchedOtherUser, conversation, me, conversationId]);
 
   const handleDecline = useCallback(async () => {
-    const id = callId;
+    const id = callId || (activeCall as any)?._id || null;
     sessionRef.current?.close();
     sessionRef.current = null;
     initStartedRef.current = false;
@@ -1417,20 +1577,333 @@ export function CallScreenInner() {
       // Cleanup handled server-side by `expireDeadCalls` cron — see comment above.
     }
     callHost.end();
-  }, [callId, declineCall, router]);
+  }, [callId, activeCall, declineCall, router]);
 
   const handleAnswer = useCallback(async () => {
-    if (!callId) return;
-    callDebug.push('CALL', `handleAnswer → answerCall(${String(callId).slice(0, 8)}…)`);
-    try {
-      await answerCall({ callId });
-      callDebug.push('CALL', 'answerCall mutation OK');
-    } catch (errorValue: any) {
-      callDebug.push('ERR', `answerCall failed: ${errorValue?.message}`);
+    // Race-proofing: `callId` state can lag one render behind the reactive
+    // `activeCall` record (it's copied over in a follow-up effect). Falling
+    // back to `activeCall._id` means the very first tap always has an id, so
+    // the button never silently no-ops ("Answer not responding" reports).
+    const id = callId || (activeCall as any)?._id || null;
+    if (!id) {
+      callDebug.push('ERR', 'handleAnswer: no callId yet (activeCall not loaded)');
+      return;
     }
-  }, [answerCall, callId]);
+    if (answering) return; // ignore double-taps
+    setAnswering(true); // immediate visual feedback while the mutation resolves
+    callDebug.push('CALL', `handleAnswer → answerCall(${String(id).slice(0, 8)}…)`);
+    try {
+      await answerCall({ callId: id });
+      callDebug.push('CALL', 'answerCall mutation OK');
+      // status → 'active' arrives via the reactive query; `answering` is reset
+      // by the isActive effect below (or on error here).
+    } catch (errorValue: any) {
+      setAnswering(false);
+      callDebug.push('ERR', `answerCall failed: ${errorValue?.message}`);
+      Alert.alert(
+        'Could not answer',
+        'We couldn\u2019t connect this call. It may have already ended. Please try again.',
+      );
+    }
+  }, [answerCall, callId, activeCall, answering]);
+
+  // Clear the optimistic "Connecting…" state once the call is live or gone.
+  useEffect(() => {
+    if (answering && (isActive || !activeCall || activeCall?.status !== 'ringing')) {
+      setAnswering(false);
+    }
+  }, [answering, isActive, activeCall]);
+
+  // ─── iter-325 CALL WAITING ───────────────────────────────────────────────
+  // Register THIS screen as the "active call" (once connected or dialing out)
+  // so the global incoming-call listener defers to us instead of hijacking the
+  // ongoing call when a SECOND call rings. Cleared on unmount.
+  useEffect(() => {
+    if ((isActive || isOutgoingRinging) && (callId || conversationId)) {
+      setActiveCall({ callId: callId || null, conversationId: conversationId ? String(conversationId) : null });
+    }
+    return undefined;
+  }, [isActive, isOutgoingRinging, callId, conversationId]);
+  useEffect(() => {
+    return () => setActiveCall(null);
+  }, []);
+
+  // Subscribe to the same global incoming-call query the listener uses, so we
+  // can surface an in-call banner for a genuine SECOND call.
+  const waitingRecord = useQuery(
+    api.calls.getIncomingCall,
+    canRunCallQueries ? {} : 'skip',
+  ) as any;
+  const [dismissedWaitingIds, setDismissedWaitingIds] = useState<string[]>([]);
+  const waitingCall = useMemo(() => {
+    const rec = waitingRecord;
+    if (!rec || !rec._id || rec.status !== 'ringing') return null;
+    // Ignore my own outgoing call record.
+    const myId = me?._id ? String(me._id) : '';
+    const callerId = String(rec?.callerId || rec?.callerIdentity || rec?.caller?._id || '');
+    if (myId && callerId && myId === callerId) return null;
+    // Ignore the call THIS screen is already handling.
+    if (callId && String(rec._id) === String(callId)) return null;
+    if (conversationId && String(rec.conversationId) === String(conversationId)) return null;
+    // Only surface while we actually have an ongoing call.
+    if (!(isActive || isOutgoingRinging)) return null;
+    // Ignore screen-share "calls".
+    const t = String(rec?.type || rec?.callType || rec?.kind || rec?.mediaType || '').toLowerCase();
+    if (['screen', 'screenshare', 'screen-share', 'screen_share', 'sharing'].includes(t)) return null;
+    if (rec?.isScreenShare || rec?.screenShareSessionId || rec?.screenSharing) return null;
+    if (dismissedWaitingIds.includes(String(rec._id))) return null;
+    return rec;
+  }, [waitingRecord, me, callId, conversationId, isActive, isOutgoingRinging, dismissedWaitingIds]);
+
+  const waitingCallerName = useMemo(() => {
+    const rec = waitingCall;
+    if (!rec) return '';
+    return String(
+      rec?.callerName || rec?.caller?.displayName || rec?.caller?.name || rec?.caller?.fullName || '',
+    ).trim();
+  }, [waitingCall]);
+  const waitingIsVideo = useMemo(() => {
+    const rec = waitingCall;
+    if (!rec) return false;
+    return (
+      rec?.isVideo === true ||
+      String(rec?.type || rec?.callType || '').toLowerCase() === 'video'
+    );
+  }, [waitingCall]);
+
+  // iter-329: WhatsApp-style ALERT when a second call arrives during a call —
+  // a distinct double-beep (over the live call audio) + a double haptic buzz,
+  // fired ONCE per new waiting call so the user notices without looking.
+  const alertedWaitingIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const id = waitingCall?._id ? String(waitingCall._id) : null;
+    if (!id) {
+      alertedWaitingIdRef.current = null;
+      return;
+    }
+    if (alertedWaitingIdRef.current === id) return;
+    alertedWaitingIdRef.current = id;
+    try {
+      InCallAudio.playCallWaitingTone();
+    } catch {}
+    try {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+      setTimeout(() => {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+      }, 500);
+    } catch {}
+    callDebug.push('CALL', `[call-waiting] alert tone+haptic for ${id.slice(0, 8)}…`);
+  }, [waitingCall]);
+
+  const declineWaitingCall = useCallback(async () => {
+    const rec = waitingCall;
+    if (!rec?._id) return;
+    const id = String(rec._id);
+    setDismissedWaitingIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    try {
+      await declineCall({ callId: id });
+      callDebug.push('CALL', `[call-waiting] declined ${id.slice(0, 8)}…`);
+    } catch (e: any) {
+      callDebug.push('ERR', `[call-waiting] decline failed: ${String(e?.message || e)}`);
+    }
+  }, [waitingCall, declineCall]);
+
+  const acceptWaitingCall = useCallback(async () => {
+    const rec = waitingCall;
+    if (!rec?.conversationId) return;
+    const targetConv = String(rec.conversationId);
+    const typeQs = `type=${waitingIsVideo ? 'video' : 'voice'}`;
+    const nameQs = waitingCallerName ? `&displayName=${encodeURIComponent(waitingCallerName)}` : '';
+    callDebug.push('CALL', `[call-waiting] end current → answer ${targetConv.slice(0, 8)}…`);
+    // End the current call, then route to the incoming call (auto-answers via
+    // the ?answer=1 flag once the incoming screen mounts).
+    try {
+      await handleHangup();
+    } catch {}
+    setActiveCall(null);
+    setTimeout(() => {
+      try {
+        router.push(`/call/${targetConv}?${typeQs}${nameQs}&answer=1` as any);
+      } catch (e: any) {
+        callDebug.push('ERR', `[call-waiting] route failed: ${String(e?.message || e)}`);
+      }
+    }, 250);
+  }, [waitingCall, waitingIsVideo, waitingCallerName, handleHangup, router]);
+
+  // ── Phase 2: true media HOLD via a second concurrent WebRTC session ──────
+  const [heldSide, setHeldSide] = useState<'none' | 'primary' | 'secondary'>('none');
+  const [secondaryInfo, setSecondaryInfo] = useState<SecondaryCallInfo | null>(null);
+  const [primaryEndedPromoted, setPrimaryEndedPromoted] = useState(false);
+  const setPrimaryHeld = useCallback(
+    (held: boolean) => {
+      const s = sessionRef.current;
+      if (!s) return;
+      try {
+        s.setMuted(held);
+        if (callType === 'video') (s as any).setCameraOff?.(held);
+        const remote: any = (s as any).remoteStream;
+        remote?.getTracks?.().forEach((t: any) => {
+          t.enabled = !held;
+        });
+      } catch {}
+    },
+    [callType],
+  );
+
+  const secondary = useSecondaryCall({
+    active: !!secondaryInfo,
+    call: secondaryInfo,
+    isAuthenticated,
+  });
+
+  // iter-328: OPTIONAL, NON-GATING "On hold" presence flag. When we hold a
+  // call we best-effort write `calls.setHold({ callId, held })` so the OTHER
+  // party can render an "On hold" indicator. It NEVER gates media — if the
+  // mutation doesn't exist yet on the backend (web agent hasn't shipped it) or
+  // the write fails, hold still works exactly the same. Reading `activeCall.held`
+  // lets US show an indicator when the remote party has put US on hold.
+  const setHoldMutation = useMutation((api as any).calls?.setHold);
+  const writeHoldFlag = useCallback(
+    (targetCallId: string | null, held: boolean) => {
+      if (!targetCallId || !setHoldMutation) return;
+      try {
+        void Promise.resolve(setHoldMutation({ callId: targetCallId, held })).catch(() => {});
+      } catch {
+        /* non-gating — ignore */
+      }
+    },
+    [setHoldMutation],
+  );
+  const remoteHeldByOther = useMemo(() => {
+    const held: any = (activeCall as any)?.held;
+    if (!held) return false;
+    const byId = String(held?.by || held?.userId || '');
+    const myId = me?._id ? String(me._id) : '';
+    return !!byId && byId !== myId;
+  }, [activeCall, me]);
+
+  const buildSecondaryInfo = useCallback((): SecondaryCallInfo | null => {
+    const rec = waitingCall;
+    if (!rec?._id) return null;
+    return {
+      callId: String(rec._id),
+      remoteUserId: String(rec?.callerId || rec?.callerIdentity || rec?.caller?._id || ''),
+      callType: waitingIsVideo ? 'video' : 'voice',
+    };
+  }, [waitingCall, waitingIsVideo]);
+
+  const holdCurrentAndAccept = useCallback(() => {
+    const info = buildSecondaryInfo();
+    if (!info) return;
+    setDismissedWaitingIds((prev) => (prev.includes(info.callId) ? prev : [...prev, info.callId]));
+    setPrimaryHeld(true);
+    setHeldSide('primary'); // primary held, secondary is foreground
+    setSecondaryInfo(info);
+    callDebug.push('CALL', `[call-waiting] hold current → accept ${info.callId.slice(0, 8)}…`);
+  }, [buildSecondaryInfo, setPrimaryHeld]);
+
+  const holdIncoming = useCallback(() => {
+    const info = buildSecondaryInfo();
+    if (!info) return;
+    setDismissedWaitingIds((prev) => (prev.includes(info.callId) ? prev : [...prev, info.callId]));
+    setHeldSide('secondary'); // primary stays foreground, secondary held
+    setSecondaryInfo(info);
+    callDebug.push('CALL', `[call-waiting] answer+hold incoming ${info.callId.slice(0, 8)}…`);
+  }, [buildSecondaryInfo]);
+
+  // Apply the hold state to whichever side is held (re-applies once the
+  // secondary session connects).
+  useEffect(() => {
+    if (!secondaryInfo) return;
+    setPrimaryHeld(heldSide === 'primary');
+    secondary.setHeld(heldSide === 'secondary');
+    // Best-effort presence flag so the other party can show "On hold".
+    writeHoldFlag(callId, heldSide === 'primary');
+    writeHoldFlag(secondaryInfo.callId, heldSide === 'secondary');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [heldSide, secondaryInfo, secondary.connected]);
+
+  const swapCalls = useCallback(() => {
+    if (!secondaryInfo) return;
+    setHeldSide((prev) => (prev === 'primary' ? 'secondary' : 'primary'));
+  }, [secondaryInfo]);
+
+  const endSecondaryCall = useCallback(() => {
+    secondary.teardown({ endOnServer: true });
+    setSecondaryInfo(null);
+    setHeldSide('none');
+    setPrimaryHeld(false); // resume primary if it was held
+  }, [secondary, setPrimaryHeld]);
+
+  // When the FOREGROUND (primary) call ends while a secondary exists, promote
+  // the secondary: keep the screen alive, un-hold it, and show it foreground.
+  useEffect(() => {
+    if (!secondaryInfo) return;
+    if (activeCall && (activeCall.status === 'ended' || activeCall.status === 'declined')) {
+      setPrimaryEndedPromoted(true);
+      setHeldSide('none');
+      secondary.setHeld(false);
+      callDebug.push('CALL', '[call-waiting] primary ended → promoting held call');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCall?.status, secondaryInfo]);
+
+  // iter-338: which call is currently the FOREGROUND (visible) one? After the
+  // user Holds the primary call and Accepts the incoming one (heldSide ===
+  // 'primary'), or after the primary call ends and the held call is promoted,
+  // the SECONDARY call owns the screen. All foreground video must then route
+  // through the secondary session's streams / call type — otherwise the user
+  // hears audio but sees no video (the bug reported by the user).
+  const foregroundIsSecondary =
+    !!secondaryInfo && (heldSide === 'primary' || primaryEndedPromoted);
+  // The remote stream shown in the MAIN video area: the secondary call when it
+  // is the foreground call (primary held) or after the primary call ended.
+  const displayRemoteURL = foregroundIsSecondary
+    ? secondary.remoteStreamURL || remoteStreamURL
+    : remoteStreamURL;
+  // The self-view stream: secondary's local camera when it is foreground.
+  const displayLocalURL = foregroundIsSecondary
+    ? secondary.localStreamURL || localStreamURL
+    : localStreamURL;
+  // The foreground call's TYPE (voice/video) and active state — used to gate the
+  // video surface so it reflects the accepted incoming call, not the held one.
+  const foregroundCallType = foregroundIsSecondary
+    ? secondaryInfo?.callType || callType
+    : callType;
+  const foregroundActive = foregroundIsSecondary
+    ? secondary.connected || isActive
+    : isActive;
+  // iter-338: double-tap-to-swap. `pipSwapped` flips which feed occupies the
+  // MAIN surface vs the small self-view PiP. When swapped the local camera goes
+  // full-screen (mirrored) and the remote feed shrinks into the PiP.
+  const mainVideoURL = pipSwapped ? displayLocalURL : displayRemoteURL;
+  const mainVideoMirror = pipSwapped; // local is mirrored, remote is not
+  const selfViewURL = pipSwapped ? displayRemoteURL : displayLocalURL;
+  const selfViewMirror = !pipSwapped;
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // Auto-answer when arriving via the call-waiting "End & Accept" flow
+  // (?answer=1). Fires once, only for an incoming ringing call.
+  const answerParam = Array.isArray(rawAnswerParam) ? rawAnswerParam[0] : rawAnswerParam;
+  const autoAnsweredRef = useRef(false);
+  useEffect(() => {
+    if (autoAnsweredRef.current) return;
+    if (String(answerParam || '') !== '1') return;
+    if (!isIncoming) return;
+    const id = callId || (activeCall as any)?._id || null;
+    if (!id) return;
+    autoAnsweredRef.current = true;
+    callDebug.push('CALL', '[call-waiting] auto-answer via ?answer=1');
+    void handleAnswer();
+  }, [answerParam, isIncoming, callId, activeCall, handleAnswer]);
+  // ─────────────────────────────────────────────────────────────────────────
 
   // If remote ends the call, also tear down locally
+  const wasLiveRef = useRef(false);
+  useEffect(() => {
+    if (isActive) wasLiveRef.current = true;
+  }, [isActive]);
+
   useEffect(() => {
     if (isIncoming) {
       incomingCallSeenRef.current = true;
@@ -1464,7 +1937,26 @@ export function CallScreenInner() {
       const timeoutId = setTimeout(() => callHost.end(), 700);
       return () => clearTimeout(timeoutId);
     }
-  }, [activeCall, isActive, isIncoming, router]);
+
+    // Case 2 (iter-308): the call was LIVE and the active-call doc has now
+    // DISAPPEARED (getActiveCall → null). The backend clears/ends the call the
+    // instant the OTHER participant hangs up, so the survivor never sees
+    // status='ended' — just an empty result. Previously mobile had no handler
+    // for this, stranding the survivor on the call screen until they also hung
+    // up. This is the reported bug. Debounce ~2.5s so a brief query blip during
+    // a network reconnect (ICE restart) can't kill a call that's still live.
+    if (Platform.OS !== 'web' && wasLiveRef.current && !activeCallLoading && !activeCall) {
+      const timeoutId = setTimeout(() => {
+        if (!activeCallLoading && !activeCall && wasLiveRef.current) {
+          callDebug.push('CALL', 'active-call doc cleared while live → remote hung up, exiting');
+          teardownLocalSession();
+          wasLiveRef.current = false;
+          callHost.end();
+        }
+      }, 2500);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [activeCall, activeCallLoading, isActive, isIncoming]);
 
   useEffect(() => {
     if (!activeCall || isActive || !incomingCallSeenRef.current || incomingCallAnsweredRef.current) {
@@ -1781,16 +2273,180 @@ export function CallScreenInner() {
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   }, [callDurationSec]);
 
+  // ── Ad-hoc multiparty: invite someone into THIS 1:1 call. Calling
+  // `callInvites.invite` rings them and flips `calls.isConference = true`,
+  // which both parties' screens observe and then switch to the mesh engine
+  // (we navigate to the reusable /group-call mesh host with the same callId).
+  const [invitePickerVisible, setInvitePickerVisible] = useState(false);
+  const upgradedToMeshRef = useRef(false);
+
   const handleAddParticipant = useCallback(() => {
-    // Group calling is its own flow on Smilers (start a call from a group
-    // conversation → /group-call). The 1:1 WebRTC peer connection here can't
-    // host 3+ parties, so mid-call escalation isn't offered.
     setAudioOutputMenuVisible(false);
-    Alert.alert(
-      'Group calls',
-      'To call several people, start the call from a group chat. Adding someone to a 1:1 call isn’t supported.',
-    );
-  }, []);
+    // Match web: "Add" is allowed while the call is LIVE (ringing or active),
+    // not strictly connected. The backend also rejects invites on
+    // ended/declined calls (BAD_REQUEST "Call has ended"), which we surface
+    // gracefully in handleInvitePerson.
+    const isCallLive = activeCall?.status === 'ringing' || activeCall?.status === 'active';
+    if (!callId || !isCallLive) {
+      Alert.alert('Add people', 'You can add people while the call is ringing or connected.');
+      return;
+    }
+    setInvitePickerVisible(true);
+  }, [callId, activeCall?.status]);
+
+  // Reactive watch: as soon as ANY invite exists for this call, it's a
+  // conference — used to move BOTH original parties to the mesh host even if
+  // `getActiveCall` doesn't echo `isConference` back promptly.
+  const { data: callInvitesData, error: callInvitesError } = useReactiveSafeConvexQuery<any[]>(
+    (api as any).callInvites.getCallInvites,
+    callId ? { callId } : undefined,
+    [],
+    !!callId,
+  );
+
+  // iter-236 (RELIABLE TRIGGER): watch the conference roster for this call.
+  // The initiator calls `conference.joinConference({ callId })` the moment
+  // they enter the mesh host, so `getParticipants(callId)` becomes non-empty
+  // on the OTHER party's device. This is the most reliable cross-device
+  // signal — it does NOT depend on the backend flipping `isConference` or on
+  // `getCallInvites` returning invites addressed to other users (which it may
+  // filter out). During a plain 1:1 call nobody has joined a conference, so
+  // the roster stays empty and we never false-trigger.
+  const { data: conferenceRosterData, error: conferenceRosterError } = useReactiveSafeConvexQuery<any[]>(
+    (api as any).conference.getParticipants,
+    callId ? { callId } : undefined,
+    [],
+    !!callId,
+  );
+
+  // Detach the live 1:1 connection and hand off to the mesh host. Idempotent.
+  // `fromModal` is true only for the INITIATOR (who has the invite-picker
+  // <Modal> open). The OTHER party has no modal — and crucially must NOT use
+  // InteractionManager.runAfterInteractions, because the call screen runs
+  // continuous animations (CallBackground orbs / ringing pulse) that keep an
+  // interaction handle open forever, so the queued navigation never fired
+  // until the user tapped something (e.g. End). That was the "have to tap End
+  // to see the conference screen" bug. We now navigate directly.
+  const triggerMeshUpgrade = useCallback((opts?: { fromModal?: boolean }) => {
+    if (upgradedToMeshRef.current) return;
+    if (!callId || !conversationId) return;
+    upgradedToMeshRef.current = true;
+    const fromModal = opts?.fromModal === true;
+    if (__DEV__) console.log('[adhoc-upgrade] triggerMeshUpgrade', { callId, fromModal });
+    callDebug.push('CALL', `[adhoc-upgrade] triggerMeshUpgrade fromModal=${fromModal}`);
+    if (fromModal) {
+      // Close the invite sheet FIRST — on Android, router.replace() is
+      // silently swallowed while a React Native <Modal> is still mounted.
+      setInvitePickerVisible(false);
+    }
+    const vq = callType === 'video' ? '1' : '0';
+    // SEAMLESS HANDOFF: detach the live 1:1 connection (so unmount won't tear
+    // it down) and stash it for the mesh host to ADOPT — keeps A↔B audio/video
+    // alive with zero interruption; only newly invited people get fresh peers.
+    try {
+      const session = sessionRef.current;
+      const partnerUserId = partnerUserIdRef.current;
+      if (session?.detachForHandoff && partnerUserId) {
+        const ho = session.detachForHandoff();
+        if (ho?.pc) {
+          stashCallHandoff({
+            callId,
+            partnerUserId,
+            pc: ho.pc,
+            localStream: ho.localStream,
+            remoteStream: ho.remoteStream,
+            video: callType === 'video',
+          });
+        }
+      }
+    } catch {
+      /* fall through to a plain mesh join if detach fails */
+    }
+    const dest =
+      `/group-call/${conversationId}?callId=${encodeURIComponent(callId)}&video=${vq}&adhoc=1` as any;
+    // Initiator: wait out the modal-dismiss animation (~350ms) so Android
+    // doesn't drop the navigation. Other party: navigate immediately (no
+    // modal, no InteractionManager — see comment above).
+    const navigate = () => {
+      if (__DEV__) console.log('[adhoc-upgrade] router.replace →', dest);
+      callDebug.push('CALL', `[adhoc-upgrade] router.replace → group-call (fromModal=${fromModal})`);
+      try { router.replace(dest); } catch (e) {
+        callDebug.push('ERR', `[adhoc-upgrade] replace failed: ${String((e as any)?.message || e)}`);
+      }
+      // CRITICAL (iter-275/276): this call screen is NOT a real route — it's
+      // the root-mounted <CallHost/> overlay (zIndex 9000) driven by the
+      // `callHost` store. `router.replace` only swaps the UNDERLYING route to
+      // /group-call; the overlay stays ON TOP, so the user keeps seeing the
+      // 1:1 screen until `callHost.end()` removes the overlay. The live
+      // PC/streams were already detached + stashed above, so ending the
+      // overlay does NOT drop the call (close() is a no-op on the detached
+      // pc); it just reveals the group-call screen underneath, which adopts
+      // the handoff. iter-276: end SYNCHRONOUSLY (not via setTimeout) — on
+      // Device B the deferred timer never fired (throttled during the nav
+      // transition), so B stayed stuck on the 1:1 overlay. No timer now.
+      try {
+        callHost.end();
+        callDebug.push('CALL', `[adhoc-upgrade] callHost.end() done (fromModal=${fromModal})`);
+      } catch (e) {
+        callDebug.push('ERR', `[adhoc-upgrade] callHost.end failed: ${String((e as any)?.message || e)}`);
+      }
+    };
+    if (fromModal) {
+      // Initiator: wait out the modal-dismiss animation so Android doesn't
+      // drop the navigation.
+      setTimeout(navigate, 350);
+    } else {
+      // Other party: next frame, then a 0ms macrotask — reliably lands the
+      // navigation without depending on InteractionManager (which never
+      // settles while the call screen animations are running).
+      requestAnimationFrame(() => setTimeout(navigate, 0));
+    }
+  }, [callId, conversationId, callType, router]);
+
+  const handleInvitePerson = useCallback(
+    async (inviteeId: string, name: string, hideNumber: boolean) => {
+      if (!callId) return;
+      try {
+        callDebug.push('CALL', `[adhoc-upgrade] invite sent → ${name} (hideNumber=${hideNumber})`);
+        await inviteToCall({ callId, inviteeId, hideNumber } as any);
+        // The initiator moves to the group screen immediately so they can
+        // watch the invitee's ring status (don't wait for the isConference
+        // round-trip). fromModal=true → close the picker first + brief delay.
+        triggerMeshUpgrade({ fromModal: true });
+      } catch (e: any) {
+        callDebug.push('ERR', `[adhoc-upgrade] inviteToCall failed: ${String(e?.message || e).slice(0, 60)}`);
+        Alert.alert('Could not add', e?.message || `Failed to ring ${name}.`);
+        throw e;
+      }
+    },
+    [callId, inviteToCall, triggerMeshUpgrade],
+  );
+
+  // The OTHER original party (and any client that missed the direct call)
+  // upgrades when: the call doc flips isConference, OR an invite appears for
+  // this call, OR the conference roster becomes non-empty (most reliable —
+  // the initiator joins the mesh roster the instant they navigate over).
+  useEffect(() => {
+    if (upgradedToMeshRef.current) return;
+    const hasInvite = Array.isArray(callInvitesData) && callInvitesData.length > 0;
+    const hasRoster = Array.isArray(conferenceRosterData) && conferenceRosterData.length > 0;
+    if (activeCall?.isConference || hasInvite || hasRoster) {
+      callDebug.push('CALL', `[adhoc-upgrade] FIRING: conf=${!!activeCall?.isConference} invite=${hasInvite} roster=${hasRoster}`);
+      triggerMeshUpgrade();
+    } else {
+      // Routed through callDebug (not __DEV__ console.log) so it shows in the
+      // in-app Diagnostic Logs export even on a production APK — this is how
+      // we tell whether the backend signals reach the existing participant.
+      callDebug.push(
+        'CALL',
+        `[adhoc-upgrade] waiting: conf=${activeCall?.isConference ?? 'n/a'} ` +
+          `invites=${Array.isArray(callInvitesData) ? callInvitesData.length : 'n/a'} ` +
+          `roster=${Array.isArray(conferenceRosterData) ? conferenceRosterData.length : 'n/a'} ` +
+          `invErr=${callInvitesError ? String((callInvitesError as any)?.message || callInvitesError).slice(0, 40) : 'none'} ` +
+          `rosErr=${conferenceRosterError ? String((conferenceRosterError as any)?.message || conferenceRosterError).slice(0, 40) : 'none'}`,
+      );
+    }
+  }, [activeCall?.isConference, callInvitesData, conferenceRosterData, triggerMeshUpgrade, callId]);
 
   const topStatusChip = useMemo(() => {
     if (isOutgoingRinging) return 'Ringing....';
@@ -1809,7 +2465,40 @@ export function CallScreenInner() {
     return statusText;
   }, [isActive, isIncoming, isOutgoingRinging, permissionDenied, statusText]);
 
-  const showVideo = callType === 'video' && isActive && RTCViewImpl != null;
+  const showVideo = foregroundCallType === 'video' && foregroundActive && RTCViewImpl != null;
+
+  // Reveal controls and (re)start the auto-hide countdown. Tap on the video
+  // surface toggles them; while connected video keeps playing they fade out
+  // again after CONTROLS_AUTO_HIDE_MS of no interaction.
+  const revealControls = useCallback(() => {
+    clearHideTimer();
+    fadeControls(true);
+    hideTimerRef.current = setTimeout(() => {
+      fadeControls(false);
+    }, CONTROLS_AUTO_HIDE_MS);
+  }, [clearHideTimer, fadeControls]);
+
+  const toggleControls = useCallback(() => {
+    if (controlsVisible) {
+      clearHideTimer();
+      fadeControls(false);
+    } else {
+      revealControls();
+    }
+  }, [controlsVisible, clearHideTimer, fadeControls, revealControls]);
+
+  // Start auto-hide once the video is live; keep controls pinned (visible) for
+  // voice calls and any non-active state so nothing ever disappears there.
+  useEffect(() => {
+    if (showVideo) {
+      revealControls();
+    } else {
+      clearHideTimer();
+      fadeControls(true);
+    }
+    return clearHideTimer;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showVideo]);
 
   // iter-107: during an OUTGOING VIDEO call that's still ringing, show the
   // local camera feed as a full-screen background instead of the static
@@ -1857,78 +2546,174 @@ export function CallScreenInner() {
   if (isMini) {
     return (
       <Pressable
-        style={{ flex: 1, backgroundColor: '#0b141a' }}
+        style={styles.popoutRoot}
         onPress={() => callHost.maximize()}
         testID="mini-call-surface"
       >
-        {showVideo && remoteStreamURL ? (
-          <RTCViewImpl key={`remote-mini-${remoteVideoGen}`} streamURL={remoteStreamURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror={false} />
-        ) : (
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-            <View style={{ width: 56, height: 56, borderRadius: 28, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' }}>
-              <Text style={{ color: Colors.white, fontSize: 22, fontWeight: '700' }}>{getDisplayInitials(otherName) || '?'}</Text>
+        {/* Remote (other participant) fills the top; self-view is attached
+            BELOW it (see popoutSelfStrip) rather than covering their face. */}
+        <View style={styles.popoutRemote}>
+          {showVideo && displayRemoteURL ? (
+            <RTCViewImpl key={`remote-mini-${remoteVideoGen}`} streamURL={displayRemoteURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror={false} />
+          ) : (
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+              <View style={{ width: 56, height: 56, borderRadius: 28, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ color: Colors.white, fontSize: 22, fontWeight: '700' }}>{getDisplayInitials(otherName) || '?'}</Text>
+              </View>
             </View>
+          )}
+          <View style={{ position: 'absolute', top: 6, left: 8, right: 8 }} pointerEvents="none">
+            <Text style={{ color: Colors.white, fontSize: 12, fontWeight: '700' }} numberOfLines={1}>{otherName}</Text>
+            <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 10 }} numberOfLines={1}>{isActive ? durationLabel : statusText}</Text>
           </View>
-        )}
-        <View style={{ position: 'absolute', top: 6, left: 8, right: 8 }} pointerEvents="none">
-          <Text style={{ color: Colors.white, fontSize: 12, fontWeight: '700' }} numberOfLines={1}>{otherName}</Text>
-          <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 10 }} numberOfLines={1}>{isActive ? durationLabel : statusText}</Text>
+          {/* Controls sit at the bottom of the REMOTE area so they clear the
+              self-view strip below. */}
+          <View style={{ position: 'absolute', bottom: 6, left: 0, right: 0, flexDirection: 'row', justifyContent: 'center', gap: 14 }}>
+            <TouchableOpacity
+              onPress={() => callHost.maximize()}
+              style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.22)', alignItems: 'center', justifyContent: 'center' }}
+              testID="mini-expand-btn"
+            >
+              <Ionicons name="expand-outline" size={16} color={Colors.white} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handleHangup}
+              style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: Colors.danger, alignItems: 'center', justifyContent: 'center' }}
+              testID="mini-end-btn"
+            >
+              <Ionicons name="call" size={16} color={Colors.white} style={{ transform: [{ rotate: '135deg' }] }} />
+            </TouchableOpacity>
+          </View>
         </View>
-        <View style={{ position: 'absolute', bottom: 8, left: 0, right: 0, flexDirection: 'row', justifyContent: 'center', gap: 14 }}>
-          <TouchableOpacity
-            onPress={() => callHost.maximize()}
-            style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.22)', alignItems: 'center', justifyContent: 'center' }}
-            testID="mini-expand-btn"
-          >
-            <Ionicons name="expand-outline" size={17} color={Colors.white} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={handleHangup}
-            style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.danger, alignItems: 'center', justifyContent: 'center' }}
-            testID="mini-end-btn"
-          >
-            <Ionicons name="call" size={17} color={Colors.white} style={{ transform: [{ rotate: '135deg' }] }} />
-          </TouchableOpacity>
+        {/* Self-view — rectangle attached directly below the remote frame. */}
+        <View style={styles.popoutSelfStrip} pointerEvents="none">
+          {showVideo && displayLocalURL && !cameraOff ? (
+            <RTCViewImpl streamURL={displayLocalURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror />
+          ) : (
+            <View style={styles.popoutSelfOff}>
+              <Feather name="video-off" size={14} color="rgba(255,255,255,0.7)" />
+            </View>
+          )}
         </View>
       </Pressable>
+    );
+  }
+
+  // OS Picture-in-Picture (Android): the system gives us a single small window,
+  // so we cannot draw OUTSIDE it — but we CAN stop the self-view from covering
+  // the other participant. Render the remote in the top portion and pin the
+  // self-view as a rectangle attached directly BELOW it (same width, ~18%
+  // height), matching the in-app pop-out layout.
+  if (inPip) {
+    return (
+      <View style={styles.popoutRoot} testID="pip-call-surface">
+        <View style={styles.popoutRemote}>
+          {showVideo && displayRemoteURL ? (
+            <RTCViewImpl key={`remote-pip-${remoteVideoGen}`} streamURL={displayRemoteURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror={false} />
+          ) : (
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+              <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ color: Colors.white, fontSize: 26, fontWeight: '700' }}>{getDisplayInitials(otherName) || '?'}</Text>
+              </View>
+            </View>
+          )}
+        </View>
+        <View style={styles.popoutSelfStrip} pointerEvents="none">
+          {showVideo && displayLocalURL && !cameraOff ? (
+            <RTCViewImpl streamURL={displayLocalURL} style={StyleSheet.absoluteFill} objectFit="cover" mirror />
+          ) : (
+            <View style={styles.popoutSelfOff}>
+              <Feather name="video-off" size={16} color="rgba(255,255,255,0.7)" />
+            </View>
+          )}
+        </View>
+      </View>
     );
   }
 
   return (
     <View style={styles.container} testID="call-screen">
       <StatusBar style="light" />
+      <InviteContactPicker
+        visible={invitePickerVisible}
+        onClose={() => setInvitePickerVisible(false)}
+        excludeUserIds={[
+          me?._id,
+          (fetchedOtherUser as any)?._id,
+          (fetchedOtherUser as any)?.userId,
+          (conversation as any)?.otherUser?._id,
+        ].filter(Boolean) as string[]}
+        onInvite={handleInvitePerson}
+        title="Add to call"
+      />
       {/* Video layer or gradient + avatar */}
-      {showVideo && remoteStreamURL ? (
+      {showVideo && mainVideoURL ? (
         <View style={styles.videoLayer}>
           <RTCViewImpl
-            key={`remote-${remoteVideoGen}`}
-            streamURL={remoteStreamURL}
+            key={`main-${pipSwapped ? 'local' : 'remote'}-${remoteVideoGen}`}
+            streamURL={mainVideoURL}
             style={StyleSheet.absoluteFill}
             objectFit="cover"
-            mirror={false}
+            mirror={mainVideoMirror}
           />
-          {/* Local picture-in-picture */}
-          {localStreamURL && !cameraOff ? (
-            <View style={styles.pipWrap}>
-              <RTCViewImpl
-                streamURL={localStreamURL}
+          {/* Full-screen tap catcher — toggles the auto-hiding controls.
+              Sits above the remote video but below the PiP/overlays so the
+              control buttons keep their own taps. */}
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={toggleControls}
+            testID="video-tap-catcher"
+          />
+          {/* Local picture-in-picture — draggable self-view. Double-tap swaps
+              it with the main feed. */}
+          {selfViewURL ? (
+            <RNAnimated.View
+              style={[styles.pipWrap, { transform: pipPan.getTranslateTransform() }]}
+              {...pipPanResponder.panHandlers}
+              testID="call-self-view"
+            >
+              <Pressable
                 style={StyleSheet.absoluteFill}
-                objectFit="cover"
-                mirror
-              />
-            </View>
+                onPress={handlePipTap}
+                testID="call-self-view-tap"
+              >
+                {!pipSwapped && cameraOff ? (
+                  <View style={styles.popoutSelfOff}>
+                    <Feather name="video-off" size={18} color="rgba(255,255,255,0.7)" />
+                  </View>
+                ) : (
+                  <RTCViewImpl
+                    key={`self-${pipSwapped ? 'remote' : 'local'}-${remoteVideoGen}`}
+                    streamURL={selfViewURL}
+                    style={StyleSheet.absoluteFill}
+                    objectFit="cover"
+                    mirror={selfViewMirror}
+                  />
+                )}
+              </Pressable>
+            </RNAnimated.View>
           ) : null}
-          {/* Top overlay: name + duration */}
-          <SafeAreaView edges={['top']} style={styles.videoTopOverlay} pointerEvents="none">
-            <Text style={styles.videoName} numberOfLines={1} ellipsizeMode="tail">
-              {otherName}
-            </Text>
-            <Text style={styles.videoStatus}>{isActive ? durationLabel : statusText}</Text>
-          </SafeAreaView>
-          {/* Bottom controls overlay */}
-          <SafeAreaView edges={['bottom']} style={styles.videoControlsOverlay}>
-            {renderControls()}
-          </SafeAreaView>
+          {/* Top overlay: name + duration (fades with controls) */}
+          <RNAnimated.View
+            style={[styles.videoTopOverlayAnim, { opacity: controlsOpacity }]}
+            pointerEvents="none"
+          >
+            <SafeAreaView edges={['top']} style={styles.videoTopOverlay} pointerEvents="none">
+              <Text style={styles.videoName} numberOfLines={1} ellipsizeMode="tail">
+                {otherName}
+              </Text>
+              <Text style={styles.videoStatus}>{isActive ? durationLabel : statusText}</Text>
+            </SafeAreaView>
+          </RNAnimated.View>
+          {/* Bottom controls overlay (fades + auto-hides) */}
+          <RNAnimated.View
+            style={[styles.videoControlsOverlayAnim, { opacity: controlsOpacity }]}
+            pointerEvents={controlsVisible ? 'box-none' : 'none'}
+          >
+            <SafeAreaView edges={['bottom']} style={styles.videoControlsOverlay}>
+              {renderControls()}
+            </SafeAreaView>
+          </RNAnimated.View>
         </View>
       ) : (
         <View style={StyleSheet.absoluteFill}>
@@ -2068,6 +2853,55 @@ export function CallScreenInner() {
         />
       )}
 
+      {/* iter-325 CALL WAITING — in-call banner for a second incoming call. */}
+      {waitingCall ? (
+        <CallWaitingOverlay
+          callerName={waitingCallerName}
+          isVideo={waitingIsVideo}
+          onEndAndAccept={acceptWaitingCall}
+          onHoldAndAccept={holdCurrentAndAccept}
+          onHoldIncoming={holdIncoming}
+          onDecline={declineWaitingCall}
+        />
+      ) : null}
+
+      {/* iter-328 — the OTHER party has put us on hold (reads calls.held). */}
+      {remoteHeldByOther ? (
+        <View style={[styles.heldBanner, styles.onHoldBanner]} testID="on-hold-indicator">
+          <MaterialCommunityIcons name="phone-paused" size={16} color={Colors.white} />
+          <Text style={styles.heldBannerText} numberOfLines={1}>
+            {`${otherName || 'They'} put you on hold`}
+          </Text>
+        </View>
+      ) : null}
+
+      {/* iter-327 — banner for the OTHER (held/foreground) call while two calls
+          coexist. Tap Swap to switch which call is active. */}
+      {secondaryInfo ? (
+        <View style={styles.heldBanner} testID="held-call-banner">
+          <MaterialCommunityIcons name="phone-paused" size={16} color={Colors.white} />
+          <Text style={styles.heldBannerText} numberOfLines={1}>
+            {heldSide === 'primary'
+              ? `${otherName || 'Call'} on hold`
+              : heldSide === 'secondary'
+                ? `${waitingCallerName || 'Second call'} on hold`
+                : 'Two calls active'}
+          </Text>
+          <TouchableOpacity onPress={swapCalls} style={styles.heldBannerBtn} testID="held-call-swap">
+            <MaterialCommunityIcons name="swap-horizontal" size={16} color={Colors.white} />
+            <Text style={styles.heldBannerBtnText}>Swap</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={endSecondaryCall}
+            style={[styles.heldBannerBtn, styles.heldBannerEndBtn]}
+            testID="held-call-end"
+          >
+            <Ionicons name="call" size={14} color={Colors.white} />
+            <Text style={styles.heldBannerBtnText}>End 2nd</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       {/* On-screen debug overlay — bottom-right floating "activity" badge.
           Tap to expand the last ~60 call/screen-share events. Visible in
           production APK to bypass console.log / adb logcat barriers. */}
@@ -2076,7 +2910,7 @@ export function CallScreenInner() {
   );
 
   function renderControls() {
-    if (isIncoming) {
+    if (isIncomingControls) {
       return (
         <View style={styles.incomingRow}>
           <View style={styles.incomingCol}>
@@ -2106,7 +2940,7 @@ export function CallScreenInner() {
               label=""
               size="xl"
             />
-            <Text style={styles.incomingActionLabel}>Answer</Text>
+            <Text style={styles.incomingActionLabel}>{answering ? 'Connecting…' : 'Answer'}</Text>
           </View>
         </View>
       );
@@ -2469,6 +3303,32 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.headerBg,
     justifyContent: 'space-between',
   },
+  heldBanner: {
+    position: 'absolute',
+    top: 96,
+    left: 12,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(75,85,99,0.95)',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  heldBannerText: { flex: 1, color: '#FFFFFF', fontSize: 13, fontWeight: '600' },
+  heldBannerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  heldBannerEndBtn: { backgroundColor: 'rgba(239,68,68,0.9)' },
+  heldBannerBtnText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
+  onHoldBanner: { top: 56, backgroundColor: 'rgba(180,53,59,0.95)' },
   containerTransparent: {
     backgroundColor: 'transparent',
   },
@@ -2789,6 +3649,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.3)',
   },
+  // iter-314: pop-out (in-app mini + OS PiP) layout — the remote participant
+  // fills the top and the local self-view is a rectangle attached directly
+  // BELOW it (same width/base, ~18% height) instead of covering their face.
+  popoutRoot: { flex: 1, backgroundColor: '#0b141a' },
+  popoutRemote: { flex: 1, position: 'relative', overflow: 'hidden' },
+  popoutSelfStrip: {
+    height: '18%',
+    width: '100%',
+    backgroundColor: '#000',
+    overflow: 'hidden',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.28)',
+  },
+  popoutSelfOff: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#11202b' },
   videoTopOverlay: {
     position: 'absolute',
     // iter-273: nudge the participant name higher so it clears the centre.
@@ -2797,6 +3671,14 @@ const styles = StyleSheet.create({
     right: 0,
     alignItems: 'center',
     paddingHorizontal: Spacing.lg,
+  },
+  // iter-278: full-screen wrappers so the auto-hide fade (opacity) can be
+  // animated without disturbing the absolute anchoring of the inner overlays.
+  videoTopOverlayAnim: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  videoControlsOverlayAnim: {
+    ...StyleSheet.absoluteFillObject,
   },
   videoControlsOverlay: {
     position: 'absolute',

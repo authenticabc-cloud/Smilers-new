@@ -1602,12 +1602,19 @@ def _derive_push_routing(data: dict) -> dict[str, str]:
     path, _, query = action_url.partition("?")
     parts = [p for p in path.split("/") if p]
     if len(parts) >= 2 and parts[0] == "call":
-        out["type"] = "call"
+        # Don't override an explicit control signal (call-cancelled /
+        # call-declined) — those must reach the Kotlin handler as-is, but
+        # still carry the callId so it knows WHICH call to dismiss.
+        if out.get("type") not in ("call-cancelled", "call-declined"):
+            out["type"] = "call"
         out["conversationId"] = parts[1]
         out["callId"] = parts[1]
     elif len(parts) >= 2 and parts[0] == "chat":
-        # Don't downgrade an explicit call type via the action_url path.
-        if out.get("type") != "call":
+        # Don't downgrade an explicit call / control-signal type via the
+        # action_url path. call-cancelled / call-declined route to /chat/<id>
+        # but MUST keep their type so the native service cancels the ring /
+        # ringback instead of rendering a plain message banner.
+        if out.get("type") not in ("call", "call-cancelled", "call-declined"):
             out["type"] = "message"
         out["conversationId"] = parts[1]
     if query:

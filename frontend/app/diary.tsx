@@ -61,9 +61,21 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useMutation, useQuery } from 'convex/react';
+import { useMutation, useQuery, useConvex } from 'convex/react';
 import * as Clipboard from 'expo-clipboard';
+import * as DocumentPicker from 'expo-document-picker';
+import * as Haptics from 'expo-haptics';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
+import {
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  useAudioRecorder,
+  useAudioRecorderState,
+} from 'expo-audio';
 import { api } from '../src/convexApi';
+import { uploadFile } from '../src/lib/uploadFile';
+import DiaryAudioBubble from '../src/components/diary/DiaryAudioBubble';
 import Avatar from '../src/components/Avatar';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import {
@@ -139,7 +151,31 @@ export default function DiaryScreen() {
   // the data will flow in WITHOUT a page reload.
   const cloudReady = Array.isArray(cloudEntriesQuery.data);
   const cloudEntries = useMemo<DiaryEntry[]>(
-    () => (cloudReady ? (cloudEntriesQuery.data as DiaryEntry[]) : []),
+    () => {
+      if (!cloudReady) return [];
+      const raw = (cloudEntriesQuery.data as any[]) || [];
+      // iter-331: normalise the backend shape. `diary.send` entries may arrive
+      // FLAT (type/mediaUrl/storageId/fileName/…) rather than nested under
+      // `attachment`. Map both into the { kind, attachment } shape the UI reads,
+      // and treat "voice" as an audio attachment.
+      return raw.map((d: any) => {
+        const type = d.kind || d.type || (d.text && !d.storageId && !d.mediaUrl ? 'text' : 'file');
+        const kind = type === 'voice' ? 'audio' : type;
+        const attachment =
+          d.attachment ||
+          (d.mediaUrl || d.storageId
+            ? {
+                storageId: d.storageId || null,
+                mediaUrl: d.mediaUrl || null,
+                fileName: d.fileName || null,
+                mimeType: d.mimeType || null,
+                fileSize: d.fileSize || null,
+                audioDuration: d.duration ?? d.audioDuration ?? null,
+              }
+            : null);
+        return { ...d, kind, attachment } as DiaryEntry;
+      });
+    },
     [cloudReady, cloudEntriesQuery.data],
   );
 
@@ -162,6 +198,169 @@ export default function DiaryScreen() {
   const clearDiaryCloud = useMutation((api as any).diary?.clearDiary);
   // Forward-target write — same mutation the rest of the app uses.
   const sendMessage = useMutation((api as any).messages.send);
+
+  // ── iter-331: Diary file attachments + voice notes ────────────────────────
+  const convex = useConvex();
+  const diarySendAvailable = Boolean((api as any).diary?.send);
+  const diarySendCloud = useMutation((api as any).diary?.send);
+  const diaryUploadUrl = (api as any).diary?.generateUploadUrl || (api as any).messages?.generateUploadUrl;
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(audioRecorder, 250);
+  const [uploading, setUploading] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const recStartRef = useRef(0);
+
+  const persistMedia = useCallback(
+    async (m: {
+      type: string;
+      storageId: string;
+      fileName: string;
+      fileSize?: number | null;
+      mimeType: string;
+      duration?: number | null;
+    }) => {
+      // Canonical web contract: api.diary.send({ type, storageId, fileName,
+      // fileSize, mimeType, duration }). Fall back to appendEntry if the
+      // deployment doesn't expose `send`.
+      if (diarySendAvailable) {
+        await diarySendCloud({
+          type: m.type,
+          storageId: m.storageId,
+          fileName: m.fileName,
+          fileSize: m.fileSize ?? undefined,
+          mimeType: m.mimeType,
+          ...(m.duration != null ? { duration: m.duration } : {}),
+        } as any);
+        return;
+      }
+      if (appendEntryAvailable) {
+        await appendEntryCloud({
+          kind: m.type === 'voice' ? 'audio' : m.type,
+          attachment: {
+            storageId: m.storageId,
+            fileName: m.fileName,
+            mimeType: m.mimeType,
+            fileSize: m.fileSize ?? null,
+            audioDuration: m.duration ?? null,
+          },
+        } as any);
+        return;
+      }
+      throw new Error('Diary media is not supported by the server yet.');
+    },
+    [diarySendAvailable, diarySendCloud, appendEntryAvailable, appendEntryCloud],
+  );
+
+  const handleAttach = useCallback(async () => {
+    if (uploading || isRecording) return;
+    try {
+      const res = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (res.canceled || !res.assets?.[0]) return;
+      const asset = res.assets[0];
+      const mime = asset.mimeType || 'application/octet-stream';
+      const type = mime.startsWith('image/')
+        ? 'image'
+        : mime.startsWith('video/')
+          ? 'video'
+          : mime.startsWith('audio/')
+            ? 'audio'
+            : 'file';
+      setUploading(true);
+      const storageId = await uploadFile(convex, asset.uri, mime, diaryUploadUrl);
+      await persistMedia({
+        type,
+        storageId,
+        fileName: asset.name || 'file',
+        fileSize: asset.size ?? null,
+        mimeType: mime,
+      });
+    } catch (e: any) {
+      Alert.alert('Attachment failed', e?.message || 'Could not attach file.');
+    } finally {
+      setUploading(false);
+    }
+  }, [uploading, isRecording, convex, diaryUploadUrl, persistMedia]);
+
+  const startRec = useCallback(async () => {
+    try {
+      const perm = await requestRecordingPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Permission required', 'Please allow microphone access to record voice notes.');
+        return;
+      }
+      try {
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      } catch {}
+      try {
+        const audioDir = `${LegacyFileSystem.cacheDirectory}Audio`;
+        const info: any = await LegacyFileSystem.getInfoAsync(audioDir);
+        if (!info?.exists) await LegacyFileSystem.makeDirectoryAsync(audioDir, { intermediates: true });
+      } catch {}
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        shouldPlayInBackground: false,
+        interruptionMode: 'duckOthers',
+        shouldRouteThroughEarpiece: false,
+      });
+      await audioRecorder.prepareToRecordAsync();
+      audioRecorder.record();
+      recStartRef.current = Date.now();
+      setIsRecording(true);
+    } catch (e: any) {
+      setIsRecording(false);
+      Alert.alert('Recording failed', e?.message || 'Could not start recording');
+    }
+  }, [audioRecorder]);
+
+  const cancelRec = useCallback(async () => {
+    try {
+      await audioRecorder.stop();
+    } catch {}
+    setIsRecording(false);
+    try {
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+    } catch {}
+  }, [audioRecorder]);
+
+  const stopRecAndSend = useCallback(async () => {
+    let uri: string | null = null;
+    const durMs = Math.max(recorderState.durationMillis || 0, Date.now() - recStartRef.current);
+    try {
+      await audioRecorder.stop();
+      uri = audioRecorder.uri;
+    } catch {}
+    setIsRecording(false);
+    try {
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+    } catch {}
+    if (!uri) return;
+    if (durMs < 800) {
+      Alert.alert('Too short', 'Hold on a little longer to record a voice note.');
+      return;
+    }
+    try {
+      setUploading(true);
+      const storageId = await uploadFile(convex, uri, 'audio/m4a', diaryUploadUrl);
+      await persistMedia({
+        type: 'voice',
+        storageId,
+        fileName: `voice-${Date.now()}.m4a`,
+        fileSize: null,
+        mimeType: 'audio/m4a',
+        duration: Math.round(durMs / 1000),
+      });
+    } catch (e: any) {
+      Alert.alert('Voice note failed', e?.message || 'Could not send voice note.');
+    } finally {
+      setUploading(false);
+    }
+  }, [audioRecorder, recorderState.durationMillis, convex, diaryUploadUrl, persistMedia]);
+  // ──────────────────────────────────────────────────────────────────────────
 
   // Forward picker: list of conversations to forward to. Cheap to
   // always keep this loaded so the picker opens snappily.
@@ -458,6 +657,12 @@ export default function DiaryScreen() {
                   style={styles.attachmentImage}
                   resizeMode="cover"
                 />
+              ) : entry.kind === 'audio' && entry.attachment.mediaUrl ? (
+                <DiaryAudioBubble
+                  uri={entry.attachment.mediaUrl}
+                  duration={entry.attachment.audioDuration}
+                  fileName={entry.attachment.fileName}
+                />
               ) : (
                 <View style={styles.attachmentFile}>
                   <MaterialCommunityIcons
@@ -599,23 +804,58 @@ export default function DiaryScreen() {
         )}
 
         <View style={[styles.composer, { paddingBottom: Math.max(8, insets.bottom) }]}>
-          <TextInput
-            style={styles.composerInput}
-            value={draft}
-            onChangeText={setDraft}
-            placeholder="Write a note…"
-            placeholderTextColor={Colors.textMuted}
-            multiline
-            testID="diary-composer"
-          />
-          <TouchableOpacity
-            style={[styles.composerSend, !draft.trim() ? styles.composerSendDisabled : null]}
-            onPress={handleSend}
-            disabled={!draft.trim()}
-            testID="diary-send-btn"
-          >
-            <Feather name="send" size={18} color={Colors.white} />
-          </TouchableOpacity>
+          {isRecording ? (
+            <View style={styles.recordingRow}>
+              <TouchableOpacity onPress={cancelRec} style={styles.recCancelBtn} testID="diary-rec-cancel">
+                <MaterialCommunityIcons name="delete-outline" size={22} color={Colors.danger} />
+              </TouchableOpacity>
+              <View style={styles.recPulse} />
+              <Text style={styles.recTimer}>
+                {(() => {
+                  const s = Math.floor((recorderState.durationMillis || 0) / 1000);
+                  return `${Math.floor(s / 60)}:${s % 60 < 10 ? '0' : ''}${s % 60}`;
+                })()}
+              </Text>
+              <Text style={styles.recHint}>Recording…</Text>
+              <TouchableOpacity onPress={stopRecAndSend} style={styles.composerSend} testID="diary-rec-send">
+                <Feather name="send" size={18} color={Colors.white} />
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <>
+              <TouchableOpacity
+                style={styles.composerAttach}
+                onPress={handleAttach}
+                disabled={uploading}
+                testID="diary-attach-btn"
+              >
+                <MaterialCommunityIcons name="paperclip" size={22} color={Colors.diaryDark} />
+              </TouchableOpacity>
+              <TextInput
+                style={styles.composerInput}
+                value={draft}
+                onChangeText={setDraft}
+                placeholder="Write a note…"
+                placeholderTextColor={Colors.textMuted}
+                multiline
+                editable={!uploading}
+                testID="diary-composer"
+              />
+              {uploading ? (
+                <View style={styles.composerSend}>
+                  <ActivityIndicator color={Colors.white} size="small" />
+                </View>
+              ) : draft.trim() ? (
+                <TouchableOpacity style={styles.composerSend} onPress={handleSend} testID="diary-send-btn">
+                  <Feather name="send" size={18} color={Colors.white} />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity style={styles.composerSend} onPress={startRec} testID="diary-mic-btn">
+                  <MaterialCommunityIcons name="microphone" size={20} color={Colors.white} />
+                </TouchableOpacity>
+              )}
+            </>
+          )}
         </View>
       </KeyboardAvoidingView>
 
@@ -887,6 +1127,34 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   composerSendDisabled: { opacity: 0.4 },
+  composerAttach: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recordingRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  recCancelBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recPulse: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: Colors.danger,
+  },
+  recTimer: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  recHint: { flex: 1, fontSize: FontSize.sm, color: Colors.textMuted },
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.45)',

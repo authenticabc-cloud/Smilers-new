@@ -11,7 +11,7 @@
  * keep a single, stable element tree and only swap the wrapper STYLE / pan
  * handlers — never the structure — when the mode changes.
  */
-import React, { useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Dimensions, PanResponder, Platform, StyleSheet, View } from 'react-native';
 
 import CallErrorBoundary from '../CallErrorBoundary';
@@ -62,9 +62,25 @@ export default function CallHost() {
     [offset, pan, screenW, screenH],
   );
 
+  // Defer UNMOUNTING the call subtree by one frame. React commit timing during
+  // the shim's navigation can make `params` briefly read null between two
+  // commits; unmounting CallScreenInner in that window (then remounting) drops
+  // taps on the Answer button. Deferring the unmount keeps the subtree — and
+  // its live handlers — stable across those transient nulls. A real end()
+  // (params stays null on the next frame) still tears the call down.
+  const [mounted, setMounted] = useState<boolean>(!!params);
+  useEffect(() => {
+    if (params) {
+      setMounted(true);
+      return;
+    }
+    const raf = requestAnimationFrame(() => setMounted(false));
+    return () => cancelAnimationFrame(raf);
+  }, [params]);
+
   // Web previews can't run react-native-webrtc — skip the overlay entirely so
   // the bundle still renders for screenshots/QA. Real calls only run on native.
-  if (Platform.OS === 'web' || !params) return null;
+  if (Platform.OS === 'web' || (!params && !mounted)) return null;
 
   const isMini = mode === 'mini';
 

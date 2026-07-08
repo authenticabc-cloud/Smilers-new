@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Alert,
   ScrollView,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -35,13 +36,20 @@ export default function StatusComposeScreen() {
   const [text, setText] = useState(params.initialText || '');
   const [bgIdx, setBgIdx] = useState(0);
   const [posting, setPosting] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
   const createStatus = useMutation(api.statuses.create);
   const palette = BG_PRESETS[bgIdx];
 
-  const onPost = useCallback(async () => {
+  // Step 1: open the preview/confirm sheet instead of posting immediately.
+  const onPreview = useCallback(() => {
+    if (!text.trim()) return;
+    setShowPreview(true);
+  }, [text]);
+
+  // Step 2: actually publish after the user confirms.
+  const onConfirmPost = useCallback(async () => {
     const value = text.trim();
     if (!value) return;
-
     setPosting(true);
     try {
       await createStatus({
@@ -50,6 +58,7 @@ export default function StatusComposeScreen() {
         backgroundColor: palette.bg,
         textColor: palette.fg,
       });
+      setShowPreview(false);
       router.back();
     } catch (errorValue: any) {
       Alert.alert('Failed to post status', errorValue?.message || 'Unknown error');
@@ -67,12 +76,8 @@ export default function StatusComposeScreen() {
               <Feather name="x" size={26} color={palette.fg} />
             </TouchableOpacity>
             <Text style={[styles.headerTitle, { color: palette.fg }]}>Status</Text>
-            <TouchableOpacity onPress={onPost} hitSlop={12} disabled={!text.trim() || posting} testID="status-post">
-              {posting ? (
-                <ActivityIndicator color={palette.fg} />
-              ) : (
-                <Text style={[styles.headerPost, { color: palette.fg, opacity: text.trim() ? 1 : 0.4 }]}>Post</Text>
-              )}
+            <TouchableOpacity onPress={onPreview} hitSlop={12} disabled={!text.trim() || posting} testID="status-post">
+              <Text style={[styles.headerPost, { color: palette.fg, opacity: text.trim() ? 1 : 0.4 }]}>Preview</Text>
             </TouchableOpacity>
           </View>
 
@@ -103,6 +108,46 @@ export default function StatusComposeScreen() {
           </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
+
+      {/* Preview & confirm sheet — shows exactly how the status will look
+          before it goes live. */}
+      <Modal visible={showPreview} transparent animationType="fade" onRequestClose={() => setShowPreview(false)}>
+        <View style={styles.previewBackdrop}>
+          <View style={styles.previewSheet}>
+            <Text style={styles.previewTitle}>Preview your status</Text>
+            <View style={[styles.previewCard, { backgroundColor: palette.bg }]}>
+              <Text style={[styles.previewText, { color: palette.fg }]}>{text.trim()}</Text>
+            </View>
+            <Text style={styles.previewHint}>Visible to your contacts for 24 hours.</Text>
+            <View style={styles.previewActions}>
+              <TouchableOpacity
+                style={[styles.previewBtn, styles.previewBtnGhost]}
+                onPress={() => setShowPreview(false)}
+                disabled={posting}
+                testID="status-preview-edit"
+              >
+                <Feather name="edit-2" size={16} color={Colors.textPrimary} />
+                <Text style={styles.previewBtnGhostText}>Keep editing</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.previewBtn, styles.previewBtnPrimary]}
+                onPress={onConfirmPost}
+                disabled={posting}
+                testID="status-preview-confirm"
+              >
+                {posting ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <Feather name="send" size={16} color="#fff" />
+                    <Text style={styles.previewBtnPrimaryText}>Confirm &amp; Post</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -131,4 +176,50 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   swatchActive: { borderColor: '#FFFFFF', borderWidth: 3, transform: [{ scale: 1.12 }] },
+  previewBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    padding: Spacing.lg,
+  },
+  previewSheet: {
+    backgroundColor: Colors.surface,
+    borderRadius: 20,
+    padding: Spacing.lg,
+  },
+  previewTitle: {
+    fontSize: FontSize.lg,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+    marginBottom: Spacing.md,
+    textAlign: 'center',
+  },
+  previewCard: {
+    borderRadius: 16,
+    minHeight: 160,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: Spacing.lg,
+  },
+  previewText: { fontSize: 22, fontWeight: FontWeight.bold, textAlign: 'center', lineHeight: 30 },
+  previewHint: {
+    marginTop: Spacing.md,
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+  },
+  previewActions: { flexDirection: 'row', gap: 12, marginTop: Spacing.lg },
+  previewBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: 14,
+  },
+  previewBtnGhost: { backgroundColor: Colors.surfaceMuted || '#EFE7D6' },
+  previewBtnGhostText: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  previewBtnPrimary: { backgroundColor: Colors.primary },
+  previewBtnPrimaryText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: '#fff' },
 });

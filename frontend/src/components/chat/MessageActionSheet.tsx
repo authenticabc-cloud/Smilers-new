@@ -14,11 +14,18 @@ export const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'
 export function MessageActionSheet({
   message,
   canEdit,
+  canSetEditMode,
+  canSuggestEdit,
+  suggestPending,
+  canPin,
+  isPinned,
   onClose,
   onPickReaction,
   onReply,
   onCopy,
   onEdit,
+  onWhoCanEdit,
+  onSuggestEdit,
   onForward,
   onShare,
   onSelectMultiple,
@@ -30,11 +37,18 @@ export function MessageActionSheet({
 }: {
   message: any | null;
   canEdit: boolean;
+  canSetEditMode?: boolean;
+  canSuggestEdit?: boolean;
+  suggestPending?: boolean;
+  canPin?: boolean;
+  isPinned?: boolean;
   onClose: () => void;
   onPickReaction: (emoji: string) => void;
   onReply: () => void;
   onCopy: () => void;
   onEdit: () => void;
+  onWhoCanEdit?: () => void;
+  onSuggestEdit?: () => void;
   onForward: () => void;
   onShare: () => void;
   onSelectMultiple: () => void;
@@ -66,6 +80,17 @@ export function MessageActionSheet({
             {canEdit ? (
               <ActionRow icon="edit-2" lib="feather" label="Edit" onPress={onEdit} />
             ) : null}
+            {canSetEditMode && onWhoCanEdit ? (
+              <ActionRow icon="shield" lib="feather" label="Who can edit" onPress={onWhoCanEdit} />
+            ) : null}
+            {canSuggestEdit && onSuggestEdit ? (
+              <ActionRow
+                icon="edit-3"
+                lib="feather"
+                label={suggestPending ? 'Edit suggested • awaiting approval' : 'Suggest edit'}
+                onPress={onSuggestEdit}
+              />
+            ) : null}
             <ActionRow icon="corner-up-right" lib="feather" label="Forward" onPress={onForward} />
             <ActionRow icon="share-2" lib="feather" label="Share" onPress={onShare} />
             <ActionRow icon="check-square" lib="feather" label="Select multiple to forward" onPress={onSelectMultiple} />
@@ -75,7 +100,14 @@ export function MessageActionSheet({
               label={message?.starred ? 'Unstar' : 'Star'}
               onPress={onStar}
             />
-            <ActionRow icon="bookmark" lib="feather" label="Pin" onPress={onPin} />
+            {canPin ? (
+              <ActionRow
+                icon="bookmark"
+                lib="feather"
+                label={isPinned ? 'Unpin' : 'Pin'}
+                onPress={onPin}
+              />
+            ) : null}
             <ActionRow icon="smile" lib="feather" label="More reactions" onPress={onMoreReactions} />
             <ActionRow icon="info" lib="feather" label="Message info" onPress={onMessageInfo} />
             <ActionRow icon="trash-2" lib="feather" label="Delete message" onPress={onDelete} danger />

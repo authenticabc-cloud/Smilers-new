@@ -18,12 +18,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
 import Header from '../src/components/Header';
+import { PaymentsAdmin } from '../src/components/admin/PaymentsAdmin';
 import { api } from '../src/convexApi';
 import { useAuth } from '../src/providers/AuthProvider';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
-type Tab = 'overview' | 'users' | 'reports' | 'ads' | 'devotions' | 'premium' | 'activity';
+type Tab = 'overview' | 'users' | 'reports' | 'ads' | 'devotions' | 'premium' | 'payments' | 'activity';
 type AdsSubTab = 'review' | 'codes';
 
 // iter-136: canonical shape returned by `api.admin.queries.getStats`
@@ -178,6 +179,20 @@ export default function AdminDashboard() {
     refetch: refetchDevReports,
     loading: devReportsLoading,
   } = useSafeConvexQuery<DevReportItem[]>(api.devotionals.listPendingReports, {}, [], isAdmin);
+  // iter-339: pending mobile-money payment requests (badge + Payments tab).
+  const { data: pendingMoneyCount } = useSafeConvexQuery<number>(
+    (api as any).mobileMoneyRequests?.countPendingRequests,
+    {},
+    0,
+    isAdmin,
+  );
+  const { data: pendingAdCount } = useSafeConvexQuery<number>(
+    (api as any).adClickRequests?.countPendingRequests,
+    {},
+    0,
+    isAdmin,
+  );
+  const pendingPaymentsCount = (pendingMoneyCount || 0) + (pendingAdCount || 0);
 
   // Mutations — iter-140b: canonical names.
   // `updateUserRole({ userId, role })` replaces the old `setRole`. The
@@ -415,6 +430,7 @@ export default function AdminDashboard() {
     { key: 'ads', label: 'Ads', icon: 'megaphone-outline', badge: pendingAds?.length },
     { key: 'devotions', label: 'Devotions', icon: 'book-outline', badge: pendingDevReports?.length },
     { key: 'premium', label: 'Premium', icon: 'star-outline' },
+    { key: 'payments', label: 'Payments', icon: 'cash-outline', badge: pendingPaymentsCount || undefined },
     { key: 'activity', label: 'Activity', icon: 'pulse-outline' },
   ];
 
@@ -499,6 +515,7 @@ export default function AdminDashboard() {
           />
         ) : null}
         {tab === 'premium' ? <PremiumTab isAdmin={isAdmin} /> : null}
+        {tab === 'payments' ? <PaymentsAdmin /> : null}
         {tab === 'activity' ? <ActivityTab isAdmin={isAdmin} /> : null}
         {tab === 'devotions' ? (
           <DevotionsTab

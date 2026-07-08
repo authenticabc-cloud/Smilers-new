@@ -32,7 +32,8 @@ import { startCall } from '../src/lib/twilio/startCall';
 import { useAuth } from '../src/providers/AuthProvider';
 import { readCacheMeta, writeCache } from '../src/lib/offlineCache';
 import OfflineBanner from '../src/components/OfflineBanner';
-import { getDisplayInitials } from '../src/lib/displayName';
+import { getDisplayInitials, getResolvedDisplayName } from '../src/lib/displayName';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../src/lib/deviceContactIndex';
 import Header from '../src/components/Header';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
@@ -115,6 +116,43 @@ export default function CallsScreen() {
   const router = useRouter();
   const { isAuthenticated } = useAuth();
   const me = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip') as any;
+  const deviceIndex = useDeviceContactIndex();
+
+  // iter-305: call history shows the phone's address-book name (consistent
+  // with chats/contacts/groups/conference). History entries carry only
+  // otherUserId/otherName, so cross-reference contacts by userId to recover
+  // the phone before the device lookup.
+  const { data: contactsData } = useSafeConvexQuery<any[]>(
+    api.contacts.getContacts,
+    {},
+    [],
+    !!isAuthenticated,
+  );
+  const contactByUserId = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const c of (contactsData || []) as any[]) {
+      const id = String(c?.userId || c?.user?._id || c?.user?.userId || c?.contactUserId || c?._id || '');
+      if (id && !map.has(id)) map.set(id, c);
+    }
+    return map;
+  }, [contactsData]);
+  const resolveCallName = useCallback(
+    (entry: CallHistoryEntry): string => {
+      if (entry.isGroup) return entry.otherName || 'Group call';
+      const userId = String(entry.otherUserId || '');
+      const contact = contactByUserId.get(userId);
+      const phone = (contact as any)?.phone || (contact as any)?.phoneE164 || (contact as any)?.user?.phone;
+      return (
+        getResolvedDisplayName(
+          { _id: userId, name: entry.otherName, phone },
+          deviceIndex,
+          lookupDeviceContactName,
+          entry.otherName || 'Unknown',
+        ) || entry.otherName || 'Unknown'
+      );
+    },
+    [contactByUserId, deviceIndex],
+  );
 
   const { data: history, loading: liveLoading, error } = useSafeConvexQuery<CallHistoryEntry[]>(
     (api as any).calls.listMyCallHistory,
@@ -181,10 +219,10 @@ export default function CallsScreen() {
         calleeIdentities: calleeId ? [calleeId] : [],
         conversationId: String(entry.conversationId),
         isVideo,
-        displayName: String((entry as any).displayName || (entry as any).name || 'Call'),
+        displayName: resolveCallName(entry),
       });
     },
-    [router, me],
+    [router, me, resolveCallName],
   );
 
   if (!isAuthenticated) {
@@ -222,7 +260,7 @@ export default function CallsScreen() {
           renderItem={({ item }) => {
             const outcomeIcon = getOutcomeIcon(item);
             const isNeg = isNegativeOutcome(item);
-            const title = item.otherName || (item.isGroup ? 'Group call' : 'Unknown');
+            const title = resolveCallName(item);
             return (
               <TouchableOpacity
                 onPress={() => openConversation(item)}

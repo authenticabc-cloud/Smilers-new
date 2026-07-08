@@ -29,7 +29,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useAction, useMutation } from 'convex/react';
+import { useAction, useMutation, useQuery } from 'convex/react';
 import * as WebBrowser from 'expo-web-browser';
 import * as ExpoLinking from 'expo-linking';
 import { api } from '../src/convexApi';
@@ -139,6 +139,9 @@ export default function PremiumPage() {
   const checkoutAction = useAction(
     (api as any).premiumAction?.checkoutPremium,
   );
+  // iter-340: quick status entry — the user's own mobile-money requests.
+  const myMoneyRequests = useQuery((api as any).mobileMoneyRequests?.getMyRequests, {}) as any[] | undefined;
+  const latestMoneyReq = Array.isArray(myMoneyRequests) && myMoneyRequests.length > 0 ? myMoneyRequests[0] : null;
 
   useEffect(() => {
     if (success === 'true') {
@@ -218,6 +221,16 @@ export default function PremiumPage() {
       Alert.alert('Enter a code', 'Paste your PRE-XXX-XXX code to continue.');
       return;
     }
+    // If Premium is already active, the backend rejects a re-redeem with a raw
+    // server error. Short-circuit with a friendly message instead.
+    if (status.hasAccess) {
+      Alert.alert(
+        'Premium already active',
+        'Your account already has Premium, so there\u2019s nothing more to redeem. Enjoy!',
+      );
+      setRedeemCodeInput('');
+      return;
+    }
     setRedeeming(true);
     try {
       const result: any = await (redeemLicense as any)({ code });
@@ -237,15 +250,28 @@ export default function PremiumPage() {
       }
     } catch (errorValue: any) {
       const message = String(errorValue?.message || errorValue || '');
+      const lower = message.toLowerCase();
       const isMissing =
-        message.includes('CouldNotFindFunction') ||
-        message.toLowerCase().includes('not found');
-      Alert.alert(
-        'Could not redeem code',
-        isMissing
-          ? 'The Convex `premium.redeemLicenseCode` mutation hasn\u2019t been deployed yet. Once the web team ships it, this redemption flow will validate your code.'
-          : message.slice(0, 200),
-      );
+        message.includes('CouldNotFindFunction') || lower.includes('not found');
+      const isAlreadyUsed =
+        lower.includes('already') || lower.includes('redeemed') || lower.includes('used');
+      const isInvalid = lower.includes('invalid') || lower.includes('expired');
+      let friendly: string;
+      if (isMissing) {
+        friendly =
+          'The Convex `premium.redeemLicenseCode` mutation hasn\u2019t been deployed yet. Once the web team ships it, this redemption flow will validate your code.';
+      } else if (isAlreadyUsed) {
+        friendly =
+          'This code has already been redeemed. If your Premium is active, you\u2019re all set \u2014 no need to redeem again.';
+      } else if (isInvalid) {
+        friendly = 'This code is invalid or has expired. Please double-check it and try again.';
+      } else {
+        // Raw Convex "Server Error" (e.g. code already used) — hide the noisy
+        // request-id trace behind a clean, reassuring message.
+        friendly =
+          'We couldn\u2019t redeem this code. It may already have been used or is no longer valid. If your Premium is already active, you\u2019re all set.';
+      }
+      Alert.alert('Could not redeem code', friendly);
     } finally {
       setRedeeming(false);
     }
@@ -377,7 +403,42 @@ export default function PremiumPage() {
                 </>
               )}
             </TouchableOpacity>
+
+            {/* iter-339: manual Mobile Money alternative to card checkout. */}
+            <TouchableOpacity
+              style={styles.mobileMoneyBtn}
+              onPress={() =>
+                router.push({
+                  pathname: '/mobile-money',
+                  params: { variantId: selectedPlan.variantId },
+                } as any)
+              }
+              activeOpacity={0.85}
+              testID="premium-mobile-money"
+            >
+              <MaterialCommunityIcons name="cellphone" size={19} color={Colors.primary} />
+              <Text style={styles.mobileMoneyBtnText}>Pay with Mobile Money</Text>
+            </TouchableOpacity>
           </>
+        ) : null}
+
+        {/* iter-340: quick access to the user's mobile-money request status. */}
+        {latestMoneyReq ? (
+          <TouchableOpacity
+            style={styles.myMoneyRow}
+            onPress={() => router.push('/mobile-money' as any)}
+            activeOpacity={0.7}
+            testID="premium-my-money-requests"
+          >
+            <MaterialCommunityIcons name="cellphone-check" size={20} color={Colors.primary} />
+            <View style={styles.flexOne}>
+              <Text style={styles.myMoneyTitle}>Your mobile money requests</Text>
+              <Text style={styles.myMoneySub} numberOfLines={1}>
+                Latest: {latestMoneyReq.planLabel || latestMoneyReq.variantId} · {String(latestMoneyReq.status).charAt(0).toUpperCase() + String(latestMoneyReq.status).slice(1)}
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={18} color={Colors.textSecondary} />
+          </TouchableOpacity>
         ) : null}
 
         {/* Premium includes section (always shown) */}
@@ -416,7 +477,9 @@ export default function PremiumPage() {
           />
         </View>
 
-        {/* Redeem code block */}
+        {/* Redeem code block — always visible. If Premium is already active,
+            handleRedeem short-circuits with a friendly "nothing to redeem" note
+            instead of calling the backend (which rejects a re-redeem). */}
         <TouchableOpacity
           style={styles.redeemHeader}
           onPress={() => setShowRedeem((v) => !v)}
@@ -604,6 +667,33 @@ const styles = StyleSheet.create({
   },
   subscribeBtnLoading: { opacity: 0.85 },
   subscribeBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: '#3D2A00' },
+  mobileMoneyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    marginTop: 12,
+    borderRadius: Radius.md,
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+  },
+  mobileMoneyBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.primary },
+  flexOne: { flex: 1 },
+  myMoneyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.border,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    marginTop: Spacing.lg,
+  },
+  myMoneyTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  myMoneySub: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
 
   // Includes
   includesList: { gap: 10 },

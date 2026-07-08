@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Platform } from 'react-native';
+import { allowScreenCaptureAsync, preventScreenCaptureAsync } from 'expo-screen-capture';
 import {
   ActivityIndicator,
   Alert,
-  Dimensions,
   Image,
   Modal,
   Pressable,
@@ -15,8 +16,11 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useMutation, useQuery } from 'convex/react';
+import { useMutation, useQuery, useConvex } from 'convex/react';
+import * as Clipboard from 'expo-clipboard';
 import { api } from '../../src/convexApi';
+import { lookupUserByPhone } from '../../src/lib/phoneLookup';
+import { friendlyConvexError } from '../../src/lib/friendlyError';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { savePhotoToGallery } from '../../src/lib/savePhotoToGallery';
@@ -25,19 +29,19 @@ import SaveContactDialog from '../../src/components/SaveContactDialog';
 import {
   getDisplayInitials,
   getDisplayNameFromUser,
+  getResolvedDisplayName,
+  getSavedContactRecord,
 } from '../../src/lib/displayName';
+import {
+  useDeviceContactIndex,
+  lookupDeviceContactName,
+} from '../../src/lib/deviceContactIndex';
 import { formatLastSeenLabel } from '../../src/lib/presence';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
-
-type MediaTab = 'photos' | 'videos' | 'files';
-
-const SCREEN_W = Dimensions.get('window').width;
-const GRID_GAP = 8;
-const GRID_PADDING = Spacing.lg;
-const GRID_COLS = 3;
-const GRID_TILE = Math.floor(
-  (SCREEN_W - GRID_PADDING * 2 - GRID_GAP * (GRID_COLS - 1)) / GRID_COLS,
-);
+import ActionButton from '../../src/components/user-profile/ActionButton';
+import GroupInCommonRow from '../../src/components/user-profile/GroupInCommonRow';
+import MediaGrid, { MediaTabBtn } from '../../src/components/user-profile/MediaGrid';
+import type { MediaTab } from '../../src/components/user-profile/types';
 
 export default function UserProfileScreen() {
   const router = useRouter();
@@ -83,6 +87,7 @@ export default function UserProfileScreen() {
       (c: any) => String(c?._id || c?.userId) === String(userId) && c?.contactStatus === 'accepted'
     );
   }, [myContacts, userId]);
+  const deviceIndex = useDeviceContactIndex();
   const [showSaveDialog, setShowSaveDialog] = useState(false);
 
   // Shared media is sourced from the existing conversation messages.
@@ -95,10 +100,14 @@ export default function UserProfileScreen() {
     isAuthenticated && hasValidConversationId,
   );
 
-  // Groups in common — filter the user's conversations to groups that include
-  // the target user as a participant.
-  const { data: conversationsList } = useSafeConvexQuery<any[]>(
-    api.conversations.listConversations,
+  // Groups in common — use the SAME authoritative source as the Groups tab
+  // (api.conversations.listGroups). The old approach filtered
+  // listConversations by shape (isGroup/type/participants>2), but that query
+  // doesn't carry those flags reliably → 0 groups detected even when the
+  // viewer had many. listGroups returns the viewer's group conversations
+  // directly; GroupInCommonRow then verifies the target is a member.
+  const { data: myGroups } = useSafeConvexQuery<any[]>(
+    api.conversations.listGroups,
     {},
     [],
     isAuthenticated,
@@ -118,25 +127,65 @@ export default function UserProfileScreen() {
     return { photos, videos, files };
   }, [messagesPage]);
 
-  const groupsInCommon = useMemo(() => {
-    if (!Array.isArray(conversationsList) || !hasValidUserId) return [];
-    return conversationsList.filter((conv: any) => {
-      if (!conv || conv.type !== 'group') return false;
-      const memberIds = [
-        ...(Array.isArray(conv?.participantIds) ? conv.participantIds : []),
-        ...(Array.isArray(conv?.memberIds) ? conv.memberIds : []),
-        ...(Array.isArray(conv?.participants)
-          ? conv.participants.map(
-              (p: any) => p?.userId || p?._id || p?.id || '',
-            )
-          : []),
-        ...(Array.isArray(conv?.members)
-          ? conv.members.map((p: any) => p?.userId || p?._id || p?.id || '')
-          : []),
-      ].filter(Boolean);
-      return memberIds.map(String).includes(String(userId));
-    });
-  }, [conversationsList, hasValidUserId, userId]);
+  // Candidate groups = all of the viewer's group conversations (from
+  // listGroups). Membership of the *target* user is verified per-row via
+  // getGroupMembers (group rows don't always carry member IDs).
+  const candidateGroups = useMemo(
+    () => (Array.isArray(myGroups) ? myGroups.filter((g: any) => g && g._id) : []),
+    [myGroups],
+  );
+
+  // iter-324 (web-agent contract): the profile identifies people by PHONE, but
+  // group member lists hold ACCOUNT IDS. The old check compared the raw route
+  // param (which can be a phone/contact id) against account ids and always
+  // missed → "No shared groups yet". We build a set of ALL identities that
+  // point to the SAME account: the route param, the resolved `user._id`, and
+  // the account id we get by resolving the target's phone → account via
+  // `users.getByPhone`. GroupInCommonRow matches any of these (or a phone).
+  const convex = useConvex();
+  const targetPhoneE164 = useMemo(() => {
+    const raw = (user as any)?.phoneE164 || (user as any)?.phone || '';
+    if (typeof raw === 'string' && raw.trim()) return raw.trim();
+    // Route param itself may be a phone in some navigation paths.
+    const param = String(userId || '');
+    return /^\+?\d[\d\s-]{5,}$/.test(param) ? param : '';
+  }, [user, userId]);
+  const [phoneResolvedId, setPhoneResolvedId] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    if (!convex || !targetPhoneE164) {
+      setPhoneResolvedId(null);
+      return;
+    }
+    lookupUserByPhone(convex, targetPhoneE164)
+      .then((res) => {
+        if (alive) setPhoneResolvedId(res?._id ? String(res._id) : null);
+      })
+      .catch(() => {
+        if (alive) setPhoneResolvedId(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [convex, targetPhoneE164]);
+  const targetUserIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (userId) ids.add(String(userId));
+    if ((user as any)?._id) ids.add(String((user as any)._id));
+    if (phoneResolvedId) ids.add(phoneResolvedId);
+    return Array.from(ids);
+  }, [userId, user, phoneResolvedId]);
+
+  const [memberVerified, setMemberVerified] = useState<Record<string, boolean>>({});
+  const reportMembership = useCallback((convId: string, isMember: boolean) => {
+    setMemberVerified((prev) =>
+      prev[convId] === isMember ? prev : { ...prev, [convId]: isMember },
+    );
+  }, []);
+  const groupsInCommon = useMemo(
+    () => candidateGroups.filter((g: any) => memberVerified[String(g._id)]),
+    [candidateGroups, memberVerified],
+  );
 
   // --- UI state -----------------------------------------------------------
   const [mediaTab, setMediaTab] = useState<MediaTab>('photos');
@@ -144,9 +193,48 @@ export default function UserProfileScreen() {
   // iter-226: tap the profile photo → enlarge; save respects the owner's policy.
   const [avatarViewerOpen, setAvatarViewerOpen] = useState(false);
   const [savingPhoto, setSavingPhoto] = useState(false);
+  // Photo-save approval flow (iter-276): non-trustees who can't save directly
+  // send the owner an approve/decline request. Local optimistic state; the
+  // owner's decision syncs back via the reactive `canSavePhoto` (granted →
+  // Save button reappears). See /app/PHOTO_SAVE_REQUEST_BACKEND_SPEC.md.
+  const [saveRequested, setSaveRequested] = useState(false);
+  const [requestingSave, setRequestingSave] = useState(false);
+  const requestPhotoSave = useMutation((api as any).photoSaveRequests?.request);
+
+  // Block screenshots / screen-recording WHILE the enlarged profile photo is
+  // open. Toggled by viewer state (instead of whole-screen) so the rest of the
+  // profile remains screenshottable. Native-only (FLAG_SECURE on Android, blank
+  // capture on iOS); no-op on web.
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    if (!avatarViewerOpen) return;
+    let cancelled = false;
+    (async () => {
+      try { await preventScreenCaptureAsync('profile-photo'); } catch {}
+    })();
+    return () => {
+      cancelled = true;
+      void cancelled;
+      (async () => {
+        try { await allowScreenCaptureAsync('profile-photo'); } catch {}
+      })();
+    };
+  }, [avatarViewerOpen]);
 
   // --- Derived ------------------------------------------------------------
-  const displayName = getDisplayNameFromUser(user, 'Smilers user');
+  // iter-317: resolve the profile title to the viewer's DEVICE contact name
+  // (e.g. "Kojo") instead of the Smilers/Google account name. Enrich the user
+  // with the saved contact record (has phone) by userId, then match the device
+  // address book — same resolution the chat list/header already use.
+  const displayName = useMemo(() => {
+    const full = getSavedContactRecord(myContacts, { userId: userId || '' }) || user;
+    return getResolvedDisplayName(
+      full,
+      deviceIndex,
+      lookupDeviceContactName,
+      getDisplayNameFromUser(user, 'Smilers user'),
+    );
+  }, [myContacts, userId, user, deviceIndex]);
   const initials = getDisplayInitials(displayName);
   const avatarUri: string | null =
     user?.avatar || user?.avatarUrl || user?.photoURL || null;
@@ -160,10 +248,52 @@ export default function UserProfileScreen() {
   // iter-227: the backend now returns a server-computed `canSavePhoto` that
   // already accounts for the policy + contact relationship — trust it when
   // present; otherwise fall back to the client-side derivation.
+  // iter-227: the backend returns a server-computed, per-viewer `canSavePhoto`.
+  // iter-277: the profile-photo save model is now TRUSTEE-GATED — only the
+  // owner, the owner's trustees, or a viewer the owner has explicitly approved
+  // may save. Everyone else must request. So when the server flag is absent
+  // (loading / unauthenticated) we DEFAULT TO FALSE and show "Request to save"
+  // — we must NOT fall back to the old everyone/contacts policy (that let
+  // non-trustees save). Viewing your OWN profile is always allowed.
+  const isSelf =
+    !!me && !!userId && String(me?._id || me?.id) === String(userId);
   const canSavePhoto =
-    typeof user?.canSavePhoto === 'boolean'
-      ? user.canSavePhoto
-      : photoSavePolicy === 'everyone' || (photoSavePolicy === 'contacts' && isContact !== false);
+    isSelf || (typeof user?.canSavePhoto === 'boolean' ? user.canSavePhoto : false);
+
+  // Live status of MY outgoing save-request to this owner (web-synced). Lets the
+  // requester's screen react the instant the owner approves/declines — without
+  // re-tapping. Enabled only while a direct save isn't already allowed.
+  const { data: outgoingStatusData } = useSafeConvexQuery<any>(
+    (api as any).photoSaveRequests?.getOutgoingStatus,
+    hasValidUserId ? { ownerId: String(userId) } : {},
+    null,
+    hasValidUserId && !canSavePhoto,
+  );
+  const outgoingStatus: string =
+    (typeof outgoingStatusData === 'string' && outgoingStatusData) ||
+    (typeof outgoingStatusData?.status === 'string' && outgoingStatusData.status) ||
+    'none';
+  // canSavePhoto already folds in the backend's one-time grant; treat an
+  // explicit 'approved' status as save-enabled too (covers the brief window
+  // before the profile query refetches canSavePhoto).
+  const photoApproved = canSavePhoto || outgoingStatus === 'approved';
+  const photoDeclined = outgoingStatus === 'declined';
+  const prevStatusRef = useRef<string>('none');
+
+  // One-time alert when the owner approves while the viewer is on this screen.
+  useEffect(() => {
+    if (outgoingStatus === prevStatusRef.current) return;
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = outgoingStatus;
+    if (prev === 'pending' && outgoingStatus === 'approved') {
+      setSaveRequested(false);
+      Alert.alert('Approved', `${displayName} approved your request — you can now save the photo.`);
+    } else if (prev === 'pending' && outgoingStatus === 'declined') {
+      setSaveRequested(false);
+    }
+    // displayName is stable enough for an alert message; status is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outgoingStatus]);
 
   const saveAvatarPhoto = async () => {
     if (!avatarUri || savingPhoto) return;
@@ -175,6 +305,30 @@ export default function UserProfileScreen() {
       Alert.alert('Could not save', 'Something went wrong. Please try again.');
     } finally {
       setSavingPhoto(false);
+    }
+  };
+
+  // Non-trustee request to save the owner's profile photo → owner approves/declines.
+  const handleRequestPhotoSave = async () => {
+    if (requestingSave || saveRequested || !hasValidUserId) return;
+    setRequestingSave(true);
+    try {
+      await requestPhotoSave?.({ ownerId: String(userId) } as any);
+      setSaveRequested(true);
+      Alert.alert(
+        'Request sent',
+        `${displayName} will be asked to approve saving their photo. You can save it once they accept.`,
+      );
+    } catch (e: any) {
+      const msg = e?.data?.message || e?.message || '';
+      // Backend not deployed yet → graceful message instead of a crash.
+      if (/CouldNotFindPublicFunction|FunctionNotFound|not a function|undefined/i.test(String(msg))) {
+        Alert.alert('Not available yet', 'Saving by approval will be enabled soon.');
+      } else {
+        Alert.alert('Could not send request', msg || 'Please try again.');
+      }
+    } finally {
+      setRequestingSave(false);
     }
   };
   const aboutText =
@@ -203,6 +357,45 @@ export default function UserProfileScreen() {
         user?.engagements_count ??
         0,
     ) || 0;
+
+  // iter-313: contact phone number (web parity with own-profile). Prefer the
+  // registered Convex profile number; fall back to the locally-saved contact
+  // row. Show the verification pill and a copy affordance.
+  const matchedContact = useMemo(
+    () =>
+      Array.isArray(myContacts)
+        ? myContacts.find((c: any) => String(c?._id || c?.userId) === String(userId))
+        : null,
+    [myContacts, userId],
+  );
+  const contactPhone: string = String(
+    user?.phone ||
+      user?.phoneE164 ||
+      matchedContact?.phone ||
+      matchedContact?.phoneE164 ||
+      '',
+  ).trim();
+  const contactPhoneVerified = Boolean(
+    (user as any)?.phoneVerified ?? (user as any)?.isPhoneVerified,
+  );
+  const [phoneCopied, setPhoneCopied] = useState(false);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyPhone = async () => {
+    if (!contactPhone) return;
+    try {
+      await Clipboard.setStringAsync(contactPhone);
+      setPhoneCopied(true);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => setPhoneCopied(false), 1600);
+    } catch {
+      /* clipboard unavailable — no-op */
+    }
+  };
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
 
   // --- Actions ------------------------------------------------------------
   const openChat = async () => {
@@ -410,6 +603,46 @@ export default function UserProfileScreen() {
           </Text>
         </View>
 
+        {/* PHONE NUMBER (web parity — visible with verification + copy) */}
+        {contactPhone ? (
+          <>
+            <View style={styles.sectionDivider} />
+            <View style={styles.section}>
+              <View style={styles.phoneLabelRow}>
+                <Feather name="phone" size={13} color={Colors.primary} />
+                <Text style={styles.sectionLabel}>PHONE NUMBER</Text>
+              </View>
+              <View style={styles.phoneRow}>
+                <Text style={styles.phoneNumber} numberOfLines={1} testID="user-profile-phone">
+                  {contactPhone}
+                </Text>
+                {contactPhoneVerified ? (
+                  <View style={styles.verifiedPill} testID="user-profile-phone-verified">
+                    <MaterialCommunityIcons name="shield-check" size={13} color="#15803D" />
+                    <Text style={styles.verifiedText}>Verified</Text>
+                  </View>
+                ) : null}
+                <View style={{ flex: 1 }} />
+                <TouchableOpacity
+                  onPress={copyPhone}
+                  hitSlop={8}
+                  style={styles.copyBtn}
+                  testID="user-profile-phone-copy"
+                >
+                  <Feather
+                    name={phoneCopied ? 'check' : 'copy'}
+                    size={16}
+                    color={phoneCopied ? '#15803D' : Colors.primary}
+                  />
+                  <Text style={[styles.copyText, phoneCopied ? { color: '#15803D' } : null]}>
+                    {phoneCopied ? 'Copied' : 'Copy'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </>
+        ) : null}
+
         {/* GROUPS IN COMMON */}
         <View style={styles.sectionDivider} />
         <View style={styles.section}>
@@ -418,40 +651,18 @@ export default function UserProfileScreen() {
           </Text>
           {groupsInCommon.length === 0 ? (
             <Text style={styles.sectionEmpty}>No shared groups yet.</Text>
-          ) : (
-            <View style={styles.groupsList}>
-              {groupsInCommon.map((group: any) => (
-                <TouchableOpacity
-                  key={group._id}
-                  style={styles.groupRow}
-                  activeOpacity={0.85}
-                  onPress={() =>
-                    router.push(`/group/${group._id}` as any)
-                  }
-                  testID={`user-profile-group-${group._id}`}
-                >
-                  <View style={styles.groupAvatar}>
-                    {group?.avatar || group?.avatarUrl ? (
-                      <Image
-                        source={{ uri: group.avatar || group.avatarUrl }}
-                        style={styles.groupAvatarImg}
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <Ionicons
-                        name="people"
-                        size={18}
-                        color={Colors.primary}
-                      />
-                    )}
-                  </View>
-                  <Text style={styles.groupName} numberOfLines={1}>
-                    {group?.name || 'Group'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
+          ) : null}
+          <View style={styles.groupsList}>
+            {candidateGroups.map((group: any) => (
+              <GroupInCommonRow
+                key={group._id}
+                conv={group}
+                targetUserIds={targetUserIds}
+                targetPhoneE164={targetPhoneE164}
+                onResolve={reportMembership}
+              />
+            ))}
+          </View>
         </View>
 
         {/* SHARED MEDIA */}
@@ -541,7 +752,7 @@ export default function UserProfileScreen() {
           >
             <Feather name="x" size={26} color={Colors.white} />
           </TouchableOpacity>
-          {canSavePhoto ? (
+          {photoApproved ? (
             <TouchableOpacity
               style={[styles.avatarSaveBtn, { bottom: Math.max(insets.bottom, 16) + 24 }]}
               onPress={saveAvatarPhoto}
@@ -556,11 +767,33 @@ export default function UserProfileScreen() {
               )}
               <Text style={styles.avatarSaveText}>{savingPhoto ? 'Saving…' : 'Save to gallery'}</Text>
             </TouchableOpacity>
-          ) : (
+          ) : photoDeclined ? (
             <View style={[styles.avatarSaveBtn, styles.avatarSaveDisabled, { bottom: Math.max(insets.bottom, 16) + 24 }]}>
-              <Feather name="lock" size={16} color={Colors.white} />
-              <Text style={styles.avatarSaveText}>Saving disabled by {displayName}</Text>
+              <Feather name="slash" size={16} color={Colors.white} />
+              <Text style={styles.avatarSaveText}>{displayName} declined saving</Text>
             </View>
+          ) : saveRequested || outgoingStatus === 'pending' ? (
+            <View style={[styles.avatarSaveBtn, styles.avatarSaveDisabled, { bottom: Math.max(insets.bottom, 16) + 24 }]}>
+              <Feather name="clock" size={16} color={Colors.white} />
+              <Text style={styles.avatarSaveText}>Awaiting {displayName}&apos;s approval</Text>
+            </View>
+          ) : (
+            <TouchableOpacity
+              style={[styles.avatarSaveBtn, { bottom: Math.max(insets.bottom, 16) + 24 }]}
+              onPress={handleRequestPhotoSave}
+              activeOpacity={0.85}
+              disabled={requestingSave}
+              testID="user-avatar-viewer-request"
+            >
+              {requestingSave ? (
+                <ActivityIndicator size="small" color={Colors.white} />
+              ) : (
+                <Feather name="lock" size={16} color={Colors.white} />
+              )}
+              <Text style={styles.avatarSaveText}>
+                {requestingSave ? 'Sending…' : 'Request to save'}
+              </Text>
+            </TouchableOpacity>
           )}
         </View>
       </Modal>
@@ -592,165 +825,6 @@ export default function UserProfileScreen() {
           </TouchableOpacity>
         </Pressable>
       </Modal>
-    </View>
-  );
-}
-
-// --- Sub-components -------------------------------------------------------
-function ActionButton({
-  icon,
-  label,
-  onPress,
-  testID,
-}: {
-  icon: any;
-  label: string;
-  onPress: () => void;
-  testID?: string;
-}) {
-  return (
-    <TouchableOpacity
-      style={styles.actionItem}
-      activeOpacity={0.85}
-      onPress={onPress}
-      testID={testID}
-    >
-      <View style={styles.actionCircle}>
-        <Feather name={icon} size={22} color={Colors.primary} />
-      </View>
-      <Text style={styles.actionLabel}>{label}</Text>
-    </TouchableOpacity>
-  );
-}
-
-function MediaTabBtn({
-  active,
-  icon,
-  label,
-  onPress,
-  testID,
-}: {
-  active: boolean;
-  icon: any;
-  label: string;
-  onPress: () => void;
-  testID?: string;
-}) {
-  return (
-    <TouchableOpacity
-      style={[styles.mediaTab, active ? styles.mediaTabActive : null]}
-      onPress={onPress}
-      activeOpacity={0.85}
-      testID={testID}
-    >
-      <Feather
-        name={icon}
-        size={15}
-        color={active ? Colors.textPrimary : Colors.textSecondary}
-      />
-      <Text
-        style={[
-          styles.mediaTabLabel,
-          active ? styles.mediaTabLabelActive : null,
-        ]}
-      >
-        {label}
-      </Text>
-    </TouchableOpacity>
-  );
-}
-
-function MediaGrid({
-  tab,
-  items,
-  onPreview,
-}: {
-  tab: MediaTab;
-  items: any[];
-  onPreview: (uri: string) => void;
-}) {
-  if (items.length === 0) {
-    return (
-      <View style={styles.mediaEmptyWrap}>
-        <Feather
-          name={tab === 'photos' ? 'image' : tab === 'videos' ? 'film' : 'file-text'}
-          size={28}
-          color={Colors.textMuted}
-        />
-        <Text style={styles.mediaEmptyText}>
-          {tab === 'photos'
-            ? 'No shared photos yet.'
-            : tab === 'videos'
-              ? 'No shared videos yet.'
-              : 'No shared files yet.'}
-        </Text>
-      </View>
-    );
-  }
-
-  if (tab === 'files') {
-    return (
-      <View style={styles.filesList}>
-        {items.map((file: any) => (
-          <View key={file._id} style={styles.fileRow}>
-            <View style={styles.fileIcon}>
-              <Feather name="file-text" size={20} color={Colors.primary} />
-            </View>
-            <View style={styles.fileMeta}>
-              <Text style={styles.fileName} numberOfLines={1}>
-                {file?.fileName || 'Document'}
-              </Text>
-              <Text style={styles.fileSub}>
-                {file?.mimeType
-                  ? String(file.mimeType).split('/').pop()?.toUpperCase()
-                  : 'FILE'}
-              </Text>
-            </View>
-          </View>
-        ))}
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.mediaGrid}>
-      {items.map((item: any) => {
-        const src: string | null =
-          item?.mediaUrl ||
-          item?.url ||
-          item?.imageUrl ||
-          item?.thumbnailUrl ||
-          null;
-        return (
-          <TouchableOpacity
-            key={item._id}
-            style={styles.mediaTile}
-            activeOpacity={0.85}
-            onPress={() => (src ? onPreview(src) : undefined)}
-          >
-            {src && /^https?:/i.test(src) ? (
-              <Image
-                source={{ uri: src }}
-                style={styles.mediaTileImg}
-                resizeMode="cover"
-              />
-            ) : (
-              <View style={styles.mediaTilePlaceholder}>
-                <Feather
-                  name={tab === 'videos' ? 'film' : 'image'}
-                  size={20}
-                  color={Colors.textMuted}
-                />
-              </View>
-            )}
-            {tab === 'videos' ? (
-              <View style={styles.mediaVideoOverlay}>
-                <Feather name="play" size={18} color={Colors.white} />
-              </View>
-            ) : null}
-          </TouchableOpacity>
-        );
-      })}
     </View>
   );
 }
@@ -877,24 +951,6 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     justifyContent: 'center',
   },
-  actionItem: {
-    alignItems: 'center',
-    minWidth: 70,
-  },
-  actionCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: Colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  actionLabel: {
-    marginTop: 8,
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    fontWeight: FontWeight.medium,
-  },
 
   // Sections
   sectionDivider: {
@@ -923,30 +979,28 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     fontStyle: 'italic',
   },
-
-  // Groups in common
-  groupsList: { gap: 18 },
-  groupRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-  },
-  groupAvatar: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: Colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  groupAvatarImg: { width: 46, height: 46, borderRadius: 23 },
-  groupName: {
-    flex: 1,
+  phoneLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
+  phoneRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  phoneNumber: {
     fontSize: FontSize.lg,
     color: Colors.textPrimary,
     fontWeight: FontWeight.semibold,
   },
+  verifiedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: Radius.pill,
+  },
+  verifiedText: { fontSize: 12, color: '#15803D', fontWeight: FontWeight.bold },
+  copyBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 4 },
+  copyText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.semibold },
+
+  // Groups in common
+  groupsList: { gap: 18 },
 
   // Media tabs
   mediaTabs: {
@@ -955,98 +1009,6 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     padding: 4,
     gap: 4,
-  },
-  mediaTab: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    borderRadius: Radius.md,
-  },
-  mediaTabActive: {
-    backgroundColor: Colors.white,
-  },
-  mediaTabLabel: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    fontWeight: FontWeight.medium,
-  },
-  mediaTabLabelActive: {
-    color: Colors.textPrimary,
-    fontWeight: FontWeight.semibold,
-  },
-  mediaGrid: {
-    marginTop: 14,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: GRID_GAP,
-  },
-  mediaTile: {
-    width: GRID_TILE,
-    height: GRID_TILE,
-    borderRadius: 10,
-    overflow: 'hidden',
-    backgroundColor: '#EFE7D6',
-    borderWidth: 1,
-    borderColor: '#E0D6C0',
-    position: 'relative',
-  },
-  mediaTileImg: { width: '100%', height: '100%' },
-  mediaTilePlaceholder: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  mediaVideoOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.18)',
-  },
-  mediaEmptyWrap: {
-    marginTop: 14,
-    paddingVertical: Spacing.xl,
-    alignItems: 'center',
-    gap: 8,
-  },
-  mediaEmptyText: {
-    fontSize: FontSize.sm,
-    color: Colors.textMuted,
-    fontStyle: 'italic',
-  },
-
-  // Files list
-  filesList: { marginTop: 12, gap: 12 },
-  fileRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 8,
-  },
-  fileIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  fileMeta: { flex: 1 },
-  fileName: {
-    fontSize: FontSize.base,
-    color: Colors.textPrimary,
-    fontWeight: FontWeight.semibold,
-  },
-  fileSub: {
-    marginTop: 2,
-    fontSize: FontSize.xs,
-    color: Colors.textSecondary,
   },
 
   // Block

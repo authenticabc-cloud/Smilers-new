@@ -25,6 +25,7 @@ import VoiceCommandLauncher from '../src/components/VoiceCommandLauncher';
 import IncomingScreenShareModal from '../src/components/IncomingScreenShareModal';
 import CallHost from '../src/components/call/CallHost';
 import CallReturnBanner from '../src/components/call/CallReturnBanner';
+import ResumeLastRoute from '../src/components/ResumeLastRoute';
 import { recordTouchActivity } from '../src/lib/touchActivity';
 import { applyInterFontPatch } from '../src/lib/fontPatch';
 import {
@@ -208,6 +209,15 @@ function PresenceHeartbeat() {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { useIncomingCallListener } = require('../src/push/useIncomingCallListener');
   useIncomingCallListener();
+
+  // GLOBAL "delivered" (GREEN dot) marker — exact port of the web app's global
+  // delivery component. Subscribes to getUnreadCounts and marks a conversation
+  // delivered whenever its unread count increases (new incoming message),
+  // regardless of the current screen. This is what makes the sender see
+  // yellow(sent) → green(delivered) → blue(read), matching web.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { useDeliveryReceipts } = require('../src/hooks/useDeliveryReceipts');
+  useDeliveryReceipts();
 
   // iter-248 (CRITICAL): wire the notifee call-navigator BRIDGE. The Answer
   // handlers in notifeeCallWake.ts call `callNavigator(route)` to open
@@ -431,6 +441,7 @@ export default function RootLayout() {
             <GlobalNotificationServices />
             <PresenceHeartbeat />
             <ShareIntentRouter />
+            <ResumeLastRoute />
             <CallWakeBootstrap />
             <StatusBar style="light" backgroundColor={Colors.headerBg} />
             <AppLockGate>

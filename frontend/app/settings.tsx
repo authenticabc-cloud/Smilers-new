@@ -31,11 +31,10 @@ type Row = {
 
 const ITEMS: Row[] = [
   // iter-176: 'Diagnostic Logs' row was removed for production publish.
-  // iter-214: re-enabled because the Test Push / Force Reconnect buttons
-  // inside it are now critical for triaging push & loading regressions
-  // in the wild. Will revisit hiding once those features prove stable.
-  { key: 'diagnostic-logs', route: '/diagnostic-logs', title: 'Diagnostic Logs', sub: 'Test push, force reconnect, crash log', icon: 'bug-outline', lib: 'ion' },
-  { key: 'call-diagnostics', route: '/call-diagnostics', title: 'Call Diagnostics', sub: 'Recent call ring, answer/decline & auto-drop events', icon: 'pulse-outline', lib: 'ion' },
+  // iter-214: briefly re-enabled for triaging push/loading regressions.
+  // 2026-07-06: hidden again for the Play Store launch (user request). The
+  // /diagnostic-logs and /call-diagnostics routes still exist and can be
+  // reached directly or re-listed here later if needed.
   { key: 'lockscreen-wake', route: '/lockscreen-wake', title: 'Lockscreen Wake', sub: 'Allow incoming calls to wake the locked screen', icon: 'cellphone-screenshot', lib: 'mc' },
   { key: 'privacy', route: '/privacy', title: 'Privacy', sub: 'Last seen, profile photo, about', icon: 'shield-outline', lib: 'ion' },
   { key: 'app-lock', route: '/app-lock', title: 'App Lock', sub: 'PIN code and biometric unlock', icon: 'fingerprint', lib: 'mc' },

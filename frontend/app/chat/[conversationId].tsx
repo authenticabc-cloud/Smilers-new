@@ -2,12 +2,15 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   FlatList,
   Image,
   InteractionManager,
   Keyboard,
   KeyboardAvoidingView,
+  Modal,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -20,9 +23,10 @@ import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useConvex, useMutation, useQuery } from 'convex/react';
 import { forceConvexReconnect } from '../../src/providers/useConvexAutoReconnect';
+import { recordingActivity } from '../../src/lib/recordingActivity';
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
-import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
+import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
@@ -32,6 +36,8 @@ import { SharedContactBubble } from '../../src/components/chat/SharedContactBubb
 import EmojiPickerSheet from '../../src/components/EmojiPickerSheet';
 import GiphyPicker, { GiphyAsset } from '../../src/components/GiphyPicker';
 import MediaBubble from '../../src/components/MediaBubble';
+import MessageInfoSheet from '../../src/components/chat/MessageInfoSheet';
+import { processComposerChange, toggleListFormat, currentLineListKind } from '../../src/lib/autoNumbering';
 import { LiveLocationRequestBanner } from '../../src/components/LiveLocationRequestBanner';
 import { LiveLocationSharingPill } from '../../src/components/LiveLocationSharingPill';
 import PollComposer from '../../src/components/PollComposer';
@@ -40,6 +46,7 @@ import { useSafeConvexQuery, useSafeConvexSubscription } from '../../src/hooks/u
 import { useScreenCaptureProtection } from '../../src/hooks/useScreenCaptureProtection';
 import { useEngagementTracker } from '../../src/hooks/useEngagementTracker';
 import { recordDiagnostic } from '../../src/lib/diagnostics';
+import { callDebug } from '../../src/lib/callDebugLog';
 import { errorToMessage } from '../../src/lib/safeString';
 import { scanMessage as scanMessageDeep } from '../../src/lib/messageSecurityScanner';
 import {
@@ -48,12 +55,29 @@ import {
   assertUploadSize,
 } from '../../src/lib/dataFriendlyDefaults';
 import { readCache, writeCache } from '../../src/lib/offlineCache';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
+import NetInfo from '@react-native-community/netinfo';
+
+// iter-301: tag used to keep the screen awake ONLY while a voice note is
+// being recorded. If the screen turns off mid-record, Android can suspend
+// the app and wipe the recorder's temp file in /cache/Audio — which produced
+// the "holes"/loop on playback and the
+// "Directory …/cache/Audio/recording-….m4a doesn't exist" upload failure.
+const VOICE_REC_KEEP_AWAKE_TAG = 'smilers-voice-rec';
+import {
+  loadOutbox,
+  enqueueOutbox,
+  removeFromOutbox,
+  markOutboxFailed,
+  type OutboxMessage,
+} from '../../src/lib/outbox';
 import { shareMessage } from '../../src/lib/messageMedia';
 import { appendDiaryEntry, chatMessageToDiaryEntry } from '../../src/lib/diaryStore';
 import { getWallpaperColor, normalizeChatAppearance } from '../../src/lib/chatAppearance';
 import { notifyEventPush, previewForMessageType } from '../../src/lib/notifyPush';
 import { reportConvexUserIdForPush } from '../../src/push/useEmergentPush';
-import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
+import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName, getResolvedDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { getLanguageByCode } from '../../src/lib/languages';
 import {
@@ -73,6 +97,8 @@ import {
   writeStoredJson,
 } from '../../src/lib/settingsStorage';
 import { formatLastSeenLabel } from '../../src/lib/presence';
+import { loadChatDraft, saveChatDraft, clearChatDraft, isChatDraftEmpty } from '../../src/lib/chatDrafts';
+import { rememberChatRoute } from '../../src/lib/lastRoute';
 import { translateIncomingMessageText } from '../../src/lib/translation';
 import { uploadFile } from '../../src/lib/uploadFile';
 import { useAuth } from '../../src/providers/AuthProvider';
@@ -87,6 +113,8 @@ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src
 import { formatChatDayChip, isSameCalendarDay } from '../../src/lib/chatFormat';
 import { CallPill } from '../../src/components/chat/CallPill';
 import { RecordingPlaybackModal } from '../../src/components/chat/RecordingPlayback';
+import { EditPermissionModals } from '../../src/components/chat/EditPermissionModals';
+import { friendlyConvexError } from '../../src/lib/friendlyError';
 import { ChatOptionsMenu } from '../../src/components/chat/ChatOptionsMenu';
 import { SwipeToReply } from '../../src/components/chat/SwipeToReply';
 import { MessageActionSheet } from '../../src/components/chat/MessageActionSheet';
@@ -112,6 +140,40 @@ function formatPresenceSubtitle(conversation: any) {
   }
   return formatLastSeenLabel(conversation);
 }
+
+/**
+ * Read fileName + fileSize for a local media URI. The web app's
+ * `messages.send` includes `fileName`, `fileSize` and `mimeType` for ALL
+ * media (image/video/audio/file); the mobile image/video sends were omitting
+ * fileName + fileSize, which the (strict) Convex backend rejected — the photo
+ * stayed stuck in the composer and videos sent with broken metadata. This
+ * derives both so mobile matches the web send signature exactly.
+ */
+async function getMediaMeta(
+  uri: string,
+  mime: string,
+  fallbackBase: string,
+): Promise<{ fileName: string; fileSize: number }> {
+  let fileSize = 0;
+  try {
+    const info: any = await LegacyFileSystem.getInfoAsync(uri, { size: true } as any);
+    if (info?.exists && typeof info.size === 'number') fileSize = info.size;
+  } catch {
+    /* size best-effort */
+  }
+  let fileName = '';
+  try {
+    fileName = (uri.split('/').pop() || '').split('?')[0];
+  } catch {
+    /* ignore */
+  }
+  if (!fileName) {
+    const ext = (mime.split('/')[1] || 'bin').split(';')[0];
+    fileName = `${fallbackBase}.${ext}`;
+  }
+  return { fileName, fileSize };
+}
+
 
 export default function ChatScreen() {
   const router = useRouter();
@@ -141,6 +203,14 @@ export default function ChatScreen() {
   // when chatting from the native client).
   const engagement = useEngagementTracker();
   const [text, setText] = useState('');
+  // iter-294: caret tracking for cursor-aware auto-numbering (mid-list Enter
+  // + renumber). `composerSelectionRef` mirrors the live caret; `forcedSelection`
+  // is a one-shot controlled selection we set only after programmatically
+  // moving the caret (then released on the next selection change).
+  const composerSelectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
+  const [forcedSelection, setForcedSelection] = useState<{ start: number; end: number } | undefined>(undefined);
+  // iter-294: highlight the active list button when the caret sits in a list.
+  const [activeListKind, setActiveListKind] = useState<'ordered' | 'bullet' | null>(null);
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [replyTo, setReplyTo] = useState<any | null>(null);
@@ -156,6 +226,14 @@ export default function ChatScreen() {
   // message list stays visible; matches are highlighted in place.
   const [searchActivePos, setSearchActivePos] = useState(0);
   const searchInitTermRef = useRef<string | null>(null);
+  // iter-291: tapping a reply's quoted preview jumps to the original message
+  // and briefly flashes it. `jumpHighlightId` holds the target message id while
+  // the highlight is visible; a timer clears it after a short interval.
+  const [jumpHighlightId, setJumpHighlightId] = useState<string | null>(null);
+  const jumpHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // iter-292: message selected for the rich "Message Info" sheet (Read by +
+  // media consumption rows). null = sheet closed.
+  const [infoMsg, setInfoMsg] = useState<any | null>(null);
   const [selectedMsg, setSelectedMsg] = useState<any | null>(null);
   // Tri-state delete-mode sheet: when set, prompts WhatsApp-style "Delete for me /
   // for receiver / for everyone" (sent) or "Delete for me / ask sender" (received).
@@ -221,6 +299,11 @@ export default function ChatScreen() {
   const recTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const recCancelledRef = useRef(false);
   const recStartMsRef = useRef(0);
+  // iter-307: disposer for the "recording in progress" lock-suppression signal.
+  const recActivityDisposeRef = useRef<null | (() => void)>(null);
+  // iter-310: heartbeat interval id for broadcasting the "recording…" activity
+  // to the other participant (must re-send < 5s or the indicator expires).
+  const recBroadcastTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recDurationMsRef = useRef(0);
   const listRef = useRef<FlatList<any>>(null);
   // iter-231: track whether the user is near the bottom so we only auto-scroll
@@ -239,6 +322,21 @@ export default function ChatScreen() {
   const typingIndicatorsEnabledRef = useRef(true);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(audioRecorder, 200);
+
+  // iter-304: voice-note REVIEW-before-send. After the user stops a recording
+  // we stage it here (instead of sending immediately) so they can listen back
+  // and re-record if it sounds off. `reviewUri` points at the stable copy.
+  const [reviewUri, setReviewUri] = useState<string | null>(null);
+  const [reviewDurationSec, setReviewDurationSec] = useState(0);
+  const [reviewReplyToId, setReviewReplyToId] = useState<string | undefined>(undefined);
+  const reviewSource = useMemo(() => (reviewUri ? { uri: reviewUri } : null), [reviewUri]);
+  const reviewPlayer = useAudioPlayer(reviewSource);
+  const reviewStatus = useAudioPlayerStatus(reviewPlayer);
+  const reviewPlaying = !!reviewStatus?.playing;
+  const reviewProgress =
+    reviewStatus && reviewStatus.duration > 0
+      ? Math.min(1, (reviewStatus.currentTime || 0) / reviewStatus.duration)
+      : 0;
   const hasValidConversationId =
     typeof conversationId === 'string' && /^[a-z0-9]+$/i.test(conversationId) && conversationId.length > 10;
   const canQueryConversation = !!conversationId && hasValidConversationId && isAuthenticated;
@@ -286,6 +384,33 @@ export default function ChatScreen() {
     canQueryConversation ? { conversationId, paginationOpts: { numItems: 50, cursor: null } } : 'skip'
   ) as any;
   const messagesLoading = canQueryConversation && messagesPage === undefined;
+  // iter-336: group pinned post. Admins (chief/admin/creator) pin or unpin;
+  // banner is visible to ALL members. Direct 1:1 chats — either person can
+  // pin. Canonical contract: conversations.pinMessage({ conversationId,
+  // messageId }) to pin/replace; omit messageId to unpin. getPinnedMessage
+  // returns the pinned message doc (or null). Admin gate via
+  // groupAdmin.getGroupAdminInfo → isAdmin.
+  const isGroupChat = conversation?.type === 'group';
+  const pinMessageMutation = useMutation((api as any).conversations?.pinMessage);
+  const pinnedMessage = useQuery(
+    (api as any).conversations?.getPinnedMessage,
+    canQueryConversation ? { conversationId } : 'skip',
+  ) as any;
+  const groupAdminInfo = useQuery(
+    (api as any).groupAdmin?.getGroupAdminInfo,
+    canQueryConversation && isGroupChat ? { conversationId } : 'skip',
+  ) as any;
+  // iter-338: group members carry each sender's Smilers/Google account name
+  // (and phone for device-contact resolution). Used by resolveSenderName so a
+  // group message never falls back to the generic "Member" label.
+  const groupMembers = useQuery(
+    (api as any).conversations?.getGroupMembers,
+    canQueryConversation && isGroupChat ? { conversationId } : 'skip',
+  ) as any[] | undefined;
+  const canPinMessages = isGroupChat ? !!groupAdminInfo?.isAdmin : true;
+  const pinnedMessageId = pinnedMessage
+    ? String(pinnedMessage._id || pinnedMessage.messageId || pinnedMessage.message?._id || '')
+    : '';
   // iter 156: call-log pills in chat timeline (per Smilers web parity).
   // Backed by canonical contract api.calls.listCallLogsForConversation.
   // iter-180: switched from one-shot useSafeConvexQuery to a LIVE
@@ -324,6 +449,48 @@ export default function ChatScreen() {
   // iter-176: device address-book name takes priority for the chat
   // header title (1:1 chats only — group titles are untouched).
   const deviceContactIndex = useDeviceContactIndex();
+  // iter-338: index group members by userId so we can resolve a sender's
+  // real account name + phone from the message's senderId alone.
+  const groupMemberById = useMemo(() => {
+    const map = new Map<string, any>();
+    (Array.isArray(groupMembers) ? groupMembers : []).forEach((m: any) => {
+      const uid = String(m?.userId || m?._id || m?.user?._id || '');
+      if (uid) map.set(uid, m);
+    });
+    return map;
+  }, [groupMembers]);
+  // iter-337/338: resolve a group message sender's display name. Device address-
+  // book name takes priority (matched via the viewer's saved contact record OR
+  // the group member's phone), falling back to the sender's Smilers/Google
+  // account name — NOT the generic "Member" label. Mirrors group/[id].tsx's
+  // displayNameForMember.
+  const resolveSenderName = useCallback(
+    (senderId: any, fallbackName?: string): string => {
+      const uid = String(senderId || '');
+      const member = groupMemberById.get(uid) || {};
+      const record = getSavedContactRecord(contacts, { userId: uid });
+      // Prefer the actual account name over the generic message fallback.
+      const memberName =
+        (member?.name && String(member.name).trim()) ||
+        (member?.displayName && String(member.displayName).trim()) ||
+        '';
+      const fb =
+        memberName ||
+        (fallbackName && String(fallbackName).trim()) ||
+        'Member';
+      // Merge the saved-contact record (viewer's phonebook) over the group
+      // member profile so phone numbers from either source enable device lookup.
+      const base = { ...member, ...(record || {}) };
+      return getResolvedDisplayName(
+        { ...base, name: base.name || fb, displayName: base.displayName || fb },
+        deviceContactIndex,
+        lookupDeviceContactName,
+        fb,
+      );
+    },
+    [contacts, deviceContactIndex, groupMemberById],
+  );
+
   const refetchMessages = useCallback(async () => {}, []);
   const { data: conversationsForForward } = useSafeConvexQuery<any[]>(
     api.conversations.listConversations,
@@ -462,6 +629,92 @@ export default function ChatScreen() {
     },
     [sendMessageRaw, conversationId],
   );
+
+  // ── Offline outbox (web-parity) ──────────────────────────────────────────
+  // Plain-text messages that fail to reach the server (device offline /
+  // Convex unreachable) are queued in AsyncStorage and shown immediately in
+  // the timeline with a RED delivery dot. The queue auto-flushes when
+  // connectivity returns (NetInfo) or the app returns to the foreground
+  // (AppState 'active'). E2EE & media messages are NOT queued — they need
+  // live keys / a live upload session.
+  const [outboxMsgs, setOutboxMsgs] = useState<OutboxMessage[]>([]);
+  const [isOffline, setIsOffline] = useState(false);
+  const flushingRef = useRef(false);
+
+  // Hydrate the queue for this conversation on mount / id change.
+  useEffect(() => {
+    if (!conversationId) {
+      setOutboxMsgs([]);
+      return;
+    }
+    let mounted = true;
+    void loadOutbox(String(conversationId)).then((list) => {
+      if (mounted) setOutboxMsgs(list);
+    });
+    return () => { mounted = false; };
+  }, [conversationId]);
+
+  // Attempt to send every queued message. On success the local entry is
+  // removed (the real server message arrives via the reactive query); on
+  // failure it is marked __failed and stays RED for the next flush.
+  const flushOutbox = useCallback(async () => {
+    if (!conversationId || flushingRef.current) return;
+    flushingRef.current = true;
+    try {
+      const queue = await loadOutbox(String(conversationId));
+      if (queue.length === 0) {
+        setOutboxMsgs([]);
+        return;
+      }
+      for (const item of queue) {
+        try {
+          await sendMessage({
+            conversationId,
+            type: 'text',
+            text: item.text,
+            ...(item.replyToId ? { replyToId: item.replyToId } : {}),
+          });
+          const next = await removeFromOutbox(String(conversationId), item._id);
+          setOutboxMsgs(next);
+        } catch (err) {
+          // Still offline / failed — keep it RED and stop the run; we'll
+          // retry on the next connectivity / foreground event.
+          const next = await markOutboxFailed(String(conversationId), item._id);
+          setOutboxMsgs(next);
+          break;
+        }
+      }
+    } finally {
+      flushingRef.current = false;
+    }
+  }, [conversationId, sendMessage]);
+
+  // Auto-flush triggers: connectivity returns + app foreground. Also tracks
+  // the offline state to drive the "showing saved messages" banner.
+  useEffect(() => {
+    if (!conversationId) return;
+    const applyState = (state: { isConnected: boolean | null; isInternetReachable: boolean | null }) => {
+      const online = !!state.isConnected && state.isInternetReachable !== false;
+      setIsOffline(!online);
+      if (online) void flushOutbox();
+    };
+    const unsubNet = NetInfo.addEventListener(applyState);
+    void NetInfo.fetch().then(applyState);
+    const appStateSub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') {
+        void NetInfo.fetch().then(applyState);
+        void flushOutbox();
+      }
+    });
+    // Kick a flush right away in case we mounted with a pending queue and are
+    // already online.
+    void flushOutbox();
+    return () => {
+      unsubNet();
+      appStateSub.remove();
+    };
+  }, [conversationId, flushOutbox]);
+
   const setTyping = useMutation(api.typing.setTyping);
   const clearTyping = useMutation((api as any).typing.clearTyping);
 
@@ -473,10 +726,74 @@ export default function ChatScreen() {
     [],
     !!conversationId,
   );
-  const markDelivered = useMutation((api as any).messages.markDelivered);
   const markRead = useMutation(api.messages.markRead);
+  // Incoming "delete for everyone" requests addressed to me (as the sender of
+  // the message). Mirrors the web app: getPendingDeletionRequests + a banner
+  // with Delete / Decline → respondToDeletionRequest({ requestId, accept }).
+  const pendingDeletionRequests = useQuery(
+    (api as any).messages.getPendingDeletionRequests,
+    isAuthenticated ? {} : 'skip',
+  ) as any[] | undefined;
+  const respondToDeletionRequest = useMutation((api as any).messages.respondToDeletionRequest);
   const toggleReaction = useMutation(api.messages.toggleReaction);
   const deleteMessage = useMutation(api.messages.deleteMessage);
+  // iter-322: PER-VIEWER deletes ("Delete for me" / "Delete for receiver") are
+  // handled by the shared Convex backend by REMOVING the message from the
+  // actor's query results entirely (verified w/ Emergent support) — it does NOT
+  // stamp deletedAt/isDeleted on the actor's own copy (only delete-for-EVERYONE
+  // marks deletedAt globally). The user wants a WhatsApp-style "This message was
+  // deleted" TOMBSTONE on the actor's device for these scopes (NOT a vanish).
+  // Since the server drops the row, an overlay alone has nothing to attach to,
+  // so we persist enough metadata (senderId + creationTime) to reconstruct a
+  // SYNTHETIC tombstone entry in the timeline. Persisted per-conversation as
+  // { [msgId]: { deletedAt, senderId, creationTime } }.
+  const LOCAL_DELETED_KEY = `smilers:deleted_msgs:${String(conversationId || 'unknown')}`;
+  type LocalDeletedEntry = { deletedAt: number; senderId: string; creationTime: number };
+  const [locallyDeleted, setLocallyDeleted] = useState<Record<string, LocalDeletedEntry>>({});
+  useEffect(() => {
+    let alive = true;
+    readStoredJson<Record<string, any>>(LOCAL_DELETED_KEY, {}).then((stored) => {
+      if (!alive || !stored || typeof stored !== 'object') return;
+      // Normalise legacy shape ({ id: number }) → { id: { deletedAt, ... } }.
+      const normalised: Record<string, LocalDeletedEntry> = {};
+      for (const [id, val] of Object.entries(stored)) {
+        if (typeof val === 'number') {
+          normalised[id] = { deletedAt: val, senderId: '', creationTime: val };
+        } else if (val && typeof val === 'object') {
+          normalised[id] = {
+            deletedAt: Number((val as any).deletedAt) || Date.now(),
+            senderId: String((val as any).senderId || ''),
+            creationTime: Number((val as any).creationTime) || Number((val as any).deletedAt) || Date.now(),
+          };
+        }
+      }
+      setLocallyDeleted(normalised);
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
+  const markDeletedLocally = useCallback(
+    (msg: any) => {
+      const id = msg?._id ? String(msg._id) : '';
+      if (!id) return;
+      setLocallyDeleted((prev) => {
+        if (prev[id]) return prev;
+        const entry: LocalDeletedEntry = {
+          deletedAt: Date.now(),
+          senderId: String(msg?.senderId || ''),
+          creationTime: Number(msg?._creationTime) || Date.now(),
+        };
+        const next = { ...prev, [id]: entry };
+        void writeStoredJson(LOCAL_DELETED_KEY, next);
+        return next;
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [conversationId]
+  );
+
   // Optional edit mutations — different Convex deployments expose this under
   // different names (`editMessage`, `updateMessage`, `editText`). We try them
   // in order at call-time. `api: any` keeps TS happy even if the function
@@ -484,6 +801,26 @@ export default function ChatScreen() {
   const editMessage = useMutation((api as any).messages.editMessage);
   const updateMessage = useMutation((api as any).messages.updateMessage);
   const editTextMutation = useMutation((api as any).messages.editText);
+  // iter-333 group-post edit permissions (Phase 1). mode ∈ owner|open|approval.
+  const setEditModeMutation = useMutation((api as any).messages.setEditMode);
+  const [editModeTarget, setEditModeTarget] = useState<any | null>(null);
+  // iter-334 (Phase 2): propose / review edit workflow for "approval" mode.
+  const proposeEditMutation = useMutation((api as any).messages.proposeEdit);
+  const reviewEditMutation = useMutation((api as any).messages.reviewEdit);
+  const [proposingMessageId, setProposingMessageId] = useState<string | null>(null);
+  const [showPendingEdits, setShowPendingEdits] = useState(false);
+  const pendingEditsList = useQuery(
+    (api as any).messages.listPendingEdits,
+    conversationId ? { conversationId } : 'skip',
+  ) as any[] | undefined;
+  const pendingEditsCount = useQuery(
+    (api as any).messages.countPendingEdits,
+    conversationId ? { conversationId } : 'skip',
+  ) as number | undefined;
+  const myPendingForSelected = useQuery(
+    (api as any).messages.getMyPendingEdit,
+    selectedMsg?._id ? { messageId: selectedMsg._id } : 'skip',
+  ) as any;
   // iter-147: canonical contract — toggleStar lives on `api.starred`,
   // NOT `api.messages`. Args require BOTH `messageId` AND
   // `conversationId` (server validates participant access).
@@ -513,6 +850,89 @@ export default function ChatScreen() {
   // message. Clearing this id (Cancel or successful save) returns the
   // composer to normal send mode. See iter-97 fix.
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+
+  // ── Composer draft persistence ────────────────────────────────────────────
+  // Save whatever the user has started (text, staged photos, reply target,
+  // in-progress edit, formatting) per conversation so leaving the chat — or the
+  // app — never loses it. On return the composer rehydrates exactly where they
+  // paused. See src/lib/chatDrafts.ts.
+  // Remember this conversation as the "resume target" so a full app restart
+  // reopens it (see src/lib/lastRoute.ts + ResumeLastRoute in _layout).
+  useEffect(() => {
+    if (conversationId && hasValidConversationId) {
+      void rememberChatRoute(`/chat/${conversationId}`);
+    }
+  }, [conversationId, hasValidConversationId]);
+
+  const draftHydratedRef = useRef(false);
+  const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestDraftRef = useRef<{ conversationId: string; draft: any } | null>(null);
+
+  // Hydrate the stored draft once per conversation open.
+  useEffect(() => {
+    draftHydratedRef.current = false;
+    if (!conversationId) return;
+    let alive = true;
+    void loadChatDraft(String(conversationId)).then((draft) => {
+      if (!alive) return;
+      if (draft && !isChatDraftEmpty(draft)) {
+        if (typeof draft.text === 'string' && draft.text.length > 0) setText(draft.text);
+        if (draft.replyTo) setReplyTo(draft.replyTo);
+        if (Array.isArray(draft.pendingImages) && draft.pendingImages.length > 0) {
+          setPendingImages(draft.pendingImages);
+        }
+        if (draft.editingMessageId) setEditingMessageId(draft.editingMessageId);
+        if (typeof draft.draftBold === 'boolean') setDraftBold(draft.draftBold);
+        if (draft.draftColor) setDraftColor(draft.draftColor as DraftTextColorKey);
+      }
+      draftHydratedRef.current = true;
+    });
+    return () => {
+      alive = false;
+    };
+  }, [conversationId]);
+
+  // Persist the draft (debounced) whenever any composer field changes — but
+  // only after hydration, so the initial empty state never wipes a saved draft.
+  useEffect(() => {
+    if (!conversationId || !draftHydratedRef.current) return;
+    if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
+    const draft = {
+      text,
+      replyTo,
+      pendingImages,
+      editingMessageId,
+      draftBold,
+      draftColor,
+    };
+    // Mirror the latest draft so we can flush it immediately on unmount (e.g.
+    // the user hits Back within the debounce window).
+    latestDraftRef.current = { conversationId: String(conversationId), draft };
+    draftSaveTimerRef.current = setTimeout(() => {
+      if (isChatDraftEmpty(draft)) {
+        void clearChatDraft(String(conversationId));
+      } else {
+        void saveChatDraft(String(conversationId), draft);
+      }
+    }, 400);
+    return () => {
+      if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
+    };
+  }, [conversationId, text, replyTo, pendingImages, editingMessageId, draftBold, draftColor]);
+
+  // Flush the latest draft immediately when the chat unmounts, so a quick Back
+  // tap during the debounce window still persists (or clears) it.
+  useEffect(() => {
+    return () => {
+      const pending = latestDraftRef.current;
+      if (!pending || !pending.conversationId) return;
+      if (isChatDraftEmpty(pending.draft)) {
+        void clearChatDraft(pending.conversationId);
+      } else {
+        void saveChatDraft(pending.conversationId, pending.draft);
+      }
+    };
+  }, []);
 
   const messages: any[] = useMemo(() => {
     const page = messagesPage as any;
@@ -552,6 +972,39 @@ export default function ChatScreen() {
       void writeCache('chat-messages', String(conversationId), arr.slice(0, 100));
     }
   }, [conversationId, messagesPage]);
+
+  // iter-234 OFFLINE READ ACCESS: cache the conversation object + my own
+  // user record so a cold/offline open can fully render the chat (header
+  // name, "is mine" alignment, composer enabled) from cached messages —
+  // not just a perpetual "Taking longer than usual" spinner.
+  //   - `chat-conversation` scope is written here whenever the live
+  //     conversation resolves (rich `listConversations` row preferred).
+  //   - `me`/`self` scope is already written by the Chats tab; we only read.
+  const [cachedConversation, setCachedConversation] = useState<any | null>(null);
+  const [cachedMe, setCachedMe] = useState<any | null>(null);
+
+  useEffect(() => {
+    if (!conversationId) return;
+    let mounted = true;
+    void readCache<any>('chat-conversation', String(conversationId)).then((c) => {
+      if (mounted && c) setCachedConversation(c);
+    });
+    void readCache<any>('me', 'self').then((m) => {
+      if (mounted && m) setCachedMe(m);
+    });
+    return () => { mounted = false; };
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (!conversationId || !conversation) return;
+    void writeCache('chat-conversation', String(conversationId), conversation);
+  }, [conversationId, conversation]);
+
+  // Live value wins; cached value is the offline fallback.
+  const effectiveConversation: any | null | undefined = conversation ?? cachedConversation;
+  const effectiveMe: any = me ?? cachedMe;
+  const hasCachedTimeline = Array.isArray(cachedMessages) && cachedMessages.length > 0;
+
 
   // When the server hasn't returned yet (cold start / offline) prefer
   // the cached array so the user sees something useful immediately.
@@ -620,10 +1073,45 @@ export default function ChatScreen() {
   const visibleMessages = useMemo(() => {
     const localTtl = DISAPPEARING_OPTIONS.find((item) => item.key === disappearingMode)?.ms || 0;
     const ttlMs = Math.max(localTtl, serverDisappearMs);
-    if (!ttlMs) return decryptedMessages;
-    const cutoff = Date.now() - ttlMs;
-    return decryptedMessages.filter((message) => Number(message?._creationTime || 0) >= cutoff);
-  }, [disappearingMode, serverDisappearMs, decryptedMessages]);
+    const cutoff = ttlMs ? Date.now() - ttlMs : 0;
+    const out: any[] = [];
+    const presentIds = new Set<string>();
+    for (const message of decryptedMessages) {
+      if (cutoff && Number(message?._creationTime || 0) < cutoff) continue;
+      const id = message?._id ? String(message._id) : '';
+      if (id) presentIds.add(id);
+      // iter-322: per-viewer deletes ("Delete for me" / "Delete for receiver")
+      // must leave a "This message was deleted" TOMBSTONE on the actor's device
+      // (NOT vanish). If the backend still returns the row, overlay a stable
+      // deletedAt so MessageBubble/MediaBubble render the tombstone in place.
+      const entry = id ? locallyDeleted[id] : undefined;
+      if (entry && !message?.deletedAt && message?.isDeleted !== true) {
+        out.push({ ...message, deletedAt: entry.deletedAt });
+      } else {
+        out.push(message);
+      }
+    }
+    // iter-322: SECOND PASS — the shared backend REMOVES per-viewer-deleted rows
+    // from the actor's query results, so an in-place overlay has nothing to
+    // attach to. For every locally-deleted id NOT present in the server results,
+    // synthesise a tombstone message so it still renders "This message was
+    // deleted" in its original timeline position (and survives reopen).
+    for (const [id, entry] of Object.entries(locallyDeleted)) {
+      if (presentIds.has(id)) continue;
+      out.push({
+        _id: id,
+        _creationTime: entry.creationTime || entry.deletedAt,
+        senderId: entry.senderId,
+        deletedAt: entry.deletedAt,
+        isDeleted: true,
+        text: '',
+        __syntheticTombstone: true,
+      });
+    }
+    // Timeline is ascending by _creationTime; keep synthetic entries positioned.
+    out.sort((a: any, b: any) => Number(a?._creationTime || 0) - Number(b?._creationTime || 0));
+    return out;
+  }, [disappearingMode, serverDisappearMs, decryptedMessages, locallyDeleted]);
 
   // iter-109: in-chat search filter — applied AFTER the disappearing-mode
   // filter so the user only sees results that are still visible per the
@@ -731,8 +1219,15 @@ export default function ChatScreen() {
   // duration, and a "Recorded" badge if applicable. Tagged with __kind:'call'
   // so the renderItem branch knows to render a CallPill, not a MediaBubble.
   const timeline = useMemo(() => {
+    // Local offline-outbox entries (RED dot) are appended so the user sees
+    // their queued messages inline in the timeline. They carry a Date.now()
+    // _creationTime so they naturally sort to the bottom.
+    const outbox = outboxMsgs;
     if (!Array.isArray(callLogsForConvo) || callLogsForConvo.length === 0) {
-      return displayMessages;
+      if (outbox.length === 0) return displayMessages;
+      return [...displayMessages, ...outbox].sort(
+        (a: any, b: any) => Number(a?._creationTime || 0) - Number(b?._creationTime || 0),
+      );
     }
     const myId = me?._id ? String(me._id) : '';
     // iter-180: `startedAt` may arrive as an ISO string (backend convention
@@ -768,10 +1263,10 @@ export default function ChatScreen() {
         isConference: !!c?.isConference,
       };
     });
-    return [...displayMessages, ...pills].sort(
+    return [...displayMessages, ...pills, ...outbox].sort(
       (a: any, b: any) => Number(a?._creationTime || 0) - Number(b?._creationTime || 0),
     );
-  }, [displayMessages, callLogsForConvo, me?._id]);
+  }, [displayMessages, callLogsForConvo, me?._id, outboxMsgs]);
 
   const msgById = useMemo(() => {
     const map = new Map<string, any>();
@@ -866,6 +1361,36 @@ export default function ChatScreen() {
     });
   }, [searchMatchPositions.length]);
 
+  // iter-291: jump to the original message a reply references. Scrolls it to
+  // the centre of the viewport and briefly flashes it so the user can see
+  // exactly which message the reply was about (WhatsApp-style).
+  const jumpToMessage = useCallback(
+    (messageId: string | null | undefined) => {
+      if (!messageId) return;
+      const idx = timeline.findIndex((it: any) => String(it?._id) === String(messageId));
+      if (idx < 0) return; // parent not loaded in the current timeline window
+      try {
+        listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
+      } catch {}
+      // Light haptic so the "found it" moment feels responsive on-device.
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+      if (jumpHighlightTimerRef.current) clearTimeout(jumpHighlightTimerRef.current);
+      setJumpHighlightId(String(messageId));
+      jumpHighlightTimerRef.current = setTimeout(() => {
+        setJumpHighlightId(null);
+        jumpHighlightTimerRef.current = null;
+      }, 1800);
+    },
+    [timeline],
+  );
+
+  useEffect(
+    () => () => {
+      if (jumpHighlightTimerRef.current) clearTimeout(jumpHighlightTimerRef.current);
+    },
+    [],
+  );
+
 
   // iter-164 auto-delete for malicious links/files.
   //
@@ -900,20 +1425,17 @@ export default function ChatScreen() {
       }
       if (!scan?.shouldAutoDelete) continue;
       autoDeletedIdsRef.current.add(id);
-      // mode 'me' = delete just for this viewer (private retraction).
-      (deleteMessage as any)({ messageId: m._id, mode: 'me' }).catch(() => {
-        // Fall back to the schema-less call if `mode` isn't supported.
-        (deleteMessage as any)({ messageId: m._id }).catch(() => {});
-      });
+      // forEveryone:false = delete just for this viewer (private retraction),
+      // matching the web app's `deleteMessage({ messageId, forEveryone:false })`.
+      (deleteMessage as any)({ messageId: m._id, forEveryone: false }).catch(() => {});
     }
   }, [displayMessages, deleteMessage]);
 
-  useEffect(() => {
-    if (conversationId && visibleMessages.length > 0) {
-      markDelivered({ conversationId }).catch(() => {});
-    }
-  }, [conversationId, visibleMessages.length, markDelivered]);
-
+  // NOTE: in-chat markDelivered was removed (iter-240) — it fired at the same
+  // moment as markRead on chat open, making the sender's dot jump yellow→blue
+  // and skip green. Delivery is now marked globally by useDeliveryReceipts
+  // (watches getUnreadCounts), exactly like the web app. markRead still fires
+  // here when messages are visible on screen.
   useEffect(() => {
     if (conversationId && visibleMessages.length > 0) {
       markRead({ conversationId }).catch(() => {});
@@ -1051,7 +1573,7 @@ export default function ChatScreen() {
   // threshold (network / websocket stall — recoverable via Retry).
   const isConversationDefinitelyMissing =
     !canQueryConversation || (canQueryConversation && conversation === null);
-  const isConversationAvailable = !!conversation;
+  const isConversationAvailable = !!effectiveConversation;
   const composerTextColor = resolveDraftColor(draftColor) || Colors.textPrimary;
   const showComposerFormatting = showComposerFormattingPinned || composerFocused || text.trim().length > 0 || showColorPicker;
 
@@ -1094,12 +1616,26 @@ export default function ChatScreen() {
     setSending(true);
     const replyToMessageId = replyTo?._id;
     const editTargetId = editingMessageId;
+    const proposeTargetId = proposingMessageId;
     setText('');
     setReplyTo(null);
     setEditingMessageId(null);
+    setProposingMessageId(null);
     resetComposerFormatting();
 
     try {
+      if (proposeTargetId) {
+        // iter-334: member proposing an edit on an "approval"-mode post.
+        setSending(false);
+        try {
+          await proposeEditMutation({ messageId: proposeTargetId, text: formattedValue });
+          callDebug.push('EDIT', `proposeEdit on ${proposeTargetId.slice(-6)}`);
+          Alert.alert('Edit suggested', 'Your suggested edit was sent to the author for approval.');
+        } catch (proposeErr: any) {
+          Alert.alert('Could not suggest edit', proposeErr?.message || 'Please try again.');
+        }
+        return;
+      }
       if (editTargetId) {
         // EDIT mode — try to update the original message in place. If the
         // backend exposes an edit mutation under any of the known names,
@@ -1129,6 +1665,21 @@ export default function ChatScreen() {
           });
         }
       } else {
+        if (isOffline) {
+          // OFFLINE: Convex mutations don't reject when there's no
+          // connection — the promise just hangs until reconnect, so the
+          // catch below never runs and the message would silently vanish
+          // from the UI (the bug the user reported). Queue it immediately
+          // → shows in the timeline with a RED dot and auto-sends on
+          // reconnect (matches WhatsApp's pending-clock behaviour).
+          const next = await enqueueOutbox(String(conversationId), {
+            senderId: String(effectiveMe?._id || ''),
+            text: formattedValue,
+            ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
+          });
+          setOutboxMsgs(next);
+          return;
+        }
         await sendMessage({
           conversationId,
           type: 'text',
@@ -1145,27 +1696,56 @@ export default function ChatScreen() {
       await refetchMessages();
     } catch (e: any) {
       console.warn('send failed:', e?.message);
-      // Restore the composer so the user can retry. If this was an edit,
-      // also restore the editing context so the next Send tries again.
-      setText(value);
       if (editTargetId) {
+        // EDIT failure — restore the composer + editing context so the next
+        // Send retries the edit. Edits are never queued to the outbox.
+        setText(value);
         setEditingMessageId(editTargetId);
+        if (replyToMessageId && replyTo) {
+          setReplyTo(replyTo);
+        }
+        Alert.alert('Message not sent', 'Something went wrong while sending. Please tap Send to try again.');
+      } else {
+        // Offline outbox (web-parity): a fresh plain-text send that failed
+        // (offline / Convex unreachable) is queued locally and shown in the
+        // timeline with a RED dot. It auto-sends on reconnect / foreground.
+        const next = await enqueueOutbox(String(conversationId), {
+          senderId: String(me?._id || ''),
+          text: formattedValue,
+          ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
+        });
+        setOutboxMsgs(next);
       }
-      // iter-185: also restore the reply banner (it was silently dropped
-      // before, leaving the user staring at an unsent message with no
-      // explanation) and SAY that the send failed. `replyTo` here is the
-      // closure-captured ORIGINAL object from before setReplyTo(null).
-      if (replyToMessageId && replyTo) {
-        setReplyTo(replyTo);
-      }
-      Alert.alert('Message not sent', 'Something went wrong while sending. Please tap Send to try again.');
     } finally {
       setSending(false);
     }
   };
 
+  // iter-294: one-tap list button — apply/remove a numbered or bulleted list
+  // across the selected lines (or current line) and select the result.
+  const applyListFormat = (kind: 'numeric' | 'bullet') => {
+    const sel = composerSelectionRef.current;
+    const result = toggleListFormat(text, sel, kind);
+    setText(result.text);
+    composerSelectionRef.current = result.selection;
+    setForcedSelection(result.selection);
+    setActiveListKind(currentLineListKind(result.text, result.selection.start));
+    messageInputRef.current?.focus();
+  };
+
   const handleTyping = (val: string) => {
-    setText(val);
+    // iter-294: cursor-aware continuous auto-numbering + renumbering.
+    // Handles Enter anywhere in a list (insert next marker at caret) and keeps
+    // ordered lists sequential after inserts/deletes. Within-line edits pass
+    // through untouched.
+    const prevCursor = composerSelectionRef.current?.start ?? text.length;
+    const result = processComposerChange(text, val, prevCursor);
+    setText(result.text);
+    if (result.selection) {
+      composerSelectionRef.current = result.selection;
+      setForcedSelection(result.selection);
+    }
+    setActiveListKind(currentLineListKind(result.text, result.selection?.start ?? prevCursor));
     if (conversationId && val.length > 0 && typingIndicatorsEnabledRef.current) {
       setTyping({ conversationId }).catch(() => {});
     }
@@ -1187,6 +1767,31 @@ export default function ChatScreen() {
     }
     prevTextEmptyRef.current = isEmpty;
   }, [text, conversationId, clearTyping]);
+
+  // iter-310: broadcast the "recording audio…" activity to the other
+  // participant while a voice note is being recorded. Contract:
+  // setTyping({ conversationId, kind: 'recording_voice' }) must be re-sent
+  // < 5s (indicator TTL), so we heartbeat every 3s and clearTyping on stop.
+  // Gated behind the same "typing indicators" privacy setting as typing.
+  useEffect(() => {
+    if (recBroadcastTimerRef.current) {
+      clearInterval(recBroadcastTimerRef.current);
+      recBroadcastTimerRef.current = null;
+    }
+    if (isRecording && conversationId && typingIndicatorsEnabledRef.current) {
+      const beat = () =>
+        setTyping({ conversationId, kind: 'recording_voice' } as any).catch(() => {});
+      beat();
+      recBroadcastTimerRef.current = setInterval(beat, 3000);
+      return () => {
+        if (recBroadcastTimerRef.current) {
+          clearInterval(recBroadcastTimerRef.current);
+          recBroadcastTimerRef.current = null;
+        }
+        if (conversationId) clearTyping?.({ conversationId }).catch(() => {});
+      };
+    }
+  }, [isRecording, conversationId, setTyping, clearTyping]);
 
   /**
    * Schedule the current draft message for a future send. Mirrors the web
@@ -1494,7 +2099,11 @@ export default function ChatScreen() {
 
   const sendImageFromUri = useCallback(
     async (uri: string, mimeType?: string, captionOverride?: string): Promise<boolean> => {
-      if (!conversationId || !isConversationAvailable) return false;
+      if (!conversationId || !isConversationAvailable) {
+        callDebug.push('IMG', `send aborted: convId=${!!conversationId} available=${isConversationAvailable}`);
+        Alert.alert('Cannot send photo', 'This conversation is still loading. Please reopen the chat and try again.');
+        return false;
+      }
 
       setUploading(true);
       const caption = (captionOverride ?? text).trim();
@@ -1503,15 +2112,27 @@ export default function ChatScreen() {
         : '';
       const replyToMessageId = replyTo?._id;
 
+      callDebug.push('IMG', `send start mime=${mimeType || 'image/jpeg'} uri=${String(uri).slice(-32)}`);
       try {
         const storageId = await uploadFile(convex, uri, mimeType || 'image/jpeg');
+        callDebug.push('IMG', `upload OK storageId=${String(storageId).slice(0, 10)}…`);
+        const meta = await getMediaMeta(uri, mimeType || 'image/jpeg', 'image');
+        callDebug.push('IMG', `meta name=${meta.fileName} size=${meta.fileSize}`);
         await sendMessage({
           conversationId,
           type: 'image',
           text: formattedCaption,
           storageId,
+          // Match the web app's media send signature exactly: the backend's
+          // messages.send requires fileName + fileSize + mimeType for media.
+          // Omitting fileName/fileSize made strict validation reject the send
+          // → the photo stayed stuck in the composer.
+          fileName: meta.fileName,
+          fileSize: meta.fileSize,
+          mimeType: mimeType || 'image/jpeg',
           ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
         });
+        callDebug.push('IMG', 'messages.send OK');
         // Single-image path clears the composer here; the multi-image
         // album path (captionOverride provided) clears once in handleSend.
         if (captionOverride === undefined) {
@@ -1522,7 +2143,9 @@ export default function ChatScreen() {
         await refetchMessages();
         return true;
       } catch (errorValue: any) {
-        Alert.alert('Upload failed', errorValue?.message || 'Unable to send image right now.');
+        const detail = errorValue?.data?.message || errorValue?.message || String(errorValue);
+        callDebug.push('ERR', `IMG send failed: ${String(detail).slice(0, 120)}`);
+        Alert.alert('Upload failed', detail || 'Unable to send image right now.');
         return false;
       } finally {
         setUploading(false);
@@ -1604,7 +2227,8 @@ export default function ChatScreen() {
       for (const asset of assets) {
         const mime = asset.mimeType || 'video/mp4';
         const storageId = await uploadFile(convex, asset.uri, mime);
-        const sentVideoId: any = await sendMessage({ conversationId, type: 'video', storageId, mimeType: mime });
+        const vmeta = await getMediaMeta(asset.uri, mime, 'video');
+        const sentVideoId: any = await sendMessage({ conversationId, type: 'video', storageId, fileName: (asset as any)?.fileName || vmeta.fileName, fileSize: (asset as any)?.fileSize || vmeta.fileSize, mimeType: mime });
         const messageId = typeof sentVideoId === 'string'
           ? sentVideoId
           : (sentVideoId?._id || sentVideoId?.id || '');
@@ -1637,8 +2261,21 @@ export default function ChatScreen() {
       return;
     }
 
+    // iter-310: broadcast "recording video…" while the camera is open. Note:
+    // this uses the OS camera (launchCameraAsync), so JS timers are paused
+    // while it's foregrounded — we can't heartbeat, so the indicator naturally
+    // clears after the ~5s TTL and again explicitly when the camera returns.
+    if (conversationId && typingIndicatorsEnabledRef.current) {
+      setTyping({ conversationId, kind: 'recording_video' } as any).catch(() => {});
+    }
+
     // iter-164 data-friendly: 60s cap + reduced quality.
-    const result = await ImagePicker.launchCameraAsync(VIDEO_PICKER_OPTIONS_CHAT);
+    let result: any;
+    try {
+      result = await ImagePicker.launchCameraAsync(VIDEO_PICKER_OPTIONS_CHAT);
+    } finally {
+      if (conversationId) clearTyping?.({ conversationId }).catch(() => {});
+    }
 
     if (result.canceled || !result.assets?.[0]?.uri || !conversationId) return;
     const asset = result.assets[0];
@@ -1647,7 +2284,8 @@ export default function ChatScreen() {
     try {
       const mime = asset.mimeType || 'video/mp4';
       const storageId = await uploadFile(convex, asset.uri, mime);
-      const sentVideoId: any = await sendMessage({ conversationId, type: 'video', storageId, mimeType: mime });
+      const vmeta = await getMediaMeta(asset.uri, mime, 'video');
+      const sentVideoId: any = await sendMessage({ conversationId, type: 'video', storageId, fileName: (asset as any)?.fileName || vmeta.fileName, fileSize: (asset as any)?.fileSize || vmeta.fileSize, mimeType: mime });
       await refetchMessages();
       const messageId = typeof sentVideoId === 'string'
         ? sentVideoId
@@ -1667,7 +2305,7 @@ export default function ChatScreen() {
     } finally {
       setUploading(false);
     }
-  }, [conversationId, convex, refetchMessages, sendMessage]);
+  }, [conversationId, convex, refetchMessages, sendMessage, setTyping, clearTyping]);
 
   const shareLocation = useCallback(async () => {
     if (!conversationId || !isConversationAvailable) return;
@@ -1832,10 +2470,24 @@ export default function ChatScreen() {
 
   const startRecording = useCallback(async () => {
     if (isRecording) return;
+    // iter-307: suppress "Lock when leaving" for the whole recording. The audio
+    // session change (and the mic-permission prompt) can flip AppState, and on
+    // return-to-active AppLockGate was locking the app mid-recording → the chat
+    // screen unmounted, the recorder was torn down, and the user saw a
+    // "Recording failed" error. Register recording activity BEFORE any of that.
+    if (recActivityDisposeRef.current) {
+      recActivityDisposeRef.current();
+      recActivityDisposeRef.current = null;
+    }
+    recActivityDisposeRef.current = recordingActivity.enter();
     try {
       const permission = await requestRecordingPermissionsAsync();
       if (!permission.granted) {
         Alert.alert('Permission required', 'Please allow microphone access to record voice notes.');
+        if (recActivityDisposeRef.current) {
+          recActivityDisposeRef.current();
+          recActivityDisposeRef.current = null;
+        }
         return;
       }
       try {
@@ -1845,6 +2497,23 @@ export default function ChatScreen() {
       setRecDuration(0);
       recDurationMsRef.current = 0;
       recStartMsRef.current = Date.now();
+      // iter-301: keep the screen ON for the whole recording. A screen-off
+      // mid-record let Android suspend the app and clear the recorder's temp
+      // file → audio "holes"/loop on playback. Best-effort; never blocks.
+      try {
+        await activateKeepAwakeAsync(VOICE_REC_KEEP_AWAKE_TAG);
+      } catch {}
+      // iter-301: make sure the cache "Audio" directory the recorder writes to
+      // actually exists before we start (it can be missing after the OS clears
+      // the cache), otherwise the later upload fails with
+      // "Directory …/cache/Audio/… doesn't exist".
+      try {
+        const audioDir = `${LegacyFileSystem.cacheDirectory}Audio`;
+        const dirInfo: any = await LegacyFileSystem.getInfoAsync(audioDir);
+        if (!dirInfo?.exists) {
+          await LegacyFileSystem.makeDirectoryAsync(audioDir, { intermediates: true });
+        }
+      } catch {}
       await setAudioModeAsync({
         allowsRecording: true,
         playsInSilentMode: true,
@@ -1859,6 +2528,10 @@ export default function ChatScreen() {
     } catch (errorValue: any) {
       setIsRecording(false);
       setIsRecordingPaused(false);
+      if (recActivityDisposeRef.current) {
+        recActivityDisposeRef.current();
+        recActivityDisposeRef.current = null;
+      }
       Alert.alert('Recording failed', errorValue?.message || 'Could not start recording');
     }
   }, [audioRecorder, isRecording]);
@@ -1886,12 +2559,75 @@ export default function ChatScreen() {
           return;
         }
         if (!conversationId) return;
+        // iter-301: copy the recorded clip out of the volatile /cache/Audio dir
+        // into a stable app-document path BEFORE uploading. If the OS cleared
+        // the cache while the screen was off, the original uri may be gone;
+        // copying immediately after stop (and verifying it's non-empty)
+        // prevents both the "Directory …/cache/Audio/… doesn't exist" upload
+        // crash and the corrupted/looping playback from a half-written file.
+        let playableUri = uri;
+        try {
+          const destDir = `${LegacyFileSystem.documentDirectory}voice-notes`;
+          const destInfo: any = await LegacyFileSystem.getInfoAsync(destDir);
+          if (!destInfo?.exists) {
+            await LegacyFileSystem.makeDirectoryAsync(destDir, { intermediates: true });
+          }
+          const dest = `${destDir}/vn-${Date.now()}.m4a`;
+          await LegacyFileSystem.copyAsync({ from: uri, to: dest });
+          const copied: any = await LegacyFileSystem.getInfoAsync(dest, { size: true } as any);
+          if (copied?.exists && Number(copied?.size || 0) > 0) {
+            playableUri = dest;
+          }
+        } catch (copyErr: any) {
+          console.warn('[voice-send] stable-copy failed, using original uri:', copyErr?.message);
+        }
+        // Final guard: make sure we actually have a non-empty file to upload.
+        const srcInfo: any = await LegacyFileSystem.getInfoAsync(playableUri, { size: true } as any);
+        if (!srcInfo?.exists || Number(srcInfo?.size || 0) === 0) {
+          Alert.alert(
+            'Recording lost',
+            'The voice note could not be saved. Please keep the screen on while recording and try again.',
+          );
+          return;
+        }
+        // iter-304: stage the clip for REVIEW instead of sending immediately.
+        // The user can play it back and then Send or Discard from the review
+        // bar (handled by sendReviewedVoice / discardReview below).
+        setReviewUri(playableUri);
+        setReviewDurationSec(totalSec);
+        setReviewReplyToId(replyToMessageId);
+      } catch (errorValue: any) {
+        const detail = errorValue?.data?.message || errorValue?.message || 'Unknown error';
+        console.error('[voice-send] stop failed:', detail, errorValue);
+        Alert.alert('Recording failed', detail);
+      } finally {
+        try {
+          deactivateKeepAwake(VOICE_REC_KEEP_AWAKE_TAG);
+        } catch {}
+        // iter-307: recording is over — allow App Lock to work normally again.
+        if (recActivityDisposeRef.current) {
+          recActivityDisposeRef.current();
+          recActivityDisposeRef.current = null;
+        }
+        setAudioModeAsync({
+          allowsRecording: false,
+          playsInSilentMode: true,
+          interruptionMode: 'duckOthers',
+          shouldRouteThroughEarpiece: false,
+        }).catch(() => {});
+      }
+    },
+    [audioRecorder, conversationId, recorderState.durationMillis, replyTo]
+  );
+
+  // iter-304: actually upload + send a (reviewed) voice note.
+  const uploadAndSendVoice = useCallback(
+    async (uri: string, totalSec: number, replyToMessageId?: string) => {
+      if (!conversationId) return;
+      try {
         setUploading(true);
         const mime = 'audio/m4a';
         const storageId = await uploadFile(convex, uri, mime);
-
-        // Per backend contract: type='voice', duration in seconds, storageId
-        // The backend auto-resolves storageId to mediaUrl on messages.list.
         const sentVoiceId: any = await sendMessage({
           conversationId,
           type: 'voice',
@@ -1900,23 +2636,12 @@ export default function ChatScreen() {
           duration: totalSec,
           ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
         });
-
         setReplyTo(null);
         await refetchMessages();
-        // iter-137 engagement tracking — voice notes need >= 5 seconds
-        // to qualify (the hook enforces this). Fire-and-forget so a
-        // tracking failure never affects the chat UX.
         void engagement.voiceNote(totalSec, { isReceived: false });
-
-        // Kick off OpenAI Whisper transcription in the background — the
-        // transcription pill on the voice bubble updates via Convex realtime
-        // once Whisper returns. Failure here never blocks the message send.
-        const messageId = typeof sentVoiceId === 'string'
-          ? sentVoiceId
-          : (sentVoiceId?._id || sentVoiceId?.id || '');
+        const messageId =
+          typeof sentVoiceId === 'string' ? sentVoiceId : sentVoiceId?._id || sentVoiceId?.id || '';
         if (messageId) {
-          // Pass the LOCAL file URI explicitly — Whisper must see the plaintext
-          // m4a bytes, not the E2EE ciphertext that Convex storage would serve.
           triggerTranscription({
             convex,
             messageId: String(messageId),
@@ -1931,22 +2656,59 @@ export default function ChatScreen() {
         console.error('[voice-send] failed:', detail, errorValue);
         Alert.alert('Failed to send voice note', detail);
       } finally {
-        setAudioModeAsync({
-          allowsRecording: false,
-          playsInSilentMode: true,
-          interruptionMode: 'duckOthers',
-          shouldRouteThroughEarpiece: false,
-        }).catch(() => {});
         setUploading(false);
       }
     },
-    [audioRecorder, conversationId, convex, recorderState.durationMillis, refetchMessages, replyTo, sendMessage]
+    [conversationId, convex, refetchMessages, sendMessage],
   );
 
   const cancelRecording = useCallback(() => {
     recCancelledRef.current = true;
     finishRecording('cancel');
   }, [finishRecording]);
+
+  // iter-304: review-bar actions.
+  const toggleReviewPlay = useCallback(() => {
+    if (!reviewPlayer) return;
+    try {
+      if (reviewStatus?.playing) {
+        reviewPlayer.pause();
+      } else {
+        const dur = reviewStatus?.duration || 0;
+        const cur = reviewStatus?.currentTime || 0;
+        if (reviewStatus?.didJustFinish || (dur > 0 && cur >= dur - 0.05)) {
+          reviewPlayer.seekTo(0);
+        }
+        reviewPlayer.play();
+      }
+    } catch {}
+  }, [reviewPlayer, reviewStatus]);
+
+  const clearReviewState = useCallback(() => {
+    try {
+      reviewPlayer?.pause?.();
+    } catch {}
+    setReviewUri(null);
+    setReviewDurationSec(0);
+    setReviewReplyToId(undefined);
+  }, [reviewPlayer]);
+
+  const sendReviewedVoice = useCallback(async () => {
+    if (!reviewUri) return;
+    const uri = reviewUri;
+    const sec = reviewDurationSec;
+    const reply = reviewReplyToId;
+    clearReviewState();
+    await uploadAndSendVoice(uri, sec, reply);
+  }, [reviewUri, reviewDurationSec, reviewReplyToId, clearReviewState, uploadAndSendVoice]);
+
+  const discardReview = useCallback(() => {
+    const uri = reviewUri;
+    clearReviewState();
+    if (uri) {
+      LegacyFileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+    }
+  }, [reviewUri, clearReviewState]);
 
   const pauseRecording = useCallback(async () => {
     if (!isRecording || isRecordingPaused) return;
@@ -1972,6 +2734,13 @@ export default function ChatScreen() {
     return () => {
       if (recTimer.current) clearInterval(recTimer.current);
       audioRecorder.stop().catch(() => {});
+      try {
+        deactivateKeepAwake(VOICE_REC_KEEP_AWAKE_TAG);
+      } catch {}
+      if (recActivityDisposeRef.current) {
+        recActivityDisposeRef.current();
+        recActivityDisposeRef.current = null;
+      }
     };
   }, [audioRecorder]);
 
@@ -1986,19 +2755,51 @@ export default function ChatScreen() {
     setSelectedMsg(null);
   };
 
+  // iter-320: reactions kept failing with a generic Convex "Server Error".
+  // A generic Server Error (not an ArgumentValidationError) means the args
+  // validated but the function threw internally — consistent with the server
+  // being unable to validate participant access without `conversationId`
+  // (same contract as toggleStar, iter-147). We therefore send conversationId
+  // and, if a backend rejects the extra field (ArgumentValidationError), we
+  // transparently retry with the minimal {messageId, emoji} payload so we
+  // remain compatible with either backend signature.
+  const reactToMessage = useCallback(
+    async (messageId: string, emoji: string) => {
+      try {
+        await toggleReaction({ messageId, emoji, conversationId } as any);
+      } catch (e: any) {
+        const msg = e?.message || String(e);
+        if (/extra field|ArgumentValidationError|conversationId/i.test(msg)) {
+          await toggleReaction({ messageId, emoji } as any);
+        } else {
+          throw e;
+        }
+      }
+    },
+    [toggleReaction, conversationId]
+  );
+
   const onPickReaction = useCallback(
     async (emoji: string) => {
       const msg = selectedMsg;
       if (!msg) return;
       closeActionSheet();
       try {
-        await toggleReaction({ messageId: msg._id, emoji });
-        await refetchMessages();
+        await reactToMessage(msg._id, emoji);
+        callDebug.push('REACT', `ok ${emoji} on ${String(msg._id).slice(-6)}`);
+        try {
+          await refetchMessages();
+        } catch {}
       } catch (e: any) {
-        console.warn('react failed:', e?.message);
+        // iter-317: reactions were failing SILENTLY (only console.warn), so the
+        // sheet just closed with nothing applied. Surface the real reason into
+        // the Diagnostic Log + a brief alert so the failure is diagnosable.
+        const reason = e?.message || String(e);
+        callDebug.push('ERR', `REACT failed ${emoji}: ${reason}`);
+        Alert.alert('Reaction failed', reason);
       }
     },
-    [selectedMsg, toggleReaction]
+    [selectedMsg, reactToMessage, refetchMessages]
   );
 
   const onCopy = useCallback(async () => {
@@ -2087,88 +2888,50 @@ export default function ChatScreen() {
     if (readAt) rows.push(`Read: ${readAt}`);
     else if (deliveredAt) rows.push('Read: —');
     if (editedAt) rows.push(`Edited: ${editedAt}`);
-    Alert.alert('Message info', rows.join('\n'));
+    // iter-292: show the rich Message Info sheet (Read by + media
+    // consumption: Played/Watched/Viewed/Opened by) instead of a plain Alert.
+    setInfoMsg(msg);
   }, [selectedMsg]);
 
   const onPin = useCallback(async () => {
     const msg = selectedMsg;
     if (!msg) return;
     closeActionSheet();
-    // Probe multiple backend endpoint names — different Convex deployments
-    // expose pin under different names. Stop at the first success.
-    const candidates: { label: string; run: () => Promise<unknown> }[] = [
-      {
-        label: 'messages.togglePin',
-        run: () => (api as any).messages.togglePin
-          ? (api as any).messages.togglePin({ messageId: msg._id })
-          : Promise.reject(new Error('CouldNotFindFunction')),
-      },
-      {
-        label: 'messages.pinMessage',
-        run: () => (api as any).messages.pinMessage
-          ? (api as any).messages.pinMessage({ messageId: msg._id })
-          : Promise.reject(new Error('CouldNotFindFunction')),
-      },
-      {
-        label: 'messages.pin',
-        run: () => (api as any).messages.pin
-          ? (api as any).messages.pin({ messageId: msg._id })
-          : Promise.reject(new Error('CouldNotFindFunction')),
-      },
-      {
-        label: 'conversations.pinMessage',
-        run: () => (api as any).conversations?.pinMessage
-          ? (api as any).conversations.pinMessage({
-              conversationId,
-              messageId: msg._id,
-            })
-          : Promise.reject(new Error('CouldNotFindFunction')),
-      },
-    ];
-    let lastError: any = null;
-    let pinned = false;
-    for (const candidate of candidates) {
-      try {
-        await candidate.run();
-        pinned = true;
-        break;
-      } catch (errorValue: any) {
-        lastError = errorValue;
-        const message = String(errorValue?.message || '');
-        // Try the next variant only when the function literally
-        // doesn't exist — permission / validation errors must NOT
-        // fall through (we'd accidentally pin via a different path).
-        if (
-          !message.includes('CouldNotFindFunction') &&
-          !message.toLowerCase().includes('not found')
-        ) {
-          break;
-        }
-      }
-    }
-    if (pinned) {
-      Alert.alert('Pinned', 'This message will appear at the top of the chat.');
+    // iter-336: canonical group pinned-post contract. In groups only admins
+    // may pin/unpin (the server enforces this too); 1:1 chats allow either
+    // participant. Pinning replaces any existing pin (one per chat).
+    if (!canPinMessages) {
+      Alert.alert('Only admins can pin', 'Ask a group admin to pin or unpin posts.');
       return;
     }
-    // Best-effort local fallback so the user gets an actionable response
-    // even when the backend hasn't shipped any of the known mutations.
-    // We just store the id in AsyncStorage keyed by conversationId — a
-    // future iteration can wire this into the conversation header banner.
+    const isCurrentlyPinned = !!pinnedMessageId && pinnedMessageId === String(msg._id);
     try {
-      const key = `smilers_local_pinned_${conversationId}`;
-      const list = ((await readStoredJson(key, [])) as string[]) || [];
-      const next = Array.isArray(list)
-        ? Array.from(new Set([...list, String(msg._id)]))
-        : [String(msg._id)];
-      await writeStoredJson(key, next);
-    } catch {
-      /* swallow */
+      if (isCurrentlyPinned) {
+        // Unpin — omit messageId.
+        await pinMessageMutation({ conversationId });
+        callDebug.push('PIN', `unpin ${String(msg._id).slice(-6)}`);
+      } else {
+        // Pin / replace the current pin.
+        await pinMessageMutation({ conversationId, messageId: msg._id });
+        callDebug.push('PIN', `pin ${String(msg._id).slice(-6)}`);
+      }
+    } catch (e: any) {
+      Alert.alert(
+        isCurrentlyPinned ? 'Could not unpin' : 'Could not pin',
+        friendlyConvexError(e, 'Please try again.'),
+      );
     }
-    Alert.alert(
-      'Pinned on this device',
-      'Pin will sync across your devices once the backend deploys the pin endpoint.',
-    );
-  }, [selectedMsg, conversationId]);
+  }, [selectedMsg, conversationId, canPinMessages, pinnedMessageId, pinMessageMutation]);
+
+  // iter-336: unpin from the pinned banner (admins in groups; either in 1:1).
+  const onUnpinBanner = useCallback(async () => {
+    try {
+      await pinMessageMutation({ conversationId });
+      callDebug.push('PIN', 'unpin via banner');
+    } catch (e: any) {
+      Alert.alert('Could not unpin', friendlyConvexError(e, 'Please try again.'));
+    }
+  }, [conversationId, pinMessageMutation]);
 
   const onSelectMultiple = useCallback(() => {
     const msg = selectedMsg;
@@ -2226,9 +2989,78 @@ export default function ChatScreen() {
 
   const cancelEdit = useCallback(() => {
     setEditingMessageId(null);
+    setProposingMessageId(null);
     setText('');
     resetComposerFormatting();
   }, [resetComposerFormatting]);
+
+  // iter-334 (Phase 2): member suggests an edit on an "approval"-mode post.
+  const onSuggestEdit = useCallback(() => {
+    const msg = selectedMsg;
+    closeActionSheet();
+    if (!msg?._id) return;
+    if (msg.type && msg.type !== 'text') {
+      Alert.alert('Not available', 'Only text posts can be edited.');
+      return;
+    }
+    setEditingMessageId(null);
+    setProposingMessageId(String(msg._id));
+    setText(stripRichTextTags(msg.text) || '');
+    setComposerFocused(true);
+  }, [selectedMsg]);
+
+  const handleReviewEdit = useCallback(
+    async (pendingEditId: string, decision: 'approve' | 'reject', proposerName?: string) => {
+      try {
+        await reviewEditMutation({ pendingEditId, decision });
+        callDebug.push('EDIT', `reviewEdit ${decision} ${String(pendingEditId).slice(-6)}`);
+        // Post a lightweight, human-readable notice so the whole group sees
+        // the outcome (syncs to web + native via a normal text message).
+        if (decision === 'approve' && conversationId) {
+          const who = (proposerName && proposerName.trim()) || 'A member';
+          try {
+            await sendMessage({
+              conversationId,
+              type: 'text',
+              text: `✏️ ${who}'s suggested edit was approved`,
+            });
+          } catch {}
+        }
+        try {
+          await refetchMessages();
+        } catch {}
+      } catch (e: any) {
+        Alert.alert('Review failed', e?.message || 'Could not review this edit.');
+      }
+    },
+    [reviewEditMutation, refetchMessages, sendMessage, conversationId],
+  );
+
+  // iter-333 (Phase 1): author opens the "Who can edit" picker for a group post.
+  const onWhoCanEdit = useCallback(() => {
+    const msg = selectedMsg;
+    closeActionSheet();
+    if (!msg?._id) return;
+    setEditModeTarget(msg);
+  }, [selectedMsg]);
+
+  const applyEditMode = useCallback(
+    async (mode: 'owner' | 'open' | 'approval') => {
+      const msg = editModeTarget;
+      setEditModeTarget(null);
+      if (!msg?._id) return;
+      try {
+        await setEditModeMutation({ messageId: msg._id, mode });
+        callDebug.push('EDIT', `setEditMode=${mode} on ${String(msg._id).slice(-6)}`);
+        try {
+          await refetchMessages();
+        } catch {}
+      } catch (e: any) {
+        Alert.alert('Could not update', e?.message || 'Failed to change edit permissions.');
+      }
+    },
+    [editModeTarget, setEditModeMutation, refetchMessages],
+  );
 
   /**
    * Attempt to call any of the known edit mutations the backend may expose.
@@ -2355,41 +3187,69 @@ export default function ChatScreen() {
     setDeleteTarget(msg);
   }, [selectedMsg]);
 
+  const respondToDeletion = useCallback(
+    async (requestId: string, accept: boolean) => {
+      try {
+        await respondToDeletionRequest({ requestId, accept });
+      } catch (e: any) {
+        Alert.alert('Action failed', e?.message || 'Could not respond to the request.');
+      }
+    },
+    [respondToDeletionRequest],
+  );
+
+  // Pending "delete for everyone" requests the OTHER party sent me about a
+  // message I own, scoped to this conversation when the backend provides it.
+  const deletionRequestsForChat = useMemo(() => {
+    if (!Array.isArray(pendingDeletionRequests)) return [];
+    return pendingDeletionRequests.filter((r: any) => {
+      if (!r) return false;
+      const rc = r.conversationId ? String(r.conversationId) : null;
+      return rc ? rc === String(conversationId) : true;
+    });
+  }, [pendingDeletionRequests, conversationId]);
+
   const performDelete = useCallback(
     async (mode: 'me' | 'receiver' | 'everyone' | 'request_everyone') => {
       const msg = deleteTarget;
       setDeleteTarget(null);
       if (!msg) return;
+
+      // EXACT web-app signatures (verified from the deployed web bundle —
+      // `messages.deleteMessage({ messageId, forEveryone | forReceiver })` and
+      // `messages.requestDeletion({ messageId })`). The shared Convex backend
+      // validates args strictly, which is why the old `{mode:'everyone'}`
+      // shape was rejected and silently downgraded to delete-for-me.
       try {
         if (mode === 'request_everyone') {
-          // Receivers asking the sender to delete-for-everyone. Falls back
-          // to a polite info alert when the backend hasn't shipped the
-          // request endpoint yet.
-          try {
-            await (deleteMessage as any)({ messageId: msg._id, mode: 'request_everyone' });
-            Alert.alert('Request sent', 'The sender has been asked to delete this message for everyone.');
-          } catch {
-            Alert.alert(
-              'Request sent',
-              'The sender will be notified to delete this message for everyone.',
-            );
-          }
+          await convex.mutation((api as any).messages.requestDeletion, {
+            messageId: msg._id,
+          });
+          Alert.alert('Request sent', 'The sender has been asked to delete this message for everyone.');
           return;
         }
-        // Sent messages — try with the explicit mode first (newer backend
-        // schema). If the deployed backend rejects the `mode` arg (Server
-        // Error from validator mismatch — iter-97 screenshot), fall back
-        // to the legacy `{ messageId }` only signature which most Convex
-        // deployments still support.
-        try {
-          await (deleteMessage as any)({ messageId: msg._id, mode });
-        } catch (modeError: any) {
-          console.warn(
-            'deleteMessage with mode=%s failed (%s) — retrying without mode',
-            mode,
-            String(modeError?.message || '').slice(0, 100),
-          );
-          await (deleteMessage as any)({ messageId: msg._id });
+        if (mode === 'me') {
+          await convex.mutation((api as any).messages.deleteMessage, {
+            messageId: msg._id,
+            forEveryone: false,
+          });
+          // iter-322: the backend REMOVES the actor's own copy for delete-for-me,
+          // so persist metadata and synthesise a local tombstone.
+          markDeletedLocally(msg);
+        } else if (mode === 'receiver') {
+          await convex.mutation((api as any).messages.deleteMessage, {
+            messageId: msg._id,
+            forReceiver: true,
+          });
+          // iter-322: user wants a "This message was deleted" tombstone on the
+          // sender's device for delete-for-receiver too. Persist + synthesise.
+          markDeletedLocally(msg);
+        } else {
+          // 'everyone'
+          await convex.mutation((api as any).messages.deleteMessage, {
+            messageId: msg._id,
+            forEveryone: true,
+          });
         }
         await refetchMessages();
       } catch (errorValue: any) {
@@ -2400,19 +3260,24 @@ export default function ChatScreen() {
         Alert.alert('Failed to delete', String(detail).slice(0, 240));
       }
     },
-    [deleteMessage, deleteTarget, refetchMessages],
+    [convex, deleteTarget, refetchMessages, markDeletedLocally],
   );
 
   const onToggleMyReaction = useCallback(
     async (msgId: string, emoji: string) => {
       try {
-        await toggleReaction({ messageId: msgId, emoji });
-        await refetchMessages();
+        await reactToMessage(msgId, emoji);
+        callDebug.push('REACT', `toggle ok ${emoji} on ${String(msgId).slice(-6)}`);
+        try {
+          await refetchMessages();
+        } catch {}
       } catch (e: any) {
-        console.warn('react failed:', e?.message);
+        const reason = e?.message || String(e);
+        callDebug.push('ERR', `REACT toggle failed ${emoji}: ${reason}`);
+        Alert.alert('Reaction failed', reason);
       }
     },
-    [refetchMessages, toggleReaction]
+    [refetchMessages, reactToMessage]
   );
 
   const savedContactTitle = useMemo(
@@ -2429,11 +3294,11 @@ export default function ChatScreen() {
   // by fetching the other participant via `api.users.getUserById`.
   const fetchedOtherUser = useConversationOtherUser(conversation, me?._id ? String(me._id) : undefined);
   const hydratedConversation = useMemo(() => {
-    if (!conversation) return conversation;
-    if (conversation.otherUser && typeof conversation.otherUser === 'object') return conversation;
-    if (!fetchedOtherUser) return conversation;
-    return { ...conversation, otherUser: fetchedOtherUser };
-  }, [conversation, fetchedOtherUser]);
+    if (!effectiveConversation) return effectiveConversation;
+    if (effectiveConversation.otherUser && typeof effectiveConversation.otherUser === 'object') return effectiveConversation;
+    if (!fetchedOtherUser) return effectiveConversation;
+    return { ...effectiveConversation, otherUser: fetchedOtherUser };
+  }, [effectiveConversation, fetchedOtherUser]);
 
   // iter-232: canonical callee resolver for the Twilio call buttons.
   // The header call/video buttons previously read ONLY `otherUser.userId`,
@@ -2522,7 +3387,7 @@ export default function ChatScreen() {
     ? 'Smilers'
     : deviceTitle ||
       savedContactTitle ||
-      (conversationLoading
+      (conversationLoading && !hydratedConversation
         ? 'Loading…'
         : getConversationDisplayName(hydratedConversation, me?._id ? String(me._id) : undefined, 'Chat'));
   const isMineSelected = selectedMsg && me && selectedMsg.senderId === me._id;
@@ -2533,9 +3398,15 @@ export default function ChatScreen() {
       return !uid || !me?._id || String(uid) !== String(me._id);
     });
     if (others.length === 0) return null;
-    const names = others.map(
-      (u: any) => u?.name || u?.userName || u?.displayName || 'Someone',
-    );
+    const nameOf = (u: any) => u?.name || u?.userName || u?.displayName || 'Someone';
+    // iter-310: recording activity takes precedence over "typing…".
+    // Backend contract: getTypingUsers returns { userId, name, kind } where
+    // kind ∈ "typing" | "recording_voice" | "recording_video".
+    const voiceRec = others.find((u: any) => u?.kind === 'recording_voice');
+    if (voiceRec) return `${nameOf(voiceRec)} is recording audio\u2026`;
+    const videoRec = others.find((u: any) => u?.kind === 'recording_video');
+    if (videoRec) return `${nameOf(videoRec)} is recording video\u2026`;
+    const names = others.map(nameOf);
     return names.length === 1
       ? `${names[0]} is typing\u2026`
       : `${names.join(', ')} are typing\u2026`;
@@ -2793,6 +3664,20 @@ export default function ChatScreen() {
           <TouchableOpacity testID="chat-encryption-btn" onPress={() => router.push('/encryption' as any)} style={styles.headerIconButton}>
             <Ionicons name="shield-checkmark-outline" size={20} color={Colors.white} />
           </TouchableOpacity>
+          {pendingEditsCount && pendingEditsCount > 0 ? (
+            <TouchableOpacity
+              testID="chat-pending-edits-btn"
+              onPress={() => setShowPendingEdits(true)}
+              style={styles.headerIconButton}
+            >
+              <Feather name="edit-3" size={20} color={Colors.white} />
+              <View style={styles.pendingEditsBadge}>
+                <Text style={styles.pendingEditsBadgeText}>
+                  {pendingEditsCount > 9 ? '9+' : pendingEditsCount}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity testID="chat-menu-btn" onPress={() => setShowOptionsMenu(true)} style={styles.headerIconButton}>
             <Feather name="more-vertical" size={20} color={Colors.white} />
           </TouchableOpacity>
@@ -2846,6 +3731,35 @@ export default function ChatScreen() {
           </View>
         );
       })()}
+
+      {/* iter-336: group pinned post banner — visible to ALL members.
+          Admins (and either party in 1:1) get an unpin (✕) affordance. */}
+      {pinnedMessage ? (
+        <View style={styles.pinnedBanner} testID="chat-pinned-banner">
+          <Feather name="bookmark" size={16} color={Colors.primary} />
+          <TouchableOpacity
+            style={styles.flexOne}
+            activeOpacity={0.7}
+            onPress={() => jumpToMessage(pinnedMessageId)}
+            testID="chat-pinned-banner-jump"
+          >
+            <Text style={styles.pinnedBannerLabel}>Pinned message</Text>
+            <Text style={styles.pinnedBannerText} numberOfLines={1}>
+              {(() => {
+                const p = pinnedMessage.message || pinnedMessage;
+                const t = stripRichTextTags(p?.text);
+                if (t) return t;
+                return previewForMessageType(p?.type, typeof p?.text === 'string' ? p.text : null);
+              })()}
+            </Text>
+          </TouchableOpacity>
+          {canPinMessages ? (
+            <TouchableOpacity onPress={onUnpinBanner} hitSlop={10} testID="chat-unpin-btn">
+              <Feather name="x" size={18} color={Colors.textSecondary} />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
 
       {/* iter-109 → iter-111: in-chat search bar — slides in below the
           header when the search button is tapped. Live-filters the
@@ -2956,7 +3870,45 @@ export default function ChatScreen() {
             <LiveLocationSharingPill conversationId={String(conversationId || '')} />
           </View>
         ) : null}
-        {conversationLoading || messagesLoading ? (
+        {/* iter-240: incoming "delete for everyone" requests — the message
+            owner sees Delete / Decline, mirroring the web app. */}
+        {deletionRequestsForChat.length > 0 ? (
+          <View style={styles.deletionReqBanner} testID="deletion-request-banner">
+            <View style={styles.deletionReqInfo}>
+              <Feather name="trash-2" size={15} color={Colors.tickRed} />
+              <Text style={styles.deletionReqText} numberOfLines={2}>
+                {deletionRequestsForChat.length === 1
+                  ? `Asked you to delete a message${deletionRequestsForChat[0]?.messageText ? `: "${String(deletionRequestsForChat[0].messageText).slice(0, 40)}"` : ''}`
+                  : `${deletionRequestsForChat.length} requests to delete messages for everyone`}
+              </Text>
+            </View>
+            <View style={styles.deletionReqActions}>
+              <TouchableOpacity
+                style={[styles.deletionReqBtn, styles.deletionReqDecline]}
+                onPress={() => respondToDeletion(String(deletionRequestsForChat[0]._id), false)}
+                testID="deletion-decline-btn"
+              >
+                <Text style={styles.deletionReqDeclineText}>Decline</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.deletionReqBtn, styles.deletionReqDelete]}
+                onPress={() => respondToDeletion(String(deletionRequestsForChat[0]._id), true)}
+                testID="deletion-delete-btn"
+              >
+                <Text style={styles.deletionReqDeleteText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
+        {/* iter-234: offline banner — tells the user they're viewing saved
+            (cached) history while there's no connection. */}
+        {isOffline ? (
+          <View style={styles.offlineBanner} testID="chat-offline-banner">
+            <Feather name="wifi-off" size={13} color={Colors.headerBg} />
+            <Text style={styles.offlineBannerText}>No internet — showing saved messages</Text>
+          </View>
+        ) : null}
+        {(conversationLoading || messagesLoading) && !hasCachedTimeline ? (
           fallbackReady && conversation === undefined ? (
             // Pending past the threshold — surface an actionable
             // "transient unavailable" screen instead of an endless spinner.
@@ -3074,26 +4026,34 @@ export default function ChatScreen() {
                     // iter-185 WhatsApp-style swipe-to-reply. Disabled in
                     // multi-select mode (pan conflicts with tap-to-toggle),
                     // for suspended viewers, and on deleted messages.
-                    enabled={!viewerSuspension && !isBroadcastReadOnly && !multiSelectIds && !item.deletedAt && isConversationAvailable}
+                    enabled={!viewerSuspension && !isBroadcastReadOnly && !multiSelectIds && !item.deletedAt && !item.__outbox && isConversationAvailable}
                     onReply={() => {
                       setReplyTo(item);
                       messageInputRef.current?.focus();
                     }}
                   >
+                    {(() => {
+                      // Backend field name normalisation (iter-101):
+                      // Smilers Convex stores the parent reference under
+                      // `replyToId` per the public spec, but the mobile
+                      // client historically wrote `replyToMessageId`.
+                      // Look up by either to be robust against both
+                      // historical AND fresh messages.
+                      const parentId = item.replyToId || item.replyToMessageId;
+                      const parentMsg = parentId ? msgById.get(parentId) : undefined;
+                      return (
                     <MediaBubble
                       msg={item}
-                      isMine={item.senderId === me?._id}
-                      myUserId={me?._id}
-                      parentMsg={(() => {
-                        // Backend field name normalisation (iter-101):
-                        // Smilers Convex stores the parent reference under
-                        // `replyToId` per the public spec, but the mobile
-                        // client historically wrote `replyToMessageId`.
-                        // Look up by either to be robust against both
-                        // historical AND fresh messages.
-                        const parentId = item.replyToId || item.replyToMessageId;
-                        return parentId ? msgById.get(parentId) : undefined;
-                      })()}
+                      isMine={item.senderId === effectiveMe?._id}
+                      myUserId={effectiveMe?._id}
+                      senderDisplayName={
+                        isGroupChat && item.senderId !== effectiveMe?._id
+                          ? resolveSenderName(item.senderId, item.senderName)
+                          : undefined
+                      }
+                      parentMsg={parentMsg}
+                      onPressParent={parentMsg ? () => jumpToMessage(parentId) : undefined}
+                      isJumpHighlighted={jumpHighlightId === String(item._id)}
                       appearance={chatAppearance}
                       e2eeStatus={e2eeStatus}
                       onLongPress={viewerSuspension || isBroadcastReadOnly ? () => {} : () => {
@@ -3104,9 +4064,22 @@ export default function ChatScreen() {
                           onToggleMultiSelect(String(item._id));
                           return;
                         }
+                        // Local outbox (RED) messages aren't on the server yet —
+                        // the action sheet's server ops don't apply. Long-press
+                        // retries the send instead.
+                        if (item.__outbox) {
+                          void flushOutbox();
+                          return;
+                        }
                         onLongPressMessage(item);
                       }}
-                      onPress={multiSelectIds ? () => onToggleMultiSelect(String(item._id)) : undefined}
+                      onPress={
+                        item.__outbox
+                          ? () => { void flushOutbox(); }
+                          : multiSelectIds
+                            ? () => onToggleMultiSelect(String(item._id))
+                            : undefined
+                      }
                       multiSelected={multiSelectIds ? multiSelectIds.includes(String(item._id)) : undefined}
                       searchTerm={searchTermNorm || null}
                       isActiveSearchMatch={activeMatchTimelineIdx >= 0 && index === activeMatchTimelineIdx}
@@ -3116,6 +4089,8 @@ export default function ChatScreen() {
                           : (emoji) => onToggleMyReaction(item._id, emoji)
                       }
                     />
+                      );
+                    })()}
                   </SwipeToReply>
                 </>
               );
@@ -3242,6 +4217,21 @@ export default function ChatScreen() {
             </View>
           ) : null}
 
+          {proposingMessageId && isConversationAvailable ? (
+            <View style={styles.replyPill} testID="propose-preview-pill">
+              <View style={[styles.replyAccent, styles.editAccent]} />
+              <View style={styles.flexOne}>
+                <Text style={styles.replyLabel}>Suggesting an edit</Text>
+                <Text style={styles.replyText} numberOfLines={1}>
+                  Tap send to submit for the author's approval
+                </Text>
+              </View>
+              <TouchableOpacity onPress={cancelEdit} hitSlop={10} testID="propose-preview-close">
+                <Feather name="x" size={18} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
           {uploading ? (
             <View style={styles.uploadBar} testID="uploading-bar">
               <ActivityIndicator size="small" color={Colors.primary} />
@@ -3324,6 +4314,22 @@ export default function ChatScreen() {
                   <Text style={[styles.composerToolText, draftBold ? styles.composerToolTextActive : null]}>B</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
+                  style={[styles.composerToolBtn, activeListKind === 'ordered' ? styles.composerToolBtnActive : null]}
+                  onPress={() => applyListFormat('numeric')}
+                  testID="composer-numbered-list"
+                >
+                  <Ionicons name="list-outline" size={20} color={activeListKind === 'ordered' ? Colors.primary : Colors.textSecondary} />
+                  <Text style={[styles.composerToolBadge, activeListKind === 'ordered' ? styles.composerToolTextActive : null]}>1.</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.composerToolBtn, activeListKind === 'bullet' ? styles.composerToolBtnActive : null]}
+                  onPress={() => applyListFormat('bullet')}
+                  testID="composer-bullet-list"
+                >
+                  <Ionicons name="ellipse" size={8} color={activeListKind === 'bullet' ? Colors.primary : Colors.textSecondary} style={styles.composerBulletDot} />
+                  <Ionicons name="list-outline" size={20} color={activeListKind === 'bullet' ? Colors.primary : Colors.textSecondary} />
+                </TouchableOpacity>
+                <TouchableOpacity
                   style={[styles.composerToolBtn, showColorPicker ? styles.composerToolBtnActive : null]}
                   onPress={() => setShowColorPicker((current) => !current)}
                   testID="composer-palette-toggle"
@@ -3335,7 +4341,48 @@ export default function ChatScreen() {
           ) : null}
 
           <View style={styles.inputBar}>
-          {isRecording ? (
+          {reviewUri ? (
+            <View style={styles.recordingRow}>
+              <TouchableOpacity style={styles.recCancelBtn} onPress={discardReview} testID="review-discard">
+                <Feather name="trash-2" size={20} color={Colors.danger} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.recPauseBtn}
+                onPress={toggleReviewPlay}
+                testID="review-play-toggle"
+              >
+                <Feather name={reviewPlaying ? 'pause' : 'play'} size={20} color={Colors.textPrimary} />
+              </TouchableOpacity>
+              <View style={styles.recIndicator}>
+                <View style={styles.recWaveWrap}>
+                  {[10, 16, 22, 14, 20, 26, 18, 12, 24, 15, 21, 13, 17, 23, 11].map((height, index, arr) => {
+                    const filled = index / arr.length <= reviewProgress;
+                    return (
+                      <View
+                        key={`rwave-${index}`}
+                        style={[
+                          styles.recWaveBar,
+                          { height },
+                          filled ? null : styles.recWaveBarPaused,
+                        ]}
+                      />
+                    );
+                  })}
+                </View>
+                <Text style={styles.recTimer}>
+                  {`${Math.floor(reviewDurationSec / 60)}:${(reviewDurationSec % 60).toString().padStart(2, '0')}`}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.recSendBtn}
+                onPress={sendReviewedVoice}
+                testID="review-send"
+                disabled={uploading}
+              >
+                <Feather name="send" size={20} color={Colors.white} />
+              </TouchableOpacity>
+            </View>
+          ) : isRecording ? (
             <View style={styles.recordingRow}>
               <TouchableOpacity style={styles.recCancelBtn} onPress={cancelRecording} testID="rec-cancel">
                 <Feather name="x" size={22} color={Colors.danger} />
@@ -3382,6 +4429,15 @@ export default function ChatScreen() {
                   draftBold ? styles.inputBold : null,
                 ]}
                 multiline
+                selection={pendingImages.length > 0 ? undefined : forcedSelection}
+                onSelectionChange={(e) => {
+                  const sel = e.nativeEvent.selection;
+                  composerSelectionRef.current = sel;
+                  setActiveListKind(currentLineListKind(text, sel.start));
+                  // Release the one-shot controlled selection once applied so
+                  // the user can move the caret freely afterwards.
+                  if (forcedSelection) setForcedSelection(undefined);
+                }}
                 editable={isConversationAvailable && !sending && !uploading}
                 onFocus={() => setComposerFocused(true)}
                 onBlur={() => setComposerFocused(false)}
@@ -3548,7 +4604,7 @@ export default function ChatScreen() {
           if (emojiPickerMode === 'react' && reactionTargetMsg) {
             // Apply as a reaction to the previously long-pressed message.
             try {
-              await toggleReaction({ messageId: reactionTargetMsg._id, emoji });
+              await reactToMessage(reactionTargetMsg._id, emoji);
               await refetchMessages();
             } catch (errorValue: any) {
               console.warn('react failed:', errorValue?.message);
@@ -3566,12 +4622,37 @@ export default function ChatScreen() {
 
       <MessageActionSheet
         message={selectedMsg}
-        canEdit={!!(isMineSelected && (selectedMsg?.type === 'text' || !selectedMsg?.type))}
+        canEdit={
+          !!(
+            (selectedMsg?.type === 'text' || !selectedMsg?.type) &&
+            (isMineSelected || selectedMsg?.editMode === 'open')
+          )
+        }
+        canSetEditMode={
+          !!(
+            isMineSelected &&
+            conversation?.type === 'group' &&
+            (selectedMsg?.type === 'text' || !selectedMsg?.type)
+          )
+        }
+        canSuggestEdit={
+          !!(
+            !isMineSelected &&
+            conversation?.type === 'group' &&
+            selectedMsg?.editMode === 'approval' &&
+            (selectedMsg?.type === 'text' || !selectedMsg?.type)
+          )
+        }
+        suggestPending={!!myPendingForSelected}
+        canPin={canPinMessages}
+        isPinned={!!pinnedMessageId && pinnedMessageId === String(selectedMsg?._id || '')}
         onClose={closeActionSheet}
         onPickReaction={onPickReaction}
         onReply={onReply}
         onCopy={onCopy}
         onEdit={onEdit}
+        onWhoCanEdit={onWhoCanEdit}
+        onSuggestEdit={onSuggestEdit}
         onForward={onForward}
         onShare={onShare}
         onSelectMultiple={onSelectMultiple}
@@ -3580,6 +4661,25 @@ export default function ChatScreen() {
         onMoreReactions={onMoreReactions}
         onMessageInfo={onMessageInfo}
         onDelete={onDelete}
+      />
+
+      <EditPermissionModals
+        editModeTarget={editModeTarget}
+        onCloseEditMode={() => setEditModeTarget(null)}
+        onApplyEditMode={applyEditMode}
+        showPendingEdits={showPendingEdits}
+        onClosePendingEdits={() => setShowPendingEdits(false)}
+        pendingEditsList={pendingEditsList}
+        onReviewEdit={handleReviewEdit}
+      />
+
+      {/* iter-292: rich Message Info sheet — Read by + media consumption
+          (Played/Watched/Viewed/Opened by), mirroring the web app. */}
+      <MessageInfoSheet
+        visible={!!infoMsg}
+        message={infoMsg}
+        recipientCount={Math.max(0, (conversation?.participants?.length || conversation?.memberCount || 2) - 1)}
+        onClose={() => setInfoMsg(null)}
       />
 
       {/* Tri-state delete-mode sheet (WhatsApp-style). For sent messages we
@@ -3725,6 +4825,31 @@ export default function ChatScreen() {
 }
 
 const styles = StyleSheet.create({
+  pendingEditsBadge: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: Colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  pendingEditsBadgeText: { color: Colors.white, fontSize: 10, fontWeight: '700' },
+  pinnedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    backgroundColor: '#FFF7E6',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  pinnedBannerLabel: { fontSize: 11, fontWeight: '700', color: Colors.primary },
+  pinnedBannerText: { fontSize: 14, color: Colors.textPrimary, marginTop: 1 },
   // iter-169 web parity: conversation message area uses the dedicated
   // `chatWallpaper` token (#F5F1E7) instead of the app body color.
   container: { flex: 1, backgroundColor: Colors.chatWallpaper },
@@ -3939,6 +5064,74 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingTop: 10,
   },
+  deletionReqBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    backgroundColor: '#FFF1F0',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#FFD6D2',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  deletionReqInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+  },
+  deletionReqText: {
+    flex: 1,
+    fontSize: 12.5,
+    fontWeight: FontWeight.medium,
+    color: Colors.textPrimary,
+  },
+  deletionReqActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  deletionReqBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: Radius.md,
+    minHeight: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deletionReqDecline: {
+    backgroundColor: 'transparent',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.border,
+  },
+  deletionReqDeclineText: {
+    fontSize: 12.5,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textSecondary,
+  },
+  deletionReqDelete: {
+    backgroundColor: Colors.tickRed,
+  },
+  deletionReqDeleteText: {
+    fontSize: 12.5,
+    fontWeight: FontWeight.bold,
+    color: '#fff',
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: Colors.tickYellow,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  offlineBannerText: {
+    fontSize: 12,
+    fontWeight: FontWeight.semibold,
+    color: Colors.headerBg,
+  },
   dayChipWrap: {
     alignItems: 'center',
     marginVertical: 8,
@@ -4123,6 +5316,16 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
+    flexDirection: 'row',
+  },
+  composerToolBadge: {
+    fontSize: 10,
+    fontWeight: FontWeight.bold,
+    color: Colors.textSecondary,
+    marginLeft: 1,
+  },
+  composerBulletDot: {
+    marginRight: 1,
   },
   composerToolBtnActive: {
     backgroundColor: '#FFF7DE',

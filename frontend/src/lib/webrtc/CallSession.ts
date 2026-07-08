@@ -60,8 +60,17 @@ export class CallSession {
   private motionStreak = 0;
 
   private closed = false;
+  /** When true, this session has handed its `pc`/streams to the mesh engine
+   *  for a seamless conference upgrade. All pc event handlers no-op and
+   *  `close()` will NOT stop the (now mesh-owned) tracks/connection. */
+  public detached = false;
   private remoteDescriptionSet = false;
   private pendingIce: RTCIceCandidate[] = [];
+  // iter-242: an offer can arrive (via the signaling poll) BEFORE the answerer
+  // has finished constructing `this.pc` — the old code threw "pc is null" and
+  // dropped it (the log showed "handleRemoteOffer: pc is null"). We now stash
+  // the latest early offer and replay it the moment the pc exists.
+  private pendingOfferPayload: string | null = null;
   private webrtc: WebRTCModule | null = null;
   // iter-128: track the LAST applied remote SDP payload bytes so we can
   // distinguish "duplicate (re-emitted by signaling poll loop)" from
@@ -586,10 +595,19 @@ export class CallSession {
       `created (callType=${this.opts.callType}, isCaller=${this.opts.isCaller}, ` +
         `hasLocalStream=${!!this.localStream}, localTracks=${this.localStream?.getTracks?.()?.length ?? 0})`,
     );
+    // iter-242: replay an offer that arrived before the pc existed.
+    if (this.pendingOfferPayload) {
+      const queued = this.pendingOfferPayload;
+      this.pendingOfferPayload = null;
+      callDebug.push('SIG', '← replaying queued offer (pc ready)');
+      void this.handleRemoteOffer(queued).catch((e) =>
+        callDebug.push('ERR', `queued offer replay failed: ${String((e as any)?.message || e)}`),
+      );
+    }
 
     // ICE candidates → send via signaling
     (pc as any).addEventListener('icecandidate', (event: any) => {
-      if (event?.candidate && !this.closed) {
+      if (event?.candidate && !this.closed && !this.detached) {
         const payload = JSON.stringify(event.candidate.toJSON ? event.candidate.toJSON() : event.candidate);
         callDebug.push('SIG', `→ ice-candidate (${(event.candidate?.candidate || '').slice(0, 40)})`);
         void Promise.resolve(
@@ -607,6 +625,7 @@ export class CallSession {
 
     // Remote tracks → expose as remoteStream
     (pc as any).addEventListener('track', (event: any) => {
+      if (this.detached) return;
       const streams = event?.streams as MediaStream[] | undefined;
       const stream = streams && streams.length > 0 ? streams[0] : null;
       const trackInfo =
@@ -621,6 +640,7 @@ export class CallSession {
     });
 
     (pc as any).addEventListener('connectionstatechange', () => {
+      if (this.detached) return;
       const state = (pc as any).connectionState as string | undefined;
       if (state) {
         callDebug.push('PC', `state=${state}`);
@@ -629,6 +649,7 @@ export class CallSession {
     });
 
     (pc as any).addEventListener('iceconnectionstatechange', () => {
+      if (this.detached) return;
       const state = (pc as any).iceConnectionState as string | undefined;
       if (state) {
         callDebug.push('PC', `ice=${state}`);
@@ -705,8 +726,11 @@ export class CallSession {
   }
   async handleRemoteOffer(payload: string): Promise<void> {
     if (!this.pc) {
-      callDebug.push('ERR', 'handleRemoteOffer: pc is null');
-      throw new Error('Peer connection not initialized');
+      // iter-242: the offer raced ahead of pc construction. Stash it and the
+      // pc-creation path will replay it — instead of throwing it away.
+      this.pendingOfferPayload = payload;
+      callDebug.push('SIG', '← offer queued (pc not ready yet)');
+      return;
     }
     // iter-128: previous (iter-96) idempotency guard rejected ANY offer
     // arriving while signalingState==='stable' + remoteDescriptionSet.
@@ -752,9 +776,7 @@ export class CallSession {
   /** Caller: handle the answer from the callee. */
   async handleRemoteAnswer(payload: string): Promise<void> {
     if (!this.pc) throw new Error('Peer connection not initialized');
-    // iter-128: same byte-identity check as handleRemoteOffer — drop
-    // ONLY exact duplicates re-emitted by the signaling poll loop,
-    // never drop legitimate ICE-restart answers.
+    // iter-128: drop exact duplicates re-emitted by the signaling poll loop.
     if (
       (this.pc as any).signalingState === 'stable' &&
       this.remoteDescriptionSet &&
@@ -763,13 +785,24 @@ export class CallSession {
       callDebug.push('SIG', '← answer ignored (byte-identical duplicate)');
       return;
     }
-    const isRestart =
-      (this.pc as any).signalingState === 'stable' && this.remoteDescriptionSet;
-    callDebug.push('SIG', `← answer (${payload.length}B${isRestart ? ', ICE-restart' : ''})`);
+    // iter-242: an answer can ONLY be applied while we're in 'have-local-offer'
+    // (or 'have-remote-pranswer'). The log showed two answers arriving back to
+    // back; the first connected us (→ 'stable') and the second blew up with
+    // "Failed to set remote answer sdp: Called in wrong state: stable". Skip
+    // any answer that arrives when we're not awaiting one.
+    const sigState = (this.pc as any).signalingState as string | undefined;
+    if (sigState && sigState !== 'have-local-offer' && sigState !== 'have-remote-pranswer') {
+      callDebug.push('SIG', `← answer ignored (state=${sigState}, not awaiting answer)`);
+      return;
+    }
+    callDebug.push('SIG', `← answer (${payload.length}B)`);
+    // Mark applied BEFORE the await so a concurrently-arriving identical answer
+    // is caught by the duplicate guard above instead of racing into a second
+    // setRemoteDescription.
+    this.lastAppliedAnswerPayload = payload;
     const answer = JSON.parse(payload);
     const webrtc = await this.getWebRTC();
     await this.pc.setRemoteDescription(new webrtc.RTCSessionDescription(answer));
-    this.lastAppliedAnswerPayload = payload;
     this.remoteDescriptionSet = true;
     await this.flushPendingIce();
   }
@@ -1041,6 +1074,25 @@ export class CallSession {
   }
 
   /** Tear down: stop tracks, close peer connection, mark closed. */
+  /**
+   * Relinquish ownership of the live `pc` + media for a seamless conference
+   * upgrade. Marks the session detached (all pc handlers no-op) and returns
+   * the connection/streams so the mesh engine can adopt them. After this,
+   * `close()` will NOT stop the (now mesh-owned) tracks or close the `pc`.
+   */
+  detachForHandoff(): { pc: RTCPeerConnection | null; localStream: MediaStream | null; remoteStream: MediaStream | null } {
+    this.detached = true;
+    if (this.iceRestartTimer) {
+      clearTimeout(this.iceRestartTimer);
+      this.iceRestartTimer = null;
+    }
+    const out = { pc: this.pc, localStream: this.localStream, remoteStream: this.remoteStream };
+    this.pc = null;
+    this.localStream = null;
+    this.remoteStream = null;
+    return out;
+  }
+
   close(): void {
     if (this.closed) return;
     this.closed = true;

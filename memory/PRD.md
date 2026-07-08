@@ -1,5 +1,31 @@
 # Smilers Mobile App — PRD
 
+## iter-277 (Jun 2026): "No chats / ? avatar" ROOT CAUSE = Convex FATAL sync desync + photo-save gating
+**THE no-chats bug is NOT auth.** Device diagnostics showed `[AUTH] getFreshIdToken: refresh OK` immediately followed by `[CONSOLE] [CONVEX FATAL ERROR] Base version 1 passed up doesn't match the current version 0`. That Convex error is FATAL — the client permanently stops syncing → empty chats + "?" header avatar until the app is killed/reinstalled (explains why reinstall "fixes" it and in-place update triggers it). Root cause: `src/providers/useConvexAutoReconnect.ts` fired manual socket reconnects during the boot/auth-handshake window, racing the SDK's own connect/auth and corrupting the session resume version. Fixes:
+  - `hardReconnect` now uses the SDK's intended `webSocketManager.closeAndReconnect('client')` (the same coordinated path Convex uses for InactiveServer/FailedToSend) instead of the low-level `stop()+tryRestart()` (which restarted the socket OUTSIDE the SDK lifecycle → version desync). Legacy fallback retained if API shape changes.
+  - Added a 12s **settle window** after mount: `evaluateAndAct` and the connection-state-subscription soft-reconnect both no-op during boot, letting the SDK establish + authenticate the socket itself (Convex's own backoff covers that window).
+  - Added `AUTH` diagnostics in `AuthProvider.getFreshIdToken`/restore + `CONVEX` diagnostics in reconnect paths to correlate any future FATAL.
+  ⚠️ NEEDS NATIVE BUILD to validate. If the FATAL ever recurs, the client is still dead until app restart (no in-session recovery yet — candidate next step: recreate ConvexReactClient on FATAL).
+**Photo-save gating fix.** Non-trustees could still save because backend `canSavePhoto` returned true via the legacy `photoSavePolicy === 'everyone'` (my earlier spec wrongly kept that). Mobile (`app/user/[userId].tsx`) now NEVER auto-allows: `canSavePhoto = isSelf || (server boolean === true)`; absent/false → "Request to save". Corrected `/app/PHOTO_SAVE_REQUEST_BACKEND_SPEC.md` to require `canSavePhoto` be **trustee-gated only** (ignore photoSavePolicy). Web team must redeploy that rule.
+
+
+## iter-276 (Jun 2026): Device-B auto-switch sync fix + profile-photo save-approval + screenshot block
+**#1 Device B auto-switch FIXED (synchronous overlay dismiss).** B's diagnostic logs showed `FIRING → triggerMeshUpgrade → router.replace → group-call` all firing, but the iter-275 `callHost.end()` was deferred via `setTimeout(…,60)` and that timer NEVER ran on B (`callHost.end() done` log absent) — Android throttled the timer during the nav transition while the overlay (zIndex 9000) kept covering group-call. Fix (`app/call/[conversationId].tsx` `triggerMeshUpgrade.navigate`): call `callHost.end()` **synchronously** right after `router.replace` (no timer). Works for both A (fromModal, after the 350ms modal-dismiss) and B (rAF path).
+**#2 Profile-photo save-by-approval (Convex-synced) — mobile UI shipped.** User rule: trustees save freely; everyone else taps "Request to save" → owner gets an Approve/Decline banner; can only save once approved; owner offline → "Awaiting approval" (no auto-save).
+  - Requester (`app/user/[userId].tsx` photo viewer): when server `canSavePhoto` is true → direct Save (existing). When false → "Request to save" → `api.photoSaveRequests.request({ownerId})` → "Awaiting … approval" state. Graceful "Not available yet" if backend fn missing.
+  - Owner (`src/components/PhotoSaveRequestBanner.tsx`, mounted in Chats tab): subscribes `api.photoSaveRequests.getIncoming`, Approve/Decline → `api.photoSaveRequests.respond({requestId, accept})`. Renders nothing until backend deploys.
+  - **Backend spec for web team:** `/app/PHOTO_SAVE_REQUEST_BACKEND_SPEC.md` (extend per-viewer `canSavePhoto` to include trustees + one-time approval grant; new `photoSaveRequests.request/getIncoming/respond`).
+**#3 Profile photo screenshot block.** `app/user/[userId].tsx` toggles `preventScreenCaptureAsync('profile-photo')` while the enlarged photo viewer is open, `allowScreenCaptureAsync` on close (native-only; no-op web).
+**#4 Photo upload (iter-275) confirmed WORKING by user.**
+⚠️ NATIVE BUILD required to validate auto-switch + screenshot block. Lint clean on all changed files; web bundle builds; app boots.
+
+
+## iter-275 (Jun 2026): P0 — 1:1→Mesh auto-switch ROOT CAUSE + photo-upload silent-hang fix
+**#1 Auto-switch (1:1 → Mesh) — TRUE ROOT CAUSE found.** User confirmed BOTH parties stay on the 1:1 screen until they tap End, which then drops them into the conference. The diagnostic logs already showed `[adhoc-upgrade] router.replace → group-call` firing — so navigation *ran* but had no visible effect. Cause: the call UI is NOT a real route — since iter-261 it's rendered by the root-mounted `<CallHost/>` overlay driven by the `callHost` store. `router.replace('/group-call/...')` only swaps the UNDERLYING expo-router screen; the 1:1 overlay stays mounted ON TOP (store still holds params), so users keep seeing the 1:1 screen until `callHost.end()` runs (which only happened on tapping End). **Fix** (`app/call/[conversationId].tsx` `triggerMeshUpgrade.navigate`): after `router.replace(dest)`, defer ~60ms then call `callHost.end()` to dismiss the overlay and reveal the group-call screen underneath. The live PC/streams are already `detachForHandoff()`-stashed before navigating, so ending the overlay does NOT drop the call (close() is a no-op on the detached pc); the group-call screen adopts the handoff. Applies to BOTH initiator (fromModal) and receiver paths.
+**#2 Photo upload "stuck in composer, no alert" — silent-hang hardening.** No error alert + photo stuck = `uploadFile`'s one-shot `convex.mutation(messages.generateUploadUrl)` hanging forever on the auth-handshake race (same failure class as trustees/languages/call-pills). **Fixes:** (a) `src/lib/uploadFile.ts` now races the upload-URL mutation against a 25s timeout → a stalled handshake throws a clear error instead of hanging. (b) `sendImageFromUri` (`app/chat/[conversationId].tsx`) now logs each step (`IMG send start / upload OK / meta / messages.send OK`) to the in-app Diagnostic Logs export and surfaces `errorValue.data.message` verbatim in the alert; the previously-silent `!isConversationAvailable` early-return now shows an alert too. Next device test + log export will pinpoint the exact failing step if it persists.
+**⚠️ NATIVE BUILD REQUIRED to validate both** (WebRTC + native upload don't run on web/Expo Go). Lint clean on all 3 files; web bundle builds; app boots to Sign In.
+
+
 ## iter-274 (Jun 2026): Conference — poll voting + timer/minutes/reactions read displays
 In `app/conference/[conferenceId]/room.tsx`:
 - **Poll voting wired:** polls now render each option as a tappable button → `api.conferencePolls.vote({pollId, optionId})` (shows vote count if present; disabled when poll closed).
@@ -742,3 +768,318 @@ Verified: all four touched files babel-transform clean; app bundles + renders
 Sign-In (smoke). Needs device verification (authenticated flows behind OIDC).
 Backend `repeat: 'yearly'/'hourly'` assumed supported by Convex (web edit already
 offers Yearly → shared backend).
+
+---
+
+## iter-233 — 4-colour delivery dots (real component) + Offline Outbox
+
+**Problem found:** the prior fork edited `src/components/chat/MessageBubble.tsx`,
+but that `MessageBubble` is DEAD CODE — the chat timeline renders
+`src/components/MediaBubble.tsx`. MediaBubble still had the old 3-colour mapping
+(Blue/Yellow/Green, no RED, and GREEN/YELLOW swapped vs the web contract).
+
+**Fixes:**
+1. **MediaBubble.tsx** — status dot now evaluated top-down per the web
+   `native-message-delivery-status-contract`: RED (`__outbox`/`__failed`) →
+   BLUE (`readBy.length>0` excl. sender) → GREEN (`deliveredTo.length>0` excl.
+   sender) → YELLOW (on server, no delivery yet). Group chats use ANY-recipient
+   `.length>0`.
+2. **NEW `src/lib/outbox.ts`** — AsyncStorage per-conversation queue
+   (`smilers:outbox:v1:<id>`): load/enqueue/remove/markFailed for plain-text only.
+3. **`app/chat/[conversationId].tsx`**:
+   - Fresh text send that FAILS (offline/Convex unreachable) is queued to the
+     outbox and rendered immediately in the timeline with a RED dot (no Alert).
+     Edits and media keep the old "not sent" alert (not queued).
+   - `flushOutbox()` auto-sends the queue on NetInfo reconnect + AppState
+     'active' + on mount. Tap / long-press a RED message also retries.
+   - Outbox entries merged into the `timeline` memo; swipe-to-reply disabled for
+     them (no server id yet).
+   - Installed `@react-native-community/netinfo` (11.4.1).
+
+Verified: lint clean on changed files; bundle compiles; app renders Sign-In
+(smoke). End-to-end offline behaviour needs device/build verification (auth is
+Google OIDC + requires real network toggling — not exercisable in web preview).
+
+---
+
+## iter-234 — Offline read access to old messages (BUG FIX)
+
+**Reported:** previous agent claimed offline message access worked; it never did.
+
+**Root cause (`app/chat/[conversationId].tsx`):** the render gate was
+`{conversationLoading || messagesLoading ? <spinner> : ...}`. When offline the
+Convex `messages.list` query stays `undefined` forever → `messagesLoading`
+stayed `true` → the screen showed "Taking longer than usual"/spinner and NEVER
+rendered the FlatList, even though `cachedMessages` (iter-164 AsyncStorage cache)
+were available. The conversation object + `me` were also `undefined` offline, so
+the header showed "Loading…" and `isConversationAvailable` was false (composer
+disabled, outbox couldn't trigger).
+
+**Fix:**
+- Cache the conversation object per-id (`chat-conversation` scope) when it
+  resolves; read it back offline. Read cached `me` (`me`/`self` scope, already
+  written by the Chats tab). Added `effectiveConversation = conversation ??
+  cachedConversation` and `effectiveMe = me ?? cachedMe`.
+- `hydratedConversation`, `isConversationAvailable`, header title, and the
+  message `isMine`/`myUserId` now use the effective (cache-fallback) values.
+- Render gate now bypasses the loading spinner when `hasCachedTimeline` (cached
+  messages exist) → the FlatList renders cached history offline.
+
+Result: opening a previously-synced chat while offline shows the full cached
+timeline, correct sender alignment, and the contact name in the header. (Only
+in-flight/undelivered incoming server messages aren't shown until reconnect, as
+expected.) Lint clean; bundle compiles; Sign-In renders (smoke). Needs device
+verification with real airplane-mode toggling.
+
+---
+
+## iter-235 — Post-test fixes (3 user-reported items)
+
+1. **Call auto-switch to conference (Issue 1).** Root cause: the other party's
+   `triggerMeshUpgrade` deferred navigation with
+   `InteractionManager.runAfterInteractions(...)`. The call screen runs
+   continuous animations (CallBackground orbs / ringing pulse) which keep an
+   interaction handle open, so the queued `router.replace` never fired until
+   the user tapped something (e.g. End). Fix (`app/call/[conversationId].tsx`):
+   `triggerMeshUpgrade({ fromModal })` — initiator closes the picker <Modal>
+   then `setTimeout(replace, 350)`; the other party navigates immediately via
+   `setTimeout(replace, 0)` with NO InteractionManager. Removed the now-unused
+   InteractionManager import.
+
+2. **Green "delivered" dot never showed (Issue 2).** Root cause: `markDelivered`
+   and `markRead` both fired only when the recipient OPENED the chat → jumped
+   straight to BLUE; GREEN was never observable. Fix (`app/(tabs)/chats.tsx`):
+   from the chats list, call `api.messages.markDelivered({conversationId})` for
+   each conversation whenever its `lastMessageTime` changes (live/online only,
+   deduped via a ref). Now the sender sees GREEN once the recipient's app syncs
+   the list, then BLUE when they open the chat. (markDelivered excludes the
+   sender, so own-conversation calls are no-ops.)
+
+3. **Offline message vanished instead of showing as not-sent (Issue 3).** Root
+   cause: Convex mutations DON'T reject when offline — `await sendMessage(...)`
+   just hangs until reconnect, so the try/catch outbox-enqueue never ran and the
+   message disappeared from the UI until reconnect. Fix
+   (`app/chat/[conversationId].tsx`): in `handleSend`, when `isOffline`, enqueue
+   to the outbox immediately (RED dot, WhatsApp-style pending) and skip the
+   hanging mutation; auto-sends on reconnect. (Avoids duplicates since the
+   mutation is never queued by Convex.)
+
+Lint clean on all changed files; bundle compiles; Sign-In renders (smoke).
+Needs two-device verification with airplane-mode toggling.
+
+---
+
+## iter-236 — Two remaining post-test issues (delivered dot + auto-switch)
+
+**Issue 2 — green "delivered" still not showing.** The iter-235 chats-list
+markDelivered only ran while the Chats tab was mounted; if the recipient was on
+another screen (or the tab unmounted) delivered was never set, so yellow kept
+"double duty". The push received-listener only fires in the FOREGROUND and the
+background task can't run a Convex mutation. Fix: NEW global hook
+`src/hooks/useDeliveryReceipts.ts`, mounted in `app/_layout.tsx`
+(PresenceHeartbeat — inside Convex+Auth, runs on EVERY authenticated screen,
+mirrors the web client's always-on subscription). It watches
+`listConversations` and calls `messages.markDelivered({conversationId})` when a
+conversation's lastMessageTime advances. Removed the chats-tab duplicate.
+
+**Issue 1 — conference auto-switch still required tapping End.** Removing
+InteractionManager (iter-235) wasn't enough — the receiver's trigger
+(`activeCall.isConference` / `getCallInvites`) wasn't firing reliably
+(getCallInvites likely filters to invites addressed to the current user, and
+isConference may not echo promptly). Added a RELIABLE cross-device trigger in
+`app/call/[conversationId].tsx`: subscribe to
+`conference.getParticipants({callId})` — the initiator calls `joinConference`
+the instant they enter the mesh host, so the roster becomes non-empty on the
+other party's device. The upgrade watcher now fires on isConference OR invite OR
+roster>0. Navigation: initiator `setTimeout(350)` after closing the modal; the
+other party uses `requestAnimationFrame → setTimeout(0)`. Added `__DEV__`
+console.logs at the watcher + triggerMeshUpgrade entry + router.replace for
+field diagnosis.
+
+Lint clean on changed files (pre-existing require/import warnings only); bundle
+compiles; Sign-In renders. Needs two-device verification.
+
+---
+
+## iter-237 — Match web delivery dots + remove risky global hook + triage regressions
+
+USER feedback: web app itself shows GREEN for both sent & delivered and never
+shows yellow; also reported NEW regressions: photo attach stuck, delete-for-
+everyone not propagating to receiver / not corrupting.
+
+1. **Delivery dots → match web exactly** (`MediaBubble.tsx`): RED (outbox) →
+   BLUE (readBy>0, excl sender) → GREEN (on server). Removed YELLOW and the
+   delivered/read distinction entirely (green now appears as soon as the
+   message is on the server, exactly like web).
+2. **Removed `useDeliveryReceipts` global hook** (+ deleted the file, unmounted
+   from `_layout.tsx`). It is no longer needed (green = on-server) and it was
+   firing `markDelivered` mutations for EVERY conversation on every list update
+   — a plausible source of Convex client backpressure / the new instability.
+   Also removed the chats-tab variant earlier.
+3. **Regression triage (NOT changed — backend/shared-Convex coupled):**
+   - Photo attach: send path (`sendImageFromUri`/`uploadFile`) is untouched and
+     uses the same Convex storage that working text uses. Suspect stale bundle
+     or the removed global hook interfering. Needs clean reload + device logs.
+   - Delete-for-everyone: `performDelete` already silently FALLS BACK to
+     `deleteMessage({messageId})` (= delete-for-me) when `{mode:'everyone'}`
+     throws (iter-97). The cross-device delete propagation + "corrupt on
+     receiver" are BACKEND (shared Convex `messages.deleteMessage`) features —
+     if the web team changed that schema, mobile's `mode:'everyone'` may now be
+     rejected → silent delete-for-me. Requires backend/web-team confirmation.
+
+Bundle compiles; Sign-In renders. Asked user to do a CLEAN reload and re-test
+photo + delete; the removed global hook may have been the destabiliser.
+
+---
+
+## iter-238 — Delete-for-everyone/receiver: probe correct backend signature
+
+USER: delete-for-everyone/receiver work on WEB (tombstone "This message was
+deleted" shown) but NOT on mobile. Root cause: mobile sent
+`deleteMessage({messageId, mode:'everyone'})`; the shared Convex backend (which
+the web app uses successfully) validates args strictly and rejects that shape,
+so the old code silently fell back to `deleteMessage({messageId})` = delete-for-
+ME only → message gone for sender, still on receiver.
+
+Fix (`performDelete` in chat): probe the realistic Convex signatures and use
+whichever the backend ACCEPTS (strict validation makes wrong shapes throw
+safely, so no accidental wrong-delete):
+  everyone → tries forEveryone:true, deleteFor:'everyone', scope, deleteType,
+             mode, then deleteMessageForEveryone()/deleteForEveryone().
+  receiver → tries deleteFor/scope/deleteType/mode:'receiver'.
+  me       → deleteFor:'me' / mode:'me' / deleteForMe() / bare {messageId}.
+CRUCIALLY removed the silent bare-{messageId} fallback for everyone/receiver
+(that was the delete-for-me masking). `__DEV__` logs which signature succeeded.
+
+NOTE: exact web signature unknown (Convex backend lives in web repo; mobile uses
+anyApi). If the probe still misses, need the web team's `messages.deleteMessage`
+arg schema to lock it in. File-corruption-on-receiver is a separate backend
+feature.
+
+Lint clean; bundle compiles.
+
+---
+
+## iter-239 — Root-caused 3 issues from the WEB BUNDLE (definitive)
+
+Inspected the deployed web bundle (smilers-app.onhercules.app/assets/index-*.js)
+to get EXACT signatures instead of guessing.
+
+1. **Delete for everyone/receiver** — web uses:
+   `messages.deleteMessage({ messageId, forEveryone: true })` (everyone),
+   `messages.deleteMessage({ messageId, forReceiver: true })` (receiver),
+   `messages.deleteMessage({ messageId, forEveryone: false })` (me),
+   `messages.requestDeletion({ messageId })` (request).
+   Mobile was sending `{mode:'everyone'}` → strict-validation reject → silent
+   delete-for-me. Rewrote `performDelete` + the media auto-purge to the exact
+   web args. Removed the silent fallback.
+
+2. **Delivery dots** — web logic (chat/page.tsx:3205-3208) is:
+   read→`bg-blue-500`, else delivered→`bg-green-500`, else→`bg-yellow-500`.
+   So my iter-237 "green=sent, no yellow" was WRONG. Restored proper 4-state in
+   MediaBubble: RED(outbox)→BLUE(read)→GREEN(delivered)→YELLOW(sent).
+   Re-added the global delivery hook as an EXACT port of the web's `Ure()`
+   component: subscribe `messages.getUnreadCounts`, and call
+   `markDelivered({conversationId})` whenever a conversation's unread count
+   INCREASES. Mounted in _layout (PresenceHeartbeat). This populates
+   `deliveredTo` so the sender actually sees green (was stuck on yellow).
+
+3. **Photo attach stuck** — web image send includes `mimeType` (+fileName,
+   fileSize); the mobile VIDEO send already sends `mimeType` (works) but the
+   IMAGE send omitted it. Backend `messages.send` requires `mimeType` for media
+   → image send rejected → "Upload failed" / photo stayed in composer. Added
+   `mimeType` to `sendImageFromUri`'s send (matches web + the working video path).
+
+Lint clean on changed files (pre-existing MediaBubble rules-of-hooks + _layout
+require-style warnings only); bundle compiles; Sign-In renders.
+
+---
+
+## iter-240 — Media metadata, deletion-request prompt, delivered fix, conf logs
+
+Verified all contracts against the deployed web bundle (smilers-app.onhercules.app).
+
+1. **Photo attach stuck + video sends bad metadata** — web `messages.send`
+   includes fileName + fileSize + mimeType for ALL media. Mobile image send
+   omitted fileName/fileSize (and previously mimeType); video sends omitted
+   fileName/fileSize. Added a `getMediaMeta(uri,mime,base)` helper
+   (expo-file-system getInfoAsync) and now send fileName+fileSize+mimeType on
+   image + both video paths. This is why photos stayed stuck in the composer
+   and the deleted video left a broken frame (bad metadata → couldn't render).
+
+2. **"Ask sender to delete" prompt (NEW feature)** — web uses
+   `getPendingDeletionRequests({})` + `respondToDeletionRequest({requestId:_id,
+   accept})`. Added a red in-chat banner (Decline / Delete) shown to the
+   message owner, scoped to the conversation when the request carries
+   conversationId.
+
+3. **Green delivered dot** — removed the in-chat markDelivered (it fired with
+   markRead on open → yellow skipped straight to blue). Delivery is now marked
+   only by the global useDeliveryReceipts hook (getUnreadCounts increase),
+   exactly like web's Ure() component.
+
+4. **Conference auto-switch diagnostics (Step 1)** — the watcher now reads and
+   logs `error` from getCallInvites + getParticipants safe-queries so a real
+   device build's Metro logs show whether those backend fns error
+   (CouldNotFindFunction) vs return empty. NOTE: mesh/group-call is native-only
+   and won't populate the roster in Expo Go — must test on an EAS build.
+
+Lint clean; bundle compiles; Sign-In renders. Most of these need a real device
+build (Expo Go can't run mesh; push is dead in Expo Go).
+
+## iter-241 — "No chats yet" lockout + per-user delete tombstone (isDeleted)
+
+1. **"No chats yet" lockout (only reinstall fixed it)** — `chats.tsx` did
+   `list = liveList ?? cachedList ?? []`, so when `listConversations` resolved
+   to an EMPTY array (transient during Convex re-auth / stale SecureStore
+   identity) the UI showed empty AND `writeCache` overwrote the good cache with
+   `[]` — persisting the lockout (APK update kept storage; only reinstall
+   cleared it). Fixes: prefer live ONLY when it has rows, else fall back to
+   cached; guard writeCache to never clobber a non-empty cache with `[]`; and
+   when live==empty but cache has rows, force ONE Convex reconnect to recover.
+   (Root cause is a backend/auth session glitch returning empty — this makes
+   the app self-heal instead of requiring reinstall.)
+
+2. **Delete tombstone for me/receiver + video** — the web uses a unified
+   `isDeleted` boolean (set per-viewer for forReceiver:true / forEveryone:false,
+   globally for forEveryone:true). Mobile only checked `deletedAt`, so per-user
+   deletes (and some media deletes) never showed "This message was deleted".
+   MediaBubble now renders the tombstone for `deletedAt || isDeleted===true`.
+
+Lint clean (pre-existing MediaBubble rules-of-hooks + chats dup-import warnings
+only); bundle compiles; Sign-In renders.
+
+## iter-242 — WebRTC signaling race fixes (from device call log)
+
+CallSession.ts (native 1:1 engine):
+1. **"handle answer failed: Called in wrong state: stable"** — two answers
+   arrived back-to-back; the first connected (→stable), the second tried
+   setRemoteDescription(answer) in stable state and threw. Fix: handleRemoteAnswer
+   now skips any answer when signalingState is not 'have-local-offer'/
+   'have-remote-pranswer', and marks lastAppliedAnswerPayload BEFORE the await so
+   a concurrent identical answer is caught by the dup guard.
+2. **"handleRemoteOffer: pc is null" / "Peer connection not initialized"** — on
+   answering, the offer raced ahead of pc construction and was thrown away. Fix:
+   handleRemoteOffer now stashes the early offer (pendingOfferPayload) instead of
+   throwing; the pc-creation path replays it the moment the pc exists.
+
+Lint clean (pre-existing RTCSessionDescription unused-type warning only); bundle
+compiles; Sign-In renders. Native-only — verify on EAS device build.
+
+## iter-243 — text tombstone, gallery-video metadata, receiver media purge
+- MessageBubble.tsx: tombstone now fires on deletedAt || isDeleted (text per-viewer delete).
+- pickVideo (gallery) now sends fileName+fileSize via getMediaMeta (was missed; only recordVideo had it).
+- MediaBubble receiver purge now triggers on isDeleted too (local file corruption on delete-for-everyone).
+- Backend Server Errors noted (NOT mobile): conference:toggleSelfMute, messages:setTranscription — web-team Convex fns.
+
+## Group Pinned Post (Admin-gated) — iter-336
+- Groups: only admins (chief admin / any admin / creator, via `groupAdmin.getGroupAdminInfo.isAdmin`) can pin/unpin; regular members don't see pin controls. Direct 1:1: either party can pin.
+- One pinned post per chat — pinning replaces the previous; unpinning clears it. Banner (`getPinnedMessage`) shows at top of chat, visible to all members; admins get an unpin (✕) affordance.
+- Canonical contract: `conversations.pinMessage({ conversationId, messageId })` pin/replace; `conversations.pinMessage({ conversationId })` unpin; `conversations.getPinnedMessage({ conversationId })` read banner.
+- Files: `app/chat/[conversationId].tsx` (queries, onPin/onUnpinBanner, banner), `src/components/chat/MessageActionSheet.tsx` (canPin/isPinned → Pin/Unpin row).
+
+## Mobile Money Payment Requests — iter-339
+- Users: Premium screen → "Pay with Mobile Money" → app/mobile-money.tsx: pick plan (Monthly/6-Months/Yearly), pick country (17 African countries, default KE), optional pay-from phone, ≈ estimate, confirm → mobileMoneyRequests.createRequest (action) → success screen w/ authoritative amount+currency. getMyRequests lists own requests w/ status.
+- Admin: app/admin.tsx new "Payments" tab (badge = countPendingRequests) → src/components/admin/MobileMoneyAdmin.tsx: Pending/History toggle; per-request Message (admin.messaging.messageUsers) / Complete (completeRequest → auto-activates plan) / Decline (declineRequest). Completed/declined move to History.
+- Shared constants mirrored verbatim from web convex/lib/mobileMoney.ts in src/lib/mobileMoney.ts (MOBILE_MONEY_COUNTRIES, FALLBACK_EUR_RATES, roundLocalAmount, PREMIUM_PLANS). country=ISO alpha-2; phone omitted (undefined) when blank.
+- Files: src/lib/mobileMoney.ts, app/mobile-money.tsx, src/components/admin/MobileMoneyAdmin.tsx, app/premium.tsx, app/admin.tsx. Backend Convex funcs assumed deployed on web side.

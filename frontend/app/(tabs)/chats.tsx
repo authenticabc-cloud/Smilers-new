@@ -1,9 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Modal, Pressable, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Swipeable, RectButton } from 'react-native-gesture-handler';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useQuery, useConvex } from 'convex/react';
 import Header from '../../src/components/Header';
 import Avatar from '../../src/components/Avatar';
@@ -11,11 +11,14 @@ import FabStack from '../../src/components/FabStack';
 import SosButton from '../../src/components/SosButton';
 import { LoginApprovalBanner } from '../../src/components/LoginApprovalBanner';
 import { LiveLocationRequestBanner } from '../../src/components/LiveLocationRequestBanner';
+import { PhotoSaveRequestBanner } from '../../src/components/PhotoSaveRequestBanner';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName } from '../../src/lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { readCacheMeta, writeCache } from '../../src/lib/offlineCache';
+import { loadAllChatDrafts, type DraftPreview } from '../../src/lib/chatDrafts';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import OfflineBanner from '../../src/components/OfflineBanner';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 // iter-220: pull-to-refresh now forces a Convex socket reconnect — the
@@ -44,9 +47,54 @@ function relTime(iso?: string) {
 export default function ChatsScreen() {
   const router = useRouter();
   const [showMenu, setShowMenu] = useState(false);
+  // iter-313: pin Voice Task contacts to the top of the chat list, in their
+  // assigned 1..10 order. Off by default (chats stay time-ordered); persisted
+  // locally so the choice survives restarts.
+  const [pinVoiceTasks, setPinVoiceTasks] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const v = await AsyncStorage.getItem('smilers_pin_voice_task_chats');
+        if (alive && v === '1') setPinVoiceTasks(true);
+      } catch {}
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const togglePinVoiceTasks = useCallback(() => {
+    setShowMenu(false);
+    setPinVoiceTasks((prev) => {
+      const next = !prev;
+      AsyncStorage.setItem('smilers_pin_voice_task_chats', next ? '1' : '0').catch(() => {});
+      return next;
+    });
+  }, []);
   const me = useQuery(api.users.getCurrentUser, {});
   const contacts = useQuery(api.contacts.getContacts, {});
   const conversations = useQuery(api.conversations.listConversations);
+  // Composer drafts per conversation — refreshed whenever the list regains
+  // focus (e.g. returning from a chat where a draft was started/cleared) so the
+  // "Draft:" preview stays in sync.
+  const [drafts, setDrafts] = useState<Record<string, DraftPreview>>({});
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      void loadAllChatDrafts().then((map) => {
+        if (alive) setDrafts(map);
+      });
+      return () => {
+        alive = false;
+      };
+    }, []),
+  );
+  // Voice Task roster (positions 1..10) — used to optionally pin those
+  // contacts' chats to the top in the same order they occupy in Voice Tasks.
+  const voiceTaskRows = useQuery(
+    (api as any).voiceTaskContacts?.getMyVoiceTaskContacts,
+    {},
+  ) as any[] | undefined;
   // iter-213: archived chats sync against the shared Convex backend
   // (api.archives.*). The main list does NOT exclude archived rows and
   // carries no isArchived flag, so we fetch the archived id set and
@@ -137,10 +185,16 @@ export default function ChatsScreen() {
   }, [userKey]);
   useEffect(() => {
     if (Array.isArray(conversations)) {
-      void writeCache('conversations', userKey, conversations);
-      setCachedTs(Date.now());
+      // Don't clobber a known-good cached list with an empty live result
+      // (the transient empty-resolve during re-auth that caused the "No chats
+      // yet" lockout). Only persist when live has rows, or when we have no
+      // cached rows yet (legitimately-empty accounts still cache []).
+      if (conversations.length > 0 || !(Array.isArray(cachedList) && cachedList.length > 0)) {
+        void writeCache('conversations', userKey, conversations);
+        setCachedTs(Date.now());
+      }
     }
-  }, [conversations, userKey]);
+  }, [conversations, userKey, cachedList]);
   // iter-191: persist a copy of `me` under a FIXED key so screens that can
   // mount while Convex is still (re)authenticating — the share sheet — can
   // resolve the correct per-user cache key instead of falling back to 'anon'.
@@ -150,8 +204,40 @@ export default function ChatsScreen() {
 
   // Prefer live data; fall back to cache while loading.
   const liveList: any[] | null = Array.isArray(conversations) ? conversations : null;
-  const list: any[] = liveList ?? cachedList ?? [];
-  const showOfflineBanner = !liveList && Array.isArray(cachedList) && cachedList.length > 0;
+  // iter-241 ("No chats yet" lockout fix): when the live query resolves to an
+  // EMPTY array (which happens transiently during a Convex re-auth / socket
+  // handshake, or when the identity token in SecureStore goes stale) we must
+  // NOT blow away a known-good list. Prefer live only when it actually has
+  // rows; otherwise fall back to the cached list. This is what kept users
+  // stuck on "No chats yet" until a full reinstall.
+  const liveHasRows = Array.isArray(liveList) && liveList.length > 0;
+  const cacheHasRows = Array.isArray(cachedList) && cachedList.length > 0;
+  const list: any[] = liveHasRows ? liveList! : cacheHasRows ? cachedList! : liveList ?? cachedList ?? [];
+  const showOfflineBanner = (!liveList || (!liveHasRows && cacheHasRows)) && cacheHasRows;
+
+  // If live came back empty but we DO have cached chats, the session/socket is
+  // almost certainly in a bad state — actively recover by forcing a Convex
+  // reconnect (once per empty-resolve) instead of leaving the user stranded.
+  const recoveredEmptyRef = useRef(false);
+  // iter-316: hard time-based cooldown. `forceConvexReconnect` is NOT
+  // rate-limited, and `recoveredEmptyRef` resets the moment rows briefly
+  // appear — so an oscillating live query (empty→rows→empty every ~2s) could
+  // weaponise this into a reconnect STORM ("disco" flicker + constant token
+  // refresh + push re-register). Never fire this recovery more than once per
+  // 30s regardless of the ref, so a flapping socket can't runaway.
+  const lastEmptyRecoverAtRef = useRef(0);
+  useEffect(() => {
+    if (liveResolved && !liveHasRows && cacheHasRows) {
+      const now = Date.now();
+      if (!recoveredEmptyRef.current && now - lastEmptyRecoverAtRef.current > 30_000) {
+        recoveredEmptyRef.current = true;
+        lastEmptyRecoverAtRef.current = now;
+        void forceConvexReconnect('chats-empty-with-cache');
+      }
+    } else if (liveHasRows) {
+      recoveredEmptyRef.current = false;
+    }
+  }, [liveResolved, liveHasRows, cacheHasRows]);
 
   // iter-213: archived chats — filter them out of the main list and keep
   // a count for the "Archived" pinned row (shown only when count > 0).
@@ -164,6 +250,54 @@ export default function ChatsScreen() {
     [list, archivedSet],
   );
   const archivedCount = archivedIds?.length ?? 0;
+
+  // iter-313: map each Voice Task contact's user id → its position (1..10),
+  // then (when the pin toggle is on) sort matching conversations to the top in
+  // that order. Non-voice-task chats keep their normal recency order below.
+  const voiceTaskOrder = useMemo(() => {
+    const map = new Map<string, number>();
+    (Array.isArray(voiceTaskRows) ? voiceTaskRows : []).forEach((r: any) => {
+      const uid = String(r?.contactId || r?.userId || '');
+      const pos = Number(r?.position);
+      if (uid && pos >= 1 && pos <= 10) map.set(uid, pos);
+    });
+    return map;
+  }, [voiceTaskRows]);
+
+  const orderedList = useMemo(() => {
+    if (!pinVoiceTasks || voiceTaskOrder.size === 0) return visibleList;
+    const peerId = (c: any): string =>
+      String(
+        c?.otherUserId ||
+          c?.otherParticipant?._id ||
+          c?.otherUser?._id ||
+          c?.otherParticipantId ||
+          '',
+      );
+    const pinned: any[] = [];
+    const rest: any[] = [];
+    visibleList.forEach((c: any) => {
+      const pos = voiceTaskOrder.get(peerId(c));
+      if (pos) pinned.push({ c, pos });
+      else rest.push(c);
+    });
+    pinned.sort((a, b) => a.pos - b.pos);
+    return [...pinned.map((p) => p.c), ...rest];
+  }, [pinVoiceTasks, voiceTaskOrder, visibleList]);
+
+  // Draft bump: conversations with an unsent draft float to the top so the
+  // user can pick up where they paused. Skipped when Voice-Task pinning is on
+  // (that's an explicit ordering the user chose). Stable — relative order
+  // within the drafted / non-drafted groups is preserved.
+  const finalList = useMemo(() => {
+    if (pinVoiceTasks) return orderedList;
+    if (!drafts || Object.keys(drafts).length === 0) return orderedList;
+    const withDraft: any[] = [];
+    const without: any[] = [];
+    orderedList.forEach((c: any) => (drafts[String(c?._id)] ? withDraft.push(c) : without.push(c)));
+    if (withDraft.length === 0) return orderedList;
+    return [...withDraft, ...without];
+  }, [pinVoiceTasks, orderedList, drafts]);
 
   const handleArchive = useCallback(
     async (conversationId: string) => {
@@ -258,6 +392,27 @@ export default function ChatsScreen() {
               onPress={() => handleMenuPress('/archived')}
               testID="menu-archived"
             />
+            <TouchableOpacity
+              style={menuStyles.row}
+              onPress={togglePinVoiceTasks}
+              activeOpacity={0.6}
+              testID="menu-pin-voice-tasks"
+            >
+              <View style={menuStyles.iconWrap}>
+                <MaterialCommunityIcons
+                  name={pinVoiceTasks ? 'pin' : 'pin-outline'}
+                  size={20}
+                  color={pinVoiceTasks ? Colors.primary : Colors.textPrimary}
+                />
+              </View>
+              <Text style={menuStyles.label}>Pin Voice Task chats</Text>
+              <View style={{ flex: 1 }} />
+              <Feather
+                name={pinVoiceTasks ? 'check-circle' : 'circle'}
+                size={18}
+                color={pinVoiceTasks ? Colors.primary : Colors.textMuted}
+              />
+            </TouchableOpacity>
             <MenuItem
               icon={<Feather name="lock" size={20} color={Colors.textPrimary} />}
               label="Encryption"
@@ -276,7 +431,7 @@ export default function ChatsScreen() {
       </Modal>
 
       <FlatList
-        data={visibleList}
+        data={finalList}
         keyExtractor={(item: any) => item._id}
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
@@ -285,6 +440,8 @@ export default function ChatsScreen() {
             <LoginApprovalBanner />
             {/* Incoming live-location requests — tap to confirm & share. */}
             <LiveLocationRequestBanner />
+            {/* Incoming profile-photo save requests — approve/decline. */}
+            <PhotoSaveRequestBanner />
             <PinnedRow
               iconBg={Colors.aiBadge}
               iconBgDark={Colors.aiBadgeDark}
@@ -364,6 +521,7 @@ export default function ChatsScreen() {
               item={item}
               currentUserId={me?._id}
               contacts={contacts}
+              draft={drafts[String(item._id)]}
               onPress={() => router.push(`/chat/${item._id}` as any)}
             />
           </SwipeToArchive>
@@ -453,7 +611,7 @@ function peerIsOnline(item: any): boolean {
   return Date.now() - t < 120000; // online if seen within 2 min
 }
 
-function ConversationRow({ item, currentUserId, contacts, onPress }: { item: any; currentUserId?: string; contacts?: any[]; onPress: () => void }) {
+function ConversationRow({ item, currentUserId, contacts, draft, onPress }: { item: any; currentUserId?: string; contacts?: any[]; draft?: DraftPreview; onPress: () => void }) {
   // iter-176: Device address-book name beats both the saved-contact name
   // AND the Smilers display name. e.g. if your phone has the other user
   // saved as "ABC Albania", you'll see "ABC Albania" here instead of the
@@ -512,9 +670,20 @@ function ConversationRow({ item, currentUserId, contacts, onPress }: { item: any
       <Avatar name={name} size={52} uri={photoUri} online={peerIsOnline(item)} />
       <View style={styles.rowMiddle}>
         <Text style={styles.rowTitle}>{name}</Text>
-        <Text style={[styles.rowSubtitle, typingLabel ? styles.rowTyping : null]} numberOfLines={1}>
-          {typingLabel || item.lastMessageText || 'Start chatting…'}
-        </Text>
+        {typingLabel ? (
+          <Text style={[styles.rowSubtitle, styles.rowTyping]} numberOfLines={1}>
+            {typingLabel}
+          </Text>
+        ) : draft ? (
+          <Text style={styles.rowSubtitle} numberOfLines={1}>
+            <Text style={styles.draftPrefix}>Draft: </Text>
+            {draft.text || (draft.hasImages ? '📷 Photo' : '')}
+          </Text>
+        ) : (
+          <Text style={styles.rowSubtitle} numberOfLines={1}>
+            {item.lastMessageText || 'Start chatting…'}
+          </Text>
+        )}
       </View>
       <Text style={styles.rowTime}>{relTime(item.lastMessageTime)}</Text>
     </TouchableOpacity>
@@ -605,6 +774,10 @@ const styles = StyleSheet.create({
   rowSubtitle: {
     fontSize: FontSize.sm,
     color: Colors.textSecondary,
+  },
+  draftPrefix: {
+    color: Colors.danger,
+    fontWeight: FontWeight.semibold,
   },
   rowTyping: {
     color: Colors.primary,

@@ -55,6 +55,34 @@ import { usePhoneMessageActions, findPhoneMatches } from '../lib/usePhoneMessage
 import { useAutoDownloadMedia } from '../lib/mediaAutoDownload';
 import { purgeMessageMedia } from '../lib/deletedMediaPurge';
 
+// iter-292 MEDIA CONSUMPTION TRACKING.
+// Records when a RECIPIENT actually plays / watches / opens / views an
+// incoming media message, so the sender's "Message Info" sheet can show
+// "Played/Watched/Viewed/Opened by …" separately from "Read by …".
+// Self-contained per media component (no prop threading): each player calls
+// the returned `markConsumed()` on its first real interaction.
+//   • Only fires for INCOMING media (`!isMine`).
+//   • Idempotent — guarded by a per-instance ref so repeated plays don't spam.
+//   • Fully graceful: if the backend hasn't deployed `messages.markConsumed`
+//     yet, the call rejects and is swallowed (UI never breaks).
+function useMarkConsumedOnce(msg: any, isMine: boolean): () => void {
+  const markConsumed = useMutation((api as any).messages?.markConsumed);
+  const firedRef = useRef(false);
+  return useCallback(() => {
+    if (firedRef.current) return;
+    if (isMine) return;
+    const messageId = msg?._id;
+    if (!messageId || typeof markConsumed !== 'function') return;
+    firedRef.current = true;
+    try {
+      void Promise.resolve(markConsumed({ messageId })).catch(() => {});
+    } catch {
+      /* backend mutation not deployed — ignore */
+    }
+  }, [msg?._id, isMine, markConsumed]);
+}
+
+
 // Module-level "currently playing" audio singleton — guarantees only one
 // voice message plays at a time. Uses expo-audio's AudioPlayer (expo-av
 // has been deprecated in SDK 54).
@@ -149,6 +177,15 @@ interface BubbleProps {
   // highlight + a subtle outline so it stands out among the other matches).
   searchTerm?: string | null;
   isActiveSearchMatch?: boolean;
+  // iter-291: tapping the quoted reply preview jumps to (and highlights) the
+  // original message it references. `onPressParent` is wired only when a
+  // parent message exists. `isJumpHighlighted` briefly flashes this bubble
+  // when it is the target of such a jump.
+  onPressParent?: () => void;
+  isJumpHighlighted?: boolean;
+  // iter-337: resolved sender name for GROUP incoming bubbles (device-contact
+  // name first, Google/account name fallback). Undefined → not shown.
+  senderDisplayName?: string;
 }
 
 export default function MediaBubble({
@@ -164,6 +201,9 @@ export default function MediaBubble({
   multiSelected,
   searchTerm,
   isActiveSearchMatch,
+  onPressParent,
+  isJumpHighlighted,
+  senderDisplayName,
 }: BubbleProps) {
   const time = msg._creationTime ? new Date(msg._creationTime) : new Date();
   const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -175,11 +215,11 @@ export default function MediaBubble({
   // we previously saved for this message. Idempotent + best-effort.
   useEffect(() => {
     if (Platform.OS === 'web') return;
-    if (!msg?.deletedAt) return;
+    if (!msg?.deletedAt && msg?.isDeleted !== true) return;
     const id = String(msg?._id || '');
     if (!id) return;
     purgeMessageMedia(id).catch(() => {});
-  }, [msg?.deletedAt, msg?._id]);
+  }, [msg?.deletedAt, msg?.isDeleted, msg?._id]);
 
   // iter-166 system-message renderer (Identity Rework).
   // Backend per canonical contract emits:
@@ -198,12 +238,14 @@ export default function MediaBubble({
     );
   }
 
-  // Delivery status indicator (sender's own messages only) — per web spec:
-  //   green  → sent (server received, not delivered yet)
-  //   yellow → delivered (reached recipient device, not opened)
-  //   blue   → read (recipient opened the chat)
-  // We must exclude the sender's own userId from readBy/deliveredTo because
-  // the server records the sender as the original delivery target.
+  // Delivery status (sender's own messages only) — matches the WEB app
+  // EXACTLY (verified from the deployed web bundle, chat/page.tsx:3205-3208):
+  //   RED    → local outbox: queued offline, never reached the server
+  //   BLUE   → read      (readBy, excl. sender, length > 0)        "Read"
+  //   GREEN  → delivered (deliveredTo, excl. sender, length > 0)   "Delivered"
+  //   YELLOW → sent, not yet delivered to anyone                   "Sent"
+  // Group chats use ANY-recipient logic (`.length > 0`).
+  const isOutbox = msg.__outbox === true || msg.__failed === true;
   const senderUserId = msg.senderId ? String(msg.senderId) : null;
   const readByOthers = Array.isArray(msg.readBy)
     ? msg.readBy.filter((uid: any) => uid && String(uid) !== senderUserId)
@@ -211,12 +253,13 @@ export default function MediaBubble({
   const deliveredToOthers = Array.isArray(msg.deliveredTo)
     ? msg.deliveredTo.filter((uid: any) => uid && String(uid) !== senderUserId)
     : [];
-  const statusDotColor =
-    readByOthers.length > 0
+  const statusDotColor = isOutbox
+    ? Colors.tickRed
+    : readByOthers.length > 0
       ? Colors.tickBlue
       : deliveredToOthers.length > 0
-        ? Colors.tickYellow
-        : Colors.tickGreen;
+        ? Colors.tickGreen
+        : Colors.tickYellow;
 
   const reactionSummary = useMemo(() => {
     const reactions: any[] = Array.isArray(msg.reactions) ? msg.reactions : [];
@@ -266,10 +309,12 @@ export default function MediaBubble({
       : timeStr;
   const isEdited = !!editedAtMs || msg.edited === true || msg.isEdited === true;
 
-  if (msg.deletedAt) {
-    // Web-app parity for deleted messages: faded bubble (opacity), italic
-    // text "This message was deleted", and timestamp on the right —
-    // matching the screenshot the user shared in iter-98.
+  if (msg.deletedAt || msg.isDeleted === true) {
+    // Web-app parity: the web uses a unified `isDeleted` boolean (set
+    // per-viewer for delete-for-me / delete-for-receiver, and globally for
+    // delete-for-everyone). Mobile previously only checked `deletedAt`, so
+    // per-user deletes (and some media deletes) never showed the tombstone.
+    // Faded bubble, italic "This message was deleted", timestamp on the right.
     const deletedTimeMs =
       typeof msg.deletedAt === 'number'
         ? msg.deletedAt
@@ -327,6 +372,7 @@ export default function MediaBubble({
           // tint when this bubble is in the selection set.
           multiSelected ? styles.bubbleMultiSelected : null,
           isActiveSearchMatch ? styles.bubbleActiveSearchMatch : null,
+          isJumpHighlighted ? styles.bubbleJumpHighlight : null,
         ]}
         testID={`message-bubble-${msg._id}`}
       >
@@ -343,8 +389,51 @@ export default function MediaBubble({
           <Text style={[styles.encryptedText, { color: isOutgoing ? '#F6FFF9' : Colors.primary }]}>Encrypted</Text>
         </View>
 
+        {/* iter-337: group sender name — only on incoming bubbles when the
+            parent resolved a name (device-contact name first, else Google). */}
+        {!isMine && senderDisplayName ? (
+          <Text style={styles.senderNameLabel} numberOfLines={1}>
+            {senderDisplayName}
+          </Text>
+        ) : null}
+
+        {/* iter-293: status-reply indicator. When a DM was sent as a reply to
+            someone's status, show a small banner so BOTH sender & receiver can
+            see it references a status (not a normal DM). Reads the
+            `replyToStatusId` link (web-parity field) and any status preview
+            the backend echoes back. */}
+        {(msg.replyToStatusId || msg.replyStatusId || msg.statusReplyTo) ? (
+          <View style={[styles.statusReplyBanner, { borderLeftColor: isOutgoing ? '#F6FFF9' : Colors.primary }]}>
+            <Ionicons
+              name="ellipse"
+              size={10}
+              color={isOutgoing ? '#F6FFF9' : Colors.primary}
+              style={styles.statusReplyDot}
+            />
+            <View style={styles.flexOne}>
+              <Text style={[styles.statusReplyLabel, { color: isOutgoing ? '#F6FFF9' : Colors.primary }]} numberOfLines={1}>
+                {isMine ? 'You replied to a status' : 'Replied to your status'}
+              </Text>
+              {(msg.replyToStatusText || msg.statusReplyText || msg.replyToStatusCaption) ? (
+                <Text
+                  style={[styles.statusReplyPreview, { color: isOutgoing ? 'rgba(246,255,249,0.85)' : Colors.textSecondary }]}
+                  numberOfLines={1}
+                >
+                  {msg.replyToStatusText || msg.statusReplyText || msg.replyToStatusCaption}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
+
         {parentMsg ? (
-          <View style={styles.quoteBlock}>
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={onPressParent}
+            disabled={!onPressParent}
+            style={styles.quoteBlock}
+            testID={`reply-quote-${msg._id}`}
+          >
             <View style={styles.quoteAccent} />
             <View style={styles.flexOne}>
               <Text style={styles.quoteName}>
@@ -354,7 +443,7 @@ export default function MediaBubble({
                 {stripRichTextTags(parentMsg.text) || `[${parentMsg.type}]`}
               </Text>
             </View>
-          </View>
+          </TouchableOpacity>
         ) : null}
 
         <BubbleBody msg={msg} timeStr={timeStr} textStyle={[bubbleTextStyle, { color: messageTextColor }]} isMine={isMine} e2eeStatus={e2eeStatus || null} searchTerm={searchTerm} isActiveSearchMatch={isActiveSearchMatch} />
@@ -674,6 +763,7 @@ function ImageMessage({ msg, timeStr, textStyle, e2eeStatus, isMine }: { msg: an
   const [open, setOpen] = useState(false);
   const { url: src, loading, error } = useDecryptedMediaUrl(msg, e2eeStatus);
   useAutoDownloadMedia({ msg, isMine, src, mediaType: 'image' });
+  const markConsumed = useMarkConsumedOnce(msg, isMine);
 
   if (!src) {
     return (
@@ -689,7 +779,7 @@ function ImageMessage({ msg, timeStr, textStyle, e2eeStatus, isMine }: { msg: an
 
   return (
     <>
-      <TouchableOpacity activeOpacity={0.9} onPress={() => setOpen(true)} testID="image-bubble" disabled={loading}>
+      <TouchableOpacity activeOpacity={0.9} onPress={() => { markConsumed(); setOpen(true); }} testID="image-bubble" disabled={loading}>
         <View style={styles.imageWrap}>
           <Image source={{ uri: src }} style={styles.image} resizeMode="cover" />
           <View style={styles.imageTimeOverlay}>
@@ -875,6 +965,7 @@ function VideoMessage({
 }) {
   const { url: src, loading, error } = useDecryptedMediaUrl(msg, e2eeStatus);
   useAutoDownloadMedia({ msg, isMine, src, mediaType: 'video' });
+  const markConsumed = useMarkConsumedOnce(msg, isMine);
   // expo-video: useVideoPlayer creates the player and the setup callback runs
   // once. We start PAUSED (videos in chat don't auto-play; user taps Play).
   const player = useVideoPlayer(
@@ -968,6 +1059,27 @@ function VideoMessage({
     } catch {}
   }, [src, player]);
 
+  // Mark this incoming video as "Watched" the first time the recipient plays it.
+  const handleTogglePlay = useCallback(() => {
+    if (player && !player.playing) markConsumed();
+    void togglePlay();
+  }, [player, togglePlay, markConsumed]);
+
+  // iter-314: one-tap Save-to-gallery directly on the video bubble (WhatsApp
+  // parity) so users don't have to open the fullscreen viewer first.
+  const convex = useConvex();
+  const [savingVideo, setSavingVideo] = useState(false);
+  const handleSaveVideo = useCallback(async () => {
+    if (savingVideo) return;
+    setSavingVideo(true);
+    try {
+      const ok = await saveMessageMediaToGallery({ client: convex as any, message: msg, localUri: src });
+      if (ok) Alert.alert('Saved', 'Video saved to your gallery.');
+    } finally {
+      setSavingVideo(false);
+    }
+  }, [savingVideo, convex, msg, src]);
+
   if (!src) {
     return (
       <View style={[styles.videoPlaceholder]} testID="video-bubble-loading">
@@ -990,7 +1102,7 @@ function VideoMessage({
   return (
     <>
       <View>
-        <TouchableOpacity activeOpacity={0.9} onPress={togglePlay} testID="video-bubble" style={styles.videoWrap}>
+        <TouchableOpacity activeOpacity={0.9} onPress={handleTogglePlay} testID="video-bubble" style={styles.videoWrap}>
           <VideoView
             player={player}
             style={styles.videoPlayer}
@@ -1021,6 +1133,24 @@ function VideoMessage({
             testID="video-fullscreen-btn"
           >
             <Feather name="maximize-2" size={14} color={Colors.white} />
+          </TouchableOpacity>
+
+          {/* Top-right save-to-gallery (one-tap, next to fullscreen) */}
+          <TouchableOpacity
+            style={styles.videoSaveBtn}
+            onPress={(event) => {
+              event.stopPropagation?.();
+              void handleSaveVideo();
+            }}
+            hitSlop={6}
+            disabled={savingVideo}
+            testID="video-save-btn"
+          >
+            {savingVideo ? (
+              <ActivityIndicator size="small" color={Colors.white} />
+            ) : (
+              <Feather name="download" size={14} color={Colors.white} />
+            )}
           </TouchableOpacity>
 
           {/* Bottom-left elapsed/duration pill */}
@@ -1152,6 +1282,34 @@ function VideoViewer({
     return null;
   }, [segments, posMs]);
 
+  // iter-313: Save-to-gallery + Share actions for videos, mirroring the
+  // ImageViewer toolbar. Reuses the same generic media helpers (they handle
+  // video mime types + E2EE-decrypted local URIs).
+  const convex = useConvex();
+  const insets = useSafeAreaInsets();
+  const [busyAction, setBusyAction] = useState<null | 'download' | 'share'>(null);
+
+  const handleDownloadVideo = useCallback(async () => {
+    if (busyAction) return;
+    setBusyAction('download');
+    try {
+      const ok = await saveMessageMediaToGallery({ client: convex as any, message: msg, localUri: uri });
+      if (ok) Alert.alert('Saved', 'Video saved to your gallery.');
+    } finally {
+      setBusyAction(null);
+    }
+  }, [busyAction, convex, msg, uri]);
+
+  const handleShareVideo = useCallback(async () => {
+    if (busyAction) return;
+    setBusyAction('share');
+    try {
+      await shareMessage({ client: convex as any, message: msg });
+    } finally {
+      setBusyAction(null);
+    }
+  }, [busyAction, convex, msg]);
+
   return (
     <Modal visible={visible} transparent={false} animationType="fade" onRequestClose={onClose}>
       <View style={styles.viewerWrap} testID="video-viewer">
@@ -1174,6 +1332,41 @@ function VideoViewer({
         <TouchableOpacity style={styles.viewerClose} onPress={onClose} hitSlop={12} testID="video-viewer-close">
           <Feather name="x" size={28} color={Colors.white} />
         </TouchableOpacity>
+
+        {/* Bottom action toolbar — Save / Share (iter-313) */}
+        {msg ? (
+          <View
+            style={[styles.viewerToolbar, { paddingBottom: Math.max(12, insets.bottom + 8) }]}
+            testID="video-viewer-toolbar"
+          >
+            <TouchableOpacity
+              style={styles.viewerAction}
+              onPress={handleDownloadVideo}
+              disabled={!!busyAction}
+              testID="video-viewer-download"
+            >
+              {busyAction === 'download' ? (
+                <ActivityIndicator size="small" color={Colors.white} />
+              ) : (
+                <Feather name="download" size={22} color={Colors.white} />
+              )}
+              <Text style={styles.viewerActionLabel}>Save</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.viewerAction}
+              onPress={handleShareVideo}
+              disabled={!!busyAction}
+              testID="video-viewer-share"
+            >
+              {busyAction === 'share' ? (
+                <ActivityIndicator size="small" color={Colors.white} />
+              ) : (
+                <Feather name="share-2" size={22} color={Colors.white} />
+              )}
+              <Text style={styles.viewerActionLabel}>Share</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
       </View>
     </Modal>
   );
@@ -1183,6 +1376,7 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
   const totalSec = getMessageDurationSec(msg);
   const { url: src, error: srcError } = useDecryptedMediaUrl(msg, e2eeStatus);
   useAutoDownloadMedia({ msg, isMine, src, mediaType: msg?.type === 'audio' ? 'audio' : 'voice' });
+  const markConsumed = useMarkConsumedOnce(msg, isMine);
 
   // expo-audio: AudioPlayer instance for THIS voice bubble's playback.
   const playerRef = useRef<AudioPlayer | null>(null);
@@ -1225,6 +1419,7 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
   const toggle = async () => {
     if (!src) return;
     try {
+      markConsumed();
       stopOtherSounds();
       let player = playerRef.current;
       if (!player) {
@@ -1498,6 +1693,7 @@ function PollMessage({ msg }: { msg: any }) {
 function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e2eeStatus: E2EEStatus | null }) {
   const { url: src, error: srcError } = useDecryptedMediaUrl(msg, e2eeStatus);
   useAutoDownloadMedia({ msg, isMine, src, mediaType: 'document' });
+  const markConsumed = useMarkConsumedOnce(msg, isMine);
 
   // iter-179: APKs are allowed (WhatsApp-style policy) but received ones
   // carry an explicit caution so less tech-savvy users don't sideload
@@ -1507,6 +1703,7 @@ function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e
 
   const onOpen = async () => {
     if (!src) return;
+    markConsumed();
     try {
       await Linking.openURL(src);
     } catch {}
@@ -1751,6 +1948,12 @@ const styles = StyleSheet.create({
   bubbleText: { fontSize: FontSize.sm, lineHeight: 20, color: Colors.textPrimary },
   encryptedRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4 },
   encryptedText: { fontSize: 10, fontWeight: FontWeight.semibold },
+  senderNameLabel: {
+    fontSize: 13,
+    fontWeight: FontWeight.bold,
+    color: Colors.primary,
+    marginBottom: 2,
+  },
   // iter-134: call log entry card (rendered when msg.type === 'call').
   // Lives inside the existing bubble shell — only the body content changes.
   callLogRow: {
@@ -1847,6 +2050,17 @@ const styles = StyleSheet.create({
   quoteAccent: { width: 3, borderRadius: 2, backgroundColor: Colors.primary },
   quoteName: { fontSize: 12, fontWeight: FontWeight.bold, color: Colors.primary },
   quoteText: { fontSize: 13, lineHeight: 18, color: Colors.textSecondary },
+  statusReplyBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderLeftWidth: 2,
+    paddingLeft: 7,
+    marginBottom: 6,
+    gap: 6,
+  },
+  statusReplyDot: { marginRight: 2 },
+  statusReplyLabel: { fontSize: 11.5, fontWeight: FontWeight.semibold },
+  statusReplyPreview: { fontSize: 12, lineHeight: 16 },
   imageWrap: { position: 'relative' },
   image: { width: IMG_W, height: IMG_W, borderRadius: Radius.md, backgroundColor: Colors.borderLight },
   imagePlaceholder: { width: IMG_W, height: IMG_W, borderRadius: Radius.md, backgroundColor: Colors.borderLight, alignItems: 'center', justifyContent: 'center' },
@@ -2035,6 +2249,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  videoSaveBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 46,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   videoTimePill: {
     position: 'absolute',
     bottom: 8,
@@ -2059,6 +2284,7 @@ const styles = StyleSheet.create({
   searchHighlightActive: { backgroundColor: '#FACC15', color: '#1A1A1A', fontWeight: FontWeight.bold },
   phoneLink: { textDecorationLine: 'underline', fontWeight: FontWeight.bold },
   bubbleActiveSearchMatch: { borderWidth: 2, borderColor: '#F59E0B' },
+  bubbleJumpHighlight: { borderWidth: 2, borderColor: Colors.primary, opacity: 0.92 },
   deletedBubble: { opacity: 0.55 },
   // bubbleMultiSelected — visual feedback when this bubble is in the
   // multi-select forwarding set (iter-99). Light green tint + a

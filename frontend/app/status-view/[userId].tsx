@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   TextInput,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
   Alert,
   FlatList,
@@ -28,6 +29,19 @@ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src
 import { recordDiagnostic } from '../../src/lib/diagnostics';
 import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
 
+
+// Background palette for editing a text status (mirrors the composer).
+const STATUS_BG_PRESETS = [
+  { id: 'amber', bg: '#F4A93B', fg: '#FFFFFF' },
+  { id: 'brown', bg: '#3A2608', fg: '#FBC871' },
+  { id: 'rose', bg: '#E11D48', fg: '#FFFFFF' },
+  { id: 'violet', bg: '#7C3AED', fg: '#FFFFFF' },
+  { id: 'emerald', bg: '#059669', fg: '#FFFFFF' },
+  { id: 'ocean', bg: '#0EA5E9', fg: '#FFFFFF' },
+  { id: 'slate', bg: '#1F2937', fg: '#FBC871' },
+  { id: 'cream', bg: '#F5EFE0', fg: '#3A2608' },
+];
+
 // iter-135: module-evaluation marker so we can correlate a crash on
 // "Smilers has stopped" with whichever screen the user opened last.
 try {
@@ -42,6 +56,8 @@ try {
 
 const DEFAULT_DURATION_MS = 5000;
 const MAX_VIDEO_DURATION_MS = 30000;
+// iter-317: WhatsApp-style quick status reactions (sent as a status-reply DM).
+const STATUS_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
 // iter-267: the web status contract exposes type under `type` OR `kind`, text
 // under `content` OR `text`, and colors under `backgroundColor`/`textColor` OR
@@ -180,12 +196,97 @@ function StatusViewScreenInner() {
 
   const markViewed = useMutation(api.statuses.markViewed);
   const sendMessage = useMutation(api.messages.send);
-  const getOrCreateDM = useMutation(api.conversations.getOrCreateDirectConversation);
+  const getOrCreateDM = useMutation(api.conversations.getOrCreateDirect);
+  // Backend mutations shipped by the web team: `statuses.deleteStatus` and
+  // `statuses.editStatus` (author-only; edit does not reset the 24h expiry).
+  const deleteStatus = useMutation((api as any).statuses.deleteStatus);
+  const editStatus = useMutation((api as any).statuses.editStatus);
+  const onDeleteStatus = useCallback(() => {
+    if (!isMine || !current?._id) return;
+    Alert.alert('Delete status?', 'This status will be removed for everyone who can see it.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await (deleteStatus as any)({ statusId: current._id });
+            router.back();
+          } catch (errorValue: any) {
+            const msg = String(errorValue?.message || '');
+            if (msg.includes('CouldNotFindFunction') || msg.toLowerCase().includes('not found')) {
+              Alert.alert(
+                'Not available yet',
+                'Deleting a status needs a backend update that hasn\u2019t shipped yet.',
+              );
+            } else {
+              Alert.alert('Could not delete', msg || 'Please try again.');
+            }
+          }
+        },
+      },
+    ]);
+  }, [isMine, current, deleteStatus, router]);
+
+  // --- Edit my status ---
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState('');
+  const [editBgIdx, setEditBgIdx] = useState(0);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const openEdit = useCallback(() => {
+    if (!isMine || !current?._id) return;
+    setEditText(String(current?.content || current?.caption || ''));
+    const bg = String(current?.backgroundColor || '').toLowerCase();
+    const foundIdx = STATUS_BG_PRESETS.findIndex((p) => p.bg.toLowerCase() === bg);
+    setEditBgIdx(foundIdx >= 0 ? foundIdx : 0);
+    setEditing(true);
+  }, [isMine, current]);
+  const saveEdit = useCallback(async () => {
+    if (!current?._id) return;
+    const value = editText.trim();
+    const isText = String(current?.type) === 'text';
+    if (isText && !value) return;
+    setSavingEdit(true);
+    try {
+      const palette = STATUS_BG_PRESETS[editBgIdx];
+      const args: any = isText
+        ? { statusId: current._id, content: value, backgroundColor: palette.bg, textColor: palette.fg }
+        : { statusId: current._id, caption: value };
+      await (editStatus as any)(args);
+      setEditing(false);
+    } catch (errorValue: any) {
+      const msg = String(errorValue?.message || '');
+      if (msg.includes('CouldNotFindFunction') || msg.toLowerCase().includes('not found')) {
+        Alert.alert('Not available yet', 'Editing a status needs a backend update that hasn\u2019t shipped yet.');
+      } else {
+        Alert.alert('Could not save', msg || 'Please try again.');
+      }
+    } finally {
+      setSavingEdit(false);
+    }
+  }, [current, editText, editBgIdx, editStatus]);
 
   const [idx, setIdx] = useState(0);
   const [paused, setPaused] = useState(false);
   const [reply, setReply] = useState('');
   const [showViewers, setShowViewers] = useState(false);
+  // iter-315: KeyboardAvoidingView is unreliable on Android edge-to-edge (the
+  // window doesn't resize) and breaks with the Modals rendered here, so the
+  // reply box stayed hidden behind the keyboard. Track the keyboard height via
+  // the Keyboard API and lift the reply bar deterministically instead.
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvt, (e: any) => {
+      setKeyboardHeight(e?.endCoordinates?.height || 0);
+    });
+    const hideSub = Keyboard.addListener(hideEvt, () => setKeyboardHeight(0));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
   const progress = useRef(new Animated.Value(0)).current;
   const animRef = useRef<Animated.CompositeAnimation | null>(null);
   const videoPlayerRef = useRef<VideoPlayer | null>(null);
@@ -250,10 +351,15 @@ function StatusViewScreenInner() {
     if (!key || viewedRef.current.has(key)) return;
     viewedRef.current.add(key);
     markViewed({ statusId: current._id || current.id || current.statusId }).catch(() => {});
-    // Keyed on `idx` (not `current`) + a once-per-id guard so a data echo
-    // from the mutation can't re-trigger this and reset the timer.
+    // iter-339: key on the CURRENT status id (not just `idx`) so the mark fires
+    // once the stories array finishes loading AFTER mount — previously the
+    // effect only depended on [idx, isMine], so if `current` was still
+    // undefined on the first render (async Convex fetch) it exited early and
+    // never re-ran, leaving the first/only status never marked viewed ("views
+    // not counting"). The `viewedRef` per-id guard still prevents a data echo
+    // from the mutation re-firing it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idx, isMine]);
+  }, [idx, isMine, current?._id, current?.id, current?.statusId]);
 
   useEffect(() => {
     if (!current) return;
@@ -306,27 +412,64 @@ function StatusViewScreenInner() {
   const onPressIn = () => setPaused(true);
   const onPressOut = () => setPaused(false);
 
-  const onSendReply = useCallback(async () => {
+  const sendReplyText = useCallback(
+    async (text: string) => {
+      const trimmed = (text || '').trim();
+      if (!trimmed || isMine || !targetUserId) return;
+      try {
+        const conversation: any = await getOrCreateDM({ otherUserId: targetUserId });
+        const conversationId = typeof conversation === 'string' ? conversation : conversation?._id || conversation?.conversationId;
+        if (!conversationId) throw new Error('No conversation');
+
+        // iter-317: the poster receives status replies as a plain DM and could
+        // not tell WHICH status (or that it was a status reply at all). Prepend
+        // a human-readable reference line so the context is ALWAYS visible, even
+        // on deployments where the structured `replyToStatusId` link isn't shown.
+        const rawRef =
+          (typeof current?.caption === 'string' && current.caption.trim()) ||
+          (current?.type === 'text' && typeof current?.text === 'string' && current.text.trim()) ||
+          '';
+        const refLabel = rawRef ? `“${rawRef.slice(0, 60)}${rawRef.length > 60 ? '…' : ''}”` : 'your status update';
+        const composed = `↩️ Reply to ${refLabel}:\n${trimmed}`;
+
+        try {
+          await sendMessage({
+            conversationId,
+            type: 'text',
+            text: composed,
+            replyToStatusId: current?._id,
+          } as any);
+        } catch {
+          await sendMessage({
+            conversationId,
+            type: 'text',
+            text: composed,
+          } as any);
+        }
+        Alert.alert('Reply sent', 'Your reply was sent as a direct message.');
+      } catch (errorValue: any) {
+        Alert.alert('Failed to reply', errorValue?.message || 'Unknown error');
+      }
+    },
+    [isMine, targetUserId, getOrCreateDM, sendMessage, current],
+  );
+
+  const onSendReply = useCallback(() => {
     const text = reply.trim();
-    if (!text || isMine || !targetUserId) return;
-
+    if (!text) return;
     setReply('');
-    try {
-      const conversation: any = await getOrCreateDM({ otherUserId: targetUserId });
-      const conversationId = typeof conversation === 'string' ? conversation : conversation?._id || conversation?.conversationId;
-      if (!conversationId) throw new Error('No conversation');
+    void sendReplyText(text);
+  }, [reply, sendReplyText]);
 
-      await sendMessage({
-        conversationId,
-        type: 'text',
-        text,
-        replyToStatusId: current?._id,
-      } as any);
-      Alert.alert('Reply sent', 'Your reply was sent as a direct message.');
-    } catch (errorValue: any) {
-      Alert.alert('Failed to reply', errorValue?.message || 'Unknown error');
-    }
-  }, [reply, isMine, targetUserId, getOrCreateDM, sendMessage, current]);
+  // iter-317: one-tap emoji reactions for statuses (WhatsApp-style). Sent as a
+  // status reply DM so it works via the existing message path and the poster
+  // still gets the "↩️ Reply to your status" context line.
+  const onStatusReaction = useCallback(
+    (emoji: string) => {
+      void sendReplyText(emoji);
+    },
+    [sendReplyText],
+  );
 
   if (!stories.length && (myStories !== undefined || otherStories !== undefined)) {
     return (
@@ -353,10 +496,33 @@ function StatusViewScreenInner() {
   const isTextStory = readStoryType(current) === 'text';
   const bg = isTextStory ? readStoryBg(current) : '#000';
   const fg = isTextStory ? readStoryFg(current) : '#FFFFFF';
-  const viewsCount = current.views?.length || current.viewCount || 0;
+  // iter-330: the backend returns the viewer list + count under SEVERAL aliases
+  // (views / viewers / viewedBy / seenBy, and viewCount / viewsCount / seenCount).
+  // Reading only `views` made the owner see "0 viewers" whenever the backend
+  // used a different field name. Resolve all of them.
+  const viewerList: any[] = Array.isArray(current.views)
+    ? current.views
+    : Array.isArray(current.viewers)
+      ? current.viewers
+      : Array.isArray(current.viewedBy)
+        ? current.viewedBy
+        : Array.isArray(current.seenBy)
+          ? current.seenBy
+          : [];
+  const viewsCount =
+    Number(
+      current.viewCount ??
+        current.viewsCount ??
+        current.seenCount ??
+        current.viewsTotal ??
+        (Array.isArray(current.views) ? current.views.length : undefined),
+    ) || viewerList.length || 0;
 
   return (
-    <View style={[styles.container, { backgroundColor: bg }]} testID="status-view-screen">
+    <View
+      style={[styles.container, { backgroundColor: bg }]}
+      testID="status-view-screen"
+    >
       <View style={styles.progressWrap}>
         {stories.map((_, progressIndex) => (
           <View key={progressIndex} style={styles.progressTrack}>
@@ -385,6 +551,26 @@ function StatusViewScreenInner() {
           <Text style={styles.authorName}>{author.name}</Text>
           <Text style={styles.authorTime}>{timeAgo(current._creationTime || Date.now())}</Text>
         </View>
+        {isMine ? (
+          <TouchableOpacity
+            onPress={openEdit}
+            hitSlop={12}
+            style={{ marginRight: 18 }}
+            testID="status-edit"
+          >
+            <Feather name="edit-2" size={20} color="#FFFFFF" />
+          </TouchableOpacity>
+        ) : null}
+        {isMine ? (
+          <TouchableOpacity
+            onPress={onDeleteStatus}
+            hitSlop={12}
+            style={{ marginRight: 18 }}
+            testID="status-delete"
+          >
+            <Feather name="trash-2" size={22} color="#FFFFFF" />
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity onPress={() => router.back()} hitSlop={12} testID="status-close">
           <Feather name="x" size={26} color="#FFFFFF" />
         </TouchableOpacity>
@@ -412,7 +598,19 @@ function StatusViewScreenInner() {
       </View>
 
       {!isMine ? (
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0}>
+        <View style={[styles.replyContainer, { marginBottom: keyboardHeight }]}>
+          <View style={styles.reactionRow}>
+            {STATUS_REACTIONS.map((emoji) => (
+              <TouchableOpacity
+                key={emoji}
+                style={styles.reactionBtn}
+                onPress={() => onStatusReaction(emoji)}
+                testID={`story-react-${emoji}`}
+              >
+                <Text style={styles.reactionEmoji}>{emoji}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
           <View style={styles.replyBar}>
             <TextInput
               value={reply}
@@ -430,7 +628,7 @@ function StatusViewScreenInner() {
               <Feather name="send" size={20} color={reply.trim() ? Colors.primary : 'rgba(255,255,255,0.5)'} />
             </TouchableOpacity>
           </View>
-        </KeyboardAvoidingView>
+        </View>
       ) : (
         <TouchableOpacity
           style={styles.viewersBar}
@@ -468,11 +666,14 @@ function StatusViewScreenInner() {
             <View style={styles.grabber} />
             <Text style={styles.viewersSheetTitle}>Seen by {viewsCount}</Text>
             <FlatList
-              data={current.views || []}
-              keyExtractor={(viewer: any, viewerIndex: number) => viewer?.userId || String(viewerIndex)}
+              data={viewerList}
+              keyExtractor={(viewer: any, viewerIndex: number) =>
+                viewer?.userId || viewer?._id || viewer?.viewer || String(viewerIndex)
+              }
               contentContainerStyle={styles.viewersList}
               renderItem={({ item }: any) => {
-                const viewerName = resolveContactName(item?.userId, item?.name || 'User');
+                const viewerId = item?.userId || item?._id || item?.viewer || item?.viewerId;
+                const viewerName = resolveContactName(viewerId, item?.name || item?.displayName || 'User');
                 return (
                   <View style={styles.viewerRow}>
                     <View style={styles.viewerAvatar}>
@@ -480,7 +681,9 @@ function StatusViewScreenInner() {
                     </View>
                     <View style={styles.flexOne}>
                       <Text style={styles.viewerName}>{viewerName}</Text>
-                      <Text style={styles.viewerTime}>{timeAgo(item?.viewedAt || Date.now())}</Text>
+                      <Text style={styles.viewerTime}>
+                        {timeAgo(item?.viewedAt || item?.at || item?.seenAt || Date.now())}
+                      </Text>
                     </View>
                   </View>
                 );
@@ -489,6 +692,75 @@ function StatusViewScreenInner() {
             />
           </Pressable>
         </Pressable>
+      </Modal>
+
+      {/* Edit my status */}
+      <Modal visible={editing} transparent animationType="slide" onRequestClose={() => setEditing(false)}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.editBackdrop}
+        >
+          <View style={styles.editSheet}>
+            <View style={styles.editHeader}>
+              <TouchableOpacity onPress={() => setEditing(false)} hitSlop={10} testID="status-edit-cancel">
+                <Text style={styles.editCancel}>Cancel</Text>
+              </TouchableOpacity>
+              <Text style={styles.editTitle}>Edit status</Text>
+              <TouchableOpacity onPress={saveEdit} hitSlop={10} disabled={savingEdit} testID="status-edit-save">
+                {savingEdit ? (
+                  <ActivityIndicator color={Colors.primary} />
+                ) : (
+                  <Text style={styles.editSave}>Save</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            {String(current?.type) === 'text' ? (
+              <>
+                <View style={[styles.editPreview, { backgroundColor: STATUS_BG_PRESETS[editBgIdx].bg }]}>
+                  <TextInput
+                    value={editText}
+                    onChangeText={setEditText}
+                    multiline
+                    placeholder="Type a status"
+                    placeholderTextColor={`${STATUS_BG_PRESETS[editBgIdx].fg}99`}
+                    style={[styles.editInput, { color: STATUS_BG_PRESETS[editBgIdx].fg }]}
+                    autoFocus
+                    testID="status-edit-input"
+                  />
+                </View>
+                <View style={styles.editSwatches}>
+                  {STATUS_BG_PRESETS.map((p, idx) => (
+                    <TouchableOpacity
+                      key={p.id}
+                      onPress={() => setEditBgIdx(idx)}
+                      style={[
+                        styles.editSwatch,
+                        { backgroundColor: p.bg },
+                        idx === editBgIdx ? styles.editSwatchActive : null,
+                      ]}
+                      testID={`status-edit-color-${p.id}`}
+                    />
+                  ))}
+                </View>
+              </>
+            ) : (
+              <View style={styles.editCaptionWrap}>
+                <Text style={styles.editCaptionLabel}>Caption</Text>
+                <TextInput
+                  value={editText}
+                  onChangeText={setEditText}
+                  multiline
+                  placeholder="Add a caption"
+                  placeholderTextColor={Colors.textMuted}
+                  style={styles.editCaptionInput}
+                  autoFocus
+                  testID="status-edit-caption"
+                />
+              </View>
+            )}
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -795,6 +1067,25 @@ const styles = StyleSheet.create({
   tapZone: {},
   tapZonePrev: { flex: 1 },
   tapZoneNext: { flex: 2 },
+  replyContainer: {
+    zIndex: 2,
+  },
+  reactionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.base,
+    paddingTop: Spacing.sm,
+    paddingBottom: 2,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  reactionBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+  },
+  reactionEmoji: {
+    fontSize: 28,
+  },
   replyBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -884,4 +1175,45 @@ const styles = StyleSheet.create({
     borderRadius: Radius.pill,
   },
   emptyBtnText: { color: '#FFFFFF', fontWeight: FontWeight.bold },
+  editBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
+  editSheet: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: Spacing.lg,
+    paddingBottom: Spacing.xl,
+  },
+  editHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.md },
+  editTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  editCancel: { fontSize: FontSize.base, color: Colors.textSecondary },
+  editSave: { fontSize: FontSize.base, color: Colors.primary, fontWeight: FontWeight.bold },
+  editPreview: {
+    borderRadius: 16,
+    minHeight: 180,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: Spacing.lg,
+  },
+  editInput: {
+    fontSize: 24,
+    fontWeight: FontWeight.bold,
+    textAlign: 'center',
+    minWidth: '100%',
+    maxHeight: 220,
+  },
+  editSwatches: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: Spacing.md, justifyContent: 'center' },
+  editSwatch: { width: 34, height: 34, borderRadius: 17, borderWidth: 2, borderColor: 'transparent' },
+  editSwatchActive: { borderColor: Colors.textPrimary, transform: [{ scale: 1.12 }] },
+  editCaptionWrap: { gap: 8 },
+  editCaptionLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.semibold },
+  editCaptionInput: {
+    minHeight: 90,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    padding: 12,
+    fontSize: FontSize.base,
+    color: Colors.textPrimary,
+    textAlignVertical: 'top',
+  },
 });

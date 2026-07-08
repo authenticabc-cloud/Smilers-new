@@ -27,6 +27,7 @@ import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useDebouncedValue } from '../../src/hooks/useDebouncedValue';
 import { api } from '../../src/convexApi';
 import { estimateClicks, formatCreditCode } from '../../src/lib/adCreditCodes';
+import { formatLocalAmount } from '../../src/lib/mobileMoney';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../src/theme';
 
 type ViewMode = 'browse' | 'mine';
@@ -59,6 +60,11 @@ export default function AdsScreen() {
     api.adCreditCodes.getMyAdCredits,
     {},
     { hasLifetime: false, totalRemainingEur: 0, codes: [] }
+  );
+  const { data: myMoneyRequests } = useSafeConvexQuery<any[]>(
+    (api as any).adClickRequests?.getMyRequests,
+    {},
+    [],
   );
   const recordClick = useMutation(api.ads.recordClick);
   const redeemCode = useMutation(api.adCreditCodes.redeemCode);
@@ -304,6 +310,7 @@ export default function AdsScreen() {
             <View style={styles.myAdsHeader}>
               <LifetimeLicenseCard credits={myCredits} />
               <RedeemAdCodeButton onPress={() => setRedeemModalVisible(true)} />
+              <MobileMoneyRequestsCard requests={myMoneyRequests} />
             </View>
           ) : null
         }
@@ -353,6 +360,19 @@ export default function AdsScreen() {
         quantity={purchaseQty}
         onChangeQuantity={setPurchaseQty}
         onConfirm={onConfirmPurchase}
+        onMobileMoney={() => {
+          const ad = purchaseAd;
+          if (!ad) return;
+          setPurchaseAd(null);
+          router.push({
+            pathname: '/ad-clicks-payment',
+            params: {
+              adId: ad._id,
+              adTitle: ad.productName || ad.businessName || 'your ad',
+              clicks: String(purchaseQty),
+            },
+          } as any);
+        }}
         onClose={() => (!purchasing ? setPurchaseAd(null) : undefined)}
         submitting={purchasing}
       />
@@ -368,6 +388,7 @@ function BuyClicksModal({
   quantity,
   onChangeQuantity,
   onConfirm,
+  onMobileMoney,
   onClose,
   submitting,
 }: {
@@ -375,6 +396,7 @@ function BuyClicksModal({
   quantity: number;
   onChangeQuantity: (q: number) => void;
   onConfirm: () => void;
+  onMobileMoney: () => void;
   onClose: () => void;
   submitting: boolean;
 }) {
@@ -451,6 +473,19 @@ function BuyClicksModal({
           >
             <Text style={styles.payBtnText}>{submitting ? 'Opening checkout…' : `Pay €${total}`}</Text>
           </TouchableOpacity>
+
+          {/* Manual Mobile Money alternative to card checkout. */}
+          <TouchableOpacity
+            style={styles.mobileMoneyBtn}
+            onPress={onMobileMoney}
+            disabled={submitting}
+            activeOpacity={0.85}
+            testID="buy-clicks-mobile-money"
+          >
+            <MaterialCommunityIcons name="cellphone" size={19} color={Colors.primary} />
+            <Text style={styles.mobileMoneyBtnText}>Pay with Mobile Money</Text>
+          </TouchableOpacity>
+
           <Text style={styles.payDisclaimer}>
             You&apos;ll complete payment securely in your browser, then return to the app.
           </Text>
@@ -503,6 +538,52 @@ function RedeemAdCodeButton({ onPress }: { onPress: () => void }) {
       <Feather name="tag" size={18} color={Colors.textPrimary} />
       <Text style={styles.redeemAdCodeText}>Redeem Ad Code</Text>
     </TouchableOpacity>
+  );
+}
+
+const MM_STATUS_META: Record<string, { bg: string; fg: string; label: string }> = {
+  pending: { bg: '#FFF4E5', fg: '#B26A00', label: 'Pending' },
+  completed: { bg: '#E7F6EC', fg: '#1B7F3B', label: 'Credited' },
+  declined: { bg: '#FDECEC', fg: Colors.danger, label: 'Declined' },
+  cancelled: { bg: '#EEE', fg: Colors.textSecondary, label: 'Cancelled' },
+};
+
+// Advertiser-facing summary of their Mobile Money click top-ups, so approved
+// purchases are visible at a glance without opening the payment screen.
+function MobileMoneyRequestsCard({ requests }: { requests: any[] | undefined }) {
+  if (!Array.isArray(requests) || requests.length === 0) return null;
+  const recent = requests.slice(0, 3);
+  const pendingCount = requests.filter((r) => r?.status === 'pending').length;
+  return (
+    <View style={styles.mmCard} testID="ad-mobile-money-requests">
+      <View style={styles.mmHeaderRow}>
+        <MaterialCommunityIcons name="cellphone-check" size={18} color={Colors.primary} />
+        <Text style={styles.mmTitle}>Mobile Money top-ups</Text>
+        {pendingCount ? (
+          <View style={styles.mmPendingBadge}>
+            <Text style={styles.mmPendingBadgeText}>{pendingCount} pending</Text>
+          </View>
+        ) : null}
+      </View>
+      {recent.map((r: any) => {
+        const meta = MM_STATUS_META[r?.status] || MM_STATUS_META.cancelled;
+        const title = r?.adTitle || r?.ad?.productName || 'Ad';
+        const clicks = r?.clicks ?? r?.quantity ?? 0;
+        return (
+          <View key={String(r._id)} style={styles.mmRow} testID={`ad-mm-req-${String(r._id).slice(-6)}`}>
+            <View style={styles.flexOne}>
+              <Text style={styles.mmRowTitle} numberOfLines={1}>{title}</Text>
+              <Text style={styles.mmRowMeta} numberOfLines={1}>
+                {clicks} clicks · {formatLocalAmount(r?.amount ?? 0, r?.currency || '')}
+              </Text>
+            </View>
+            <View style={[styles.mmPill, { backgroundColor: meta.bg }]}>
+              <Text style={[styles.mmPillText, { color: meta.fg }]}>{meta.label}</Text>
+            </View>
+          </View>
+        );
+      })}
+    </View>
   );
 }
 
@@ -868,6 +949,31 @@ const styles = StyleSheet.create({
   /* List */
   listContent: { padding: Spacing.base, paddingBottom: 140, gap: Spacing.base },
   myAdsHeader: { gap: Spacing.sm, marginBottom: 4 },
+  mmCard: {
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+    padding: Spacing.base,
+    gap: 8,
+  },
+  mmHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  mmTitle: { flex: 1, fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  mmPendingBadge: { backgroundColor: '#FFF4E5', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999 },
+  mmPendingBadgeText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold, color: '#B26A00' },
+  mmRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    paddingTop: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.border,
+  },
+  mmRowTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  mmRowMeta: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
+  mmPill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 },
+  mmPillText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold },
 
   /* My Ads: Lifetime License banner card */
   lifetimeCard: {
@@ -1098,6 +1204,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   payBtnDisabled: { opacity: 0.6 },
+  mobileMoneyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 13,
+    marginTop: 10,
+    borderRadius: Radius.lg,
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+  },
+  mobileMoneyBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.primary },
   payBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.headerBg },
   payDisclaimer: { fontSize: FontSize.xs, color: Colors.textMuted, textAlign: 'center', marginTop: 10 },
 });

@@ -32,6 +32,9 @@ import { useRouter } from 'expo-router';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
+import Constants from 'expo-constants';
+import { useQuery } from 'convex/react';
+import { api } from '../src/convexApi';
 import { sentry } from '../src/lib/sentry';
 import Header from '../src/components/Header';
 import { Colors, FontSize, FontWeight, Spacing } from '../src/theme';
@@ -41,12 +44,19 @@ import {
   recordDiagnostic,
   probeBackendHealth,
 } from '../src/lib/diagnostics';
+import { readStoredJson } from '../src/lib/settingsStorage';
+import {
+  useDeviceContactIndex,
+  lookupDeviceContactName,
+} from '../src/lib/deviceContactIndex';
+import { getResolvedDisplayName, getSavedContactRecord } from '../src/lib/displayName';
 import { triggerEmergentSelfTestPush } from '../src/push/useEmergentPush';
 import { useAuth } from '../src/providers/AuthProvider';
 import { forceConvexReconnect } from '../src/providers/useConvexAutoReconnect';
 
 const STORAGE_KEY = 'smilers:diagnostic_events:v1';
 const SESSION_KEY = 'smilers:diagnostic_session:v1';
+const VOICE_TASKS_STORAGE_KEY = 'smilers_voice_task_contacts_v1';
 
 interface Event {
   ts: number;
@@ -104,6 +114,123 @@ export default function DiagnosticLogsScreen() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [runningPushTest, setRunningPushTest] = useState(false);
+
+  // iter-312: on-device "state snapshot" so a tester can copy the exact
+  // contacts-index / voice-task / keyboard-env state and paste it back —
+  // turning multi-hour native-build round-trips into seconds. Read-only.
+  const deviceIndex = useDeviceContactIndex();
+  const contacts = useQuery(api.contacts.getContacts, {}) as any[] | undefined;
+  const voiceTasksConvex = useQuery(
+    (api as any).voiceTaskContacts?.getMyVoiceTaskContacts,
+    {},
+  ) as any[] | undefined;
+  const conversationsList = useQuery(api.conversations.listConversations, {}) as any[] | undefined;
+  const listGroupsData = useQuery((api as any).conversations.listGroups, {}) as any[] | undefined;
+  const [localVoiceTasks, setLocalVoiceTasks] = useState<Record<string, any> | null>(null);
+  useEffect(() => {
+    (async () => {
+      const local = await readStoredJson(VOICE_TASKS_STORAGE_KEY, null);
+      setLocalVoiceTasks(local as Record<string, any> | null);
+    })();
+  }, []);
+
+  const buildSnapshot = useCallback((): string => {
+    const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL || '(missing)';
+    const edgeToEdge = (Constants?.expoConfig?.android as any)?.edgeToEdgeEnabled;
+    const lines: string[] = [];
+    lines.push('===== SMILERS STATE SNAPSHOT =====');
+    lines.push(`Time: ${new Date().toISOString()}`);
+    lines.push(`Platform: ${Platform.OS} ${String(Platform.Version)}`);
+    lines.push(`App: ${Constants?.expoConfig?.version || '?'}`);
+    lines.push(`Backend: ${backendUrl.replace(/^https?:\/\//, '')}`);
+    lines.push('');
+    lines.push('--- Keyboard / env ---');
+    lines.push(`edgeToEdgeEnabled: ${edgeToEdge}`);
+    lines.push(
+      `KAV behavior: ${Platform.OS === 'ios' ? 'padding (iOS)' : 'height (Android)'}`,
+    );
+    lines.push('');
+    lines.push('--- Device Contact Index ---');
+    lines.push(`isReady: ${deviceIndex?.isReady}`);
+    lines.push(`entries (byE164): ${deviceIndex?.byE164?.size ?? 0}`);
+    lines.push(`entries (byDigits): ${deviceIndex?.byDigits?.size ?? 0}`);
+    lines.push(`defaultCountry: ${deviceIndex?.defaultCountry || '(none)'}`);
+    lines.push(
+      `lastRefreshedAt: ${
+        deviceIndex?.lastRefreshedAt
+          ? new Date(deviceIndex.lastRefreshedAt).toISOString()
+          : 'never'
+      }`,
+    );
+    lines.push(`Smilers contacts (getContacts): ${Array.isArray(contacts) ? contacts.length : '(loading)'}`);
+    lines.push('');
+    lines.push('--- Voice Tasks (name resolution) ---');
+    lines.push(`Convex rows: ${Array.isArray(voiceTasksConvex) ? voiceTasksConvex.length : '(loading)'}`);
+    lines.push(`Local rows: ${localVoiceTasks ? Object.keys(localVoiceTasks).length : 0}`);
+    const rows = Array.isArray(voiceTasksConvex) ? voiceTasksConvex : [];
+    for (const r of rows) {
+      const contactId = String(r?.contactId || r?.userId || '');
+      const stored = String(r?.name || '');
+      const full = getSavedContactRecord(contacts, { userId: contactId }) || {
+        userId: contactId,
+        name: stored,
+      };
+      const resolved = getResolvedDisplayName(
+        full,
+        deviceIndex,
+        lookupDeviceContactName,
+        stored || 'Contact',
+      );
+      const phone = (full as any)?.phoneE164 || (full as any)?.phone || '(none)';
+      const changed = resolved !== stored ? ' [OVERRIDDEN✓]' : '';
+      lines.push(
+        `  #${r?.position}: stored="${stored}" phone=${phone} → resolved="${resolved}"${changed}`,
+      );
+    }
+    lines.push('');
+    lines.push('--- Contact phone-match (device index) ---');
+    const cs = Array.isArray(contacts) ? contacts : [];
+    lines.push(`total contacts: ${cs.length}`);
+    let matched = 0;
+    const shown = cs.slice(0, 40);
+    for (const c of shown) {
+      const phone = c?.phoneE164 || c?.phone || '';
+      const smil = c?.name || c?.displayName || '';
+      const nm = getResolvedDisplayName(c, deviceIndex, lookupDeviceContactName, smil || 'Contact');
+      const isDev = !!phone && nm !== smil && nm !== 'Contact';
+      if (isDev) matched++;
+      lines.push(`  ${phone || '(no phone)'} → "${nm}"${isDev ? ' [device✓]' : ''}`);
+    }
+    lines.push(`device-matched: ${matched}/${shown.length} shown`);
+    lines.push('');
+    lines.push('--- Group detection ---');
+    const convs = Array.isArray(conversationsList) ? conversationsList : [];
+    const groups = convs.filter((c: any) => c && (c.isGroup === true || c.type === 'group' || (Array.isArray(c.participants) && c.participants.length > 2)));
+    const lg = Array.isArray(listGroupsData) ? listGroupsData : [];
+    lines.push(`listConversations: ${convs.length} · shape-detected groups: ${groups.length}`);
+    lines.push(`listGroups (authoritative): ${lg.length}`);
+    for (const g of lg.slice(0, 20)) {
+      lines.push(`  "${g?.name || '(no name)'}" id=${String(g?._id || '').slice(-6)}`);
+    }
+    lines.push('==================================');
+    return lines.join('\n');
+  }, [contacts, conversationsList, deviceIndex, localVoiceTasks, voiceTasksConvex]);
+
+  const handleCopySnapshot = useCallback(async () => {
+    try {
+      const text = buildSnapshot();
+      await Clipboard.setStringAsync(text);
+      Alert.alert('Snapshot copied', 'State snapshot copied to clipboard — paste it back here.');
+    } catch (errorValue: any) {
+      Alert.alert('Copy failed', errorValue?.message || 'Could not copy snapshot.');
+    }
+  }, [buildSnapshot]);
+
+  const handleShareSnapshot = useCallback(async () => {
+    try {
+      await Share.share({ message: buildSnapshot(), title: 'Smilers State Snapshot' });
+    } catch {}
+  }, [buildSnapshot]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -377,6 +504,36 @@ export default function DiagnosticLogsScreen() {
         })()}
       </View>
 
+      <View style={styles.snapshotCard}>
+        <View style={styles.snapshotHeaderRow}>
+          <Feather name="clipboard" size={14} color="#4dd0e1" />
+          <Text style={styles.snapshotTitle}>State Snapshot</Text>
+        </View>
+        <Text style={styles.snapshotLine}>
+          Contacts index: {deviceIndex?.isReady ? `ready · ${deviceIndex.byE164?.size ?? 0} names` : 'not ready'}
+          {deviceIndex?.defaultCountry ? ` · ${deviceIndex.defaultCountry}` : ''}
+        </Text>
+        <Text style={styles.snapshotLine}>
+          Smilers contacts: {Array.isArray(contacts) ? contacts.length : '…'} · Voice tasks: {Array.isArray(voiceTasksConvex) ? voiceTasksConvex.length : '…'}
+        </Text>
+        <Text style={styles.snapshotLine}>
+          Groups detected: {Array.isArray(conversationsList) ? conversationsList.filter((c: any) => c && (c.isGroup === true || c.type === 'group' || (Array.isArray(c.participants) && c.participants.length > 2))).length : '…'} / {Array.isArray(conversationsList) ? conversationsList.length : '…'} convos
+        </Text>
+        <Text style={styles.snapshotLine}>
+          Keyboard KAV: {Platform.OS === 'ios' ? 'padding' : 'height'} · edge-to-edge: {String((Constants?.expoConfig?.android as any)?.edgeToEdgeEnabled)}
+        </Text>
+        <View style={styles.snapshotBtnRow}>
+          <TouchableOpacity style={styles.snapshotBtn} onPress={handleCopySnapshot} testID="diag-copy-snapshot">
+            <Feather name="copy" size={14} color="#4dd0e1" />
+            <Text style={styles.snapshotBtnText}>Copy snapshot</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.snapshotBtn} onPress={handleShareSnapshot} testID="diag-share-snapshot">
+            <Feather name="share-2" size={14} color="#4dd0e1" />
+            <Text style={styles.snapshotBtnText}>Share</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
       <View style={styles.toolbar}>
         <TouchableOpacity style={styles.toolBtn} onPress={handleCopy}>
           <Feather name="copy" size={16} color={Colors.white} />
@@ -553,6 +710,51 @@ export default function DiagnosticLogsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
+  snapshotCard: {
+    marginHorizontal: Spacing.md,
+    marginTop: Spacing.xs,
+    marginBottom: Spacing.xs,
+    padding: 12,
+    borderRadius: 10,
+    backgroundColor: 'rgba(77,208,225,0.08)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(77,208,225,0.3)',
+  },
+  snapshotHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 6,
+  },
+  snapshotTitle: {
+    color: '#4dd0e1',
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+  },
+  snapshotLine: {
+    color: Colors.white,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  snapshotBtnRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 10,
+  },
+  snapshotBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: 'rgba(77,208,225,0.14)',
+  },
+  snapshotBtnText: {
+    color: '#4dd0e1',
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.medium,
+  },
   summary: {
     paddingHorizontal: Spacing.md,
     paddingTop: Spacing.sm,

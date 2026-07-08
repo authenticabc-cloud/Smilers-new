@@ -22,6 +22,8 @@ import {
   readStoredJson,
   writeStoredJson,
 } from '../src/lib/settingsStorage';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../src/lib/deviceContactIndex';
+import { getResolvedDisplayName, getSavedContactRecord } from '../src/lib/displayName';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
 const POSITIONS: number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -40,6 +42,24 @@ interface VoiceTaskAssignment {
 }
 
 type AssignmentMap = Record<number, VoiceTaskAssignment>;
+
+// iter-323: `addVoiceTaskContact({ contactId })` expects the contact's USER id
+// (Id<"users">), NOT the contacts-table row `_id`. On backends whose
+// getContacts rows carry both, passing `_id` first (the old bug) sent the wrong
+// id and the mutation threw a generic Convex "Server Error". Resolve the linked
+// user id with the canonical priority (userId first, row `_id` last) — mirrors
+// the helper used in groups-create.tsx / trustees.tsx.
+function getContactUserId(item: any): string | null {
+  const value =
+    item?.userId ||
+    item?.user?._id ||
+    item?.user?.userId ||
+    item?.contactUserId ||
+    item?.linkedUserId ||
+    item?._id ||
+    item?.id;
+  return value ? String(value) : null;
+}
 
 /**
  * iter-137: locked to the canonical Convex paths confirmed by the web
@@ -121,11 +141,44 @@ function VoiceTasksScreen() {
   const router = useRouter();
   const convex = useConvex();
   const { isAuthenticated } = useAuth();
+  const deviceIndex = useDeviceContactIndex();
+
+  // iter-303: prefer the name saved in THIS phone's address book over the
+  // contact's Smilers/Google account name, everywhere on this screen.
+  const displayNameFor = useCallback(
+    (obj: any): string =>
+      getResolvedDisplayName(
+        obj,
+        deviceIndex,
+        lookupDeviceContactName,
+        obj?.name || obj?.displayName || obj?.email || obj?.phone || 'Contact',
+      ),
+    [deviceIndex],
+  );
 
   const contacts = useQuery(
     api.contacts.getContacts,
     isAuthenticated ? {} : 'skip'
   ) as any[] | undefined;
+
+  // iter-311: `getMyVoiceTaskContacts` returns only { position, contactId,
+  // name, avatar } — NO phone. Without a phone we can never match this
+  // phone's address book, so the row always showed the Smilers/Google
+  // account name. Enrich the assignment with the full contact record from
+  // `getContacts` (which carries phone/phoneE164) so the device-saved name
+  // (e.g. "ABC Albania") wins, mirroring the chats list behaviour.
+  const displayNameForAssignment = useCallback(
+    (a: VoiceTaskAssignment): string => {
+      const full = getSavedContactRecord(contacts, { userId: a.contactId }) || a;
+      return getResolvedDisplayName(
+        full,
+        deviceIndex,
+        lookupDeviceContactName,
+        a?.name || 'Contact',
+      );
+    },
+    [contacts, deviceIndex],
+  );
 
   const [assignments, setAssignments] = useState<AssignmentMap>({});
   const [loaded, setLoaded] = useState(false);
@@ -191,10 +244,17 @@ function VoiceTasksScreen() {
   const handleAssign = useCallback(
     async (position: number, contact: any) => {
       if (!contact) return;
+      // iter-323: resolve the contact's USER id (not the contacts-row _id) so
+      // addVoiceTaskContact receives the id shape the backend expects.
+      const resolvedUserId = getContactUserId(contact);
+      if (!resolvedUserId) {
+        console.warn('[voice-tasks] could not resolve user id for contact');
+        return;
+      }
       const next: VoiceTaskAssignment = {
         position,
-        contactId: String(contact._id || contact.id || ''),
-        name: contact.name || contact.displayName || contact.email || contact.phone || 'Contact',
+        contactId: resolvedUserId,
+        name: displayNameFor(contact),
         avatar: contact.avatar || null,
         phone: contact.phone || null,
       };
@@ -240,12 +300,12 @@ function VoiceTasksScreen() {
     const trimmed = pickerQuery.trim().toLowerCase();
     if (!trimmed) return list;
     return list.filter((c: any) => {
-      const name = String(c?.name || c?.displayName || '').toLowerCase();
+      const name = displayNameFor(c).toLowerCase();
       const phone = String(c?.phone || '').toLowerCase();
       const email = String(c?.email || '').toLowerCase();
       return name.includes(trimmed) || phone.includes(trimmed) || email.includes(trimmed);
     });
-  }, [contacts, pickerQuery]);
+  }, [contacts, pickerQuery, displayNameFor]);
 
   return (
     <View style={styles.container} testID="voice-tasks-screen">
@@ -297,7 +357,8 @@ function VoiceTasksScreen() {
         ) : (
           POSITIONS.map((position) => {
             const a = assignments[position];
-            const initial = a ? (a.name.charAt(0) || '?').toUpperCase() : '+';
+            const aName = a ? displayNameForAssignment(a) : '';
+            const initial = a ? (aName.charAt(0) || '?').toUpperCase() : '+';
             return (
               <Pressable
                 key={position}
@@ -306,7 +367,7 @@ function VoiceTasksScreen() {
                   if (a) {
                     Alert.alert(
                       `Position ${position}`,
-                      `Remove ${a.name}?`,
+                      `Remove ${aName}?`,
                       [
                         { text: 'Cancel', style: 'cancel' },
                         {
@@ -339,7 +400,7 @@ function VoiceTasksScreen() {
                     style={a ? styles.rowAssignedName : styles.rowPlaceholderText}
                     numberOfLines={1}
                   >
-                    {a ? a.name : `Tap to assign position #${position}`}
+                    {a ? aName : `Tap to assign position #${position}`}
                   </Text>
                   {a?.phone ? (
                     <Text style={styles.rowAssignedPhone} numberOfLines={1}>
@@ -419,7 +480,7 @@ function VoiceTasksScreen() {
                 </View>
               }
               renderItem={({ item }) => {
-                const name = item.name || item.displayName || 'Unknown';
+                const name = displayNameFor(item);
                 const subtitle = item.phone || item.email || '';
                 const init = (name.charAt(0) || '?').toUpperCase();
                 return (

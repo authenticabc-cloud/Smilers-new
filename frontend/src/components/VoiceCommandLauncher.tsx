@@ -16,11 +16,13 @@ import {
 } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter, usePathname } from 'expo-router';
-import { useConvex, useMutation } from 'convex/react';
+import { useConvex, useMutation, useQuery } from 'convex/react';
 import { useAudioRecorder, useAudioRecorderState, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
 import { readStoredJson, writeStoredJson } from '../lib/settingsStorage';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../lib/deviceContactIndex';
+import { getResolvedDisplayName, getSavedContactRecord } from '../lib/displayName';
 import { parseVoiceCommand, isStopCommand, VoiceCommand } from '../lib/voiceCommandParser';
 import { uploadFile } from '../lib/uploadFile';
 import { triggerTranscription } from '../lib/triggerTranscription';
@@ -63,6 +65,18 @@ interface VoiceCommandSheetProps {
 function VoiceCommandSheetInner({ visible, onClose }: VoiceCommandSheetProps) {
   const router = useRouter();
   const convex = useConvex();
+  const deviceIndex = useDeviceContactIndex();
+  const contacts = useQuery(api.contacts.getContacts, {}) as any[] | undefined;
+  // iter-311: voice-task rows stored only the Smilers/Google account name.
+  // Resolve to THIS phone's saved contact name (via phone match) so the
+  // launcher UI + TTS announce the same name the user knows.
+  const resolveAssignmentName = useCallback(
+    (a: Assignment): string => {
+      const full = getSavedContactRecord(contacts, { userId: a.contactId }) || a;
+      return getResolvedDisplayName(full, deviceIndex, lookupDeviceContactName, a?.name || 'Contact');
+    },
+    [contacts, deviceIndex],
+  );
   const getOrCreateDirect = useMutation(api.conversations.getOrCreateDirect);
   const [transcript, setTranscript] = useState('');
   const [flow, setFlow] = useState<FlowState>('idle');
@@ -519,7 +533,7 @@ function VoiceCommandSheetInner({ visible, onClose }: VoiceCommandSheetProps) {
     }
 
     const encodedConv = encodeURIComponent(conversationId);
-    const displayName = encodeURIComponent(assignment.name);
+    const displayName = encodeURIComponent(resolveAssignmentName(assignment));
     switch (parsedCommand.type) {
       case 'voice_call':
         router.push(`/call/${encodedConv}?type=voice&displayName=${displayName}` as any);
@@ -572,7 +586,7 @@ function VoiceCommandSheetInner({ visible, onClose }: VoiceCommandSheetProps) {
           await audioRecorder.prepareToRecordAsync();
           await audioRecorder.record();
           recordingStartedAtRef.current = Date.now();
-          setRecordingTarget({ conversationId, name: assignment.name });
+          setRecordingTarget({ conversationId, name: resolveAssignmentName(assignment) });
           setFlow('recording-voice');
           finalHandledRef.current = false;
           // Re-arm the recognizer in continuous mode — listening for "smiley".
@@ -596,6 +610,7 @@ function VoiceCommandSheetInner({ visible, onClose }: VoiceCommandSheetProps) {
     getOrCreateDirect,
     onClose,
     parsedCommand,
+    resolveAssignmentName,
     router,
     startRawListener,
   ]);
@@ -700,7 +715,7 @@ function VoiceCommandSheetInner({ visible, onClose }: VoiceCommandSheetProps) {
             ) : null}
             {flow === 'recognized' && parsedCommand ? (
               <Text style={styles.recognized}>
-                {commandPreview(parsedCommand, assignments)}
+                {commandPreview(parsedCommand, assignments, resolveAssignmentName)}
               </Text>
             ) : null}
             {flow === 'no-match' ? (
@@ -760,10 +775,14 @@ function VoiceCommandSheetInner({ visible, onClose }: VoiceCommandSheetProps) {
   );
 }
 
-function commandPreview(cmd: VoiceCommand, assignments: AssignmentMap): string {
+function commandPreview(
+  cmd: VoiceCommand,
+  assignments: AssignmentMap,
+  resolveName?: (a: Assignment) => string,
+): string {
   if (cmd.type === 'stop_command') return 'Say a command like "Call 1" first.';
   const a = assignments[cmd.position];
-  const who = a ? a.name : `position ${cmd.position}`;
+  const who = a ? (resolveName ? resolveName(a) : a.name) : `position ${cmd.position}`;
   switch (cmd.type) {
     case 'voice_call':
       return `Calling ${who}\u2026`;

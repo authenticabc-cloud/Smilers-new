@@ -5,6 +5,7 @@ import * as SecureStore from 'expo-secure-store';
 import * as WebBrowser from 'expo-web-browser';
 import { sentry } from '../lib/sentry';
 import { setDiagnosticUser } from '../lib/diagnostics';
+import { callDebug } from '../lib/callDebugLog';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -62,13 +63,17 @@ interface AuthContextValue {
   isLoading: boolean;
   isSignInReady: boolean;
   isAuthenticated: boolean;
+  // iter-295: true when the refresh token is terminally rejected
+  // (invalid_grant etc.) — the session can't be silently renewed and the user
+  // must re-authenticate. Lets the UI surface recovery instantly.
+  sessionExpired: boolean;
   authMode: 'direct' | 'webview';
   idToken: string | null;
   lastError: string | null;
   userInfo: { email?: string; name?: string; picture?: string; sub?: string } | null;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
-  getFreshIdToken: () => Promise<string | null>;
+  getFreshIdToken: (force?: boolean) => Promise<string | null>;
   acceptTokens: (tokens: {
     idToken: string;
     accessToken?: string;
@@ -132,6 +137,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // background refresh attempts so we don't hammer the OIDC endpoint.
   const lastRefreshAtRef = useRef<number>(0);
   const refreshInFlightRef = useRef<Promise<string | null> | null>(null);
+  // iter-295: remember the LAST refresh failure reason so we can (a) surface it
+  // in diagnostics and (b) distinguish a TERMINAL revocation (invalid_grant)
+  // from a transient/network blip. A terminal failure means the refresh token
+  // is dead (rotated-token reuse, revoked, or absolute-expiry) → the user must
+  // re-auth; a transient failure should keep the cached session and retry.
+  const lastRefreshErrorRef = useRef<string | null>(null);
+  const refreshTokenDeadRef = useRef<boolean>(false);
+  // State mirror of refreshTokenDeadRef so the UI re-renders and can surface
+  // the recovery screen the instant a terminal refresh failure happens.
+  const [sessionExpired, setSessionExpired] = useState(false);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const discoveryReadyRef = useRef(false);
   // iter-191: persisted copy of the OIDC discovery document. On a cold start
@@ -239,6 +254,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // We do NOT bounce them to /index here.
           setIdToken(storedIdToken);
           setUserInfo(parseJwt(storedIdToken));
+          callDebug.push('AUTH', 'restore: cached id_token found → optimistic session');
+        } else if (!cancelled) {
+          callDebug.push('AUTH', 'restore: NO cached id_token → signed out');
         }
       } catch (e) {
         console.warn('Restore session error:', e);
@@ -314,8 +332,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       if (tokens.refreshToken) {
         await storage.setItem(STORAGE_KEYS.REFRESH_TOKEN, tokens.refreshToken);
+      } else {
+        // iter-296 CRITICAL: a fresh login that does NOT carry a new refresh
+        // token must DISCARD any refresh token left over from a previous
+        // session. Otherwise getFreshIdToken later refreshes against that
+        // stale token whose server session is gone → `invalid_grant: session
+        // not found` → we mark the session dead and bounce the user even
+        // though they JUST signed in (the "chats flash for 2s then spin
+        // forever" bug). With no refresh token we simply use the freshly
+        // issued id_token until it genuinely expires.
+        await storage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
       }
       await storage.setItem(STORAGE_KEYS.TOKEN_EXPIRY, expiryTime.toString());
+
+      // Fresh login → clear any terminal-failure state from a prior session.
+      refreshTokenDeadRef.current = false;
+      lastRefreshErrorRef.current = null;
+      setSessionExpired(false);
 
       setIdToken(tokens.idToken);
       setUserInfo(parseJwt(tokens.idToken));
@@ -360,31 +393,100 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (refreshInFlightRef.current) {
         return refreshInFlightRef.current;
       }
+      // Perform ONE refresh round-trip with the given token, persisting the
+      // rotated tokens on success. Throws the provider error on failure.
+      const attempt = async (token: string): Promise<string | null> => {
+        const tokenResult = await AuthSession.refreshAsync(
+          { clientId: OIDC_CLIENT_ID, refreshToken: token },
+          disco
+        );
+        await storeTokens(tokenResult);
+        lastRefreshAtRef.current = Date.now();
+        refreshTokenDeadRef.current = false;
+        lastRefreshErrorRef.current = null;
+        const anyResult = tokenResult as any;
+        return (anyResult.idToken || anyResult.id_token || null) as string | null;
+      };
+
+      const classify = (errorValue: any) => {
+        const code = String(errorValue?.code || errorValue?.error || '').toLowerCase();
+        const desc =
+          errorValue?.description || errorValue?.error_description || errorValue?.message || String(errorValue);
+        // OAuth terminal errors: the refresh token is no longer usable
+        // (revoked, expired, or a rotated-token reuse was detected).
+        const isTerminal =
+          code === 'invalid_grant' ||
+          code === 'invalid_token' ||
+          code === 'unauthorized_client' ||
+          code === 'invalid_client';
+        return { code, desc, isTerminal };
+      };
+
       const promise = (async () => {
         try {
-          const tokenResult = await AuthSession.refreshAsync(
-            { clientId: OIDC_CLIENT_ID, refreshToken },
-            disco
-          );
-          await storeTokens(tokenResult);
-          lastRefreshAtRef.current = Date.now();
-          const anyResult = tokenResult as any;
-          return (anyResult.idToken || anyResult.id_token || null) as string | null;
-        } catch (errorValue: any) {
-          // IMPORTANT — historical bug: this used to call `clearTokens()` and
-          // log the user out on the first transient failure (e.g. flaky wifi,
-          // VPN flap, server hiccup). That meant a single bad ping forced the
-          // user back through OIDC sign-in.
-          //
-          // New behaviour: swallow the error and KEEP the cached session
-          // alive locally. Convex will continue to use the cached id_token;
-          // if that's truly expired, individual queries may temporarily 401
-          // until the next refresh succeeds, but the user is NEVER kicked
-          // out of the app. They can keep navigating, viewing cached data,
-          // queueing messages, etc.
-          const message = errorValue instanceof Error ? errorValue.message : String(errorValue);
-          console.warn('Refresh failed (keeping cached session alive):', message);
-          return null;
+          // iter-312 RACE FIX: re-read the FRESHEST refresh token from storage
+          // INSIDE the single-flight critical section. On resume-from-idle
+          // (overnight) several subsystems ask for a token at once; the caller
+          // may have read `refreshToken` moments before a concurrent refresh
+          // rotated it. Submitting that stale token → `invalid_grant` → we used
+          // to mark the session terminally dead → "No chats yet" until manual
+          // sign-out/in. Always submit the latest stored token instead.
+          const latest = (await storage.getItem(STORAGE_KEYS.REFRESH_TOKEN)) || refreshToken;
+          try {
+            return await attempt(latest);
+          } catch (firstErr: any) {
+            const first = classify(firstErr);
+            lastRefreshErrorRef.current = first.code || first.desc;
+            if (first.isTerminal) {
+              // A concurrent refresher may have rotated the token between our
+              // read and submit. Re-read; if it changed, this was a rotation
+              // RACE (not a real revocation) → retry ONCE with the new token
+              // before declaring the session dead.
+              const newer = await storage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
+              if (newer && newer !== latest) {
+                try {
+                  const recovered = await attempt(newer);
+                  callDebug.push('AUTH', 'refresh recovered via rotated token (race resolved)');
+                  return recovered;
+                } catch (retryErr: any) {
+                  const second = classify(retryErr);
+                  lastRefreshErrorRef.current = second.code || second.desc;
+                  if (second.isTerminal) {
+                    refreshTokenDeadRef.current = true;
+                    setSessionExpired(true);
+                    try {
+                      await storage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
+                    } catch {
+                      /* ignore */
+                    }
+                  }
+                  callDebug.push(
+                    'ERR',
+                    `AUTH refresh retry failed: code=${second.code || '?'} terminal=${second.isTerminal}`,
+                  );
+                  return null;
+                }
+              }
+              // No newer token in storage → genuine terminal revocation/expiry.
+              // Purge the dead token so we stop retrying and surface re-auth.
+              refreshTokenDeadRef.current = true;
+              setSessionExpired(true);
+              try {
+                await storage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
+              } catch {
+                /* ignore */
+              }
+            }
+            // Non-terminal (network blip etc.) → KEEP the cached session alive;
+            // Convex may 401 briefly until a later refresh succeeds, but the
+            // user is never kicked out.
+            callDebug.push(
+              'ERR',
+              `AUTH refreshAsync threw: code=${first.code || '?'} terminal=${first.isTerminal} msg=${String(first.desc).slice(0, 140)}`,
+            );
+            console.warn('Refresh failed (keeping cached session alive):', first.code || first.desc);
+            return null;
+          }
         } finally {
           refreshInFlightRef.current = null;
         }
@@ -407,6 +509,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIdToken(null);
     setUserInfo(null);
     setLastError(null);
+    refreshTokenDeadRef.current = false;
+    setSessionExpired(false);
   };
 
   const signIn = useCallback(async () => {
@@ -449,35 +553,63 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refreshTokensRef.current = refreshTokens;
   }, [refreshTokens]);
 
-  const getFreshIdToken = useCallback(async (): Promise<string | null> => {
+  const getFreshIdToken = useCallback(async (force = false): Promise<string | null> => {
     const expiryStr = await storage.getItem(STORAGE_KEYS.TOKEN_EXPIRY);
     const expiry = expiryStr ? parseInt(expiryStr, 10) : 0;
     const refreshToken = await storage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
     const idToken = await storage.getItem(STORAGE_KEYS.ID_TOKEN);
 
-    if (Date.now() > expiry - 60000 && refreshToken) {
+    const nearExpiry = Date.now() > expiry - 60000;
+    // iter-306: honor Convex's `forceRefreshToken`. When Convex is handed our
+    // id_token and the server REJECTS it, Convex re-requests a token with
+    // force=true — i.e. "that one was bad, give me a genuinely fresh one".
+    // Previously we ignored force and only refreshed on near-expiry, then on
+    // any failure returned the SAME stale id_token. Result: Convex stayed
+    // permanently unauthenticated on that device (getCurrentUser → null, so
+    // name shows only from cache, no photo loads, chats resolve empty →
+    // "No chats yet" / "feels offline"), recoverable ONLY by a manual
+    // sign-out/in. Honoring force lets the session self-heal by actually
+    // rotating the token. We skip when the refresh token is already known
+    // dead (terminal) so we don't hammer the endpoint — that path routes to
+    // the re-auth screen instead.
+    if ((force || nearExpiry) && refreshToken && !refreshTokenDeadRef.current) {
       // iter-191: on a cold start Convex asks for a token within ~100ms,
       // long before `useAutoDiscovery` has fetched the OIDC endpoints.
-      // Returning the EXPIRED cached id_token here made Convex run
-      // unauthenticated for the whole session (empty contacts/chats in the
-      // share sheet). Wait up to 5s for discovery (live or cached) so the
-      // refresh can actually happen.
+      // Wait up to 5s for discovery (live or cached) so the refresh can
+      // actually happen instead of returning an expired id_token.
       if (!discoveryReadyRef.current && !cachedDiscoveryRef.current) {
+        callDebug.push('AUTH', `getFreshIdToken: refresh needed (force=${force}), waiting for discovery…`);
         for (let i = 0; i < 20; i += 1) {
           await new Promise((resolve) => setTimeout(resolve, 250));
           if (discoveryReadyRef.current || cachedDiscoveryRef.current) break;
         }
       }
+      const haveDisco = discoveryReadyRef.current || !!cachedDiscoveryRef.current;
       const refreshed = await refreshTokensRef.current(refreshToken);
-      if (refreshed) return refreshed;
+      if (refreshed) {
+        callDebug.push('AUTH', `getFreshIdToken: refresh OK (disco=${haveDisco}, force=${force})`);
+        return refreshed;
+      }
       // Refresh failed (network blip etc) — fall through and return the
       // cached id_token. Convex may 401 a few times until our background
       // retry succeeds; the user stays signed in.
+      callDebug.push('ERR', `AUTH getFreshIdToken: refresh FAILED (force=${force}, disco=${haveDisco}, hasRefresh=${!!refreshToken}, reason=${lastRefreshErrorRef.current || '?'}, terminal=${refreshTokenDeadRef.current}) → returning ${idToken ? 'STALE id_token' : 'null'}`);
+      // iter-315 TOKEN-LIMBO FIX: when Convex EXPLICITLY rejected the current
+      // token (force=true) and the refresh could not mint a new one, returning
+      // the SAME stale/expired id_token just loops forever (Convex rejects →
+      // asks again with force=true → we hand back the rejected token → …).
+      // That loop is the "logged-in but Convex-unauthenticated / No chats yet"
+      // limbo the user hits after an overnight background. Return null so
+      // Convex settles as unauthenticated and retries cleanly once a refresh
+      // finally succeeds (or the terminal path routes to recovery), instead of
+      // spinning on a token the server already refused.
+      if (force) return null;
     }
     // IMPORTANT: Convex validates the ID token (JWT) for user identity.
     // The access token does not contain the OIDC claims Convex needs (iss/sub),
     // so returning it here causes ctx.auth.getUserIdentity() to be null inside
     // queries/mutations/actions. Always return the ID token.
+    if (!idToken) callDebug.push('ERR', 'AUTH getFreshIdToken: NO id_token in storage → unauthenticated');
     return idToken;
   }, [refreshTokens]);
 
@@ -591,6 +723,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         isSignInReady: !!request && !!discovery,
         isAuthenticated: !!idToken,
+        sessionExpired,
         authMode: AUTH_MODE,
         idToken,
         lastError,

@@ -15,13 +15,15 @@
 export const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com.smilers.app';
 
 export function buildInviteUrl(referralCode?: string | null): string {
-  const code = (referralCode || '').toString().trim();
+  // Normalize to match the capture/redeem side (trim + uppercase) so the
+  // referrer param and the typed code are always consistent.
+  const code = (referralCode || '').toString().trim().toUpperCase();
   if (!code) return PLAY_STORE_URL;
   return `${PLAY_STORE_URL}&referrer=${encodeURIComponent(`ref=${code}`)}`;
 }
 
 export function buildInviteMessage(referralCode?: string | null): string {
-  const code = (referralCode || '').toString().trim();
+  const code = (referralCode || '').toString().trim().toUpperCase();
   const url = buildInviteUrl(code);
   return code
     ? `Join me on Smilers! Use my referral code ${code} when you sign up. Download the app: ${url}`

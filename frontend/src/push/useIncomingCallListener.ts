@@ -5,6 +5,7 @@ import { useQuery } from 'convex/react';
 import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
 import { isTwilioEnabled } from '../lib/twilio/twilioApi';
+import { hasOtherActiveCall } from '../lib/call/activeCallRegistry';
 
 /**
  * Real-time incoming-call listener — when foregrounded, Convex's reactive
@@ -119,6 +120,16 @@ export function useIncomingCallListener() {
       return;
     }
 
+    // iter-325 CALL WAITING: if the user is ALREADY on an active call, do NOT
+    // hijack it by navigating to this new (second) call. The active call screen
+    // subscribes to the same incoming-call query and renders an in-call "Call
+    // Waiting" overlay so the user can accept/decline WITHOUT losing the
+    // ongoing call. We mark it handled so we don't re-trigger, and bail here.
+    if (hasOtherActiveCall(incomingCall._id, incomingCall.conversationId)) {
+      handledCallId.current = incomingCall._id;
+      return;
+    }
+
     // Suppress auto-route + ringtone when the incoming call is actually a
     // screen-share request. The IncomingScreenShareModal handles those
     // silently with a system overlay (no audible ring). The backend may
@@ -193,8 +204,12 @@ export function useIncomingCallListener() {
         String((incomingCall as any)?.isConference ?? '') === '1' ||
         String((incomingCall as any)?.callType || '').toLowerCase() === 'conference';
       if (isConferenceCall) {
-        userAnsweredRef.current = true;
-        router.push(`/group-call/${conversationId}?callId=${encodeURIComponent(String(incomingCall._id))}` as any);
+        const confIsVideo =
+          (incomingCall as any)?.isVideo === true ||
+          String((incomingCall as any)?.callType || '').toLowerCase() === 'video';
+        router.push(
+          `/group-call/${conversationId}?callId=${encodeURIComponent(String(incomingCall._id))}&video=${confIsVideo ? '1' : '0'}&adhoc=1` as any,
+        );
         return;
       }
       const callIsVideo =

@@ -55,8 +55,22 @@ export function MessageBubble({
   const text = msg.text || (msg.type !== 'text' ? `[${msg.type}]` : '');
   const time = msg._creationTime ? new Date(msg._creationTime) : new Date();
   const timeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const tickColor = msg.readBy?.length ? Colors.tickBlue : msg.deliveredTo?.length ? Colors.tickYellow : Colors.tickGray;
-  const tickIcon = msg.readBy?.length || msg.deliveredTo?.length ? 'checkmark-done' : 'checkmark';
+  // 4-state delivery status (sender's own messages only). Per the web
+  // native-message-delivery-status-contract: evaluate top-down, exclude my own
+  // id from readBy/deliveredTo, ANY-recipient logic for groups.
+  //   RED  = local outbox (never reached server) → msg.__outbox / __failed
+  //   BLUE = any other participant has read it (readBy)
+  //   GREEN= any other participant's device received it (deliveredTo)
+  //   YELLOW = on server, not yet delivered (resting/default)
+  const statusDotColor = (() => {
+    if (!isMine) return null;
+    if (msg.__outbox || msg.__failed) return Colors.tickRed;
+    const others = (arr?: string[]) =>
+      Array.isArray(arr) ? arr.filter((id) => id && id !== myUserId) : [];
+    if (others(msg.readBy).length > 0) return Colors.tickBlue;
+    if (others(msg.deliveredTo).length > 0) return Colors.tickGreen;
+    return Colors.tickYellow;
+  })();
 
   const reactionSummary = useMemo(() => {
     const reactions: any[] = Array.isArray(msg.reactions) ? msg.reactions : [];
@@ -173,10 +187,10 @@ export function MessageBubble({
     );
   }
 
-  if (msg.deletedAt) {
-    // Web-app parity (iter-98 screenshot): "This message was deleted"
-    // italic + timestamp on the right inside a faded bubble. Mirrors the
-    // identical pattern in MediaBubble's deleted branch.
+  if (msg.deletedAt || msg.isDeleted === true) {
+    // Web-app parity (iter-98 + iter-243): show the tombstone for both global
+    // delete-for-everyone (deletedAt) AND per-viewer deletes (isDeleted —
+    // delete-for-me / delete-for-receiver), matching MediaBubble.
     const deletedTimeMs =
       typeof msg.deletedAt === 'number'
         ? msg.deletedAt
@@ -260,13 +274,25 @@ export function MessageBubble({
               editedAtMs && Number.isFinite(editedAtMs)
                 ? new Date(editedAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                 : timeStr;
+            // iter-333: when a group post was last edited by someone OTHER than
+            // the author, the backend resolves `lastEditedByName`. Show
+            // "edited by <name>"; otherwise fall back to "edited <time>".
+            const byName =
+              typeof msg.lastEditedByName === 'string' && msg.lastEditedByName.trim()
+                ? msg.lastEditedByName.trim()
+                : null;
             return (
-              <Text style={[styles.bubbleTime, styles.editedBadge]}>edited {editedTimeStr}</Text>
+              <Text style={[styles.bubbleTime, styles.editedBadge]}>
+                {byName ? `edited by ${byName}` : `edited ${editedTimeStr}`}
+              </Text>
             );
           })()}
           <Text style={styles.bubbleTime}>{timeStr}</Text>
-          {isMine ? (
-            <Ionicons name={tickIcon as any} size={14} color={tickColor} style={styles.tickIcon} />
+          {statusDotColor ? (
+            <View
+              style={[styles.statusDot, { backgroundColor: statusDotColor }]}
+              testID={`msg-status-dot-${msg._id}`}
+            />
           ) : null}
         </View>
       </TouchableOpacity>
@@ -386,4 +412,5 @@ const styles = StyleSheet.create({
   editedBadge: { fontStyle: 'italic', marginRight: 6, opacity: 0.85 },
   starIcon: { marginRight: 4 },
   tickIcon: { marginLeft: 4 },
+  statusDot: { width: 9, height: 9, borderRadius: 5, marginLeft: 6 },
 });

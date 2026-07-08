@@ -32,6 +32,7 @@ import { useEffect, useRef } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
 import type { ConvexReactClient } from 'convex/react';
 import { sentry } from '../lib/sentry';
+import { callDebug } from '../lib/callDebugLog';
 
 // How often we poll the connection state while foregrounded.
 // iter-213: tightened 30s → 15s so chat-screen stalls clear faster.
@@ -88,21 +89,42 @@ function softReconnect(client: ConvexReactClient): boolean {
 }
 
 /**
- * HEAVY path: force close and restart the socket. Used only when we
- * have firm evidence of a ghost connection (stale inflight request
- * on a "ready" socket). Wrapped in try/catch + a 60s backoff guard.
+ * HEAVY path: ask Convex to restart its session via the SDK's OWN
+ * coordinated reconnect (`closeAndReconnect`) — the exact method Convex
+ * uses internally for InactiveServer / FailedToSend recovery. Used only
+ * when we have firm evidence of a ghost connection (stale inflight request
+ * on a "ready" socket).
+ *
+ * iter-277 — FATAL FIX: the previous implementation called
+ * `wsm.stop()+tryRestart()` directly. `stop()` parks the socket in the
+ * "stopped" state and `tryRestart()` then opens a brand-new socket OUTSIDE
+ * Convex's normal reconnect lifecycle. When this raced the auth re-handshake
+ * on boot, the client resumed the session with a stale base version while the
+ * server had reset to version 0 → `[CONVEX FATAL ERROR] Base version 1 passed
+ * up doesn't match the current version 0`. That error is FATAL: the client
+ * stops syncing for the rest of the process → empty chats + "?" avatar until
+ * the app is killed/reinstalled. `closeAndReconnect` goes through the SDK's
+ * standard `close()` → `scheduleReconnect()` path, which resumes correctly.
  */
 async function hardReconnect(client: ConvexReactClient): Promise<boolean> {
   try {
     const sync: any = (client as any).cachedSync;
     if (!sync) return false;
     const wsm: any = sync.webSocketManager;
-    if (!wsm || typeof wsm.stop !== 'function' || typeof wsm.tryRestart !== 'function') {
-      return false;
+    if (!wsm) return false;
+    if (typeof wsm.closeAndReconnect === 'function') {
+      wsm.closeAndReconnect('client');
+      callDebug.push('CONVEX', 'hardReconnect via closeAndReconnect(client)');
+      return true;
     }
-    await wsm.stop();
-    wsm.tryRestart();
-    return true;
+    // Fallback only if the SDK shape changes in a future release.
+    if (typeof wsm.stop === 'function' && typeof wsm.tryRestart === 'function') {
+      await wsm.stop();
+      wsm.tryRestart();
+      callDebug.push('CONVEX', 'hardReconnect via stop()+tryRestart() (fallback)');
+      return true;
+    }
+    return false;
   } catch (err) {
     try {
       sentry.captureException(err, { tags: { module: 'convex-auto-reconnect', path: 'hard' } });
@@ -124,10 +146,22 @@ function getInflightAgeMs(state: ConvexConnectionState): number | null {
 export function useConvexAutoReconnect(client: ConvexReactClient) {
   const lastHardRestartAtRef = useRef<number>(0);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+  // iter-277: timestamp of mount. For the first few seconds the Convex client
+  // is doing its initial connect + auth handshake (and our AuthProvider may be
+  // refreshing the OIDC token, which re-auths the socket). Firing ANY manual
+  // reconnect during that window races the SDK's own connect/auth and was the
+  // trigger for `[CONVEX FATAL ERROR] Base version … doesn't match …`, which
+  // permanently kills sync (empty chats + "?" avatar). We stay hands-off until
+  // the socket has had time to settle.
+  const mountedAtRef = useRef<number>(Date.now());
+  const SETTLE_WINDOW_MS = 12_000;
 
   useEffect(() => {
     let cancelled = false;
     activeClient = client; // iter-213: register for manual reconnect callers.
+    mountedAtRef.current = Date.now();
+
+    const withinSettleWindow = () => Date.now() - mountedAtRef.current < SETTLE_WINDOW_MS;
 
     const safeConnectionState = (): ConvexConnectionState | null => {
       try {
@@ -139,6 +173,9 @@ export function useConvexAutoReconnect(client: ConvexReactClient) {
 
     const evaluateAndAct = (trigger: string) => {
       try {
+        // iter-277: never intervene during the boot/auth-handshake settle
+        // window — let the SDK establish + authenticate the socket itself.
+        if (withinSettleWindow()) return;
         const state = safeConnectionState();
         if (!state) return;
 
@@ -240,6 +277,18 @@ export function useConvexAutoReconnect(client: ConvexReactClient) {
       const prev = appStateRef.current;
       appStateRef.current = next;
       if (next === 'active' && prev !== 'active') {
+        // iter-292 RESUME-FIX: the SETTLE_WINDOW that prevents the FATAL
+        // "Base version … doesn't match …" desync was only armed at MOUNT,
+        // so it protected cold-start but NOT resume-from-background. On
+        // resume, AuthProvider ALSO fires an AppState 'active' listener that
+        // refreshes the OIDC token → setIdToken → Convex re-auth handshake.
+        // If our reconnect runs concurrently with that re-auth, the socket
+        // desyncs → sync permanently dies → infinite "Opening Smilers…" until
+        // the user clears app storage. Re-arming the settle window on EVERY
+        // foreground transition lets the token re-auth complete before we
+        // touch the socket. Convex's own internal backoff still reconnects in
+        // the meantime; our heartbeat assists once the window elapses.
+        mountedAtRef.current = Date.now();
         // Give the OS a moment to actually restore network access
         // before evaluating — iOS in particular is async about
         // WiFi resume.
@@ -280,10 +329,15 @@ export function useConvexAutoReconnect(client: ConvexReactClient) {
           });
           // If Convex itself notices a disconnect and we're foregrounded,
           // SOFT-kick a reconnect rather than waiting for the next heartbeat.
+          // iter-277: but NOT during the boot/auth-handshake settle window —
+          // kicking a reconnect mid-handshake races the SDK and triggered the
+          // fatal "Base version" desync. Convex's own backoff covers this
+          // window; we only assist once things have settled.
           if (
             appStateRef.current === 'active' &&
             state.hasEverConnected &&
-            !state.isWebSocketConnected
+            !state.isWebSocketConnected &&
+            !withinSettleWindow()
           ) {
             softReconnect(client);
           }

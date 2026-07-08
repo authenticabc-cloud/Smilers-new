@@ -356,7 +356,7 @@ export default function HelpScreen() {
             <Text style={styles.footerLine}>
               Smilers v{Constants.expoConfig?.version || '1.0'} · Platform {Platform.OS}
             </Text>
-            <Text style={styles.footerLine}>support@smilers.online</Text>
+            <Text style={styles.footerLine}>{SUPPORT_EMAIL}</Text>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>

@@ -15,10 +15,22 @@ function useAuthForConvex() {
       isLoading,
       isAuthenticated,
       fetchAccessToken: async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
-        const token = await getFreshIdToken();
+        // iter-306: pass Convex's force flag through. When Convex rejects our
+        // id_token it re-asks with forceRefreshToken=true; we MUST rotate the
+        // token then (not return the same stale one), otherwise the session is
+        // stuck unauthenticated → empty chats / "No chats yet" until a manual
+        // sign-out/in.
+        const token = await getFreshIdToken(forceRefreshToken);
         return token;
       },
     }),
+    // iter-316 REVERT of iter-315: `idToken` was added here to notify Convex of
+    // token rotation, but it created an INFINITE LOOP → "disco" flicker:
+    //   setAuth → fetchAccessToken(force=true) → getFreshIdToken rotates the
+    //   id_token → idToken state changes → this memo changes → setAuth again → …
+    // (device log showed AUTH "refresh OK force=true" + CONVEX hardReconnect
+    // firing every 1-2s). Convex re-fetches the token on its OWN reconnect, so
+    // this memo MUST stay stable across token rotations. Do NOT add idToken.
     [isLoading, isAuthenticated, getFreshIdToken]
   );
 }

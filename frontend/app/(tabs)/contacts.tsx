@@ -18,6 +18,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { buildInviteUrl, buildInviteMessage } from '../../src/lib/inviteLink';
+import { friendlyConvexError } from '../../src/lib/friendlyError';
 import { useRouter } from 'expo-router';
 import { useMutation, useQuery, useConvex } from 'convex/react';
 import * as Contacts from 'expo-contacts';
@@ -27,7 +28,7 @@ import { api } from '../../src/convexApi';
 import { lookupUsersByPhones } from '../../src/lib/phoneLookup';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { getDisplayInitials, getDisplayNameFromUser, getResolvedDisplayName } from '../../src/lib/displayName';
-import { useDeviceContactIndex, useDeviceContactRefresh, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
+import { useDeviceContactIndex, useDeviceContactRefresh, lookupDeviceContactName, fetchAllDeviceContacts } from '../../src/lib/deviceContactIndex';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../src/theme';
 
 type TabKey = 'my' | 'device';
@@ -236,10 +237,11 @@ export default function ContactsScreen() {
         return;
       }
       setDevicePerm('granted');
-      const { data } = await Contacts.getContactsAsync({
-        fields: [Contacts.Fields.Name, Contacts.Fields.PhoneNumbers, Contacts.Fields.Emails],
-        pageSize: 5000,
-      });
+      const data = await fetchAllDeviceContacts([
+        Contacts.Fields.Name,
+        Contacts.Fields.PhoneNumbers,
+        Contacts.Fields.Emails,
+      ]);
       // iter-148: align device-contacts surface with the web app.
       // The web shows "INVITE TO SMILERS (N)" with canonical names — only
       // contacts that actually have a usable name and a unique phone.
@@ -351,17 +353,17 @@ export default function ContactsScreen() {
     let cancelled = false;
     (async () => {
       const phones = deviceContacts.map((c) => c.phone).filter(Boolean) as string[];
-      const found = await lookupUsersByPhones(convex, phones);
+      const found = await lookupUsersByPhones(convex, phones, myDefaultCountry);
       if (cancelled || found.size === 0) return;
-      // `found` is already keyed by last-10-digits.
-      const byDigits = new Map<string, { userId: string; name?: string }>();
-      found.forEach((v, digits) => byDigits.set(digits, { userId: v.userId, name: v.displayName }));
-      if (!cancelled) setRegisteredByDigits(byDigits);
+      // `found` is keyed by full E.164.
+      const byE164 = new Map<string, { userId: string; name?: string }>();
+      found.forEach((v, e164) => byE164.set(e164, { userId: v.userId, name: v.displayName }));
+      if (!cancelled) setRegisteredByDigits(byE164);
     })();
     return () => {
       cancelled = true;
     };
-  }, [deviceContacts, convex]);
+  }, [deviceContacts, convex, myDefaultCountry]);
 
 
   // ── Actions ──────────────────────────────────────
@@ -376,7 +378,7 @@ export default function ContactsScreen() {
         typeof conversation === 'string' ? conversation : conversation?._id || conversation?.conversationId;
       if (conversationId) router.push(`/chat/${conversationId}` as any);
     } catch (errorValue: any) {
-      Alert.alert('Error', errorValue?.message || 'Could not open chat');
+      Alert.alert('Could not open chat', friendlyConvexError(errorValue, 'Could not open chat'));
     }
   };
 
@@ -465,11 +467,11 @@ export default function ContactsScreen() {
     if (registeredByDigits.size === 0) return 0;
     let n = 0;
     for (const c of deviceFiltered) {
-      const d = (c.phone || '').replace(/\D+/g, '').slice(-10);
+      const d = normalizePhoneE164(c.phone, myDefaultCountry) || (c.phone || '').trim();
       if (d && registeredByDigits.has(d)) n += 1;
     }
     return n;
-  }, [deviceFiltered, registeredByDigits]);
+  }, [deviceFiltered, registeredByDigits, myDefaultCountry]);
 
   // iter-223: tapping the nudge banner filters the Device list to ONLY the
   // contacts already on Smilers, so the user can message them in one tap.
@@ -477,10 +479,10 @@ export default function ContactsScreen() {
   const deviceListData = useMemo(() => {
     if (!onSmilersOnly) return deviceFiltered;
     return deviceFiltered.filter((c) => {
-      const d = (c.phone || '').replace(/\D+/g, '').slice(-10);
+      const d = normalizePhoneE164(c.phone, myDefaultCountry) || (c.phone || '').trim();
       return d && registeredByDigits.has(d);
     });
-  }, [onSmilersOnly, deviceFiltered, registeredByDigits]);
+  }, [onSmilersOnly, deviceFiltered, registeredByDigits, myDefaultCountry]);
   // Don't get stuck in an empty filtered state (e.g. after a search).
   useEffect(() => {
     if (onSmilersOnly && onSmilersCount === 0) setOnSmilersOnly(false);
@@ -770,9 +772,9 @@ export default function ContactsScreen() {
             </>
           }
           renderItem={({ item }) => {
-            // iter-223: if this device number is already on Smilers (resolved
-            // via the batch lookup), offer "Message"; otherwise "Invite".
-            const digits = (item.phone || '').replace(/\D+/g, '').slice(-10);
+            // iter-223/iter-315: if this device number is already on Smilers,
+            // offer "Message"; otherwise "Invite". Keyed by full E.164.
+            const digits = normalizePhoneE164(item.phone, myDefaultCountry) || (item.phone || '').trim();
             const registered = digits ? registeredByDigits.get(digits) : undefined;
             return (
               <View style={styles.row} testID={`device-contact-${item.id}`}>

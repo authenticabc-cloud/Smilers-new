@@ -38,7 +38,21 @@ export async function uploadFile(
 ): Promise<string> {
   let uploadUrl: string;
   try {
-    uploadUrl = await convex.mutation(uploadUrlMutation, {});
+    // iter-275: `convex.mutation()` is a ONE-SHOT promise that can hang
+    // FOREVER when it races the Convex auth handshake (same failure class
+    // documented for trustees / languages / call-pills). A hung
+    // generateUploadUrl made the photo upload silently stick in the composer
+    // with NO error alert (user-reported P0). Race it against a 25s timeout
+    // so a stalled handshake surfaces a clear error instead of hanging.
+    uploadUrl = await Promise.race([
+      convex.mutation(uploadUrlMutation, {}),
+      new Promise<string>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('Timed out getting an upload link. Check your connection and try again.')),
+          25000,
+        ),
+      ),
+    ]);
   } catch (errorValue: any) {
     const msg = errorValue?.data?.message || errorValue?.message || String(errorValue);
     console.error('[uploadFile] messages.generateUploadUrl failed:', msg);
