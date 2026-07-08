@@ -192,3 +192,18 @@ The caller-side ringback effect now also bails when `calleeKnownOffline` is true
 (`if (!isOutgoingRinging || calleeKnownOffline) return;`) and lists it in the
 deps, so the ring tone stops/does-not-start when the label is "Not Ringing".
 `calleeKnownOffline` was moved above the ringback effect for this.
+
+---
+
+## iter-341c — backend ack wired (calleeRingingAt) (2026-07-08)
+
+Backend now provides `api.calls.markCalleeRinging({ callId })` + a
+`calleeRingingAt` field on the calls doc (returned by getActiveCall/getIncomingCall).
+In `app/call/[conversationId].tsx`:
+- **Callee:** when `isIncoming && activeCall.status==='ringing'`, calls
+  `markCalleeRinging({ callId: activeCall._id })` ONCE (ref-guarded).
+- **Caller:** `calleeRingingAcked = activeCall.calleeRingingAt > 0`.
+  `callerNotRinging = isOutgoingRinging && !acked && (calleeKnownOffline || ringGraceElapsed)`
+  where `ringGraceElapsed` flips true 7s after ringing starts. Label + ringback
+  both use `callerNotRinging`. Ack (definitive) beats presence; presence is the
+  fast negative + fallback when the field is absent.

@@ -5,6 +5,13 @@ Newest first. All changes are captured in `smilers-app-logic-changes.patch`
 `MERGE_FOR_ASHWINI.md`.
 
 ## 2026-07-08
+- **Caller "Ringing"/"Not Ringing" — now backend-definitive (iter-341c):** wired
+  the new `api.calls.markCalleeRinging` ack. The callee's device stamps
+  `calleeRingingAt` when its incoming-call UI rings; the caller prefers that ack
+  ("Ringing...." the instant it's set — even for backgrounded push-woken
+  callees), shows "Not Ringing" when the callee is presence-offline or hasn't
+  acked within a 7s grace, and falls back to presence if the field is absent.
+  Ringback tone follows the same state. File: `app/call/[conversationId].tsx`.
 - **Caller "Ringing" / "Not Ringing" reachability (iter-341):** during an
   OUTGOING ringing call the top status chip now shows **"Not Ringing"** when the
   callee is explicitly offline (device off / no internet / not connected to

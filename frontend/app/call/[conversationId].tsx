@@ -375,6 +375,9 @@ export function CallScreenInner() {
   // hangup. See useEngagementTracker for thresholds (must connect).
   const engagement = useEngagementTracker();
   const declineCall = useMutation(api.calls.declineCall);
+  // iter-341c: callee ack that its device is actually ringing (backend
+  // contract: native-call-reachability). Safe/idempotent no-op backend-side.
+  const markCalleeRinging = useMutation((api as any).calls.markCalleeRinging);
   const inviteToCall = useMutation((api as any).callInvites.invite);
   const requestVideoUpgrade = useMutation((api as any).calls.requestVideoUpgrade);
   // Backend-confirmed contract (June 2025): `api.calls.heartbeat({ callId })`
@@ -809,20 +812,62 @@ export function CallScreenInner() {
     return peer.isOnline === false || peer.online === false;
   }, [fetchedOtherUser]);
 
+  // iter-341c: DEFINITIVE reachability via the backend ack (contract:
+  // native-call-reachability). The callee's device stamps `calleeRingingAt`
+  // the moment its incoming-call UI actually rings, so a present value means
+  // "genuinely ringing" — this also covers the backgrounded-but-push-reachable
+  // case that presence alone can't. We prefer the ack; presence is the fast
+  // negative + the fallback when the field is absent (older backend).
+  const calleeRingingAcked =
+    typeof activeCall?.calleeRingingAt === 'number' && activeCall.calleeRingingAt > 0;
+  // Grace window: give the callee ~7s to ack before we conclude "Not Ringing".
+  const [ringGraceElapsed, setRingGraceElapsed] = useState(false);
+  useEffect(() => {
+    if (!isOutgoingRinging) {
+      setRingGraceElapsed(false);
+      return undefined;
+    }
+    setRingGraceElapsed(false);
+    const t = setTimeout(() => setRingGraceElapsed(true), 7000);
+    return () => clearTimeout(t);
+  }, [isOutgoingRinging, callId]);
+  // The caller shows "Not Ringing" when: the callee is definitely NOT ringing
+  // yet AND either presence says offline (fast) or the grace window elapsed
+  // with no ack.
+  const callerNotRinging =
+    isOutgoingRinging && !calleeRingingAcked && (calleeKnownOffline || ringGraceElapsed);
+
   // iter-187: CALLER-SIDE RINGBACK through InCallManager's native ringback
   // (voice-call stream — not muted by MODE_IN_COMMUNICATION). Replaces the
   // expo-audio ringback that fell silent as soon as the in-call session
   // started (= as soon as all permissions were granted).
-  // iter-341: don't play ringback when the callee is unreachable ("Not
-  // Ringing") — a ring tone would contradict the label.
+  // iter-341: don't play ringback when we're showing "Not Ringing" — a ring
+  // tone would contradict the label. Resumes automatically if the callee acks
+  // / comes online mid-ring.
   useEffect(() => {
     if (Platform.OS === 'web' || isScreenOnly) return undefined;
-    if (!isOutgoingRinging || calleeKnownOffline) return undefined;
+    if (!isOutgoingRinging || callerNotRinging) return undefined;
     InCallAudio.startRingback();
     return () => {
       InCallAudio.stopRingback();
     };
-  }, [isOutgoingRinging, isScreenOnly, calleeKnownOffline]);
+  }, [isOutgoingRinging, isScreenOnly, callerNotRinging]);
+
+  // iter-341c: CALLEE ACK — as soon as this device's incoming-call UI is
+  // ringing, tell the backend so the caller can show a definitive "Ringing….".
+  // Fires once per call (idempotent backend-side too).
+  const ringAckSentRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isIncoming) return;
+    if (activeCall?.status !== 'ringing') return;
+    const id = callId || activeCall?._id;
+    if (!id || ringAckSentRef.current === String(id)) return;
+    ringAckSentRef.current = String(id);
+    void markCalleeRinging({ callId: String(id) }).catch(() => {
+      // best-effort; never block the incoming-call UI
+      ringAckSentRef.current = null;
+    });
+  }, [isIncoming, activeCall?.status, activeCall?._id, callId, markCalleeRinging]);
 
   // Capture callId once we know it
   useEffect(() => {
@@ -2472,9 +2517,9 @@ export function CallScreenInner() {
     }
   }, [activeCall?.isConference, callInvitesData, conferenceRosterData, triggerMeshUpgrade, callId]);
 
-  // iter-341: caller-side reachability label (calleeKnownOffline is computed
-  // earlier, next to the ringback effect). Undefined presence stays optimistic.
-  const outgoingRingingLabel = calleeKnownOffline ? 'Not Ringing' : 'Ringing....';
+  // iter-341: caller-side reachability label. Prefers the backend ack
+  // (calleeRingingAt via callerNotRinging), falls back to presence.
+  const outgoingRingingLabel = callerNotRinging ? 'Not Ringing' : 'Ringing....';
 
   const topStatusChip = useMemo(() => {
     if (isOutgoingRinging) return outgoingRingingLabel;
