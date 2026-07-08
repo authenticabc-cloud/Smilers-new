@@ -668,12 +668,32 @@ function StatusViewScreenInner() {
             <FlatList
               data={viewerList}
               keyExtractor={(viewer: any, viewerIndex: number) =>
-                viewer?.userId || viewer?._id || viewer?.viewer || String(viewerIndex)
+                (typeof viewer === 'string'
+                  ? viewer
+                  : viewer?.userId || viewer?._id || viewer?.viewer || viewer?.viewerId) ||
+                String(viewerIndex)
               }
               contentContainerStyle={styles.viewersList}
               renderItem={({ item }: any) => {
-                const viewerId = item?.userId || item?._id || item?.viewer || item?.viewerId;
-                const viewerName = resolveContactName(viewerId, item?.name || item?.displayName || 'User');
+                // A viewer entry may be a raw userId string OR an object with
+                // the id + name/phone/viewedAt under several backend aliases.
+                const entry = typeof item === 'string' ? { userId: item } : (item || {});
+                const viewerId =
+                  entry.userId || entry._id || entry.viewer || entry.viewerId || entry.user?._id;
+                const embeddedName =
+                  entry.name ||
+                  entry.displayName ||
+                  entry.userName ||
+                  entry.viewerName ||
+                  entry.user?.name ||
+                  entry.user?.displayName ||
+                  'User';
+                const viewerName = resolveContactName(viewerId, embeddedName, {
+                  phoneE164: entry.phoneE164 || entry.phone || entry.user?.phoneE164,
+                  phone: entry.phone || entry.user?.phone,
+                });
+                const viewedTs =
+                  entry.viewedAt ?? entry.at ?? entry.seenAt ?? entry.viewedAtMs ?? entry._creationTime;
                 return (
                   <View style={styles.viewerRow}>
                     <View style={styles.viewerAvatar}>
@@ -681,9 +701,7 @@ function StatusViewScreenInner() {
                     </View>
                     <View style={styles.flexOne}>
                       <Text style={styles.viewerName}>{viewerName}</Text>
-                      <Text style={styles.viewerTime}>
-                        {timeAgo(item?.viewedAt || item?.at || item?.seenAt || Date.now())}
-                      </Text>
+                      <Text style={styles.viewerTime}>{timeAgo(viewedTs)}</Text>
                     </View>
                   </View>
                 );
@@ -985,7 +1003,20 @@ function StoryVideoPlayer({
   );
 }
 
-function timeAgo(ms: number): string {
+function timeAgo(value: number | string | null | undefined): string {
+  // Accept ms-epoch numbers (Convex `_creationTime`), ISO strings, or
+  // seconds-epoch numbers. Anything unparseable → "just now" (never "NaN").
+  let ms: number;
+  if (typeof value === 'number') {
+    ms = value;
+  } else if (typeof value === 'string') {
+    ms = Date.parse(value);
+  } else {
+    ms = NaN;
+  }
+  if (!Number.isFinite(ms)) return 'just now';
+  // Coerce seconds-epoch (10-digit) to ms.
+  if (ms > 0 && ms < 1e12) ms = ms * 1000;
   const diff = Math.max(0, Date.now() - ms);
   const seconds = Math.floor(diff / 1000);
   if (seconds < 60) return 'just now';
