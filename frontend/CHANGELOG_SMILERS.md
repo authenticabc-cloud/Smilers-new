@@ -5,6 +5,13 @@ Newest first. All changes are captured in `smilers-app-logic-changes.patch`
 `MERGE_FOR_ASHWINI.md`.
 
 ## 2026-07-08
+- **Chat draft — background-flush hardening (iter-340):** the composer draft is
+  now also written synchronously when the app goes to `background`/`inactive`
+  (via `AppState`), not only on unmount/debounce. This closes the gap where a
+  message typed right before switching away could be lost if the OS killed the
+  backgrounded app before the 400ms debounce fired. File:
+  `app/chat/[conversationId].tsx`. (Draft persistence itself was already shipped
+  — this makes it survive app kills.)
 - **In-app "Update available" banner:** on launch the app calls
   `GET /api/app-version` (FastAPI) and, if the bundled `expo.version` is older
   than the published `latestVersion`, shows a dismissible top banner linking to

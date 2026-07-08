@@ -736,7 +736,7 @@ index 048401d5..2f3d50f7 100644
          {tab === 'devotions' ? (
            <DevotionsTab
 diff --git a/frontend/app/chat/[conversationId].tsx b/frontend/app/chat/[conversationId].tsx
-index de2a29a2..47023e47 100644
+index de2a29a2..dc9901b0 100644
 --- a/frontend/app/chat/[conversationId].tsx
 +++ b/frontend/app/chat/[conversationId].tsx
 @@ -8,7 +8,9 @@ import {
@@ -886,7 +886,7 @@ index de2a29a2..47023e47 100644
    // iter-147: canonical contract — toggleStar lives on `api.starred`,
    // NOT `api.messages`. Args require BOTH `messageId` AND
    // `conversationId` (server validates participant access).
-@@ -756,6 +851,89 @@ export default function ChatScreen() {
+@@ -756,6 +851,109 @@ export default function ChatScreen() {
    // composer to normal send mode. See iter-97 fix.
    const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
  
@@ -973,10 +973,30 @@ index de2a29a2..47023e47 100644
 +    };
 +  }, []);
 +
++  // iter-340: also flush the draft the moment the app goes to background /
++  // inactive. Cleanup callbacks do NOT run when the OS kills a backgrounded
++  // app, so without this a message typed just before switching away could be
++  // lost (the 400ms debounce may not have fired yet). Writing synchronously on
++  // the background transition guarantees the draft is persisted before any kill.
++  useEffect(() => {
++    const sub = AppState.addEventListener('change', (next) => {
++      if (next === 'background' || next === 'inactive') {
++        const pending = latestDraftRef.current;
++        if (!pending || !pending.conversationId) return;
++        if (isChatDraftEmpty(pending.draft)) {
++          void clearChatDraft(pending.conversationId);
++        } else {
++          void saveChatDraft(pending.conversationId, pending.draft);
++        }
++      }
++    });
++    return () => sub.remove();
++  }, []);
++
    const messages: any[] = useMemo(() => {
      const page = messagesPage as any;
      const arr = page?.page || page || [];
-@@ -1438,12 +1616,26 @@ export default function ChatScreen() {
+@@ -1438,12 +1636,26 @@ export default function ChatScreen() {
      setSending(true);
      const replyToMessageId = replyTo?._id;
      const editTargetId = editingMessageId;
@@ -1003,7 +1023,7 @@ index de2a29a2..47023e47 100644
        if (editTargetId) {
          // EDIT mode — try to update the original message in place. If the
          // backend exposes an edit mutation under any of the known names,
-@@ -2705,81 +2897,41 @@ export default function ChatScreen() {
+@@ -2705,81 +2917,41 @@ export default function ChatScreen() {
      const msg = selectedMsg;
      if (!msg) return;
      closeActionSheet();
@@ -1073,15 +1093,7 @@ index de2a29a2..47023e47 100644
 -    // We just store the id in AsyncStorage keyed by conversationId — a
 -    // future iteration can wire this into the conversation header banner.
 +    const isCurrentlyPinned = !!pinnedMessageId && pinnedMessageId === String(msg._id);
-     try {
--      const key = `smilers_local_pinned_${conversationId}`;
--      const list = ((await readStoredJson(key, [])) as string[]) || [];
--      const next = Array.isArray(list)
--        ? Array.from(new Set([...list, String(msg._id)]))
--        : [String(msg._id)];
--      await writeStoredJson(key, next);
--    } catch {
--      /* swallow */
++    try {
 +      if (isCurrentlyPinned) {
 +        // Unpin — omit messageId.
 +        await pinMessageMutation({ conversationId });
@@ -1096,27 +1108,35 @@ index de2a29a2..47023e47 100644
 +        isCurrentlyPinned ? 'Could not unpin' : 'Could not pin',
 +        friendlyConvexError(e, 'Please try again.'),
 +      );
++    }
++  }, [selectedMsg, conversationId, canPinMessages, pinnedMessageId, pinMessageMutation]);
++
++  // iter-336: unpin from the pinned banner (admins in groups; either in 1:1).
++  const onUnpinBanner = useCallback(async () => {
+     try {
+-      const key = `smilers_local_pinned_${conversationId}`;
+-      const list = ((await readStoredJson(key, [])) as string[]) || [];
+-      const next = Array.isArray(list)
+-        ? Array.from(new Set([...list, String(msg._id)]))
+-        : [String(msg._id)];
+-      await writeStoredJson(key, next);
+-    } catch {
+-      /* swallow */
++      await pinMessageMutation({ conversationId });
++      callDebug.push('PIN', 'unpin via banner');
++    } catch (e: any) {
++      Alert.alert('Could not unpin', friendlyConvexError(e, 'Please try again.'));
      }
 -    Alert.alert(
 -      'Pinned on this device',
 -      'Pin will sync across your devices once the backend deploys the pin endpoint.',
 -    );
 -  }, [selectedMsg, conversationId]);
-+  }, [selectedMsg, conversationId, canPinMessages, pinnedMessageId, pinMessageMutation]);
-+
-+  // iter-336: unpin from the pinned banner (admins in groups; either in 1:1).
-+  const onUnpinBanner = useCallback(async () => {
-+    try {
-+      await pinMessageMutation({ conversationId });
-+      callDebug.push('PIN', 'unpin via banner');
-+    } catch (e: any) {
-+      Alert.alert('Could not unpin', friendlyConvexError(e, 'Please try again.'));
-+    }
 +  }, [conversationId, pinMessageMutation]);
  
    const onSelectMultiple = useCallback(() => {
      const msg = selectedMsg;
-@@ -2837,10 +2989,79 @@ export default function ChatScreen() {
+@@ -2837,10 +3009,79 @@ export default function ChatScreen() {
  
    const cancelEdit = useCallback(() => {
      setEditingMessageId(null);
@@ -1196,7 +1216,7 @@ index de2a29a2..47023e47 100644
    /**
     * Attempt to call any of the known edit mutations the backend may expose.
     * Different Convex deployments use different function names — try each
-@@ -3443,6 +3664,20 @@ export default function ChatScreen() {
+@@ -3443,6 +3684,20 @@ export default function ChatScreen() {
            <TouchableOpacity testID="chat-encryption-btn" onPress={() => router.push('/encryption' as any)} style={styles.headerIconButton}>
              <Ionicons name="shield-checkmark-outline" size={20} color={Colors.white} />
            </TouchableOpacity>
@@ -1217,7 +1237,7 @@ index de2a29a2..47023e47 100644
            <TouchableOpacity testID="chat-menu-btn" onPress={() => setShowOptionsMenu(true)} style={styles.headerIconButton}>
              <Feather name="more-vertical" size={20} color={Colors.white} />
            </TouchableOpacity>
-@@ -3497,6 +3732,35 @@ export default function ChatScreen() {
+@@ -3497,6 +3752,35 @@ export default function ChatScreen() {
          );
        })()}
  
@@ -1253,7 +1273,7 @@ index de2a29a2..47023e47 100644
        {/* iter-109 → iter-111: in-chat search bar — slides in below the
            header when the search button is tapped. Live-filters the
            message list by case-insensitive substring match. Kept as a
-@@ -3782,6 +4046,11 @@ export default function ChatScreen() {
+@@ -3782,6 +4066,11 @@ export default function ChatScreen() {
                        msg={item}
                        isMine={item.senderId === effectiveMe?._id}
                        myUserId={effectiveMe?._id}
@@ -1265,7 +1285,7 @@ index de2a29a2..47023e47 100644
                        parentMsg={parentMsg}
                        onPressParent={parentMsg ? () => jumpToMessage(parentId) : undefined}
                        isJumpHighlighted={jumpHighlightId === String(item._id)}
-@@ -3948,6 +4217,21 @@ export default function ChatScreen() {
+@@ -3948,6 +4237,21 @@ export default function ChatScreen() {
              </View>
            ) : null}
  
@@ -1287,7 +1307,7 @@ index de2a29a2..47023e47 100644
            {uploading ? (
              <View style={styles.uploadBar} testID="uploading-bar">
                <ActivityIndicator size="small" color={Colors.primary} />
-@@ -4338,12 +4622,37 @@ export default function ChatScreen() {
+@@ -4338,12 +4642,37 @@ export default function ChatScreen() {
  
        <MessageActionSheet
          message={selectedMsg}
@@ -1326,7 +1346,7 @@ index de2a29a2..47023e47 100644
          onForward={onForward}
          onShare={onShare}
          onSelectMultiple={onSelectMultiple}
-@@ -4354,6 +4663,16 @@ export default function ChatScreen() {
+@@ -4354,6 +4683,16 @@ export default function ChatScreen() {
          onDelete={onDelete}
        />
  
@@ -1343,7 +1363,7 @@ index de2a29a2..47023e47 100644
        {/* iter-292: rich Message Info sheet — Read by + media consumption
            (Played/Watched/Viewed/Opened by), mirroring the web app. */}
        <MessageInfoSheet
-@@ -4506,6 +4825,31 @@ export default function ChatScreen() {
+@@ -4506,6 +4845,31 @@ export default function ChatScreen() {
  }
  
  const styles = StyleSheet.create({
