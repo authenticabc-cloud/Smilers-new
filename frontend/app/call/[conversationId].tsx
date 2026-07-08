@@ -797,18 +797,32 @@ export function CallScreenInner() {
     }
   }, [isIncoming, isScreenOnly, audioModeReady, applyAudioMode]);
 
+  // iter-341: caller-side reachability. Derived from the hydrated callee
+  // presence (same signal as the chat header online dot). Used both for the
+  // "Ringing / Not Ringing" label AND to silence the ringback tone when the
+  // callee is unreachable (so the audio matches the label). Undefined presence
+  // stays optimistic (treated as reachable) to avoid false negatives.
+  const calleeKnownOffline = useMemo(() => {
+    const peer: any = fetchedOtherUser || null;
+    if (!peer) return false;
+    if (peer.isOnline === true || peer.online === true) return false;
+    return peer.isOnline === false || peer.online === false;
+  }, [fetchedOtherUser]);
+
   // iter-187: CALLER-SIDE RINGBACK through InCallManager's native ringback
   // (voice-call stream — not muted by MODE_IN_COMMUNICATION). Replaces the
   // expo-audio ringback that fell silent as soon as the in-call session
   // started (= as soon as all permissions were granted).
+  // iter-341: don't play ringback when the callee is unreachable ("Not
+  // Ringing") — a ring tone would contradict the label.
   useEffect(() => {
     if (Platform.OS === 'web' || isScreenOnly) return undefined;
-    if (!isOutgoingRinging) return undefined;
+    if (!isOutgoingRinging || calleeKnownOffline) return undefined;
     InCallAudio.startRingback();
     return () => {
       InCallAudio.stopRingback();
     };
-  }, [isOutgoingRinging, isScreenOnly]);
+  }, [isOutgoingRinging, isScreenOnly, calleeKnownOffline]);
 
   // Capture callId once we know it
   useEffect(() => {
@@ -2458,20 +2472,8 @@ export function CallScreenInner() {
     }
   }, [activeCall?.isConference, callInvitesData, conferenceRosterData, triggerMeshUpgrade, callId]);
 
-  // iter-341: caller-side reachability label. During an OUTGOING ringing call
-  // we tell the caller whether the callee's device is actually reachable. When
-  // the callee is offline (device off / no internet / app not connected to
-  // Convex), presence reports isOnline=false and the incoming-call live-query
-  // cannot reach them → "Not Ringing". When they're online (reachable) → the
-  // usual "Ringing....". While presence is unknown/loading we stay optimistic.
-  const calleeKnownOffline = useMemo(() => {
-    const peer: any = fetchedOtherUser || null;
-    if (!peer) return false; // presence not resolved yet → don't claim offline
-    if (peer.isOnline === true || peer.online === true) return false;
-    // Only assert "offline" on an EXPLICIT false; an undefined presence field
-    // (backend not reporting it) must NOT flip us to "Not Ringing".
-    return peer.isOnline === false || peer.online === false;
-  }, [fetchedOtherUser]);
+  // iter-341: caller-side reachability label (calleeKnownOffline is computed
+  // earlier, next to the ringback effect). Undefined presence stays optimistic.
   const outgoingRingingLabel = calleeKnownOffline ? 'Not Ringing' : 'Ringing....';
 
   const topStatusChip = useMemo(() => {

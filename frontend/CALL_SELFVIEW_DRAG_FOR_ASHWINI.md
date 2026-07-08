@@ -186,3 +186,9 @@ This is client-only (uses existing Convex presence, same as the chat header
 online dot). For a bulletproof version that also handles a backgrounded but
 push-reachable callee, see `STATUS_CALL_REACHABILITY_BACKEND_SPEC.md` (adds a
 callee `ringingAt` ack to the calls table).
+
+### iter-341b — silence ringback when "Not Ringing"
+The caller-side ringback effect now also bails when `calleeKnownOffline` is true
+(`if (!isOutgoingRinging || calleeKnownOffline) return;`) and lists it in the
+deps, so the ring tone stops/does-not-start when the label is "Not Ringing".
+`calleeKnownOffline` was moved above the ringback effect for this.
