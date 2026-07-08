@@ -169,3 +169,20 @@ Fix (in `app/call/[conversationId].tsx`):
 3. The self-view `RTCView` is now a direct child of the animated wrapper.
 
 Net: drag works, double-tap-to-swap works, position still persists. Native only.
+
+---
+
+## iter-341 — caller "Ringing" / "Not Ringing" reachability (2026-07-08)
+
+In `app/call/[conversationId].tsx`. During an OUTGOING ringing call the top
+status chip now reflects the callee's reachability:
+- `outgoingRingingLabel = calleeKnownOffline ? 'Not Ringing' : 'Ringing....'`
+- `calleeKnownOffline` is derived from the hydrated callee presence
+  (`fetchedOtherUser.isOnline === false || .online === false`). Undefined
+  presence stays optimistic ("Ringing....") to avoid false negatives.
+- `topStatusChip` returns `outgoingRingingLabel` for `isOutgoingRinging`.
+
+This is client-only (uses existing Convex presence, same as the chat header
+online dot). For a bulletproof version that also handles a backgrounded but
+push-reachable callee, see `STATUS_CALL_REACHABILITY_BACKEND_SPEC.md` (adds a
+callee `ringingAt` ack to the calls table).

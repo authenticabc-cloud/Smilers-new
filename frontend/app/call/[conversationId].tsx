@@ -2458,12 +2458,28 @@ export function CallScreenInner() {
     }
   }, [activeCall?.isConference, callInvitesData, conferenceRosterData, triggerMeshUpgrade, callId]);
 
+  // iter-341: caller-side reachability label. During an OUTGOING ringing call
+  // we tell the caller whether the callee's device is actually reachable. When
+  // the callee is offline (device off / no internet / app not connected to
+  // Convex), presence reports isOnline=false and the incoming-call live-query
+  // cannot reach them → "Not Ringing". When they're online (reachable) → the
+  // usual "Ringing....". While presence is unknown/loading we stay optimistic.
+  const calleeKnownOffline = useMemo(() => {
+    const peer: any = fetchedOtherUser || null;
+    if (!peer) return false; // presence not resolved yet → don't claim offline
+    if (peer.isOnline === true || peer.online === true) return false;
+    // Only assert "offline" on an EXPLICIT false; an undefined presence field
+    // (backend not reporting it) must NOT flip us to "Not Ringing".
+    return peer.isOnline === false || peer.online === false;
+  }, [fetchedOtherUser]);
+  const outgoingRingingLabel = calleeKnownOffline ? 'Not Ringing' : 'Ringing....';
+
   const topStatusChip = useMemo(() => {
-    if (isOutgoingRinging) return 'Ringing....';
+    if (isOutgoingRinging) return outgoingRingingLabel;
     if (isIncoming) return 'Incoming...';
     if (!isActive && statusText && statusText !== 'Connecting…') return statusText;
     return '';
-  }, [isActive, isIncoming, isOutgoingRinging, statusText]);
+  }, [isActive, isIncoming, isOutgoingRinging, statusText, outgoingRingingLabel]);
 
   const primaryCallSubLabel = useMemo(() => {
     if (isActive) return durationLabel;

@@ -5,6 +5,15 @@ Newest first. All changes are captured in `smilers-app-logic-changes.patch`
 `MERGE_FOR_ASHWINI.md`.
 
 ## 2026-07-08
+- **Caller "Ringing" / "Not Ringing" reachability (iter-341):** during an
+  OUTGOING ringing call the top status chip now shows **"Not Ringing"** when the
+  callee is explicitly offline (device off / no internet / not connected to
+  Convex) and **"Ringing...."** when reachable (or while presence is unknown).
+  Uses the callee's existing presence (`fetchedOtherUser.isOnline`), the same
+  signal as the chat header online dot — client-only, no backend change. An
+  OPTIONAL bulletproof upgrade (callee `ringingAt` ack, also handles push-woken
+  backgrounded devices) is specced in `STATUS_CALL_REACHABILITY_BACKEND_SPEC.md`.
+  Native only. File: `app/call/[conversationId].tsx`.
 - **Chat draft NOT saving (real fix, iter-340):** `saveChatDraft`/`loadChatDraft`
   were writing/reading through `settingsStorage` which uses **SecureStore** on
   native — but SecureStore rejects keys containing colons, and the draft key is
