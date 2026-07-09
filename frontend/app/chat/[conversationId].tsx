@@ -934,6 +934,26 @@ export default function ChatScreen() {
     };
   }, []);
 
+  // iter-340: also flush the draft the moment the app goes to background /
+  // inactive. Cleanup callbacks do NOT run when the OS kills a backgrounded
+  // app, so without this a message typed just before switching away could be
+  // lost (the 400ms debounce may not have fired yet). Writing synchronously on
+  // the background transition guarantees the draft is persisted before any kill.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'background' || next === 'inactive') {
+        const pending = latestDraftRef.current;
+        if (!pending || !pending.conversationId) return;
+        if (isChatDraftEmpty(pending.draft)) {
+          void clearChatDraft(pending.conversationId);
+        } else {
+          void saveChatDraft(pending.conversationId, pending.draft);
+        }
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
   const messages: any[] = useMemo(() => {
     const page = messagesPage as any;
     const arr = page?.page || page || [];

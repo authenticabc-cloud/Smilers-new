@@ -18,7 +18,13 @@ Baseline for all diffs: commit 21cc30a3 (2026-07-03 23:11 UTC).
 > rev 5 (2026-07-08): **Group A** — group message sender name no longer shows
 > "Member" (enriched from `getGroupMembers`) in `app/chat/[conversationId].tsx`;
 > **status views now count** — `app/status-view/[userId].tsx` `markViewed` effect
-> re-keyed on the current status id so it fires after the async stories load.
+> re-keyed on the current status id so it fires after the async stories load;
+> **"Seen by" polish** — no more "NaN d ago", better viewer-name resolution;
+> **in-app Update banner** — new `src/lib/appVersion.ts` +
+> `src/components/UpdateBanner.tsx`, mounted in `app/_layout.tsx`. ⚠️ BACKEND
+> DEPENDENCY: the Update banner needs the new `GET /api/app-version` endpoint
+> (added in `backend/server.py`) live on the PRODUCTION backend the APK points
+> to; bump `SMILERS_LATEST_VERSION` (env) when each new build ships.
 > Re-generated `smilers-app-logic-changes.patch`. **Group B (call layer)** — 3
 > new call-screen changes documented in `CALL_SELFVIEW_DRAG_FOR_ASHWINI.md`:
 > (A) call-waiting foreground video routing fix (audio-only bug), (B) persist

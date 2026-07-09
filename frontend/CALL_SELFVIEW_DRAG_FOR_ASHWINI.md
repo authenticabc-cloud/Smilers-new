@@ -147,3 +147,63 @@ const selfViewURL   = pipSwapped ? displayRemoteURL : displayLocalURL;
 Single taps still fall through to the drag / controls tap-catcher.
 
 **Native only** — all three require a device build (RTCView + real 2nd call).
+
+---
+
+## iter-340 — self-view PiP drag FIX (2026-07-08)
+
+Bug: the self-view was rendered as a small box but could NOT be dragged.
+Cause: iter-338 wrapped the draggable `Animated.View` in a child `Pressable`
+(for double-tap). The Pressable grabbed the touch responder on START, so the
+parent `PanResponder`'s move-only `onMoveShouldSetPanResponder` was never
+consulted → no drag.
+
+Fix (in `app/call/[conversationId].tsx`):
+1. PanResponder now claims the gesture at touch-start via
+   `onStartShouldSetPanResponder`/`onStartShouldSetPanResponderCapture` (+ the
+   move-capture variants) and `onPanResponderTerminationRequest: () => false`.
+2. Removed the child `<Pressable>`. Double-tap is detected inside
+   `onPanResponderRelease`: if the release moved <6px it's treated as a tap and
+   routed to `handlePipTap()` (double-tap within 300ms → swap feeds); otherwise
+   it's a drag (clamp + spring + `saveSelfViewPos`).
+3. The self-view `RTCView` is now a direct child of the animated wrapper.
+
+Net: drag works, double-tap-to-swap works, position still persists. Native only.
+
+---
+
+## iter-341 — caller "Ringing" / "Not Ringing" reachability (2026-07-08)
+
+In `app/call/[conversationId].tsx`. During an OUTGOING ringing call the top
+status chip now reflects the callee's reachability:
+- `outgoingRingingLabel = calleeKnownOffline ? 'Not Ringing' : 'Ringing....'`
+- `calleeKnownOffline` is derived from the hydrated callee presence
+  (`fetchedOtherUser.isOnline === false || .online === false`). Undefined
+  presence stays optimistic ("Ringing....") to avoid false negatives.
+- `topStatusChip` returns `outgoingRingingLabel` for `isOutgoingRinging`.
+
+This is client-only (uses existing Convex presence, same as the chat header
+online dot). For a bulletproof version that also handles a backgrounded but
+push-reachable callee, see `STATUS_CALL_REACHABILITY_BACKEND_SPEC.md` (adds a
+callee `ringingAt` ack to the calls table).
+
+### iter-341b — silence ringback when "Not Ringing"
+The caller-side ringback effect now also bails when `calleeKnownOffline` is true
+(`if (!isOutgoingRinging || calleeKnownOffline) return;`) and lists it in the
+deps, so the ring tone stops/does-not-start when the label is "Not Ringing".
+`calleeKnownOffline` was moved above the ringback effect for this.
+
+---
+
+## iter-341c — backend ack wired (calleeRingingAt) (2026-07-08)
+
+Backend now provides `api.calls.markCalleeRinging({ callId })` + a
+`calleeRingingAt` field on the calls doc (returned by getActiveCall/getIncomingCall).
+In `app/call/[conversationId].tsx`:
+- **Callee:** when `isIncoming && activeCall.status==='ringing'`, calls
+  `markCalleeRinging({ callId: activeCall._id })` ONCE (ref-guarded).
+- **Caller:** `calleeRingingAcked = activeCall.calleeRingingAt > 0`.
+  `callerNotRinging = isOutgoingRinging && !acked && (calleeKnownOffline || ringGraceElapsed)`
+  where `ringGraceElapsed` flips true 7s after ringing starts. Label + ringback
+  both use `callerNotRinging`. Ack (definitive) beats presence; presence is the
+  fast negative + fallback when the field is absent.

@@ -5,6 +5,66 @@ Newest first. All changes are captured in `smilers-app-logic-changes.patch`
 `MERGE_FOR_ASHWINI.md`.
 
 ## 2026-07-08
+- **Caller "Ringing"/"Not Ringing" — now backend-definitive (iter-341c):** wired
+  the new `api.calls.markCalleeRinging` ack. The callee's device stamps
+  `calleeRingingAt` when its incoming-call UI rings; the caller prefers that ack
+  ("Ringing...." the instant it's set — even for backgrounded push-woken
+  callees), shows "Not Ringing" when the callee is presence-offline or hasn't
+  acked within a 7s grace, and falls back to presence if the field is absent.
+  Ringback tone follows the same state. File: `app/call/[conversationId].tsx`.
+- **Caller "Ringing" / "Not Ringing" reachability (iter-341):** during an
+  OUTGOING ringing call the top status chip now shows **"Not Ringing"** when the
+  callee is explicitly offline (device off / no internet / not connected to
+  Convex) and **"Ringing...."** when reachable (or while presence is unknown).
+  Uses the callee's existing presence (`fetchedOtherUser.isOnline`), the same
+  signal as the chat header online dot — client-only, no backend change. An
+  OPTIONAL bulletproof upgrade (callee `ringingAt` ack, also handles push-woken
+  backgrounded devices) is specced in `STATUS_CALL_REACHABILITY_BACKEND_SPEC.md`.
+  Native only. File: `app/call/[conversationId].tsx`.
+- **Chat draft NOT saving (real fix, iter-340):** `saveChatDraft`/`loadChatDraft`
+  were writing/reading through `settingsStorage` which uses **SecureStore** on
+  native — but SecureStore rejects keys containing colons, and the draft key is
+  `smilers:chat_draft:v1:<id>`, so every write threw and was swallowed (worked on
+  web via localStorage, silently failed on the APK). They now use **AsyncStorage**
+  directly, consistent with `clearChatDraft`/`loadAllChatDrafts`. This is why
+  drafts vanished on the device. File: `src/lib/chatDrafts.ts`.
+- **Self-view PiP now draggable (real fix, iter-340):** the double-tap `Pressable`
+  added in iter-338 was stealing the touch responder, blocking the drag. The
+  `PanResponder` now claims the gesture at touch-start (capture) and detects
+  double-tap inside the release handler instead of a child Pressable. Drag +
+  double-tap-to-swap + position persistence all work now. Native only. File:
+  `app/call/[conversationId].tsx` (see `CALL_SELFVIEW_DRAG_FOR_ASHWINI.md`).
+- **Chat draft — background-flush hardening (iter-340):** the composer draft is
+  now also written synchronously when the app goes to `background`/`inactive`
+  (via `AppState`), not only on unmount/debounce. This closes the gap where a
+  message typed right before switching away could be lost if the OS killed the
+  backgrounded app before the 400ms debounce fired. File:
+  `app/chat/[conversationId].tsx`. (Draft persistence itself was already shipped
+  — this makes it survive app kills.)
+- **In-app "Update available" banner:** on launch the app calls
+  `GET /api/app-version` (FastAPI) and, if the bundled `expo.version` is older
+  than the published `latestVersion`, shows a dismissible top banner linking to
+  the Play Store (Android) / App Store (iOS). "Later" hides it for the session
+  (returns next launch); a `forceUpdate`/below-`minSupportedVersion` release
+  hides "Later". NEW files: `src/lib/appVersion.ts`,
+  `src/components/UpdateBanner.tsx`; mounted in `app/_layout.tsx`. BACKEND: new
+  `GET /api/app-version` endpoint in `backend/server.py` (env-overridable via
+  `SMILERS_LATEST_VERSION` / `SMILERS_ANDROID_URL` / `SMILERS_IOS_URL` /
+  `SMILERS_MIN_VERSION` / `SMILERS_FORCE_UPDATE` / `SMILERS_RELEASE_NOTES`).
+- **Status "Seen by" — real viewer names + times:** the viewers sheet now
+  fetches each viewer's profile via `api.users.getUserById` (new
+  `StatusViewerRow` component) and resolves the name the WhatsApp/web way —
+  device-contact name → their Smilers/Google account name (with avatar when
+  available) — instead of the generic "User". The per-viewer time reads
+  `viewedAt` (backend spec) + aliases; shown only when present (no misleading
+  "just now"). ⚠️ If time stays blank after a rebuild, the backend must return
+  `viewedAt` per viewer — see `STATUS_VIEWER_TIMESTAMP_BACKEND_SPEC.md`.
+  File: `app/status-view/[userId].tsx`.
+- **Status "Seen by" polish:** viewer time no longer shows "NaN d ago"
+  (`timeAgo` now coerces ISO-string / seconds-epoch timestamps, falling back to
+  "just now"); viewer name resolution broadened (more backend aliases + saved
+  contact / device name) so it only shows "User" when the viewer is truly
+  unknown. File: `app/status-view/[userId].tsx`.
 - **Status views not counting (FIXED):** the viewer screen's `markViewed` effect
   was keyed only on `[idx, isMine]`, so when the stories array finished loading
   AFTER the first render (async Convex fetch) the effect never re-ran and the

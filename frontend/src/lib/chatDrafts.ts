@@ -14,7 +14,6 @@
  * resume", not "resume a mid-flight byte transfer".
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { readStoredJson, writeStoredJson } from './settingsStorage';
 
 export interface PendingImageDraft {
   uri: string;
@@ -46,7 +45,9 @@ export function isChatDraftEmpty(draft: ChatDraft | null | undefined): boolean {
 export async function loadChatDraft(conversationId: string): Promise<ChatDraft | null> {
   if (!conversationId) return null;
   try {
-    const draft = await readStoredJson(keyFor(conversationId), null);
+    const raw = await AsyncStorage.getItem(keyFor(conversationId));
+    if (!raw) return null;
+    const draft = JSON.parse(raw);
     return draft && typeof draft === 'object' ? (draft as ChatDraft) : null;
   } catch {
     return null;
@@ -62,7 +63,10 @@ export async function saveChatDraft(conversationId: string, draft: ChatDraft): P
     return;
   }
   try {
-    await writeStoredJson(keyFor(conversationId), { ...draft, updatedAt: Date.now() });
+    await AsyncStorage.setItem(
+      keyFor(conversationId),
+      JSON.stringify({ ...draft, updatedAt: Date.now() }),
+    );
   } catch {
     /* best-effort */
   }

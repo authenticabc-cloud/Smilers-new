@@ -26,7 +26,7 @@ import IncomingScreenShareModal from '../src/components/IncomingScreenShareModal
 import CallHost from '../src/components/call/CallHost';
 import CallReturnBanner from '../src/components/call/CallReturnBanner';
 import ResumeLastRoute from '../src/components/ResumeLastRoute';
-import { recordTouchActivity } from '../src/lib/touchActivity';
+import UpdateBanner from '../src/components/UpdateBanner';import { recordTouchActivity } from '../src/lib/touchActivity';
 import { applyInterFontPatch } from '../src/lib/fontPatch';
 import {
   installGlobalDiagnostics,
@@ -505,6 +505,7 @@ export default function RootLayout() {
             <IncomingScreenShareModal />
             <CallHost />
             <CallReturnBanner />
+            <UpdateBanner />
               </View>
             </AppLockGate>
             </DeviceContactBridge>

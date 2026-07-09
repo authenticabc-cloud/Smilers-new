@@ -668,26 +668,18 @@ function StatusViewScreenInner() {
             <FlatList
               data={viewerList}
               keyExtractor={(viewer: any, viewerIndex: number) =>
-                viewer?.userId || viewer?._id || viewer?.viewer || String(viewerIndex)
+                (typeof viewer === 'string'
+                  ? viewer
+                  : viewer?.userId || viewer?._id || viewer?.viewer || viewer?.viewerId) ||
+                String(viewerIndex)
               }
               contentContainerStyle={styles.viewersList}
-              renderItem={({ item }: any) => {
-                const viewerId = item?.userId || item?._id || item?.viewer || item?.viewerId;
-                const viewerName = resolveContactName(viewerId, item?.name || item?.displayName || 'User');
-                return (
-                  <View style={styles.viewerRow}>
-                    <View style={styles.viewerAvatar}>
-                      <Text style={styles.viewerAvatarText}>{(viewerName || '?').charAt(0).toUpperCase()}</Text>
-                    </View>
-                    <View style={styles.flexOne}>
-                      <Text style={styles.viewerName}>{viewerName}</Text>
-                      <Text style={styles.viewerTime}>
-                        {timeAgo(item?.viewedAt || item?.at || item?.seenAt || Date.now())}
-                      </Text>
-                    </View>
-                  </View>
-                );
-              }}
+              renderItem={({ item }: any) => (
+                <StatusViewerRow
+                  item={item}
+                  resolveContactName={resolveContactName}
+                />
+              )}
               ListEmptyComponent={<Text style={styles.viewerEmpty}>No one has viewed this yet.</Text>}
             />
           </Pressable>
@@ -985,7 +977,101 @@ function StoryVideoPlayer({
   );
 }
 
-function timeAgo(ms: number): string {
+/**
+ * StatusViewerRow — one row in the owner's "Seen by" sheet.
+ *
+ * A viewer entry from the backend may be a raw userId string OR an object
+ * `{ userId, viewedAt?, name? }`. Names/avatars are NOT reliably embedded in
+ * `getMyStatuses`, so we resolve them the way the web app does: fetch the
+ * viewer's user doc via `api.users.getUserById` and prefer the device-contact
+ * name (via `resolveContactName`) → their Smilers/Google account name. The
+ * timestamp is only shown when the entry carries a real `viewedAt` value.
+ */
+function StatusViewerRow({
+  item,
+  resolveContactName,
+}: {
+  item: any;
+  resolveContactName: (id: string | null | undefined, fallback: string, extra?: any) => string;
+}) {
+  const entry = typeof item === 'string' ? { userId: item } : (item || {});
+  const viewerId = String(
+    entry.userId || entry._id || entry.viewer || entry.viewerId || entry.user?._id || '',
+  );
+  const { data: fetchedUser } = useSafeConvexQuery<any | null>(
+    api.users.getUserById,
+    viewerId ? { userId: viewerId } : {},
+    null,
+    !!viewerId,
+  );
+
+  const accountName =
+    entry.name ||
+    entry.displayName ||
+    entry.userName ||
+    entry.viewerName ||
+    entry.user?.name ||
+    entry.user?.displayName ||
+    fetchedUser?.name ||
+    fetchedUser?.displayName ||
+    fetchedUser?.fullName ||
+    'User';
+  const viewerName = resolveContactName(viewerId, accountName, {
+    phoneE164: entry.phoneE164 || entry.phone || fetchedUser?.phoneE164 || fetchedUser?.phone,
+    phone: entry.phone || fetchedUser?.phone,
+  });
+  const avatarUrl =
+    entry.avatarUrl || entry.user?.avatarUrl || fetchedUser?.avatarUrl || fetchedUser?.photoUrl || '';
+
+  // Show the view time when the entry carries one. The backend spec stores it
+  // as `viewedAt` (ms); we also accept common aliases. When none is present we
+  // render nothing rather than a misleading "just now".
+  const rawTs =
+    entry.viewedAt ??
+    entry.viewedAtMs ??
+    entry.at ??
+    entry.seenAt ??
+    entry.seenAtMs ??
+    entry.timestamp ??
+    entry.time ??
+    entry.createdAt ??
+    entry._creationTime ??
+    entry.user?.viewedAt;
+  const hasTs =
+    (typeof rawTs === 'number' && Number.isFinite(rawTs) && rawTs > 0) ||
+    (typeof rawTs === 'string' && Number.isFinite(Date.parse(rawTs)));
+
+  return (
+    <View style={styles.viewerRow}>
+      {avatarUrl ? (
+        <Image source={{ uri: avatarUrl }} style={styles.viewerAvatar} />
+      ) : (
+        <View style={styles.viewerAvatar}>
+          <Text style={styles.viewerAvatarText}>{(viewerName || '?').charAt(0).toUpperCase()}</Text>
+        </View>
+      )}
+      <View style={styles.flexOne}>
+        <Text style={styles.viewerName}>{viewerName}</Text>
+        {hasTs ? <Text style={styles.viewerTime}>{timeAgo(rawTs)}</Text> : null}
+      </View>
+    </View>
+  );
+}
+
+function timeAgo(value: number | string | null | undefined): string {
+  // Accept ms-epoch numbers (Convex `_creationTime`), ISO strings, or
+  // seconds-epoch numbers. Anything unparseable → "just now" (never "NaN").
+  let ms: number;
+  if (typeof value === 'number') {
+    ms = value;
+  } else if (typeof value === 'string') {
+    ms = Date.parse(value);
+  } else {
+    ms = NaN;
+  }
+  if (!Number.isFinite(ms)) return 'just now';
+  // Coerce seconds-epoch (10-digit) to ms.
+  if (ms > 0 && ms < 1e12) ms = ms * 1000;
   const diff = Math.max(0, Date.now() - ms);
   const seconds = Math.floor(diff / 1000);
   if (seconds < 60) return 'just now';

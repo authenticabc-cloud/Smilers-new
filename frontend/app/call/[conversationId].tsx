@@ -240,17 +240,28 @@ export function CallScreenInner() {
   const pipPanResponder = useMemo(
     () =>
       PanResponder.create({
-        // Only claim the gesture once the finger actually moves, so a tap on
-        // the preview doesn't get swallowed.
-        onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 4 || Math.abs(g.dy) > 4,
+        // iter-340: claim the gesture at TOUCH START (capture) so neither the
+        // RTCView child nor the full-screen controls tap-catcher sibling can
+        // swallow it — the previous move-only claim never fired because a child
+        // Pressable grabbed the responder first, leaving the PiP un-draggable.
+        onStartShouldSetPanResponder: () => true,
+        onStartShouldSetPanResponderCapture: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponderCapture: () => true,
+        onPanResponderTerminationRequest: () => false,
         onPanResponderGrant: () => {
           pipPan.extractOffset();
         },
         onPanResponderMove: RNAnimated.event([null, { dx: pipPan.x, dy: pipPan.y }], {
           useNativeDriver: false,
         }),
-        onPanResponderRelease: () => {
+        onPanResponderRelease: (_e, g) => {
           pipPan.flattenOffset();
+          // A negligible move = a tap → route to double-tap-to-swap handler.
+          if (Math.abs(g.dx) <= 6 && Math.abs(g.dy) <= 6) {
+            handlePipTap();
+            return;
+          }
           const x = (pipPan.x as any)._value as number;
           const y = (pipPan.y as any)._value as number;
           const clampedX = Math.min(pipBounds.maxTx, Math.max(pipBounds.minTx, x));
@@ -265,7 +276,7 @@ export function CallScreenInner() {
           saveSelfViewPos({ tx: clampedX, ty: clampedY });
         },
       }),
-    [pipBounds, pipPan],
+    [pipBounds, pipPan, handlePipTap],
   );
   const { isAuthenticated } = useAuth();
   // Params now come from the callHost store (this component is rendered by
@@ -391,6 +402,9 @@ export function CallScreenInner() {
   // hangup. See useEngagementTracker for thresholds (must connect).
   const engagement = useEngagementTracker();
   const declineCall = useMutation(api.calls.declineCall);
+  // iter-341c: callee ack that its device is actually ringing (backend
+  // contract: native-call-reachability). Safe/idempotent no-op backend-side.
+  const markCalleeRinging = useMutation((api as any).calls.markCalleeRinging);
   const inviteToCall = useMutation((api as any).callInvites.invite);
   const requestVideoUpgrade = useMutation((api as any).calls.requestVideoUpgrade);
   // Backend-confirmed contract (June 2025): `api.calls.heartbeat({ callId })`
@@ -813,18 +827,74 @@ export function CallScreenInner() {
     }
   }, [isIncoming, isScreenOnly, audioModeReady, applyAudioMode]);
 
+  // iter-341: caller-side reachability. Derived from the hydrated callee
+  // presence (same signal as the chat header online dot). Used both for the
+  // "Ringing / Not Ringing" label AND to silence the ringback tone when the
+  // callee is unreachable (so the audio matches the label). Undefined presence
+  // stays optimistic (treated as reachable) to avoid false negatives.
+  const calleeKnownOffline = useMemo(() => {
+    const peer: any = fetchedOtherUser || null;
+    if (!peer) return false;
+    if (peer.isOnline === true || peer.online === true) return false;
+    return peer.isOnline === false || peer.online === false;
+  }, [fetchedOtherUser]);
+
+  // iter-341c: DEFINITIVE reachability via the backend ack (contract:
+  // native-call-reachability). The callee's device stamps `calleeRingingAt`
+  // the moment its incoming-call UI actually rings, so a present value means
+  // "genuinely ringing" — this also covers the backgrounded-but-push-reachable
+  // case that presence alone can't. We prefer the ack; presence is the fast
+  // negative + the fallback when the field is absent (older backend).
+  const calleeRingingAcked =
+    typeof activeCall?.calleeRingingAt === 'number' && activeCall.calleeRingingAt > 0;
+  // Grace window: give the callee ~7s to ack before we conclude "Not Ringing".
+  const [ringGraceElapsed, setRingGraceElapsed] = useState(false);
+  useEffect(() => {
+    if (!isOutgoingRinging) {
+      setRingGraceElapsed(false);
+      return undefined;
+    }
+    setRingGraceElapsed(false);
+    const t = setTimeout(() => setRingGraceElapsed(true), 7000);
+    return () => clearTimeout(t);
+  }, [isOutgoingRinging, callId]);
+  // The caller shows "Not Ringing" when: the callee is definitely NOT ringing
+  // yet AND either presence says offline (fast) or the grace window elapsed
+  // with no ack.
+  const callerNotRinging =
+    isOutgoingRinging && !calleeRingingAcked && (calleeKnownOffline || ringGraceElapsed);
+
   // iter-187: CALLER-SIDE RINGBACK through InCallManager's native ringback
   // (voice-call stream — not muted by MODE_IN_COMMUNICATION). Replaces the
   // expo-audio ringback that fell silent as soon as the in-call session
   // started (= as soon as all permissions were granted).
+  // iter-341: don't play ringback when we're showing "Not Ringing" — a ring
+  // tone would contradict the label. Resumes automatically if the callee acks
+  // / comes online mid-ring.
   useEffect(() => {
     if (Platform.OS === 'web' || isScreenOnly) return undefined;
-    if (!isOutgoingRinging) return undefined;
+    if (!isOutgoingRinging || callerNotRinging) return undefined;
     InCallAudio.startRingback();
     return () => {
       InCallAudio.stopRingback();
     };
-  }, [isOutgoingRinging, isScreenOnly]);
+  }, [isOutgoingRinging, isScreenOnly, callerNotRinging]);
+
+  // iter-341c: CALLEE ACK — as soon as this device's incoming-call UI is
+  // ringing, tell the backend so the caller can show a definitive "Ringing….".
+  // Fires once per call (idempotent backend-side too).
+  const ringAckSentRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isIncoming) return;
+    if (activeCall?.status !== 'ringing') return;
+    const id = callId || activeCall?._id;
+    if (!id || ringAckSentRef.current === String(id)) return;
+    ringAckSentRef.current = String(id);
+    void markCalleeRinging({ callId: String(id) }).catch(() => {
+      // best-effort; never block the incoming-call UI
+      ringAckSentRef.current = null;
+    });
+  }, [isIncoming, activeCall?.status, activeCall?._id, callId, markCalleeRinging]);
 
   // Capture callId once we know it
   useEffect(() => {
@@ -2485,12 +2555,16 @@ export function CallScreenInner() {
     }
   }, [activeCall?.isConference, callInvitesData, conferenceRosterData, triggerMeshUpgrade, callId]);
 
+  // iter-341: caller-side reachability label. Prefers the backend ack
+  // (calleeRingingAt via callerNotRinging), falls back to presence.
+  const outgoingRingingLabel = callerNotRinging ? 'Not Ringing' : 'Ringing....';
+
   const topStatusChip = useMemo(() => {
-    if (isOutgoingRinging) return 'Ringing....';
+    if (isOutgoingRinging) return outgoingRingingLabel;
     if (isIncoming) return 'Incoming...';
     if (!isActive && statusText && statusText !== 'Connecting…') return statusText;
     return '';
-  }, [isActive, isIncoming, isOutgoingRinging, statusText]);
+  }, [isActive, isIncoming, isOutgoingRinging, statusText, outgoingRingingLabel]);
 
   const primaryCallSubLabel = useMemo(() => {
     if (isActive) return durationLabel;
@@ -2702,32 +2776,27 @@ export function CallScreenInner() {
             testID="video-tap-catcher"
           />
           {/* Local picture-in-picture — draggable self-view. Double-tap swaps
-              it with the main feed. */}
+              it with the main feed. The PanResponder owns ALL touches (drag +
+              tap) so there is no child Pressable to steal the gesture. */}
           {selfViewURL ? (
             <RNAnimated.View
               style={[styles.pipWrap, { transform: pipPan.getTranslateTransform() }]}
               {...pipPanResponder.panHandlers}
               testID="call-self-view"
             >
-              <Pressable
-                style={StyleSheet.absoluteFill}
-                onPress={handlePipTap}
-                testID="call-self-view-tap"
-              >
-                {!pipSwapped && cameraOff ? (
-                  <View style={styles.popoutSelfOff}>
-                    <Feather name="video-off" size={18} color="rgba(255,255,255,0.7)" />
-                  </View>
-                ) : (
-                  <RTCViewImpl
-                    key={`self-${pipSwapped ? 'remote' : 'local'}-${remoteVideoGen}`}
-                    streamURL={selfViewURL}
-                    style={StyleSheet.absoluteFill}
-                    objectFit="cover"
-                    mirror={selfViewMirror}
-                  />
-                )}
-              </Pressable>
+              {!pipSwapped && cameraOff ? (
+                <View style={styles.popoutSelfOff}>
+                  <Feather name="video-off" size={18} color="rgba(255,255,255,0.7)" />
+                </View>
+              ) : (
+                <RTCViewImpl
+                  key={`self-${pipSwapped ? 'remote' : 'local'}-${remoteVideoGen}`}
+                  streamURL={selfViewURL}
+                  style={StyleSheet.absoluteFill}
+                  objectFit="cover"
+                  mirror={selfViewMirror}
+                />
+              )}
             </RNAnimated.View>
           ) : null}
           {/* Top overlay: name + duration (fades with controls) */}

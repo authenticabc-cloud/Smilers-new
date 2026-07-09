@@ -337,17 +337,19 @@ index 3e77ad2f..9e83e330 100644
    };
  
 diff --git a/frontend/app/_layout.tsx b/frontend/app/_layout.tsx
-index 9f1a1576..1ebdb0fe 100644
+index 9f1a1576..38817700 100644
 --- a/frontend/app/_layout.tsx
 +++ b/frontend/app/_layout.tsx
-@@ -25,6 +25,7 @@ import VoiceCommandLauncher from '../src/components/VoiceCommandLauncher';
+@@ -25,7 +25,8 @@ import VoiceCommandLauncher from '../src/components/VoiceCommandLauncher';
  import IncomingScreenShareModal from '../src/components/IncomingScreenShareModal';
  import CallHost from '../src/components/call/CallHost';
  import CallReturnBanner from '../src/components/call/CallReturnBanner';
+-import { recordTouchActivity } from '../src/lib/touchActivity';
 +import ResumeLastRoute from '../src/components/ResumeLastRoute';
- import { recordTouchActivity } from '../src/lib/touchActivity';
++import UpdateBanner from '../src/components/UpdateBanner';import { recordTouchActivity } from '../src/lib/touchActivity';
  import { applyInterFontPatch } from '../src/lib/fontPatch';
  import {
+   installGlobalDiagnostics,
 @@ -423,6 +424,7 @@ export default function RootLayout() {
              <GlobalNotificationServices />
              <PresenceHeartbeat />
@@ -356,6 +358,14 @@ index 9f1a1576..1ebdb0fe 100644
              <CallWakeBootstrap />
              <StatusBar style="light" backgroundColor={Colors.headerBg} />
              <AppLockGate>
+@@ -486,6 +488,7 @@ export default function RootLayout() {
+             <IncomingScreenShareModal />
+             <CallHost />
+             <CallReturnBanner />
++            <UpdateBanner />
+               </View>
+             </AppLockGate>
+             </DeviceContactBridge>
 diff --git a/frontend/app/ad-clicks-payment.tsx b/frontend/app/ad-clicks-payment.tsx
 new file mode 100644
 index 00000000..ec1d72d5
@@ -726,7 +736,7 @@ index 048401d5..2f3d50f7 100644
          {tab === 'devotions' ? (
            <DevotionsTab
 diff --git a/frontend/app/chat/[conversationId].tsx b/frontend/app/chat/[conversationId].tsx
-index de2a29a2..47023e47 100644
+index de2a29a2..dc9901b0 100644
 --- a/frontend/app/chat/[conversationId].tsx
 +++ b/frontend/app/chat/[conversationId].tsx
 @@ -8,7 +8,9 @@ import {
@@ -876,7 +886,7 @@ index de2a29a2..47023e47 100644
    // iter-147: canonical contract — toggleStar lives on `api.starred`,
    // NOT `api.messages`. Args require BOTH `messageId` AND
    // `conversationId` (server validates participant access).
-@@ -756,6 +851,89 @@ export default function ChatScreen() {
+@@ -756,6 +851,109 @@ export default function ChatScreen() {
    // composer to normal send mode. See iter-97 fix.
    const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
  
@@ -963,10 +973,30 @@ index de2a29a2..47023e47 100644
 +    };
 +  }, []);
 +
++  // iter-340: also flush the draft the moment the app goes to background /
++  // inactive. Cleanup callbacks do NOT run when the OS kills a backgrounded
++  // app, so without this a message typed just before switching away could be
++  // lost (the 400ms debounce may not have fired yet). Writing synchronously on
++  // the background transition guarantees the draft is persisted before any kill.
++  useEffect(() => {
++    const sub = AppState.addEventListener('change', (next) => {
++      if (next === 'background' || next === 'inactive') {
++        const pending = latestDraftRef.current;
++        if (!pending || !pending.conversationId) return;
++        if (isChatDraftEmpty(pending.draft)) {
++          void clearChatDraft(pending.conversationId);
++        } else {
++          void saveChatDraft(pending.conversationId, pending.draft);
++        }
++      }
++    });
++    return () => sub.remove();
++  }, []);
++
    const messages: any[] = useMemo(() => {
      const page = messagesPage as any;
      const arr = page?.page || page || [];
-@@ -1438,12 +1616,26 @@ export default function ChatScreen() {
+@@ -1438,12 +1636,26 @@ export default function ChatScreen() {
      setSending(true);
      const replyToMessageId = replyTo?._id;
      const editTargetId = editingMessageId;
@@ -993,7 +1023,7 @@ index de2a29a2..47023e47 100644
        if (editTargetId) {
          // EDIT mode — try to update the original message in place. If the
          // backend exposes an edit mutation under any of the known names,
-@@ -2705,81 +2897,41 @@ export default function ChatScreen() {
+@@ -2705,81 +2917,41 @@ export default function ChatScreen() {
      const msg = selectedMsg;
      if (!msg) return;
      closeActionSheet();
@@ -1063,15 +1093,7 @@ index de2a29a2..47023e47 100644
 -    // We just store the id in AsyncStorage keyed by conversationId — a
 -    // future iteration can wire this into the conversation header banner.
 +    const isCurrentlyPinned = !!pinnedMessageId && pinnedMessageId === String(msg._id);
-     try {
--      const key = `smilers_local_pinned_${conversationId}`;
--      const list = ((await readStoredJson(key, [])) as string[]) || [];
--      const next = Array.isArray(list)
--        ? Array.from(new Set([...list, String(msg._id)]))
--        : [String(msg._id)];
--      await writeStoredJson(key, next);
--    } catch {
--      /* swallow */
++    try {
 +      if (isCurrentlyPinned) {
 +        // Unpin — omit messageId.
 +        await pinMessageMutation({ conversationId });
@@ -1086,27 +1108,35 @@ index de2a29a2..47023e47 100644
 +        isCurrentlyPinned ? 'Could not unpin' : 'Could not pin',
 +        friendlyConvexError(e, 'Please try again.'),
 +      );
++    }
++  }, [selectedMsg, conversationId, canPinMessages, pinnedMessageId, pinMessageMutation]);
++
++  // iter-336: unpin from the pinned banner (admins in groups; either in 1:1).
++  const onUnpinBanner = useCallback(async () => {
+     try {
+-      const key = `smilers_local_pinned_${conversationId}`;
+-      const list = ((await readStoredJson(key, [])) as string[]) || [];
+-      const next = Array.isArray(list)
+-        ? Array.from(new Set([...list, String(msg._id)]))
+-        : [String(msg._id)];
+-      await writeStoredJson(key, next);
+-    } catch {
+-      /* swallow */
++      await pinMessageMutation({ conversationId });
++      callDebug.push('PIN', 'unpin via banner');
++    } catch (e: any) {
++      Alert.alert('Could not unpin', friendlyConvexError(e, 'Please try again.'));
      }
 -    Alert.alert(
 -      'Pinned on this device',
 -      'Pin will sync across your devices once the backend deploys the pin endpoint.',
 -    );
 -  }, [selectedMsg, conversationId]);
-+  }, [selectedMsg, conversationId, canPinMessages, pinnedMessageId, pinMessageMutation]);
-+
-+  // iter-336: unpin from the pinned banner (admins in groups; either in 1:1).
-+  const onUnpinBanner = useCallback(async () => {
-+    try {
-+      await pinMessageMutation({ conversationId });
-+      callDebug.push('PIN', 'unpin via banner');
-+    } catch (e: any) {
-+      Alert.alert('Could not unpin', friendlyConvexError(e, 'Please try again.'));
-+    }
 +  }, [conversationId, pinMessageMutation]);
  
    const onSelectMultiple = useCallback(() => {
      const msg = selectedMsg;
-@@ -2837,10 +2989,79 @@ export default function ChatScreen() {
+@@ -2837,10 +3009,79 @@ export default function ChatScreen() {
  
    const cancelEdit = useCallback(() => {
      setEditingMessageId(null);
@@ -1186,7 +1216,7 @@ index de2a29a2..47023e47 100644
    /**
     * Attempt to call any of the known edit mutations the backend may expose.
     * Different Convex deployments use different function names — try each
-@@ -3443,6 +3664,20 @@ export default function ChatScreen() {
+@@ -3443,6 +3684,20 @@ export default function ChatScreen() {
            <TouchableOpacity testID="chat-encryption-btn" onPress={() => router.push('/encryption' as any)} style={styles.headerIconButton}>
              <Ionicons name="shield-checkmark-outline" size={20} color={Colors.white} />
            </TouchableOpacity>
@@ -1207,7 +1237,7 @@ index de2a29a2..47023e47 100644
            <TouchableOpacity testID="chat-menu-btn" onPress={() => setShowOptionsMenu(true)} style={styles.headerIconButton}>
              <Feather name="more-vertical" size={20} color={Colors.white} />
            </TouchableOpacity>
-@@ -3497,6 +3732,35 @@ export default function ChatScreen() {
+@@ -3497,6 +3752,35 @@ export default function ChatScreen() {
          );
        })()}
  
@@ -1243,7 +1273,7 @@ index de2a29a2..47023e47 100644
        {/* iter-109 → iter-111: in-chat search bar — slides in below the
            header when the search button is tapped. Live-filters the
            message list by case-insensitive substring match. Kept as a
-@@ -3782,6 +4046,11 @@ export default function ChatScreen() {
+@@ -3782,6 +4066,11 @@ export default function ChatScreen() {
                        msg={item}
                        isMine={item.senderId === effectiveMe?._id}
                        myUserId={effectiveMe?._id}
@@ -1255,7 +1285,7 @@ index de2a29a2..47023e47 100644
                        parentMsg={parentMsg}
                        onPressParent={parentMsg ? () => jumpToMessage(parentId) : undefined}
                        isJumpHighlighted={jumpHighlightId === String(item._id)}
-@@ -3948,6 +4217,21 @@ export default function ChatScreen() {
+@@ -3948,6 +4237,21 @@ export default function ChatScreen() {
              </View>
            ) : null}
  
@@ -1277,7 +1307,7 @@ index de2a29a2..47023e47 100644
            {uploading ? (
              <View style={styles.uploadBar} testID="uploading-bar">
                <ActivityIndicator size="small" color={Colors.primary} />
-@@ -4338,12 +4622,37 @@ export default function ChatScreen() {
+@@ -4338,12 +4642,37 @@ export default function ChatScreen() {
  
        <MessageActionSheet
          message={selectedMsg}
@@ -1316,7 +1346,7 @@ index de2a29a2..47023e47 100644
          onForward={onForward}
          onShare={onShare}
          onSelectMultiple={onSelectMultiple}
-@@ -4354,6 +4663,16 @@ export default function ChatScreen() {
+@@ -4354,6 +4683,16 @@ export default function ChatScreen() {
          onDelete={onDelete}
        />
  
@@ -1333,7 +1363,7 @@ index de2a29a2..47023e47 100644
        {/* iter-292: rich Message Info sheet — Read by + media consumption
            (Played/Watched/Viewed/Opened by), mirroring the web app. */}
        <MessageInfoSheet
-@@ -4506,6 +4825,31 @@ export default function ChatScreen() {
+@@ -4506,6 +4845,31 @@ export default function ChatScreen() {
  }
  
  const styles = StyleSheet.create({
@@ -2151,7 +2181,7 @@ index 6d84c311..cc0cb8e9 100644
    { key: 'privacy', route: '/privacy', title: 'Privacy', sub: 'Last seen, profile photo, about', icon: 'shield-outline', lib: 'ion' },
    { key: 'app-lock', route: '/app-lock', title: 'App Lock', sub: 'PIN code and biometric unlock', icon: 'fingerprint', lib: 'mc' },
 diff --git a/frontend/app/status-view/[userId].tsx b/frontend/app/status-view/[userId].tsx
-index 7dc7476c..96fe3f0e 100644
+index 7dc7476c..24845b1e 100644
 --- a/frontend/app/status-view/[userId].tsx
 +++ b/frontend/app/status-view/[userId].tsx
 @@ -351,10 +351,15 @@ function StatusViewScreenInner() {
@@ -2202,7 +2232,7 @@ index 7dc7476c..96fe3f0e 100644
  
    return (
      <View
-@@ -641,11 +666,14 @@ function StatusViewScreenInner() {
+@@ -641,23 +666,20 @@ function StatusViewScreenInner() {
              <View style={styles.grabber} />
              <Text style={styles.viewersSheetTitle}>Seen by {viewsCount}</Text>
              <FlatList
@@ -2210,27 +2240,138 @@ index 7dc7476c..96fe3f0e 100644
 -              keyExtractor={(viewer: any, viewerIndex: number) => viewer?.userId || String(viewerIndex)}
 +              data={viewerList}
 +              keyExtractor={(viewer: any, viewerIndex: number) =>
-+                viewer?.userId || viewer?._id || viewer?.viewer || String(viewerIndex)
++                (typeof viewer === 'string'
++                  ? viewer
++                  : viewer?.userId || viewer?._id || viewer?.viewer || viewer?.viewerId) ||
++                String(viewerIndex)
 +              }
                contentContainerStyle={styles.viewersList}
-               renderItem={({ item }: any) => {
+-              renderItem={({ item }: any) => {
 -                const viewerName = resolveContactName(item?.userId, item?.name || 'User');
-+                const viewerId = item?.userId || item?._id || item?.viewer || item?.viewerId;
-+                const viewerName = resolveContactName(viewerId, item?.name || item?.displayName || 'User');
-                 return (
-                   <View style={styles.viewerRow}>
-                     <View style={styles.viewerAvatar}>
-@@ -653,7 +681,9 @@ function StatusViewScreenInner() {
-                     </View>
-                     <View style={styles.flexOne}>
-                       <Text style={styles.viewerName}>{viewerName}</Text>
+-                return (
+-                  <View style={styles.viewerRow}>
+-                    <View style={styles.viewerAvatar}>
+-                      <Text style={styles.viewerAvatarText}>{(viewerName || '?').charAt(0).toUpperCase()}</Text>
+-                    </View>
+-                    <View style={styles.flexOne}>
+-                      <Text style={styles.viewerName}>{viewerName}</Text>
 -                      <Text style={styles.viewerTime}>{timeAgo(item?.viewedAt || Date.now())}</Text>
-+                      <Text style={styles.viewerTime}>
-+                        {timeAgo(item?.viewedAt || item?.at || item?.seenAt || Date.now())}
-+                      </Text>
-                     </View>
-                   </View>
-                 );
+-                    </View>
+-                  </View>
+-                );
+-              }}
++              renderItem={({ item }: any) => (
++                <StatusViewerRow
++                  item={item}
++                  resolveContactName={resolveContactName}
++                />
++              )}
+               ListEmptyComponent={<Text style={styles.viewerEmpty}>No one has viewed this yet.</Text>}
+             />
+           </Pressable>
+@@ -955,7 +977,101 @@ function StoryVideoPlayer({
+   );
+ }
+ 
+-function timeAgo(ms: number): string {
++/**
++ * StatusViewerRow — one row in the owner's "Seen by" sheet.
++ *
++ * A viewer entry from the backend may be a raw userId string OR an object
++ * `{ userId, viewedAt?, name? }`. Names/avatars are NOT reliably embedded in
++ * `getMyStatuses`, so we resolve them the way the web app does: fetch the
++ * viewer's user doc via `api.users.getUserById` and prefer the device-contact
++ * name (via `resolveContactName`) → their Smilers/Google account name. The
++ * timestamp is only shown when the entry carries a real `viewedAt` value.
++ */
++function StatusViewerRow({
++  item,
++  resolveContactName,
++}: {
++  item: any;
++  resolveContactName: (id: string | null | undefined, fallback: string, extra?: any) => string;
++}) {
++  const entry = typeof item === 'string' ? { userId: item } : (item || {});
++  const viewerId = String(
++    entry.userId || entry._id || entry.viewer || entry.viewerId || entry.user?._id || '',
++  );
++  const { data: fetchedUser } = useSafeConvexQuery<any | null>(
++    api.users.getUserById,
++    viewerId ? { userId: viewerId } : {},
++    null,
++    !!viewerId,
++  );
++
++  const accountName =
++    entry.name ||
++    entry.displayName ||
++    entry.userName ||
++    entry.viewerName ||
++    entry.user?.name ||
++    entry.user?.displayName ||
++    fetchedUser?.name ||
++    fetchedUser?.displayName ||
++    fetchedUser?.fullName ||
++    'User';
++  const viewerName = resolveContactName(viewerId, accountName, {
++    phoneE164: entry.phoneE164 || entry.phone || fetchedUser?.phoneE164 || fetchedUser?.phone,
++    phone: entry.phone || fetchedUser?.phone,
++  });
++  const avatarUrl =
++    entry.avatarUrl || entry.user?.avatarUrl || fetchedUser?.avatarUrl || fetchedUser?.photoUrl || '';
++
++  // Show the view time when the entry carries one. The backend spec stores it
++  // as `viewedAt` (ms); we also accept common aliases. When none is present we
++  // render nothing rather than a misleading "just now".
++  const rawTs =
++    entry.viewedAt ??
++    entry.viewedAtMs ??
++    entry.at ??
++    entry.seenAt ??
++    entry.seenAtMs ??
++    entry.timestamp ??
++    entry.time ??
++    entry.createdAt ??
++    entry._creationTime ??
++    entry.user?.viewedAt;
++  const hasTs =
++    (typeof rawTs === 'number' && Number.isFinite(rawTs) && rawTs > 0) ||
++    (typeof rawTs === 'string' && Number.isFinite(Date.parse(rawTs)));
++
++  return (
++    <View style={styles.viewerRow}>
++      {avatarUrl ? (
++        <Image source={{ uri: avatarUrl }} style={styles.viewerAvatar} />
++      ) : (
++        <View style={styles.viewerAvatar}>
++          <Text style={styles.viewerAvatarText}>{(viewerName || '?').charAt(0).toUpperCase()}</Text>
++        </View>
++      )}
++      <View style={styles.flexOne}>
++        <Text style={styles.viewerName}>{viewerName}</Text>
++        {hasTs ? <Text style={styles.viewerTime}>{timeAgo(rawTs)}</Text> : null}
++      </View>
++    </View>
++  );
++}
++
++function timeAgo(value: number | string | null | undefined): string {
++  // Accept ms-epoch numbers (Convex `_creationTime`), ISO strings, or
++  // seconds-epoch numbers. Anything unparseable → "just now" (never "NaN").
++  let ms: number;
++  if (typeof value === 'number') {
++    ms = value;
++  } else if (typeof value === 'string') {
++    ms = Date.parse(value);
++  } else {
++    ms = NaN;
++  }
++  if (!Number.isFinite(ms)) return 'just now';
++  // Coerce seconds-epoch (10-digit) to ms.
++  if (ms > 0 && ms < 1e12) ms = ms * 1000;
+   const diff = Math.max(0, Date.now() - ms);
+   const seconds = Math.floor(diff / 1000);
+   if (seconds < 60) return 'just now';
 diff --git a/frontend/app/user/[userId].tsx b/frontend/app/user/[userId].tsx
 index 48d91649..051b5fe8 100644
 --- a/frontend/app/user/[userId].tsx
@@ -2459,6 +2600,161 @@ index 00000000..31dae8c1
 +
 +  return null;
 +}
+diff --git a/frontend/src/components/UpdateBanner.tsx b/frontend/src/components/UpdateBanner.tsx
+new file mode 100644
+index 00000000..d8998e87
+--- /dev/null
++++ b/frontend/src/components/UpdateBanner.tsx
+@@ -0,0 +1,149 @@
++import React from 'react';
++import { View, Text, TouchableOpacity, StyleSheet, Linking, Platform } from 'react-native';
++import { useSafeAreaInsets } from 'react-native-safe-area-context';
++import { Ionicons } from '@expo/vector-icons';
++
++import { Colors, Spacing, Radius, FontSize, FontWeight } from '../theme';
++import { useUpdateBanner } from '../lib/appVersion';
++
++/**
++ * UpdateBanner — a dismissible "Update available" banner shown at the top of
++ * the app on launch when a newer version has been published. Mounted once at
++ * the app root. Links to the Play Store (Android) / App Store (iOS). A forced
++ * update (below min supported version) hides the dismiss button.
++ *
++ * Renders nothing when the app is up to date, offline, or already dismissed
++ * this session.
++ */
++export default function UpdateBanner() {
++  const insets = useSafeAreaInsets();
++  const { visible, forceUpdate, latestVersion, storeUrl, releaseNotes, dismiss } =
++    useUpdateBanner();
++
++  if (!visible) return null;
++
++  const openStore = () => {
++    if (storeUrl) {
++      Linking.openURL(storeUrl).catch(() => {});
++    }
++  };
++
++  return (
++    <View
++      style={[styles.wrap, { paddingTop: insets.top + Spacing.sm }]}
++      testID="update-banner"
++    >
++      <View style={styles.row}>
++        <View style={styles.iconCircle}>
++          <Ionicons name="cloud-download-outline" size={20} color={Colors.headerBg} />
++        </View>
++        <View style={styles.textCol}>
++          <Text style={styles.title}>
++            {forceUpdate ? 'Update required' : 'Update available'}
++          </Text>
++          <Text style={styles.subtitle} numberOfLines={2}>
++            {releaseNotes
++              ? releaseNotes
++              : `A new version (${latestVersion || 'latest'}) of Smilers is ready to install.`}
++          </Text>
++        </View>
++      </View>
++      <View style={styles.actions}>
++        {!forceUpdate ? (
++          <TouchableOpacity
++            onPress={dismiss}
++            style={styles.laterBtn}
++            hitSlop={10}
++            testID="update-banner-later"
++          >
++            <Text style={styles.laterText}>Later</Text>
++          </TouchableOpacity>
++        ) : null}
++        <TouchableOpacity
++          onPress={openStore}
++          style={styles.updateBtn}
++          testID="update-banner-update"
++        >
++          <Text style={styles.updateText}>
++            {Platform.OS === 'ios' ? 'Update' : 'Update now'}
++          </Text>
++        </TouchableOpacity>
++      </View>
++    </View>
++  );
++}
++
++const styles = StyleSheet.create({
++  wrap: {
++    position: 'absolute',
++    top: 0,
++    left: 0,
++    right: 0,
++    zIndex: 1000,
++    elevation: 12,
++    backgroundColor: Colors.primary,
++    paddingHorizontal: Spacing.base,
++    paddingBottom: Spacing.md,
++    borderBottomLeftRadius: Radius.lg,
++    borderBottomRightRadius: Radius.lg,
++    shadowColor: Colors.black,
++    shadowOpacity: 0.18,
++    shadowRadius: 8,
++    shadowOffset: { width: 0, height: 3 },
++  },
++  row: {
++    flexDirection: 'row',
++    alignItems: 'center',
++  },
++  iconCircle: {
++    width: 40,
++    height: 40,
++    borderRadius: 20,
++    backgroundColor: Colors.white,
++    alignItems: 'center',
++    justifyContent: 'center',
++    marginRight: Spacing.md,
++  },
++  textCol: { flex: 1 },
++  title: {
++    color: Colors.headerBg,
++    fontSize: FontSize.base,
++    fontWeight: FontWeight.bold,
++  },
++  subtitle: {
++    color: Colors.headerBg,
++    fontSize: FontSize.sm,
++    marginTop: 2,
++    opacity: 0.85,
++  },
++  actions: {
++    flexDirection: 'row',
++    justifyContent: 'flex-end',
++    alignItems: 'center',
++    marginTop: Spacing.sm,
++    gap: Spacing.sm,
++  },
++  laterBtn: {
++    paddingVertical: Spacing.sm,
++    paddingHorizontal: Spacing.base,
++    borderRadius: Radius.pill,
++  },
++  laterText: {
++    color: Colors.headerBg,
++    fontSize: FontSize.sm,
++    fontWeight: FontWeight.semibold,
++  },
++  updateBtn: {
++    paddingVertical: Spacing.sm,
++    paddingHorizontal: Spacing.lg,
++    borderRadius: Radius.pill,
++    backgroundColor: Colors.headerBg,
++    minHeight: 44,
++    justifyContent: 'center',
++  },
++  updateText: {
++    color: Colors.white,
++    fontSize: FontSize.sm,
++    fontWeight: FontWeight.bold,
++  },
++});
 diff --git a/frontend/src/components/admin/PaymentRequestsPanel.tsx b/frontend/src/components/admin/PaymentRequestsPanel.tsx
 new file mode 100644
 index 00000000..2468994b
@@ -3221,12 +3517,148 @@ index c5fee004..2b1477ea 100644
  
    useEffect(() => {
      onResolve(String(conv?._id), isMember);
+diff --git a/frontend/src/lib/appVersion.ts b/frontend/src/lib/appVersion.ts
+new file mode 100644
+index 00000000..685d46eb
+--- /dev/null
++++ b/frontend/src/lib/appVersion.ts
+@@ -0,0 +1,130 @@
++/**
++ * appVersion.ts — "update available" detection for the in-app banner.
++ *
++ * On launch the app fetches GET /api/app-version (served by the FastAPI
++ * backend) and compares the bundled app version against the latest published
++ * one. When the bundled version is older we surface a dismissible banner that
++ * deep-links to the correct store (Play Store on Android, App Store on iOS).
++ *
++ * The dismissal is IN-MEMORY only (session-scoped) per the product decision:
++ * the banner reappears on the next launch until the user actually updates.
++ */
++import { useEffect, useState } from 'react';
++import { Platform } from 'react-native';
++import Constants from 'expo-constants';
++
++const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/$/, '');
++
++export type AppVersionInfo = {
++  latestVersion: string;
++  minSupportedVersion: string;
++  androidUrl: string;
++  iosUrl: string;
++  forceUpdate: boolean;
++  releaseNotes: string;
++};
++
++/** Version bundled into THIS build (from app.json → expo.version).
++ *  Returns '' when it can't be determined (e.g. web preview) so callers can
++ *  choose NOT to show the update banner rather than trigger a false positive. */
++export function getCurrentAppVersion(): string {
++  const v =
++    (Constants.expoConfig as any)?.version ||
++    (Constants as any)?.nativeAppVersion ||
++    (Constants.manifest2 as any)?.extra?.expoClient?.version ||
++    '';
++  return String(v || '');
++}
++
++/**
++ * Compare two dotted version strings. Returns:
++ *   -1 if a < b, 0 if equal, 1 if a > b.
++ * Non-numeric / missing segments are treated as 0 so "2.2" == "2.2.0".
++ */
++export function compareVersions(a: string, b: string): number {
++  const pa = String(a || '0').split('.').map((n) => parseInt(n, 10) || 0);
++  const pb = String(b || '0').split('.').map((n) => parseInt(n, 10) || 0);
++  const len = Math.max(pa.length, pb.length);
++  for (let i = 0; i < len; i += 1) {
++    const x = pa[i] || 0;
++    const y = pb[i] || 0;
++    if (x < y) return -1;
++    if (x > y) return 1;
++  }
++  return 0;
++}
++
++async function fetchAppVersion(signal?: AbortSignal): Promise<AppVersionInfo | null> {
++  if (!BACKEND_URL) return null;
++  try {
++    const res = await fetch(`${BACKEND_URL}/api/app-version`, { signal });
++    if (!res.ok) return null;
++    const data = (await res.json()) as AppVersionInfo;
++    if (!data || typeof data.latestVersion !== 'string') return null;
++    return data;
++  } catch {
++    return null;
++  }
++}
++
++// Session-scoped dismissal so the banner returns on the next cold start.
++let dismissedThisSession = false;
++
++export type UpdateBannerState = {
++  visible: boolean;
++  forceUpdate: boolean;
++  latestVersion: string;
++  currentVersion: string;
++  releaseNotes: string;
++  storeUrl: string;
++  dismiss: () => void;
++};
++
++/**
++ * useUpdateBanner — drives the root <UpdateBanner/>. Fetches once on mount,
++ * decides whether an update banner should show, and exposes a session-scoped
++ * dismiss handler. Fails silent (never blocks the app) when offline.
++ */
++export function useUpdateBanner(): UpdateBannerState {
++  const [info, setInfo] = useState<AppVersionInfo | null>(null);
++  const [dismissed, setDismissed] = useState(dismissedThisSession);
++  const currentVersion = getCurrentAppVersion();
++
++  useEffect(() => {
++    const controller = new AbortController();
++    void fetchAppVersion(controller.signal).then((data) => {
++      if (data) setInfo(data);
++    });
++    return () => controller.abort();
++  }, []);
++
++  const storeUrl =
++    Platform.OS === 'ios' ? info?.iosUrl || '' : info?.androidUrl || '';
++  // Only compare when we actually know THIS build's version — otherwise (e.g.
++  // web preview where expoConfig.version is unavailable) never show the banner.
++  const knownCurrent = !!currentVersion && currentVersion !== '0.0.0';
++  const updateAvailable =
++    knownCurrent && !!info && compareVersions(currentVersion, info.latestVersion) < 0;
++  const forceUpdate =
++    knownCurrent &&
++    !!info &&
++    (info.forceUpdate ||
++      compareVersions(currentVersion, info.minSupportedVersion) < 0);
++  // A forced update can't be dismissed.
++  const visible = updateAvailable && (!dismissed || forceUpdate);
++
++  const dismiss = () => {
++    dismissedThisSession = true;
++    setDismissed(true);
++  };
++
++  return {
++    visible,
++    forceUpdate,
++    latestVersion: info?.latestVersion || '',
++    currentVersion,
++    releaseNotes: info?.releaseNotes || '',
++    storeUrl,
++    dismiss,
++  };
++}
 diff --git a/frontend/src/lib/chatDrafts.ts b/frontend/src/lib/chatDrafts.ts
 new file mode 100644
-index 00000000..eea62c44
+index 00000000..6d1f9c08
 --- /dev/null
 +++ b/frontend/src/lib/chatDrafts.ts
-@@ -0,0 +1,116 @@
+@@ -0,0 +1,120 @@
 +/**
 + * chatDrafts — per-conversation composer draft persistence.
 + *
@@ -3243,7 +3675,6 @@ index 00000000..eea62c44
 + * resume", not "resume a mid-flight byte transfer".
 + */
 +import AsyncStorage from '@react-native-async-storage/async-storage';
-+import { readStoredJson, writeStoredJson } from './settingsStorage';
 +
 +export interface PendingImageDraft {
 +  uri: string;
@@ -3275,7 +3706,9 @@ index 00000000..eea62c44
 +export async function loadChatDraft(conversationId: string): Promise<ChatDraft | null> {
 +  if (!conversationId) return null;
 +  try {
-+    const draft = await readStoredJson(keyFor(conversationId), null);
++    const raw = await AsyncStorage.getItem(keyFor(conversationId));
++    if (!raw) return null;
++    const draft = JSON.parse(raw);
 +    return draft && typeof draft === 'object' ? (draft as ChatDraft) : null;
 +  } catch {
 +    return null;
@@ -3291,7 +3724,10 @@ index 00000000..eea62c44
 +    return;
 +  }
 +  try {
-+    await writeStoredJson(keyFor(conversationId), { ...draft, updatedAt: Date.now() });
++    await AsyncStorage.setItem(
++      keyFor(conversationId),
++      JSON.stringify({ ...draft, updatedAt: Date.now() }),
++    );
 +  } catch {
 +    /* best-effort */
 +  }
