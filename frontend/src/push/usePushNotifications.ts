@@ -14,6 +14,7 @@ import { useConvexAuth, useMutation } from 'convex/react';
 import { api } from '../convexApi';
 import { readStoredJson } from '../lib/settingsStorage';
 import { getPushDiagnosticsState, setPushDiagnostics, setPushDiagnosticsRetryHandler } from './pushDiagnostics';
+import { recordDiagnostic } from '../lib/diagnostics';
 import { useAuth } from '../providers/AuthProvider';
 import { isTwilioEnabled } from '../lib/twilio/twilioApi';
 import {
@@ -1148,10 +1149,34 @@ export function usePushNotifications() {
       if (type === 'call-declined') {
         const dcCallId =
           toNonEmptyString(payload.callId) || toNonEmptyString(payload.conversationId);
+        // sml-009: previously the ONLY trace of this push ever arriving was
+        // the console.error on failure — now that the backend's declineCall
+        // fix turns a stale/mismatched id into a silent no-op, a successful
+        // call and a push that never arrived at all look identical (nothing
+        // logged). Log receipt + outcome explicitly so we can tell them apart.
+        recordDiagnostic({
+          tag: 'TWILIO-CALL',
+          source: 'push/call-declined',
+          message: `received callId=${dcCallId || '(empty)'} rawCallId=${payload.callId || '(empty)'} rawConvId=${payload.conversationId || '(empty)'}`,
+        });
         if (dcCallId) {
-          declineCall({ callId: dcCallId }).catch((e: any) => {
-            console.warn('[push] call-declined: declineCall failed', e?.message || e);
-          });
+          declineCall({ callId: dcCallId })
+            .then(() => {
+              recordDiagnostic({
+                tag: 'TWILIO-CALL',
+                source: 'push/call-declined',
+                message: `declineCall ok callId=${dcCallId}`,
+              });
+            })
+            .catch((e: any) => {
+              const msg = e?.message || String(e);
+              console.warn('[push] call-declined: declineCall failed', msg);
+              recordDiagnostic({
+                tag: 'TWILIO-CALL',
+                source: 'push/call-declined',
+                message: `declineCall failed callId=${dcCallId} error=${msg}`,
+              });
+            });
         }
       }
       // iter-186: desktop login approval arriving while the app is OPEN —
