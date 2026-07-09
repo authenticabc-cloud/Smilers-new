@@ -11,4 +11,6 @@
     <item name="postSplashScreenTheme">@style/AppTheme</item>
     <item name="android:windowSplashScreenBehavior">icon_preferred</item>
   </style>
+  <!-- sml-011: CallActionTrampolineActivity — never draws a frame, must finish() before onResume(). -->
+  <style name="Theme.CallActionTrampoline" parent="android:Theme.NoDisplay"/>
 </resources>

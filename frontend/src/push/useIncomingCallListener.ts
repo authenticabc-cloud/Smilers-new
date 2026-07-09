@@ -1,11 +1,27 @@
 import { useEffect, useRef } from 'react';
-import { AppState, NativeModules } from 'react-native';
+import { AppState, NativeModules, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useQuery } from 'convex/react';
 import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
 import { isTwilioEnabled } from '../lib/twilio/twilioApi';
 import { hasOtherActiveCall } from '../lib/call/activeCallRegistry';
+
+// sml-013: the native FCM handler posts a heads-up ring notification for EVERY
+// incoming call regardless of app state — it has no way to know this listener's
+// own Convex live-query path is about to show the in-app incoming-call UI for
+// the exact same call. Called right before navigating so the user sees only
+// ONE incoming-call UI (ours) instead of the system notification banner AND
+// our full-screen UI stacked on top of each other.
+function dismissNativeRingNotification(callId: string, conversationId: string) {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.SmilersCallModule?.dismissRingNotification?.(
+      callId || '',
+      conversationId || '',
+    )?.catch?.(() => {});
+  } catch {}
+}
 
 /**
  * Real-time incoming-call listener — when foregrounded, Convex's reactive
@@ -168,14 +184,18 @@ export function useIncomingCallListener() {
     ).trim();
     if (!conversationId) return;
 
-    // Check global decline flag: if this conversation was recently declined from
-    // the notification, don't push the call screen (prevents the race where the
-    // decline deeplink navigates home but useIncomingCallListener re-routes).
+    // Check global decline flag: if THIS SPECIFIC call was just declined from
+    // the notification tray, don't push the call screen (prevents the race
+    // where the decline deeplink navigates home but useIncomingCallListener
+    // re-routes for the same still-'ringing' record before the mutation
+    // commits). Keyed by callId, NOT conversationId — a fresh call on the
+    // same conversation gets its own _id and must ring normally even if it
+    // arrives seconds after the previous one was declined.
     try {
       const declinedMap = (globalThis as any).__smilersDeclinedByConv as Map<string, number> | undefined;
       if (declinedMap) {
-        const convId = String((incomingCall as any)?.conversationId || conversationId || '');
-        const declinedAt = (convId && declinedMap.get(convId)) || 0;
+        const thisCallId = String(incomingCall._id || '');
+        const declinedAt = (thisCallId && declinedMap.get(`callId:${thisCallId}`)) || 0;
         if (declinedAt && Date.now() - declinedAt < 15000) {
           handledCallId.current = incomingCall._id;
           return;
@@ -207,6 +227,7 @@ export function useIncomingCallListener() {
         const confIsVideo =
           (incomingCall as any)?.isVideo === true ||
           String((incomingCall as any)?.callType || '').toLowerCase() === 'video';
+        dismissNativeRingNotification(String(incomingCall._id), conversationId);
         router.push(
           `/group-call/${conversationId}?callId=${encodeURIComponent(String(incomingCall._id))}&video=${confIsVideo ? '1' : '0'}&adhoc=1` as any,
         );
@@ -218,6 +239,7 @@ export function useIncomingCallListener() {
         String(incomingCall?.callType || '').toLowerCase() === 'video';
       const typeQs = `type=${callIsVideo ? 'video' : 'voice'}`;
       userAnsweredRef.current = true;
+      dismissNativeRingNotification(String(incomingCall._id), conversationId);
       router.push(
         displayName
           ? (`/call/${conversationId}?${typeQs}&displayName=${encodeURIComponent(displayName)}` as any)
@@ -268,6 +290,7 @@ export function useIncomingCallListener() {
       `&conversationId=${encodeURIComponent(String(conversationId))}` +
       `&convexCallId=${encodeURIComponent(String(incomingCall._id))}`;
     userAnsweredRef.current = true;
+    dismissNativeRingNotification(String(incomingCall._id), conversationId);
     router.push(incUrl as any);
   }, [incomingCall, router, me]);
 }

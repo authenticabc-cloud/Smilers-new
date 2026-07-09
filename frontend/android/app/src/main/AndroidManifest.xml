@@ -139,5 +139,16 @@
     <receiver
         android:name="com.smilers.app.CallActionReceiver"
         android:exported="false"/>
+
+    <!-- sml-011: invisible trampoline the Answer/Decline notification buttons launch
+         directly, so the app opens reliably from a killed process even on OEMs
+         (Samsung/Motorola) with aggressive background-activity-launch restrictions. -->
+    <activity
+        android:name="com.smilers.app.CallActionTrampolineActivity"
+        android:exported="false"
+        android:theme="@style/Theme.CallActionTrampoline"
+        android:excludeFromRecents="true"
+        android:noHistory="true"
+        android:launchMode="singleInstance"/>
   </application>
 </manifest>

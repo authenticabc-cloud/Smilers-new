@@ -41,6 +41,7 @@ import { api } from '../../src/convexApi';
 import CallDebugOverlay from '../../src/components/CallDebugOverlay';
 import { callDebug } from '../../src/lib/callDebugLog';
 import CallErrorBoundary from '../../src/components/CallErrorBoundary';
+import { forceConvexReconnect } from '../../src/providers/useConvexAutoReconnect';
 import ConferenceHUD from '../../src/components/ConferenceHUD';
 import ScreenShareOverlay from '../../src/components/ScreenShareOverlay';
 import ScreenShareSwitchControls from '../../src/components/ScreenShareSwitchControls';
@@ -157,6 +158,32 @@ export function CallScreenInner() {
   // iter-297: suppress the "lock when leaving" PIN re-lock while a call is on
   // screen (WebRTC's frequent background/active flips were re-locking the app).
   useEffect(() => callActivity.enter(), []);
+
+  // sml-012: this screen is frequently mounted by answering a call from a
+  // backgrounded/killed app (notification tray Answer). useConvexAutoReconnect's
+  // 12s post-resume "settle window" (there to avoid racing AuthProvider's token
+  // re-auth handshake, see its iter-277/iter-292 comments) intentionally holds
+  // off ANY reconnect assist for ~12s after every foreground transition, then
+  // relies on a 15s heartbeat — so a ghost-disconnected socket from backgrounding
+  // could sit unrecovered for 15-20s. Until it recovers, this screen's
+  // getActiveCall subscription can't learn the call ended, so "Connecting…"
+  // lingers long after the call is actually over. forceConvexReconnect() is the
+  // same escape hatch the chat header's "tap to reconnect" already uses — it
+  // fires a SAFE soft reconnect unconditionally (a no-op if already connected)
+  // and skips the heavier hard-reconnect entirely while callHost.isActive(), so
+  // it can't disrupt an ongoing call's socket. Firing it once on mount costs
+  // nothing when the socket was already healthy (the normal foreground-answer
+  // case) and shortcuts the 12s+ stall in the backgrounded-answer case.
+  useEffect(() => {
+    const mountedAt = Date.now();
+    void forceConvexReconnect('call-screen-mount')
+      .then((attempted) => {
+        callDebug.push('CONVEX', `forceConvexReconnect(call-screen-mount) attempted=${attempted} elapsedMs=${Date.now() - mountedAt}`);
+      })
+      .catch((e) => {
+        callDebug.push('ERR', `forceConvexReconnect(call-screen-mount) threw: ${e?.message || e}`);
+      });
+  }, []);
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
 
   // ── Draggable self-view (video PiP) ───────────────────────────────────────
@@ -1905,6 +1932,16 @@ export function CallScreenInner() {
   }, [isActive]);
 
   useEffect(() => {
+    // sml-012 diagnostics: this effect is the ONLY thing that can close the
+    // screen once a call ends. Logging every time its inputs change gives a
+    // timeline of exactly when activeCall's status/existence actually
+    // updates — needed to tell apart "the query is starved because the
+    // socket hasn't recovered" from any other cause of a slow close.
+    callDebug.push(
+      'CALL',
+      `close-effect tick status=${(activeCall as any)?.status ?? '(none)'} activeCallLoading=${activeCallLoading} isActive=${isActive} wasLive=${wasLiveRef.current}`,
+    );
+
     if (isIncoming) {
       incomingCallSeenRef.current = true;
       incomingCallAnsweredRef.current = false;

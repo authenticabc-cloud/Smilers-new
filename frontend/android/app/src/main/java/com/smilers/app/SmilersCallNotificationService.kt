@@ -42,6 +42,17 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
         // Entries expire after 60 s (see handler.postDelayed in handleCallCancelledMessage).
         private val cancelledConvIds = mutableSetOf<String>()
 
+        // sml-015: ids the foreground JS listener (useIncomingCallListener.ts) has already
+        // taken over for — it pushed its own in-app incoming-call UI. The Convex live-query
+        // update that drives that decision is near-instant over an already-open WebSocket,
+        // while the FCM push that triggers THIS notification has to round-trip through
+        // Firebase — so the JS "dismiss the notification" call very often runs BEFORE the
+        // notification has even been posted yet. Marking the id here (checked in
+        // handleCallMessage, mirroring cancelledConvIds above) suppresses the notification
+        // for an FCM that's still in flight, not just one already showing. Self-expires
+        // after 30 s — comfortably longer than any realistic FCM delivery delay.
+        private val foregroundHandledIds = mutableSetOf<String>()
+
         // Ring-timeout: posts missed-call immediately 1s after the 35s ring expires, without
         // waiting for the backend FCM (which can arrive 7-9 minutes late).
         // The timeout is cancelled when the user answers/declines (via CallActionReceiver) or
@@ -82,6 +93,57 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
         // Falls back to null when the relay FCM hasn't been processed yet.
         fun getRelayCallId(callId: String, convId: String): String? =
             synchronized(dedupLock) { relayCallIdByConvId[convId] ?: relayCallIdByConvId[callId] }
+
+        // sml-010: cancellable delayed backstop for the in-app silent-decline flow.
+        // CallActionReceiver launches the app straight to a headless screen that
+        // declines over the live authenticated Convex session; this map holds the
+        // OLD native-only decline path (direct notify-event / raw Convex mutation)
+        // as a bounded fallback in case the in-app path doesn't confirm in time
+        // (auth not ready, network blip). Mirrors pendingTimeouts exactly.
+        private val pendingDeclineFallbacks = mutableMapOf<String, Runnable>()
+
+        /** Schedule the native decline backstop. Reuses the existing main-thread Handler. */
+        fun scheduleDeclineFallback(key: String, runnable: Runnable, delayMs: Long) {
+            if (key.isEmpty()) return
+            synchronized(dedupLock) {
+                pendingDeclineFallbacks[key]?.let { handler.removeCallbacks(it) }
+                pendingDeclineFallbacks[key] = runnable
+            }
+            handler.postDelayed(runnable, delayMs)
+            Log.d(TAG, "scheduleDeclineFallback: scheduled for key=$key in ${delayMs}ms")
+        }
+
+        /**
+         * sml-015: called by SmilersCallModule.dismissRingNotification — marks this call as
+         * already handled by the foreground in-app UI so handleCallMessage suppresses the
+         * ring notification whether the FCM that would post it already arrived (nothing to
+         * do beyond the caller's own dismiss-if-showing step) or hasn't arrived yet (this is
+         * what actually prevents it from ever appearing in that ordering).
+         */
+        fun markForegroundHandled(callId: String, conversationId: String) {
+            synchronized(dedupLock) {
+                if (callId.isNotEmpty()) foregroundHandledIds.add(callId)
+                if (conversationId.isNotEmpty()) foregroundHandledIds.add(conversationId)
+            }
+            handler.postDelayed({
+                synchronized(dedupLock) {
+                    foregroundHandledIds.remove(callId)
+                    foregroundHandledIds.remove(conversationId)
+                }
+            }, 30_000L)
+        }
+
+        /** Called by SmilersCallModule once the in-app decline confirms — cancels the backstop. */
+        fun cancelDeclineFallback(key: String): Boolean {
+            if (key.isEmpty()) return false
+            val r = synchronized(dedupLock) { pendingDeclineFallbacks.remove(key) }
+            if (r != null) {
+                handler.removeCallbacks(r)
+                Log.d(TAG, "cancelDeclineFallback: cancelled for key=$key")
+                return true
+            }
+            return false
+        }
 
         fun cancelMissedCallTimeout(callId: String) {
             val r = synchronized(dedupLock) { pendingTimeouts.remove(callId) }
@@ -722,6 +784,13 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
                 Log.d(TAG, "handleCallMessage: callId=$callId convId=$conversationId already cancelled — suppressing late ring")
                 return
             }
+            // sml-015: the foreground JS listener already took over this call (its own
+            // in-app incoming-call UI is showing) — don't ALSO post the system notification,
+            // regardless of whether this FCM arrived before or after that decision.
+            if (foregroundHandledIds.contains(callId) || foregroundHandledIds.contains(conversationId)) {
+                Log.d(TAG, "handleCallMessage: callId=$callId convId=$conversationId already handled by foreground UI — suppressing ring notification")
+                return
+            }
         }
 
         // A new ring for this conversation means the caller is attempting again. Clear any stale
@@ -808,27 +877,37 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
             append("&conversationId=${Uri.encode(conversationId)}")
         }
 
-        // Answer/Decline action buttons go through CallActionReceiver so they can cancel the
-        // ring-timeout runnable before the missed-call notification fires at 36s.
-        val answerActionPi = PendingIntent.getBroadcast(this, notifId + 3,
-            Intent(this, CallActionReceiver::class.java).apply {
+        // sml-011: Answer/Decline action buttons launch CallActionTrampolineActivity
+        // directly via PendingIntent.getActivity() instead of PendingIntent.getBroadcast()
+        // to CallActionReceiver. A broadcast-triggered context.startActivity() call is
+        // subject to Android's background-activity-launch restrictions and was being
+        // blocked outright on Samsung/Motorola once the process was fully killed — the
+        // notification dismissed but the app never opened. PendingIntent.getActivity() is
+        // unconditionally exempt from that restriction because the system launches it
+        // directly in response to the notification tap. The trampoline activity runs the
+        // exact same handleAnswer/handleDecline logic (see CallActionReceiver.kt) and then
+        // hands off to MainActivity itself — an activity-to-activity launch, also exempt.
+        val answerActionPi = PendingIntent.getActivity(this, notifId + 3,
+            Intent(this, CallActionTrampolineActivity::class.java).apply {
                 action = "com.smilers.app.ACTION_ANSWER_CALL"
                 putExtra("callId", callId)
                 putExtra("targetUrl", answerUrl)
                 putExtra("notifId", notifId)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
         val backendUrl = data["backendUrl"] ?: ""
         val callerUserId = data["callerId"] ?: data["callerIdentity"] ?: ""
-        val declinePi = PendingIntent.getBroadcast(this, notifId + 4,
-            Intent(this, CallActionReceiver::class.java).apply {
+        val declinePi = PendingIntent.getActivity(this, notifId + 4,
+            Intent(this, CallActionTrampolineActivity::class.java).apply {
                 action = "com.smilers.app.ACTION_DECLINE_CALL"
                 putExtra("callId", callId)
                 putExtra("conversationId", conversationId)
                 putExtra("callerUserId", callerUserId)
                 putExtra("backendUrl", backendUrl)
                 putExtra("notifId", notifId)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
