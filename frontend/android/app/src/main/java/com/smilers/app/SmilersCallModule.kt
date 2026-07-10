@@ -10,7 +10,6 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.module.annotations.ReactModule
 
-
 /**
  * Native module bridge: JS → Kotlin ring cancellation.
  *
