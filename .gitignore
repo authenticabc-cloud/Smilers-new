@@ -116,3 +116,4 @@ backlog/
 documents/
 .claude/
 
+frontend/.metro-cache/
