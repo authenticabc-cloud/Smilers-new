@@ -1253,8 +1253,44 @@ export function usePushNotifications() {
     });
 
     // Also handle the case where the app was launched by tapping a notification
+    //
+    // sml-019: getLastNotificationResponseAsync() returns the OS/Expo-cached
+    // record of the LAST notification response the user EVER gave — it is
+    // NOT scoped to "was THIS specific cold launch triggered by a tap" and is
+    // never cleared automatically. Every subsequent cold launch (including
+    // ones triggered by our own native Answer/Decline trampoline, which never
+    // goes through Expo's notification-response path at all) replayed this
+    // same stale response, silently re-navigating to whatever old
+    // conversation/call it pointed to — independent of, and racing with, the
+    // current call's own navigation. This was traced via native+JS logcat:
+    // the call screen's shim correctly replaced with Home, then ~1s later
+    // this stale replay pushed `/chat/<conversationId>` on top of it,
+    // reported as "cold launch lands on the wrong screen". Consuming it with
+    // clearLastNotificationResponseAsync() after handling prevents replay on
+    // the next unrelated launch.
     Notifications.getLastNotificationResponseAsync().then((resp) => {
-      if (resp) handleResponse(resp);
+      // sml-020 diagnostics: clearLastNotificationResponseAsync() did NOT
+      // stop the replay on retest — it still fired on a plain launcher-icon
+      // relaunch (no notification tap at all), including across multiple
+      // separate cold launches after the fix was installed. Logging the
+      // exact identifier/type/conversationId returned here, plus whether the
+      // clear call actually resolves, to find out whether Expo's own cache
+      // is really being consumed or whether something else (e.g. Android
+      // redelivering a stale launch Intent via task restoration) is the
+      // real source.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { callDebug } = require('../lib/callDebugLog');
+      const respData = (resp?.notification?.request?.content?.data || {}) as any;
+      callDebug.push(
+        'NAV',
+        `getLastNotificationResponseAsync → id=${resp?.notification?.request?.identifier || '(none)'} type=${respData?.type || '(none)'} convId=${respData?.conversationId || '(none)'}`,
+      );
+      if (resp) {
+        handleResponse(resp);
+        Notifications.clearLastNotificationResponseAsync()
+          .then(() => callDebug.push('NAV', 'clearLastNotificationResponseAsync resolved'))
+          .catch((e: any) => callDebug.push('NAV', `clearLastNotificationResponseAsync failed: ${e?.message}`));
+      }
     });
 
     return () => {

@@ -316,7 +316,11 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
                 if (convId.isNotEmpty() && convId != callId) cancelIncomingCallNotification(convId)
                 // Bring the caller's app to the foreground so its Convex reactive query updates.
                 // Using SINGLE_TOP so we don't create a new activity if one is already running.
-                val targetUrl = if (convId.isNotEmpty()) "smilers://chat/$convId" else "smilers://home"
+                // sml-017: this is an AUTO-WAKE (no user tap involved) — landing on the specific
+                // chat screen was reported as unexpected navigation when reopening the app after
+                // a call. Always target Home instead; the Convex client reconnects and the call
+                // state updates regardless of which screen is in the foreground.
+                val targetUrl = "smilers://home"
                 try {
                     startActivity(Intent(this, MainActivity::class.java).apply {
                         action = Intent.ACTION_VIEW
@@ -407,7 +411,8 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
                         val convId = bodyObj.optString("conversationId").ifEmpty { data["conversationId"] ?: "" }
                         Log.d(TAG, "handleIntent (relay call-declined): callId=$callId convId=$convId — waking caller app")
                         if (callId.isNotEmpty() || convId.isNotEmpty()) {
-                            val targetUrl = if (convId.isNotEmpty()) "smilers://chat/$convId" else "smilers://home"
+                            // sml-017: auto-wake, same reasoning as the direct call-declined path above.
+                            val targetUrl = "smilers://home"
                             try {
                                 startActivity(Intent(this, MainActivity::class.java).apply {
                                     action = Intent.ACTION_VIEW
@@ -860,6 +865,27 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
             append("&autoAnswer=1")
         }
 
+        // sml-016: dedicated target for the notification's explicit "Answer" ACTION
+        // BUTTON only (content intent / full-screen intent above are untouched and
+        // still go to /incoming-call, which is correct — those should still let the
+        // user choose Answer/Decline). Client-reported bug: tapping the Answer
+        // button from background/killed landed on /incoming-call, which — for this
+        // legacy/WebRTC build — can never auto-join (no Twilio room exists), so the
+        // user saw the ringing Accept/Decline screen again instead of connecting.
+        // /call/<conversationId>?answer=1 already auto-answers on mount (built for
+        // the call-waiting "End & Accept" flow, frontend/app/call/[conversationId].tsx)
+        // so pointing the Answer button there directly connects the call, matching
+        // exactly what tapping Answer is supposed to do. Falls back to answerUrl if
+        // conversationId is ever missing (can't build a valid /call/<id> route).
+        val answerActionUrl = if (conversationId.isNotEmpty()) {
+            buildString {
+                append("smilers://call/${Uri.encode(conversationId)}")
+                append("?type=${if (isVideo) "video" else "voice"}")
+                append("&answer=1")
+                if (callerName.isNotBlank()) append("&displayName=${Uri.encode(callerName)}")
+            }
+        } else answerUrl
+
         val answerIntent = Intent(this, MainActivity::class.java).apply {
             action = Intent.ACTION_VIEW
             this.data = Uri.parse(answerUrl)
@@ -891,7 +917,7 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
             Intent(this, CallActionTrampolineActivity::class.java).apply {
                 action = "com.smilers.app.ACTION_ANSWER_CALL"
                 putExtra("callId", callId)
-                putExtra("targetUrl", answerUrl)
+                putExtra("targetUrl", answerActionUrl)
                 putExtra("notifId", notifId)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             },

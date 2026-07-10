@@ -138,8 +138,16 @@ export default function CallScreen() {
     // remount CallScreenInner, dropping taps on the Answer button (the
     // intermittent "Answer not responding" report).
     requestAnimationFrame(() => {
-      if (router.canGoBack()) router.back();
-      else router.replace('/(tabs)/chats' as any);
+      const canGoBack = router.canGoBack();
+      // sml-017: this route is now reached directly from a killed-app cold
+      // launch (the notification's Answer action deep-links straight here,
+      // see sml-016) — that's exactly when canGoBack() is false, since this
+      // is the very first route ever pushed. Previously that fallback went
+      // to the chats LIST tab; client asked for Home specifically for this
+      // case. Logged so a retest can confirm which branch actually fires.
+      callDebug.push('CALL', `call-shim pop: canGoBack=${canGoBack} → ${canGoBack ? 'back()' : 'replace(home)'}`);
+      if (canGoBack) router.back();
+      else router.replace('/' as any);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -906,9 +914,20 @@ export function CallScreenInner() {
 
   // ====== Initiate (auto-start outgoing call if none exists) ======
   useEffect(() => {
+    // sml-017: arriving with answer=1 means "answer an existing call" —
+    // NEVER "start a new one". Without this guard, if this screen's params
+    // ever get forwarded again after the original call already ended (e.g.
+    // activeCall has gone back to null/cleared), the conditions below alone
+    // look identical to a genuine "no call yet, start one" state, and this
+    // effect places a brand new outgoing call the callee never asked for
+    // (reported: reopening the app after a call ends re-dials the caller).
+    const arrivedToAnswer = Boolean(
+      Array.isArray(rawAnswerParam) ? rawAnswerParam[0] : rawAnswerParam,
+    );
     const shouldAutoInitiate =
       !activeCall &&
       !callId &&
+      !arrivedToAnswer &&
       canRunCallQueries &&
       conversationId &&
       conversation &&
@@ -925,7 +944,41 @@ export function CallScreenInner() {
       // Conference mode similarly must NOT touch the `calls` table — it uses
       // the separate `conferences` table and its own signaling channel.
       !isConferenceMode;
-    if (!shouldAutoInitiate) return;
+    if (!shouldAutoInitiate) {
+      // sml-018 (fixed after regression report): self-close when arrived-to-
+      // answer but there's genuinely nothing to answer — but ONLY once the
+      // SAME readiness gates `shouldAutoInitiate` itself requires are all
+      // true (canRunCallQueries, conversationId/conversation/me present).
+      // The first version of this fix checked only the *Loading flags, which
+      // read `false` while a query is still `'skip'`-ped (auth/conversation
+      // not ready yet on a cold launch) — not because the call is actually
+      // gone. That false "settled" reading closed the overlay WHILE the real
+      // incoming-call data was still about to arrive, breaking Answer
+      // entirely (reported: tapping Answer opened the app but never
+      // connected, landing back on the ringing screen). Mirroring
+      // `shouldAutoInitiate`'s full condition set (already proven safe for
+      // that exact readiness question) closes that race. A short debounce
+      // is kept as an extra margin against any single-render blip.
+      const settledWithNothingToAnswer =
+        arrivedToAnswer &&
+        !activeCall &&
+        !callId &&
+        canRunCallQueries &&
+        !!conversationId &&
+        !!conversation &&
+        !!me &&
+        !activeCallLoading &&
+        !conversationLoading &&
+        !meLoading &&
+        !isScreenOnly &&
+        !isConferenceMode;
+      if (!settledWithNothingToAnswer) return undefined;
+      const closeTimeoutId = setTimeout(() => {
+        callDebug.push('CALL', 'arrived with answer=1 but no activeCall/callId after queries settled — self-closing (stale/already-ended call)');
+        callHost.end();
+      }, 1500);
+      return () => clearTimeout(closeTimeoutId);
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -966,7 +1019,7 @@ export function CallScreenInner() {
     return () => {
       cancelled = true;
     };
-  }, [activeCall, activeCallLoading, callId, canRunCallQueries, conversation, conversationId, conversationLoading, fetchedOtherUser, initiateCall, isAuthenticated, isConferenceMode, isScreenOnly, me, meLoading, requestedType]);
+  }, [activeCall, activeCallLoading, callId, canRunCallQueries, conversation, conversationId, conversationLoading, fetchedOtherUser, initiateCall, isAuthenticated, isConferenceMode, isScreenOnly, me, meLoading, rawAnswerParam, requestedType]);
 
   // ====== Update status text based on state ======
   useEffect(() => {
@@ -1654,6 +1707,10 @@ export function CallScreenInner() {
       // server-side, and the dead-call cron (`expireDeadCalls`) handles
       // pruning expired signaling rows automatically.
     }
+    // sml-017 issue-2 diagnostics: same AppState check as the remote-ended
+    // paths below — this is the LOCAL hangup (this device tapped End), the
+    // one path that previously had no AppState logging at all.
+    callDebug.push('CALL', `local hangup → callHost.end() AppState=${AppState.currentState}`);
     callHost.end();
   }, [activeCall, callId, declineCall, endCall, router, callDurationSec, callType, engagement, isCaller, fetchedOtherUser, conversation, me, conversationId]);
 
@@ -2041,7 +2098,13 @@ export function CallScreenInner() {
       }
       // Give the user 700ms to see the "Call ended" / "Declined" state before popping.
       // This now fires even when sessionRef is null (call declined while still ringing).
-      const timeoutId = setTimeout(() => callHost.end(), 700);
+      const timeoutId = setTimeout(() => {
+        // sml-017 diagnostics: same AppState check as the local hangup/decline
+        // handlers, for the REMOTE-end path — reported to background the
+        // callee's app "if either user ends the call".
+        callDebug.push('CALL', `remote-ended → callHost.end() AppState=${AppState.currentState}`);
+        callHost.end();
+      }, 700);
       return () => clearTimeout(timeoutId);
     }
 
@@ -2055,8 +2118,17 @@ export function CallScreenInner() {
     if (Platform.OS !== 'web' && wasLiveRef.current && !activeCallLoading && !activeCall) {
       const timeoutId = setTimeout(() => {
         if (!activeCallLoading && !activeCall && wasLiveRef.current) {
-          callDebug.push('CALL', 'active-call doc cleared while live → remote hung up, exiting');
-          teardownLocalSession();
+          callDebug.push('CALL', `active-call doc cleared while live → remote hung up, exiting AppState=${AppState.currentState}`);
+          if (sessionRef.current) {
+            sessionRef.current.close();
+            sessionRef.current = null;
+            initStartedRef.current = false;
+          }
+          if (inCallStartedRef.current) {
+            InCallAudio.stop();
+            inCallStartedRef.current = false;
+            callDebug.push('AUDIO', 'InCallManager.stop() (remote-ended, doc-cleared path)');
+          }
           wasLiveRef.current = false;
           callHost.end();
         }
