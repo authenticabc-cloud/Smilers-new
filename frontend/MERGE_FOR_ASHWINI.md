@@ -118,3 +118,16 @@ overwrite. Diff each against your version and take only what you don't already h
   must be deployed on the Hercules web-app side (mobileMoneyRequests.*, messages.*,
   conversations.pinMessage/getPinnedMessage). The native wiring conforms to the
   agreed contracts.
+
+## Backend diagnostic parity (iter-342)
+- The Emergent-hosted FastAPI backend has a `[PUSH][token-map]` diagnostic in
+  `backend/server.py` (send_push + notify_event) that logs, per push, how many
+  recipients matched a device token and via which key (user_id vs convex_user_id),
+  plus `unmatched_recipients`/`matched_via_*` fields persisted to `push_trigger_log`
+  (exposed by `GET /api/push-debug?triggers=N`). This is what surfaced the caller's
+  stale FCM tokens in the decline investigation.
+- Ashwini's repo `backend/server.py` is missing ONLY this diagnostic (it already has
+  `/app-version`). Apply `backend/TOKEN_MAP_DIAGNOSTIC_PATCH_FOR_ASHWINI.md` to make
+  the two backends identical. Purely additive (extra logging) — no behaviour change.
+- NOTE: `markCalleeRinging` is a CONVEX mutation (Hercules side), NOT FastAPI — its
+  absence from server.py is expected/correct.
