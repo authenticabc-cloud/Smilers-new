@@ -129,6 +129,61 @@ async function secureRemoveChunked(key: string): Promise<void> {
   await SecureStore.deleteItemAsync(key).catch(() => {});
 }
 
+// iter-316: describe HOW a value is currently persisted (which backend, size,
+// chunk count) — powers the on-device "Session health" card so the user can
+// confirm token persistence on their real device without pulling logs.
+export interface StoredValueInfo {
+  backend:
+    | 'securestore'
+    | 'securestore-chunked'
+    | 'securestore-legacy'
+    | 'asyncstorage-fallback'
+    | 'localStorage'
+    | 'none';
+  chars: number;
+  chunks?: number;
+}
+
+async function describeStoredValue(key: string): Promise<StoredValueInfo> {
+  if (isWeb) {
+    const v = webGet(key);
+    return { backend: v != null ? 'localStorage' : 'none', chars: v?.length ?? 0 };
+  }
+  const metaRaw = await SecureStore.getItemAsync(key + META_SUFFIX).catch(() => null);
+  if (metaRaw) {
+    try {
+      const meta = JSON.parse(metaRaw) as { strategy?: string; count?: number };
+      if (meta.strategy === 'single') {
+        const v = await SecureStore.getItemAsync(key).catch(() => null);
+        return { backend: 'securestore', chars: v?.length ?? 0 };
+      }
+      if (meta.strategy === 'chunks') {
+        const full = await secureReadChunked(key).catch(() => null);
+        return { backend: 'securestore-chunked', chars: full?.length ?? 0, chunks: meta.count };
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  const legacy = await SecureStore.getItemAsync(key).catch(() => null);
+  if (legacy != null) return { backend: 'securestore-legacy', chars: legacy.length };
+  const asyncVal = await AsyncStorage.getItem(key).catch(() => null);
+  if (asyncVal != null) return { backend: 'asyncstorage-fallback', chars: asyncVal.length };
+  return { backend: 'none', chars: 0 };
+}
+
+export interface SessionHealth {
+  authenticated: boolean;
+  sessionExpired: boolean;
+  lastRefreshAt: number | null;
+  lastRefreshError: string | null;
+  refreshTokenDead: boolean;
+  tokenExpiry: number | null;
+  refreshToken: StoredValueInfo;
+  idToken: StoredValueInfo;
+  accessToken: StoredValueInfo;
+}
+
 const storage = {
   async getItem(key: string): Promise<string | null> {
     if (isWeb) return webGet(key);
@@ -206,6 +261,9 @@ interface AuthContextValue {
     expiresIn?: number;
   }) => Promise<void>;
   setAuthError: (msg: string | null) => void;
+  // iter-316: on-device session/token-persistence snapshot for the
+  // "Session health" diagnostics card.
+  getSessionHealth: () => Promise<SessionHealth>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -483,6 +541,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const setAuthError = useCallback((msg: string | null) => setLastError(msg), []);
+
+  // iter-316: snapshot of the current session + how each token is persisted.
+  const getSessionHealth = useCallback(async (): Promise<SessionHealth> => {
+    const [refreshInfo, idInfo, accessInfo] = await Promise.all([
+      describeStoredValue(STORAGE_KEYS.REFRESH_TOKEN),
+      describeStoredValue(STORAGE_KEYS.ID_TOKEN),
+      describeStoredValue(STORAGE_KEYS.ACCESS_TOKEN),
+    ]);
+    const expiryStr = await storage.getItem(STORAGE_KEYS.TOKEN_EXPIRY);
+    const expiry = expiryStr ? parseInt(expiryStr, 10) : 0;
+    return {
+      authenticated: !!idToken,
+      sessionExpired,
+      lastRefreshAt: lastRefreshAtRef.current || null,
+      lastRefreshError: lastRefreshErrorRef.current,
+      refreshTokenDead: refreshTokenDeadRef.current,
+      tokenExpiry: expiry || null,
+      refreshToken: refreshInfo,
+      idToken: idInfo,
+      accessToken: accessInfo,
+    };
+  }, [idToken, sessionExpired]);
 
   const storeTokens = useCallback(
     async (tokenResult: AuthSession.TokenResponse) => {
@@ -858,6 +938,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         getFreshIdToken,
         acceptTokens,
         setAuthError,
+        getSessionHealth,
       }}
     >
       {children}
