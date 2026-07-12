@@ -76,9 +76,11 @@ export default function BroadcastCreateScreen() {
   });
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  // Live progress while a large broadcast is delivered in batches.
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   // Glanceable post-send confirmation: how many of the targeted users the
   // backend actually delivered the broadcast to.
-  const [lastResult, setLastResult] = useState<{ sent: number; total: number } | null>(null);
+  const [lastResult, setLastResult] = useState<{ sent: number; total: number; failed: number } | null>(null);
 
   const allUsers = useMemo(() => (Array.isArray(users) ? users : []), [users]);
 
@@ -125,25 +127,59 @@ export default function BroadcastCreateScreen() {
       return;
     }
     setSending(true);
+    setLastResult(null);
+    // iter-317 FIX: sending ALL recipients in ONE messageUsers mutation blows
+    // past Convex's per-call limits (fails for 200+ users, works for a few) and
+    // a single bad user record aborts the whole broadcast. Deliver in small
+    // sequential BATCHES instead — this stays within limits AND isolates
+    // failures so one bad batch never sinks the entire broadcast.
+    const BATCH_SIZE = 25;
+    const ids = Array.from(selected).map((id) => String(id));
+    const total = ids.length;
+    const batches: string[][] = [];
+    for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+      batches.push(ids.slice(i, i + BATCH_SIZE));
+    }
+
+    let sentTotal = 0;
+    let failedTotal = 0;
+    let lastError = '';
+    setProgress({ done: 0, total });
     try {
-      const total = selected.size;
-      const result = await messageUsers({
-        userIds: Array.from(selected) as any,
-        text: trimmed,
-      });
-      const sent = Number((result as any)?.sent ?? total);
-      setLastResult({ sent, total });
-      setSelected(new Set());
-      setText('');
-    } catch (errorValue: any) {
-      const message = String(errorValue?.message || '');
-      Alert.alert(
-        'Could not send broadcast',
-        message.includes('FORBIDDEN')
-          ? 'Only Smilers admins can send broadcasts.'
-          : message || 'Please try again.',
-      );
+      for (const batch of batches) {
+        try {
+          const result = await messageUsers({ userIds: batch as any, text: trimmed });
+          const sent = Number((result as any)?.sent);
+          sentTotal += Number.isFinite(sent) ? sent : batch.length;
+        } catch (batchErr: any) {
+          failedTotal += batch.length;
+          lastError = String(batchErr?.message || '');
+          // keep going — deliver to the remaining batches
+        }
+        setProgress((prev) => (prev ? { done: Math.min(prev.done + batch.length, total), total } : prev));
+      }
+
+      setLastResult({ sent: sentTotal, total, failed: failedTotal });
+      if (failedTotal === 0) {
+        setSelected(new Set());
+        setText('');
+      } else if (sentTotal === 0) {
+        // Nothing delivered at all — surface the underlying reason.
+        Alert.alert(
+          'Could not send broadcast',
+          lastError.includes('FORBIDDEN')
+            ? 'Only Smilers admins can send broadcasts.'
+            : lastError || 'Please try again.',
+        );
+      } else {
+        // Partial delivery — keep the composer so the admin can retry the rest.
+        Alert.alert(
+          'Partly delivered',
+          `Delivered to ${sentTotal} of ${total}. ${failedTotal} could not be reached — tap Broadcast again to retry.`,
+        );
+      }
     } finally {
+      setProgress(null);
       setSending(false);
     }
   }, [messageUsers, selected, text]);
@@ -187,6 +223,7 @@ export default function BroadcastCreateScreen() {
           <Text style={styles.resultBannerText} testID="broadcast-result-text">
             Delivered to {lastResult.sent} of {lastResult.total}{' '}
             {lastResult.total === 1 ? 'user' : 'users'} as “Smilers”.
+            {lastResult.failed > 0 ? ` ${lastResult.failed} failed.` : ''}
           </Text>
           <TouchableOpacity onPress={() => setLastResult(null)} hitSlop={10} testID="broadcast-result-dismiss">
             <Feather name="x" size={16} color="#166534" />
@@ -289,7 +326,14 @@ export default function BroadcastCreateScreen() {
           testID="broadcast-send-btn"
         >
           {sending ? (
-            <ActivityIndicator color={Colors.headerBg} />
+            <>
+              <ActivityIndicator color={Colors.headerBg} />
+              {progress ? (
+                <Text style={styles.bottomCtaText}>
+                  Sending {progress.done} of {progress.total}…
+                </Text>
+              ) : null}
+            </>
           ) : (
             <>
               <Feather name="radio" size={20} color={Colors.headerBg} />
