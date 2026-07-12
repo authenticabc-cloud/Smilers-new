@@ -1,5 +1,14 @@
 # Smilers Mobile App — PRD
 
+## iter-323 (Jun 2026): "Receive once" 🔂 — native wiring (dedupe duplicate files per receiver)
+Web-team backend contract wired into the Expo app. A receiver never gets the same file twice (across all 1:1 + groups); the duplicate copy shows a tappable footprint; the sender always keeps the file.
+- **New helper `src/lib/fileHash.ts`** — `computeFileHashFromUri(uri)` = SHA-256 (lowercase hex) of the file's PLAINTEXT bytes, streamed in 512KB chunks (no OOM on large docs/APKs); web uses fetch→arrayBuffer. Verified against canonical SHA-256("abc").
+- **Sending** (`app/chat/[conversationId].tsx`): computes `fileHash` before upload and passes it to `messages.send` for **image**, **video** (gallery + camera), and **file/document**. Voice notes & text are intentionally skipped (backend ignores them). Forwarding already carries the hash server-side.
+- **Rendering** (`src/components/MediaBubble.tsx`): when `msg.receiveOnceHidden === true`, an early-return renders a faded, TAPPABLE footprint "file deleted for multiple receipt" (🔁 icon) instead of media (mediaUrl omitted by server).
+- **Footprint tap** (`handleReceiveOnceTombstone`): Alert → "View original" (`messages.getReceiveOnceOrigin({fileHash})` → `jumpToMessage` if same convo else `router.push('/chat/<convId>?mid=<msgId>')`), "Allow receipt" (`messages.allowReceipt({messageId})` → refetch → file becomes viewable), Cancel.
+- Lint clean (pre-existing MediaBubble rules-of-hooks warning at L270 untouched); app boots. ⚠️ End-to-end (send same file twice → 2nd hidden → reveal/jump) needs signed-in device validation.
+
+
 ## iter-320 (Jun 2026): PRIVACY — People search no longer exposes the whole Smilers directory
 **Issue (user, native app):** Searching a name in global Search → "People" tab listed ALL matching Smilers users with a Message button (privacy leak). 
 **Fix (`app/search.tsx`, client-side filter on `api.users.searchUsers` results):** the People tab now only shows users the searcher already has a relationship with:
