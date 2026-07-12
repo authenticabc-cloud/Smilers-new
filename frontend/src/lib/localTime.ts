@@ -39,3 +39,69 @@ export function formatCityLocalTime(tz?: string | null, now: Date = new Date()):
   if (!city || !time) return null;
   return `${city} ${time} local time`;
 }
+
+/** The device's own IANA timezone, or null if unavailable. */
+export function getLocalTimezone(): string | null {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null;
+  }
+}
+
+/** UTC offset (in minutes) for an IANA timezone at a given instant. */
+function tzOffsetMinutes(tz: string, date: Date): number | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hour12: false,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).formatToParts(date);
+    const map: Record<string, string> = {};
+    for (const p of parts) map[p.type] = p.value;
+    // Intl can emit hour "24" at midnight — normalise to 0.
+    const hour = map.hour === '24' ? '0' : map.hour;
+    const asUTC = Date.UTC(
+      Number(map.year),
+      Number(map.month) - 1,
+      Number(map.day),
+      Number(hour),
+      Number(map.minute),
+      Number(map.second),
+    );
+    return Math.round((asUTC - date.getTime()) / 60000);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Human time difference of `peerTz` relative to `myTz`, e.g.
+ * "2 hours ahead of you", "3 hours 30 min behind you", "Same time as you".
+ * Returns null if either timezone is missing/invalid.
+ */
+export function formatTimeDifference(
+  peerTz?: string | null,
+  myTz?: string | null,
+  now: Date = new Date(),
+): string | null {
+  if (!peerTz || !myTz) return null;
+  const peer = tzOffsetMinutes(peerTz, now);
+  const mine = tzOffsetMinutes(myTz, now);
+  if (peer == null || mine == null) return null;
+  const diff = peer - mine;
+  if (diff === 0) return 'Same time as you';
+  const ahead = diff > 0;
+  const abs = Math.abs(diff);
+  const h = Math.floor(abs / 60);
+  const m = abs % 60;
+  const parts: string[] = [];
+  if (h) parts.push(`${h} hour${h > 1 ? 's' : ''}`);
+  if (m) parts.push(`${m} min`);
+  return `${parts.join(' ')} ${ahead ? 'ahead of' : 'behind'} you`;
+}

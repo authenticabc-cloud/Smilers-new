@@ -104,6 +104,7 @@ import { uploadFile } from '../../src/lib/uploadFile';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { useConversationOtherUser } from '../../src/hooks/useConversationOtherUser';
 import { formatCityLocalTime } from '../../src/lib/localTime';
+import { cityFromTimezone, formatTimeDifference, getLocalTimezone } from '../../src/lib/localTime';
 import { useConversationE2EE } from '../../src/hooks/useConversationE2EE';
 import { useViewerSuspension } from '../../src/hooks/useViewerSuspension';
 import { decryptText } from '../../src/lib/e2eeCrypto';
@@ -3466,6 +3467,15 @@ export default function ChatScreen() {
     !isBroadcastReadOnly && !isGroupConversation
       ? formatCityLocalTime(peerTimezone, new Date(nowTick))
       : null;
+  // iter-319b: tapping the city/time line shows the full offset vs YOU.
+  const onPressCityTime = useCallback(() => {
+    const time = formatCityLocalTime(peerTimezone, new Date());
+    const diff = formatTimeDifference(peerTimezone, getLocalTimezone(), new Date());
+    Alert.alert(
+      cityFromTimezone(peerTimezone) || 'Local time',
+      [time, diff].filter(Boolean).join('\n') || 'Local time unavailable',
+    );
+  }, [peerTimezone]);
   const avatarInitial = getDisplayInitials(title);
   // DM-only online state for the header avatar dot (mirrors web). Online if the
   // peer flag is set or they were seen within 2 min; never on groups/broadcast.
@@ -3650,9 +3660,11 @@ export default function ChatScreen() {
             <View style={styles.headerTextWrap}>
               <Text style={styles.chatHeaderTitle} numberOfLines={1} testID="chat-header-title">{title}</Text>
               {cityLocalTimeLabel ? (
-                <Text style={styles.chatHeaderCityTime} numberOfLines={1} testID="chat-header-citytime">
-                  {cityLocalTimeLabel}
-                </Text>
+                <TouchableOpacity onPress={onPressCityTime} hitSlop={6} testID="chat-header-citytime-btn" activeOpacity={0.6}>
+                  <Text style={styles.chatHeaderCityTime} numberOfLines={1} testID="chat-header-citytime">
+                    {cityLocalTimeLabel}
+                  </Text>
+                </TouchableOpacity>
               ) : null}
               <Text style={styles.chatHeaderSubtitle} numberOfLines={1} testID="chat-header-subtitle">{subtitle}</Text>
             </View>
