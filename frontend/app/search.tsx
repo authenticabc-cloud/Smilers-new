@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   FlatList,
   StyleSheet,
@@ -10,12 +10,14 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useMutation } from 'convex/react';
+import { useConvex, useMutation } from 'convex/react';
 import Avatar from '../src/components/Avatar';
 import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
 import { useDebouncedValue } from '../src/hooks/useDebouncedValue';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+import { useDeviceContactIndex, resolveDeviceContactNameFromUser } from '../src/lib/deviceContactIndex';
+import { lookupUsersByPhones } from '../src/lib/phoneLookup';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
 type SearchTab = 'chats' | 'messages' | 'people';
@@ -26,8 +28,11 @@ export default function SearchScreen() {
   const [tab, setTab] = useState<SearchTab>('chats');
   const debouncedQuery = useDebouncedValue(query.trim(), 250);
   const getOrCreateDirect = useMutation(api.conversations.getOrCreateDirect);
+  const convex = useConvex();
 
   const { data: conversations } = useSafeConvexQuery<any[]>(api.conversations.listConversations, {}, []);
+  const { data: me } = useSafeConvexQuery<any>(api.users.getCurrentUser, {}, null);
+  const contactIndex = useDeviceContactIndex();
   const { data: users } = useSafeConvexQuery<any[]>(
     api.users.searchUsers,
     debouncedQuery.length >= 2 ? { query: debouncedQuery } : {},
@@ -57,7 +62,73 @@ export default function SearchScreen() {
   }, [conversations, debouncedQuery]);
 
   const messageResults = useMemo(() => (Array.isArray(messageHits) ? messageHits : []), [messageHits]);
-  const userResults = useMemo(() => (Array.isArray(users) ? users : []), [users]);
+  const allUserResults = useMemo(() => (Array.isArray(users) ? users : []), [users]);
+
+  // PRIVACY (iter-320): the People tab must NOT expose the whole Smilers
+  // directory. Only surface users the searcher already has a relationship
+  // with — someone they've had a DIRECT conversation with, OR someone saved
+  // in their device address book (matched by phone). Everyone else is hidden
+  // and cannot be messaged from search.
+  const conversationPeerIds = useMemo(() => {
+    const set = new Set<string>();
+    (Array.isArray(conversations) ? conversations : []).forEach((c: any) => {
+      // Only DIRECT conversations expose `otherUser*` — group membership does
+      // not count as "had a conversation with them".
+      [c?.otherUser?._id, c?.otherUser?.userId, c?.otherUserId].forEach((v: any) => {
+        if (v) set.add(String(v));
+      });
+    });
+    return set;
+  }, [conversations]);
+
+  // Smilers userIds that are saved in the viewer's DEVICE address book,
+  // resolved from their own contacts via the canonical phone→user lookup
+  // (the same mechanism the Contacts tab trusts). Derived from the viewer's
+  // contacts — NOT from what `searchUsers` returns — so it works even though
+  // search results don't expose phone numbers.
+  const contactPhones = useMemo(
+    () => (contactIndex?.byE164 ? Array.from(contactIndex.byE164.keys()) : []),
+    [contactIndex?.byE164],
+  );
+  const [deviceContactUserIds, setDeviceContactUserIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let cancelled = false;
+    if (!convex || contactPhones.length === 0) {
+      setDeviceContactUserIds(new Set());
+      return;
+    }
+    (async () => {
+      try {
+        const matches = await lookupUsersByPhones(convex, contactPhones, contactIndex?.defaultCountry ?? null);
+        if (cancelled) return;
+        const ids = new Set<string>();
+        matches.forEach((m) => {
+          if (m?.userId) ids.add(String(m.userId));
+        });
+        setDeviceContactUserIds(ids);
+      } catch {
+        if (!cancelled) setDeviceContactUserIds(new Set());
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [convex, contactPhones, contactIndex?.defaultCountry]);
+
+  const myId = me?._id ? String(me._id) : '';
+  const userResults = useMemo(() => {
+    return allUserResults.filter((u: any) => {
+      const uid = String(u?._id || u?.userId || '');
+      if (!uid || uid === myId) return false;
+      // (a) previous direct conversation
+      if (conversationPeerIds.has(uid)) return true;
+      // (b) saved in the viewer's device address book (resolved by userId)
+      if (deviceContactUserIds.has(uid)) return true;
+      // (b-fallback) if the result happens to carry a phone, match it too
+      const deviceName = resolveDeviceContactNameFromUser(contactIndex, u);
+      return !!(deviceName && deviceName.trim());
+    });
+  }, [allUserResults, conversationPeerIds, deviceContactUserIds, contactIndex, myId]);
 
   const activeResults = tab === 'chats' ? conversationResults : tab === 'messages' ? messageResults : userResults;
 
@@ -162,9 +233,11 @@ export default function SearchScreen() {
             </Text>
             <Text style={styles.emptySub}>
               {debouncedQuery
-                ? 'Try a different name, email, or keyword.'
+                ? tab === 'people'
+                  ? 'Only people in your contacts or past chats can appear here.'
+                  : 'Try a different name, email, or keyword.'
                 : tab === 'people'
-                  ? 'Type at least 2 characters to search people.'
+                  ? 'Search only shows people saved in your contacts or that you’ve chatted with.'
                   : tab === 'messages'
                     ? 'Find any word inside your conversations.'
                     : 'We will search your existing conversations.'}

@@ -1,5 +1,14 @@
 # Smilers Mobile App — PRD
 
+## iter-320 (Jun 2026): PRIVACY — People search no longer exposes the whole Smilers directory
+**Issue (user, native app):** Searching a name in global Search → "People" tab listed ALL matching Smilers users with a Message button (privacy leak). 
+**Fix (`app/search.tsx`, client-side filter on `api.users.searchUsers` results):** the People tab now only shows users the searcher already has a relationship with:
+  - (a) someone they've had a **direct conversation** with (`conversationPeerIds` from `listConversations` — direct `otherUser*` only; group membership excluded), OR
+  - (b) someone saved in their **device address book**, resolved to Smilers userIds via the canonical `lookupUsersByPhones(convex, myContactPhones)` (same mechanism the Contacts tab trusts — derived from the viewer's OWN contacts, so it works even though `searchUsers` returns only name/email, not phone). Plus a phone-match fallback (`resolveDeviceContactNameFromUser`) if a result ever carries a phone.
+  - Self is always excluded. Empty-state copy updated to explain the restriction.
+`find-by-phone.tsx` (targeted phone lookup) is intentionally unchanged — you must already know the number. Lint clean; search screen boots. ⚠️ Filtering behaviour needs signed-in device validation (needs real contacts + conversations). NOTE: this is a client-side guard — recommend the web team ALSO restrict `searchUsers` server-side (return only contacts/conversation peers) for defense-in-depth, since the raw query still returns all users.
+
+
 ## iter-319 (Jun 2026): Peer city + local time in the 1:1 chat header
 Shows the OTHER user's city and 24h local time between the name and last-seen (e.g. "Rome 14:54 local time"). Web-team contract: new optional `users.timezone` (IANA); `setOnlineStatus` accepts optional `timezone`; `getUserById` returns `timezone`.
 - **Send tz:** `src/hooks/usePresenceHeartbeat.ts` now sends `Intl.DateTimeFormat().resolvedOptions().timeZone` with every online heartbeat.
