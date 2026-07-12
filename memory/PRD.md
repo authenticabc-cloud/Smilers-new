@@ -1,5 +1,15 @@
 # Smilers Mobile App — PRD
 
+## iter-342 (Jun 2026): Ringing / Not Ringing reachability — stop false "Not Ringing"
+**Issue (user):** Caller flips to "Not Ringing" whenever the callee's incoming-call heads-up notification collapses (even though the phone keeps ringing), then back to "Ringing" when the callee opens the app. User wants "Not Ringing" ONLY for true unreachability (airplane / device off / no internet); once the call reaches the receiver it must show "Ringing".
+**Root cause:** the callee's reachability ack (`calls.markCalleeRinging` → `calls.calleeRingingAt`) only fired when the full `call/[conversationId]` JS screen mounted. A background heads-up (screen not open) never acked, so after a 7s grace the caller concluded "Not Ringing".
+**Fix:**
+- `src/push/useIncomingCallListener.ts`: fire `markCalleeRinging({callId})` the moment the GLOBAL Convex reactive query first sees the incoming ringing call (idempotent, once per call), BEFORE the navigation/call-waiting guards. This acks whenever JS is alive (foreground OR backgrounded-not-killed) and also in the call-waiting case → the ack latches `calleeRingingAt`, so a collapsing notification no longer flips the caller.
+- `app/call/[conversationId].tsx`: `callerNotRinging` no longer uses the 7s timeout. Now `isOutgoingRinging && !calleeRingingAcked && calleeKnownOffline` — "Not Ringing" shows ONLY when the callee hasn't acked AND presence positively says offline (heartbeat stopped = no connectivity), matching the 3 unreachability cases. All other states stay optimistically "Ringing…"; ack latches it on.
+- Removed the now-unused `ringGraceElapsed` state/effect. Lint clean; app boots.
+⚠️ Remaining gap (Ashwini/native): a FULLY-KILLED app (swiped away) runs no JS, so the JS listener can't ack — the native FCM/Notifee handler must call `markCalleeRinging` on push receipt for that case. Needs two-device validation.
+
+
 ## iter-323 (Jun 2026): "Receive once" 🔂 — native wiring (dedupe duplicate files per receiver)
 Web-team backend contract wired into the Expo app. A receiver never gets the same file twice (across all 1:1 + groups); the duplicate copy shows a tappable footprint; the sender always keeps the file.
 - **New helper `src/lib/fileHash.ts`** — `computeFileHashFromUri(uri)` = SHA-256 (lowercase hex) of the file's PLAINTEXT bytes, streamed in 512KB chunks (no OOM on large docs/APKs); web uses fetch→arrayBuffer. Verified against canonical SHA-256("abc").

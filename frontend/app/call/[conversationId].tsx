@@ -820,22 +820,16 @@ export function CallScreenInner() {
   // negative + the fallback when the field is absent (older backend).
   const calleeRingingAcked =
     typeof activeCall?.calleeRingingAt === 'number' && activeCall.calleeRingingAt > 0;
-  // Grace window: give the callee ~7s to ack before we conclude "Not Ringing".
-  const [ringGraceElapsed, setRingGraceElapsed] = useState(false);
-  useEffect(() => {
-    if (!isOutgoingRinging) {
-      setRingGraceElapsed(false);
-      return undefined;
-    }
-    setRingGraceElapsed(false);
-    const t = setTimeout(() => setRingGraceElapsed(true), 7000);
-    return () => clearTimeout(t);
-  }, [isOutgoingRinging, callId]);
-  // The caller shows "Not Ringing" when: the callee is definitely NOT ringing
-  // yet AND either presence says offline (fast) or the grace window elapsed
-  // with no ack.
+  // iter-342: "Not Ringing" now means UNREACHABLE only (airplane mode / device
+  // off / no internet) — matching the user's mental model. It is NO LONGER
+  // driven by a "no ack within Ns" timeout, because a reachable-but-backgrounded
+  // callee legitimately acks late (or the ack rides in via the reactive
+  // listener once JS wakes). We therefore show "Not Ringing" ONLY when the
+  // callee has NOT acked AND presence positively says they're offline (which is
+  // exactly what happens with no connectivity — the heartbeat stops). Any other
+  // state stays optimistically "Ringing…". Once the ack arrives it latches on.
   const callerNotRinging =
-    isOutgoingRinging && !calleeRingingAcked && (calleeKnownOffline || ringGraceElapsed);
+    isOutgoingRinging && !calleeRingingAcked && calleeKnownOffline;
 
   // iter-187: CALLER-SIDE RINGBACK through InCallManager's native ringback
   // (voice-call stream — not muted by MODE_IN_COMMUNICATION). Replaces the
