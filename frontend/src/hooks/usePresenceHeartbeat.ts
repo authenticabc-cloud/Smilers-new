@@ -47,10 +47,18 @@ export function usePresenceHeartbeat() {
       const now = Date.now();
       if (online && now - lastPingRef.current < 5_000) return;
       lastPingRef.current = now;
+      // iter-319: send the device's IANA timezone with every heartbeat so the
+      // other side can show "City HH:MM local time" in the chat header.
+      let timezone: string | undefined;
+      try {
+        timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+      } catch {
+        timezone = undefined;
+      }
       try {
         // Convex mutation returns a Promise — fire and forget. Swallow
         // network errors silently; the next tick will retry.
-        (setOnlineStatus as any)({ isOnline: online }).catch(() => {});
+        (setOnlineStatus as any)({ isOnline: online, ...(timezone ? { timezone } : {}) }).catch(() => {});
       } catch {
         /* swallow */
       }

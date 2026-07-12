@@ -1,5 +1,12 @@
 # Smilers Mobile App — PRD
 
+## iter-319 (Jun 2026): Peer city + local time in the 1:1 chat header
+Shows the OTHER user's city and 24h local time between the name and last-seen (e.g. "Rome 14:54 local time"). Web-team contract: new optional `users.timezone` (IANA); `setOnlineStatus` accepts optional `timezone`; `getUserById` returns `timezone`.
+- **Send tz:** `src/hooks/usePresenceHeartbeat.ts` now sends `Intl.DateTimeFormat().resolvedOptions().timeZone` with every online heartbeat.
+- **Read + render:** `app/chat/[conversationId].tsx` reads the peer timezone (from `getUserById` via `useSafeConvexQuery`, falling back to embedded `otherUser.timezone`), derives label via new `src/lib/localTime.ts` (`cityFromTimezone` = last IANA segment, underscores→spaces, shortened >16 chars; `localTimeInTimezone` = en-GB 24h), ticks every 30s. New header line `chatHeaderCityTime` between title and subtitle. DM-only (broadcast/group excluded; groups have no single peer so tz is null).
+- Verified helper output matches spec (Rome 14:54 / Accra 12:54); invalid tz → no label. Lint clean; app boots. ⚠️ Live header only visible signed-in on device; a peer's city/time appears only after they've run this build once (heartbeat populates their `users.timezone`).
+
+
 ## iter-318 (Jun 2026): Personal chat link — `/u/<userId>` + `smilers://chat-with/<userId>`
 Every user now has a shareable link that opens a direct chat with them (web-team contract; backend `api.users.getPublicChatLinkPreview` + existing `getOrCreateDirect`).
 - **Resolver** `app/u/[userId].tsx`: fetches the safe PUBLIC preview via `useSafeConvexQuery(api.users.getPublicChatLinkPreview)` (error-safe → invalid/unknown/system ids show "User not available" instead of a red-screen), shows avatar/name/about + a "Message" button → `getOrCreateDirect({otherUserId})` → `router.replace('/chat/<id>')`. Blocks self-links; handles `?auto=1` for post-sign-in auto-open.

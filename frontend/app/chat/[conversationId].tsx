@@ -103,6 +103,7 @@ import { translateIncomingMessageText } from '../../src/lib/translation';
 import { uploadFile } from '../../src/lib/uploadFile';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { useConversationOtherUser } from '../../src/hooks/useConversationOtherUser';
+import { formatCityLocalTime } from '../../src/lib/localTime';
 import { useConversationE2EE } from '../../src/hooks/useConversationE2EE';
 import { useViewerSuspension } from '../../src/hooks/useViewerSuspension';
 import { decryptText } from '../../src/lib/e2eeCrypto';
@@ -3382,6 +3383,27 @@ export default function ChatScreen() {
     }),
     [hydratedConversation, savedContactRecord],
   );
+
+  // iter-319: peer CITY + LOCAL TIME for the DM header. Read the other user's
+  // IANA timezone (getUserById is contract-guaranteed to return it) and derive
+  // a "City HH:MM local time" label shown between the name and last-seen.
+  const { data: peerProfileForTz } = useSafeConvexQuery<any | null>(
+    (api as any).users?.getUserById,
+    callCalleeId ? { userId: callCalleeId } : {},
+    null,
+    !!callCalleeId,
+  );
+  const peerTimezone =
+    (mergedPresenceSource as any)?.otherUser?.timezone ||
+    (peerProfileForTz as any)?.timezone ||
+    null;
+  const [nowTick, setNowTick] = useState<number>(() => Date.now());
+  useEffect(() => {
+    if (!peerTimezone) return;
+    const id = setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, [peerTimezone]);
+
   // iter-111: isDiary detection REMOVED. Diary is now a fully separate
   // local-only screen (/app/diary.tsx) — the chat screen no longer has
   // any awareness of Diary mode. This eliminates the iter-109 leak
@@ -3435,6 +3457,15 @@ export default function ChatScreen() {
   const subtitle = isBroadcastReadOnly
     ? 'Announcement · read-only'
     : (typingLabel || formatPresenceSubtitle(mergedPresenceSource));
+  // iter-319: DM-only city + local time (hidden for broadcast; groups have no
+  // single peer so `peerTimezone` is naturally null → label null).
+  const isGroupConversation =
+    (mergedPresenceSource as any)?.type === 'group' ||
+    (hydratedConversation as any)?.isGroup === true;
+  const cityLocalTimeLabel =
+    !isBroadcastReadOnly && !isGroupConversation
+      ? formatCityLocalTime(peerTimezone, new Date(nowTick))
+      : null;
   const avatarInitial = getDisplayInitials(title);
   // DM-only online state for the header avatar dot (mirrors web). Online if the
   // peer flag is set or they were seen within 2 min; never on groups/broadcast.
@@ -3618,6 +3649,11 @@ export default function ChatScreen() {
             </View>
             <View style={styles.headerTextWrap}>
               <Text style={styles.chatHeaderTitle} numberOfLines={1} testID="chat-header-title">{title}</Text>
+              {cityLocalTimeLabel ? (
+                <Text style={styles.chatHeaderCityTime} numberOfLines={1} testID="chat-header-citytime">
+                  {cityLocalTimeLabel}
+                </Text>
+              ) : null}
               <Text style={styles.chatHeaderSubtitle} numberOfLines={1} testID="chat-header-subtitle">{subtitle}</Text>
             </View>
           </TouchableOpacity>
@@ -4973,6 +5009,13 @@ const styles = StyleSheet.create({
     marginTop: 3,
     fontSize: 14,
     color: 'rgba(255,255,255,0.92)',
+    fontWeight: FontWeight.medium,
+  },
+  chatHeaderCityTime: {
+    // iter-319: peer city + local time, sits between name and last-seen.
+    marginTop: 2,
+    fontSize: 12.5,
+    color: 'rgba(255,255,255,0.78)',
     fontWeight: FontWeight.medium,
   },
   encryptionBanner: {
