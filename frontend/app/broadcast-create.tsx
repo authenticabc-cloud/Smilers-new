@@ -32,6 +32,7 @@ import { api } from '../src/convexApi';
 import { useAuth } from '../src/providers/AuthProvider';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { getDisplayInitials, getDisplayNameFromUser } from '../src/lib/displayName';
+import { recordBroadcast } from '../src/lib/broadcastHistory';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/theme';
 
 interface AdminUser {
@@ -160,6 +161,8 @@ export default function BroadcastCreateScreen() {
       }
 
       setLastResult({ sent: sentTotal, total, failed: failedTotal });
+      // Record to the device-local broadcast audit log.
+      void recordBroadcast({ text: trimmed, total, sent: sentTotal, failed: failedTotal });
       if (failedTotal === 0) {
         setSelected(new Set());
         setText('');
@@ -215,6 +218,14 @@ export default function BroadcastCreateScreen() {
           <Text style={styles.headerTitle}>New Broadcast</Text>
           <Text style={styles.headerSubtitle}>Sends as “Smilers” · {selected.size} selected</Text>
         </View>
+        <TouchableOpacity
+          onPress={() => router.push('/broadcast-history')}
+          hitSlop={12}
+          style={styles.headerHistory}
+          testID="broadcast-history-btn"
+        >
+          <Feather name="clock" size={22} color={Colors.white} />
+        </TouchableOpacity>
       </View>
 
       {lastResult ? (
@@ -361,6 +372,7 @@ const styles = StyleSheet.create({
   },
   headerBack: { padding: 4 },
   headerTextWrap: { flex: 1, marginLeft: 4 },
+  headerHistory: { padding: 6 },
   headerTitle: { color: Colors.white, fontSize: FontSize.xl, fontWeight: FontWeight.bold },
   headerSubtitle: { color: 'rgba(255,255,255,0.7)', fontSize: FontSize.sm, marginTop: 2 },
 
