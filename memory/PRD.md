@@ -1,5 +1,15 @@
 # Smilers Mobile App — PRD
 
+## iter-318 (Jun 2026): Personal chat link — `/u/<userId>` + `smilers://chat-with/<userId>`
+Every user now has a shareable link that opens a direct chat with them (web-team contract; backend `api.users.getPublicChatLinkPreview` + existing `getOrCreateDirect`).
+- **Resolver** `app/u/[userId].tsx`: fetches the safe PUBLIC preview via `useSafeConvexQuery(api.users.getPublicChatLinkPreview)` (error-safe → invalid/unknown/system ids show "User not available" instead of a red-screen), shows avatar/name/about + a "Message" button → `getOrCreateDirect({otherUserId})` → `router.replace('/chat/<id>')`. Blocks self-links; handles `?auto=1` for post-sign-in auto-open.
+- **Deep link** `app/chat-with/[userId].tsx` redirects `smilers://chat-with/<id>` → `/u/<id>`.
+- **Signed-out flow:** tapping Message stashes the target (`src/lib/pendingChatLink.ts`) → sign-in → `ResumeLastRoute` resumes to `/u/<id>?auto=1` (priority over last-chat resume).
+- **Share entry point:** Profile → "Share my chat link" (RN `Share`, `src/lib/personalChatLink.ts`, base `https://smilers.online/u/<id>`).
+- **Native config:** added App Links `pathPrefix: "/u/"` for `smilers.online` in `app.json` intentFilters (same verified domain as auth-callback). Routes registered in `_layout.tsx`.
+Lint clean; public resolver verified on web (invalid id → graceful empty state). ⚠️ Authenticated open-chat, deep-link handoff, and App Links need the user's signed-in device / native EAS build. Ashwini's native manifest must include the `/u/` intent-filter if he builds outside Emergent.
+
+
 ## iter-317 (Jun 2026): Admin broadcast batching (fix 233-user "Could not send broadcast") + admin-DM-vs-broadcast name spec
 **#2 Broadcast to many users failed (FIXED, app-side).** `admin/messaging:messageUsers` returned a Convex Server Error when broadcasting to all/many users (233) but worked for a few. Cause: sending ALL recipients in ONE mutation blows past Convex per-call limits and one bad record aborts the whole batch. Fix (`app/broadcast-create.tsx handleSend`): deliver in sequential **batches of 25**, tally `sent`, continue past a failing batch, show live "Sending X of Y…" progress, and report partial delivery (retry keeps the composer). Lint clean; app boots. ⚠️ Full e2e needs the user's logged-in admin device (screen is admin/OIDC-gated).
 **#1 Admin personal 1:1 messages show as "Smilers" (BACKEND — spec written).** Broadcasts flag/reuse the admin↔user DIRECT conversation as `isBroadcast:true`, so the admin's later personal 1:1 messages render as read-only "Smilers". A single per-conversation flag can't separate the two. Correct fix requires Convex: broadcasts must target a dedicated **system "Smilers" account** conversation per recipient (the only place `isBroadcast:true` is allowed), while personal DMs stay on the normal `getOrCreateDirect(admin,user)` thread showing the admin's real name + one-time migration to un-flag corrupted threads. Full spec: `/app/frontend/ADMIN_BROADCAST_VS_DM_BACKEND_SPEC.md` (handed to web team).

@@ -477,6 +477,8 @@ export default function RootLayout() {
               <Stack.Screen name="wallet" />
               <Stack.Screen name="send-money" />
               <Stack.Screen name="user/[userId]" />
+              <Stack.Screen name="u/[userId]" />
+              <Stack.Screen name="chat-with/[userId]" />
               <Stack.Screen name="status-compose" options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }} />
               <Stack.Screen name="status-view/[userId]" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
               <Stack.Screen name="contact-qr" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />

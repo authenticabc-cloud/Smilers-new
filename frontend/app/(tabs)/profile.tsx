@@ -9,6 +9,7 @@ import {
   Modal,
   Platform,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -27,6 +28,7 @@ import Avatar from '../../src/components/Avatar';
 import SosButton from '../../src/components/SosButton';
 import { api } from '../../src/convexApi';
 import { getLanguageByCode } from '../../src/lib/languages';
+import { buildPersonalChatShareMessage } from '../../src/lib/personalChatLink';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { uploadFile } from '../../src/lib/uploadFile';
 import { safeMutation } from '../../src/lib/safeMutation';
@@ -436,6 +438,25 @@ export default function ProfileScreen() {
           >
             <Ionicons name="star-outline" size={20} color={Colors.primary} />
             <Text style={styles.linkText}>Starred Messages</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.linkBtn}
+            onPress={async () => {
+              if (!me?._id) {
+                Alert.alert('Not ready', 'Please wait a moment and try again.');
+                return;
+              }
+              try {
+                await Share.share({ message: buildPersonalChatShareMessage(me?.name, me._id) });
+              } catch {
+                /* user dismissed the share sheet */
+              }
+            }}
+            testID="share-chat-link-btn"
+          >
+            <Ionicons name="link-outline" size={20} color={Colors.primary} />
+            <Text style={styles.linkText}>Share my chat link</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
