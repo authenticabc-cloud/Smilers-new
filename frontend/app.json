@@ -8,7 +8,7 @@
     "icon": "./assets/images/icon.png",
     "scheme": "smilers",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.smilers.app",
@@ -153,7 +153,8 @@
         "BLUETOOTH_CONNECT",
         "BLUETOOTH_SCAN",
         "BLUETOOTH_ADVERTISE",
-        "USE_FULL_SCREEN_INTENT"
+        "USE_FULL_SCREEN_INTENT",
+        "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
       ]
     },
     "web": {
@@ -165,6 +166,8 @@
       "expo-router",
       "./plugins/withCallWakeScreen.js",
       "./plugins/withWebRTCScreenshare.js",
+      "./plugins/withNotifeeLocalMaven.js",
+      "./plugins/withNativeCallService.js",
       [
         "expo-splash-screen",
         {
@@ -187,7 +190,9 @@
             "./assets/sounds/smilers_never_cry_2.mp3",
             "./assets/sounds/smilers_never_cry_3.mp3",
             "./assets/sounds/smilers_notification.mp3",
-            "./assets/sounds/incallmanager_ringback.mp3"
+            "./assets/sounds/incallmanager_ringback.mp3",
+            "./assets/sounds/message_notification_beep.mp3",
+            "./assets/sounds/message_notification_followup.mp3"
           ]
         }
       ],

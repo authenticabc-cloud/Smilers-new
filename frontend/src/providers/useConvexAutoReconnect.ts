@@ -33,6 +33,8 @@ import { AppState, AppStateStatus } from 'react-native';
 import type { ConvexReactClient } from 'convex/react';
 import { sentry } from '../lib/sentry';
 import { callDebug } from '../lib/callDebugLog';
+import { callHost } from '../lib/call/callHost';
+import { recordDiagnostic } from '../lib/diagnostics';
 
 // How often we poll the connection state while foregrounded.
 // iter-213: tightened 30s → 15s so chat-screen stalls clear faster.
@@ -237,6 +239,17 @@ export function useConvexAutoReconnect(client: ConvexReactClient) {
           if (now - lastHardRestartAtRef.current < MIN_HARD_RESTART_INTERVAL_MS) {
             return;
           }
+          // sml-008: a hard reconnect tears down and rebuilds the socket the
+          // active call's activeCall/status subscription depends on to learn
+          // the call ended — never disrupt it mid-call, regardless of trigger.
+          if (callHost.isActive()) {
+            recordDiagnostic({
+              tag: 'CONVEX',
+              source: 'auto-reconnect',
+              message: `hard-reconnect skipped (call in progress) trigger=${trigger}`,
+            });
+            return;
+          }
           lastHardRestartAtRef.current = now;
           void hardReconnect(client).then((ok) => {
             try {
@@ -276,6 +289,17 @@ export function useConvexAutoReconnect(client: ConvexReactClient) {
     const appStateSub = AppState.addEventListener('change', (next) => {
       const prev = appStateRef.current;
       appStateRef.current = next;
+      // sml-008: visibility into what's causing AppState transitions during a
+      // call — a hard-reconnect was observed firing within ~1s of every call
+      // start, but nothing yet explains WHY AppState flips to 'active' then.
+      // Logging every transition (with call-in-progress context) lets the
+      // next test run correlate this against the existing [CALL]/[TWILIO-CALL]
+      // diagnostic events instead of guessing at the native trigger.
+      recordDiagnostic({
+        tag: 'APPSTATE',
+        source: 'useConvexAutoReconnect',
+        message: `${prev} -> ${next} callActive=${callHost.isActive()}`,
+      });
       if (next === 'active' && prev !== 'active') {
         // iter-292 RESUME-FIX: the SETTLE_WINDOW that prevents the FATAL
         // "Base version … doesn't match …" desync was only armed at MOUNT,
@@ -395,6 +419,18 @@ export async function forceConvexReconnect(reason: string = 'manual'): Promise<b
   // eslint-disable-next-line no-console
   console.log(`[convex-auto-reconnect] manual reconnect reason=${reason}`);
   const soft = softReconnect(client);
+  // sml-008: never hard-tear-down the socket while a call is in progress —
+  // it's the same connection the call screen depends on to reactively learn
+  // the call was declined/ended. Backstop for any caller of this function
+  // besides chats.tsx (which already guards its own AppState trigger).
+  if (callHost.isActive()) {
+    recordDiagnostic({
+      tag: 'CONVEX',
+      source: 'auto-reconnect',
+      message: `manual hard-reconnect skipped (call in progress) reason=${reason}`,
+    });
+    return soft;
+  }
   // Always also attempt a hard reconnect — the user already waited
   // long enough to tap a button; we should not let them keep waiting.
   const hard = await hardReconnect(client);

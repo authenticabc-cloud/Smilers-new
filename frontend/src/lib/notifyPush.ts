@@ -33,7 +33,7 @@ import { recordDiagnostic } from './diagnostics';
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL?.replace(/\/$/, '') || '';
 
-export type NotifyEvent = 'message' | 'call' | 'missed-call' | 'call-cancelled';
+export type NotifyEvent = 'message' | 'call' | 'missed-call' | 'call-cancelled' | 'call-declined';
 
 export interface NotifyPushOpts {
   /** Convex user ids of the recipients (NOT the sender). */

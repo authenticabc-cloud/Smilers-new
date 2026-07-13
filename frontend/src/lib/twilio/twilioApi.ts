@@ -191,7 +191,19 @@ export async function initiateTwilioCall(args: {
  * (both sides may call it on a hangup race) — never throws.
  */
 export async function endTwilioCall(roomName: string, roomSid?: string | null): Promise<void> {
-  if (!BACKEND_URL || !roomName) return;
+  if (!BACKEND_URL || !roomName) {
+    // sml-007: this used to return silently. A missing roomName here (e.g.
+    // the relay-FCM race leaving the caller's decline handler with an
+    // unresolved room) meant the Twilio room was never told to complete,
+    // with zero trace in the diagnostics — logging it so this no-op is
+    // visible instead of looking like the call quietly worked.
+    recordDiagnostic({
+      tag: 'TWILIO-CALL',
+      source: 'endTwilioCall',
+      message: `skipped — missing ${!BACKEND_URL ? 'BACKEND_URL' : 'roomName'} (roomName=${roomName || '(empty)'})`,
+    });
+    return;
+  }
   const t0 = Date.now();
   try {
     const resp = await fetch(`${BACKEND_URL}/api/twilio/end-call`, {

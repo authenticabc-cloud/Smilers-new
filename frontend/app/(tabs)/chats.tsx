@@ -29,6 +29,8 @@ import { forceConvexReconnect } from '../../src/providers/useConvexAutoReconnect
 // iter-221: connection-status banner + foreground-triggered auto-refresh.
 import ConnectionStatusBanner from '../../src/components/ConnectionStatusBanner';
 import { AppState } from 'react-native';
+// sml-008: don't tear down the live socket mid-call — see handlePullToReconnect below.
+import { callHost } from '../../src/lib/call/callHost';
 
 function relTime(iso?: string) {
   if (!iso) return '';
@@ -131,6 +133,14 @@ export default function ChatsScreen() {
   const [reconnecting, setReconnecting] = useState(false);
   const handlePullToReconnect = useCallback(async () => {
     if (reconnecting) return;
+    // sml-008: this screen stays mounted underneath the call overlay
+    // (<CallHost/> renders at the app root, never unmounting the tab behind
+    // it), so this AppState-triggered reconnect was firing within ~1s of
+    // EVERY call start and hard-tearing-down the Convex socket
+    // (forceConvexReconnect always follows with closeAndReconnect) — the
+    // exact socket the call screen depends on to reactively learn the call
+    // was declined/ended. Skip entirely while a call is in progress.
+    if (callHost.isActive()) return;
     setReconnecting(true);
     try {
       await forceConvexReconnect('chats-pull-to-refresh');

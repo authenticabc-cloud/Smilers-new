@@ -4,11 +4,17 @@ import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import * as TaskManager from 'expo-task-manager';
+// Side-effect import: ensures backgroundTaskSetup stays in the Metro bundle
+// graph even if tree-shaking would otherwise drop it. The task handler and
+// Notifee call event handlers MUST be registered at module scope (not just
+// inside this hook) so they run in the headless JS context on killed-app FCM.
+import './backgroundTaskSetup';
 import { useRouter } from 'expo-router';
 import { useConvexAuth, useMutation } from 'convex/react';
 import { api } from '../convexApi';
 import { readStoredJson } from '../lib/settingsStorage';
 import { getPushDiagnosticsState, setPushDiagnostics, setPushDiagnosticsRetryHandler } from './pushDiagnostics';
+import { recordDiagnostic } from '../lib/diagnostics';
 import { useAuth } from '../providers/AuthProvider';
 import { isTwilioEnabled } from '../lib/twilio/twilioApi';
 import {
@@ -16,6 +22,10 @@ import {
   wasAlreadyPrompted,
   markPrompted,
   openFullScreenIntentSettings,
+  shouldCheckBatteryOptimization,
+  wasBatteryOptPrompted,
+  markBatteryOptPrompted,
+  requestBatteryOptimizationExemption,
 } from '../lib/fullScreenIntentPermission';
 
 // Foreground display behavior — show banner but DON'T let the OS play the
@@ -24,14 +34,22 @@ import {
 // hook's custom Smilers tone. The system sound won by a few ms, producing the
 // "default beep then Smilers tone" double-sound. The in-app hook owns
 // foreground sound, so silence the OS here.
+//
+// Call pushes are DATA-ONLY on Android. When Expo's bridge delivers one to
+// the foreground notification handler it would auto-create a plain system
+// banner (no buttons, title = payload.title = "Incoming voice call") for
+// every FCM retry. Notifee owns call rendering — suppress the Expo banner for
+// type:"call" so we never get the "default multiple notifications" alongside
+// the Notifee full-screen ring.
 if (Platform.OS !== 'web') {
   Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: false,
-      shouldSetBadge: true,
-    }),
+    handleNotification: async (notification) => {
+      const type = (notification.request.content.data as Record<string, unknown>)?.type;
+      if (type === 'call' || type === 'call-declined' || type === 'call-cancelled') {
+        return { shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false };
+      }
+      return { shouldShowBanner: true, shouldShowList: true, shouldPlaySound: false, shouldSetBadge: true };
+    },
   });
 }
 
@@ -265,7 +283,15 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
     taskObject;
   const payload = normalizeNotificationPayload(rawPayload);
   const type = toNonEmptyString(payload.type);
-  if (type !== 'call' && type !== 'message') {
+  if (type !== 'call' && type !== 'message' && type !== 'call-declined') {
+    return;
+  }
+
+  // call-declined: callee tapped Decline from the notification tray while
+  // caller's app is backgrounded. Intercept silently — no banner, no action.
+  // The foreground addNotificationReceivedListener handles this when caller
+  // is active; if caller is also backgrounded, Convex cron expires the call.
+  if (type === 'call-declined') {
     return;
   }
 
@@ -414,41 +440,8 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
   });
 }
 
-if (Platform.OS !== 'web' && !runtimeScope.__smilersNotificationTaskDefined) {
-  runtimeScope.__smilersNotificationTaskDefined = true;
-  TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }: any) => {
-    if (error) {
-      console.warn('[push] Background notification task error:', error?.message || error);
-      return;
-    }
-
-    if (runtimeScope.__smilersAppState === 'active') {
-      // iter-248: in the FOREGROUND, only bail for non-CALL pushes. Call pushes
-      // are sent data-only, which bypasses the foreground notification listener
-      // entirely, and the Convex live-query path has proven unreliable at
-      // surfacing the ring — so let CALL pushes fall through to
-      // presentBackgroundLocalNotification (the Notifee Answer/Decline ring is
-      // idempotent by call id, so it won't double-ring with the Convex path).
-      try {
-        const probe = normalizeNotificationPayload(
-          (data as any)?.notification?.request?.content?.data ||
-            (data as any)?.data ||
-            data ||
-            {},
-        );
-        if (toNonEmptyString(probe.type) !== 'call') return;
-      } catch {
-        return;
-      }
-    }
-
-    try {
-      await presentBackgroundLocalNotification(data);
-    } catch (taskError: any) {
-      console.warn('[push] Background notification scheduling failed:', taskError?.message || taskError);
-    }
-  });
-}
+// TaskManager.defineTask for BACKGROUND_NOTIFICATION_TASK has been moved to
+// backgroundTaskSetup.ts so it runs in the headless JS context (killed app).
 
 function resolveMessageChannelSound(notificationSoundId?: string | null) {
   switch (notificationSoundId) {
@@ -621,6 +614,38 @@ export function usePushNotifications() {
         ],
       );
     }, 4000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [hasAuthSession]);
+
+  // Battery optimization exemption prompt.
+  // Fires 6 seconds after the user logs in (staggered after the 4s full-screen
+  // intent prompt). Shown once per install. On Android, tapping "Allow" opens
+  // the system dialog that whitelists Smilers from battery optimization — this
+  // is the primary fix for calls not ringing when the app is killed on OEM
+  // devices (Motorola, Samsung, Xiaomi) that aggressively kill background tasks.
+  useEffect(() => {
+    if (!hasAuthSession) return undefined;
+    if (!shouldCheckBatteryOptimization()) return undefined;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      if (cancelled) return;
+      if (await wasBatteryOptPrompted()) return;
+      await markBatteryOptPrompted();
+      Alert.alert(
+        'Allow calls when app is closed',
+        'To receive incoming Smilers calls even when the app is closed, allow it to run in the background without battery restrictions.',
+        [
+          { text: 'Not now', style: 'cancel' },
+          {
+            text: 'Allow',
+            onPress: () => { void requestBatteryOptimizationExemption(); },
+          },
+        ],
+      );
+    }, 6000);
     return () => {
       cancelled = true;
       clearTimeout(timer);
@@ -1118,6 +1143,42 @@ export function usePushNotifications() {
           console.warn('[push] markDelivered failed:', errorValue?.message || errorValue);
         });
       }
+      // call-declined arrives at the CALLER's device when the callee taps Decline
+      // from the notification tray (background/killed state). Call declineCall so
+      // Convex updates the call record and the caller's call screen ends immediately.
+      if (type === 'call-declined') {
+        const dcCallId =
+          toNonEmptyString(payload.callId) || toNonEmptyString(payload.conversationId);
+        // sml-009: previously the ONLY trace of this push ever arriving was
+        // the console.error on failure — now that the backend's declineCall
+        // fix turns a stale/mismatched id into a silent no-op, a successful
+        // call and a push that never arrived at all look identical (nothing
+        // logged). Log receipt + outcome explicitly so we can tell them apart.
+        recordDiagnostic({
+          tag: 'TWILIO-CALL',
+          source: 'push/call-declined',
+          message: `received callId=${dcCallId || '(empty)'} rawCallId=${payload.callId || '(empty)'} rawConvId=${payload.conversationId || '(empty)'}`,
+        });
+        if (dcCallId) {
+          declineCall({ callId: dcCallId })
+            .then(() => {
+              recordDiagnostic({
+                tag: 'TWILIO-CALL',
+                source: 'push/call-declined',
+                message: `declineCall ok callId=${dcCallId}`,
+              });
+            })
+            .catch((e: any) => {
+              const msg = e?.message || String(e);
+              console.warn('[push] call-declined: declineCall failed', msg);
+              recordDiagnostic({
+                tag: 'TWILIO-CALL',
+                source: 'push/call-declined',
+                message: `declineCall failed callId=${dcCallId} error=${msg}`,
+              });
+            });
+        }
+      }
       // iter-186: desktop login approval arriving while the app is OPEN —
       // contract section 2: "If the app is in the foreground, show the
       // prompt in-app". Requests expire in 2 minutes, so route straight
@@ -1155,7 +1216,12 @@ export function usePushNotifications() {
                 toNonEmptyString(payload.twilio_caller_identity) ||
                 toNonEmptyString(payload.callerId) ||
                 '',
-              callerName: getDisplayNameFromPayload(payload) || 'Smilers user',
+              callerName:
+                toNonEmptyString(payload.callerName) ||
+                toNonEmptyString(payload.callerDisplayName) ||
+                toNonEmptyString(payload.displayName) ||
+                toNonEmptyString(payload.senderName) ||
+                'Smilers user',
               callType: isVideo ? 'video' : 'voice',
               conversationId: conversationId || '',
               twilioRoom: toNonEmptyString(payload.twilio_room_name) || '',
@@ -1187,8 +1253,44 @@ export function usePushNotifications() {
     });
 
     // Also handle the case where the app was launched by tapping a notification
+    //
+    // sml-019: getLastNotificationResponseAsync() returns the OS/Expo-cached
+    // record of the LAST notification response the user EVER gave — it is
+    // NOT scoped to "was THIS specific cold launch triggered by a tap" and is
+    // never cleared automatically. Every subsequent cold launch (including
+    // ones triggered by our own native Answer/Decline trampoline, which never
+    // goes through Expo's notification-response path at all) replayed this
+    // same stale response, silently re-navigating to whatever old
+    // conversation/call it pointed to — independent of, and racing with, the
+    // current call's own navigation. This was traced via native+JS logcat:
+    // the call screen's shim correctly replaced with Home, then ~1s later
+    // this stale replay pushed `/chat/<conversationId>` on top of it,
+    // reported as "cold launch lands on the wrong screen". Consuming it with
+    // clearLastNotificationResponseAsync() after handling prevents replay on
+    // the next unrelated launch.
     Notifications.getLastNotificationResponseAsync().then((resp) => {
-      if (resp) handleResponse(resp);
+      // sml-020 diagnostics: clearLastNotificationResponseAsync() did NOT
+      // stop the replay on retest — it still fired on a plain launcher-icon
+      // relaunch (no notification tap at all), including across multiple
+      // separate cold launches after the fix was installed. Logging the
+      // exact identifier/type/conversationId returned here, plus whether the
+      // clear call actually resolves, to find out whether Expo's own cache
+      // is really being consumed or whether something else (e.g. Android
+      // redelivering a stale launch Intent via task restoration) is the
+      // real source.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { callDebug } = require('../lib/callDebugLog');
+      const respData = (resp?.notification?.request?.content?.data || {}) as any;
+      callDebug.push(
+        'NAV',
+        `getLastNotificationResponseAsync → id=${resp?.notification?.request?.identifier || '(none)'} type=${respData?.type || '(none)'} convId=${respData?.conversationId || '(none)'}`,
+      );
+      if (resp) {
+        handleResponse(resp);
+        Notifications.clearLastNotificationResponseAsync()
+          .then(() => callDebug.push('NAV', 'clearLastNotificationResponseAsync resolved'))
+          .catch((e: any) => callDebug.push('NAV', `clearLastNotificationResponseAsync failed: ${e?.message}`));
+      }
     });
 
     return () => {
