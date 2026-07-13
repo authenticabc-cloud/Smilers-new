@@ -3,7 +3,7 @@
     "name": "Smilers",
     "slug": "smilers",
     "owner": "abcsimplesend",
-    "version": "2.2.17",
+    "version": "2.2.18",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "smilers",
@@ -37,7 +37,7 @@
     "android": {
       "package": "com.smilers.app",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 2217,
+      "versionCode": 2295,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#E4B53B"
