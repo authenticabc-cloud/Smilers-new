@@ -1830,6 +1830,43 @@ async def send_push(
             )
             tokens = await cursor.to_list(length=500)
             stats["token_count"] = len(tokens)
+            # iter-342: per-recipient token-mapping diagnostic. Pinpoints WHY a
+            # push (esp. a call-declined to the caller) delivered to nobody:
+            #   • recipients with 0 tokens  → the id we were given matches no
+            #     push_tokens row on either key (registration/id-form mismatch)
+            #   • which key matched          → user_id (OIDC sub) vs convex_user_id
+            # This makes "backend accepted 202 but caller got nothing" logs
+            # self-explanatory. Kept concise (ids truncated) and INFO-level.
+            try:
+                recip_set = set(recipients)
+                by_user_id: set[str] = set()
+                by_convex_id: set[str] = set()
+                for t in tokens:
+                    uid = str(t.get("user_id") or "")
+                    cid = str(t.get("convex_user_id") or "")
+                    if uid in recip_set:
+                        by_user_id.add(uid)
+                    if cid in recip_set:
+                        by_convex_id.add(cid)
+                matched = by_user_id | by_convex_id
+                missing = [r for r in recipients if r not in matched]
+                stats["unmatched_recipients"] = [str(m) for m in missing]
+                stats["matched_via_user_id"] = len(by_user_id)
+                stats["matched_via_convex_id"] = len(by_convex_id)
+                _push_type_dbg = _derive_push_routing(data).get("type") or "?"
+                logger.info(
+                    "[PUSH][token-map] type=%s recipients=%d matched=%d tokens=%d "
+                    "via_user_id=%d via_convex_id=%d missing=%s",
+                    _push_type_dbg,
+                    len(recipients),
+                    len(matched),
+                    len(tokens),
+                    len(by_user_id),
+                    len(by_convex_id),
+                    [str(m)[:14] + "…" for m in missing[:5]],
+                )
+            except Exception:
+                pass
             if tokens:
                 # FCM data payload: keep small + string-only. Include
                 # the deeplink so the mobile tap-handler can route.
@@ -2317,6 +2354,11 @@ async def notify_event(body: NotifyEventBody):
                 "fcm_error_count": stats.get("error_count", 0),
                 "fcm_errors": (stats.get("errors") or [])[:5],
                 "token_count": stats.get("token_count", 0),
+                # iter-342: id-mapping diagnostic — which recipients had NO
+                # matching device token, and which key the matches came from.
+                "unmatched_recipients": stats.get("unmatched_recipients", []),
+                "matched_via_user_id": stats.get("matched_via_user_id", 0),
+                "matched_via_convex_id": stats.get("matched_via_convex_id", 0),
             }
         )
     except Exception as e:

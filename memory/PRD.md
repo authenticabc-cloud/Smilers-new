@@ -1,5 +1,62 @@
 # Smilers Mobile App — PRD
 
+## iter-342 (Jun 2026): Ringing / Not Ringing reachability — stop false "Not Ringing"
+**Issue (user):** Caller flips to "Not Ringing" whenever the callee's incoming-call heads-up notification collapses (even though the phone keeps ringing), then back to "Ringing" when the callee opens the app. User wants "Not Ringing" ONLY for true unreachability (airplane / device off / no internet); once the call reaches the receiver it must show "Ringing".
+**Root cause:** the callee's reachability ack (`calls.markCalleeRinging` → `calls.calleeRingingAt`) only fired when the full `call/[conversationId]` JS screen mounted. A background heads-up (screen not open) never acked, so after a 7s grace the caller concluded "Not Ringing".
+**Fix:**
+- `src/push/useIncomingCallListener.ts`: fire `markCalleeRinging({callId})` the moment the GLOBAL Convex reactive query first sees the incoming ringing call (idempotent, once per call), BEFORE the navigation/call-waiting guards. This acks whenever JS is alive (foreground OR backgrounded-not-killed) and also in the call-waiting case → the ack latches `calleeRingingAt`, so a collapsing notification no longer flips the caller.
+- `app/call/[conversationId].tsx`: `callerNotRinging` no longer uses the 7s timeout. Now `isOutgoingRinging && !calleeRingingAcked && calleeKnownOffline` — "Not Ringing" shows ONLY when the callee hasn't acked AND presence positively says offline (heartbeat stopped = no connectivity), matching the 3 unreachability cases. All other states stay optimistically "Ringing…"; ack latches it on.
+- Removed the now-unused `ringGraceElapsed` state/effect. Lint clean; app boots.
+⚠️ Remaining gap (Ashwini/native): a FULLY-KILLED app (swiped away) runs no JS, so the JS listener can't ack — the native FCM/Notifee handler must call `markCalleeRinging` on push receipt for that case. Needs two-device validation.
+
+
+## iter-323 (Jun 2026): "Receive once" 🔂 — native wiring (dedupe duplicate files per receiver)
+Web-team backend contract wired into the Expo app. A receiver never gets the same file twice (across all 1:1 + groups); the duplicate copy shows a tappable footprint; the sender always keeps the file.
+- **New helper `src/lib/fileHash.ts`** — `computeFileHashFromUri(uri)` = SHA-256 (lowercase hex) of the file's PLAINTEXT bytes, streamed in 512KB chunks (no OOM on large docs/APKs); web uses fetch→arrayBuffer. Verified against canonical SHA-256("abc").
+- **Sending** (`app/chat/[conversationId].tsx`): computes `fileHash` before upload and passes it to `messages.send` for **image**, **video** (gallery + camera), and **file/document**. Voice notes & text are intentionally skipped (backend ignores them). Forwarding already carries the hash server-side.
+- **Rendering** (`src/components/MediaBubble.tsx`): when `msg.receiveOnceHidden === true`, an early-return renders a faded, TAPPABLE footprint "file deleted for multiple receipt" (🔁 icon) instead of media (mediaUrl omitted by server).
+- **Footprint tap** (`handleReceiveOnceTombstone`): Alert → "View original" (`messages.getReceiveOnceOrigin({fileHash})` → `jumpToMessage` if same convo else `router.push('/chat/<convId>?mid=<msgId>')`), "Allow receipt" (`messages.allowReceipt({messageId})` → refetch → file becomes viewable), Cancel.
+- Lint clean (pre-existing MediaBubble rules-of-hooks warning at L270 untouched); app boots. ⚠️ End-to-end (send same file twice → 2nd hidden → reveal/jump) needs signed-in device validation.
+
+
+## iter-320 (Jun 2026): PRIVACY — People search no longer exposes the whole Smilers directory
+**Issue (user, native app):** Searching a name in global Search → "People" tab listed ALL matching Smilers users with a Message button (privacy leak). 
+**Fix (`app/search.tsx`, client-side filter on `api.users.searchUsers` results):** the People tab now only shows users the searcher already has a relationship with:
+  - (a) someone they've had a **direct conversation** with (`conversationPeerIds` from `listConversations` — direct `otherUser*` only; group membership excluded), OR
+  - (b) someone saved in their **device address book**, resolved to Smilers userIds via the canonical `lookupUsersByPhones(convex, myContactPhones)` (same mechanism the Contacts tab trusts — derived from the viewer's OWN contacts, so it works even though `searchUsers` returns only name/email, not phone). Plus a phone-match fallback (`resolveDeviceContactNameFromUser`) if a result ever carries a phone.
+  - Self is always excluded. Empty-state copy updated to explain the restriction.
+`find-by-phone.tsx` (targeted phone lookup) is intentionally unchanged — you must already know the number. Lint clean; search screen boots. ⚠️ Filtering behaviour needs signed-in device validation (needs real contacts + conversations). NOTE: this is a client-side guard — recommend the web team ALSO restrict `searchUsers` server-side (return only contacts/conversation peers) for defense-in-depth, since the raw query still returns all users.
+
+
+## iter-319 (Jun 2026): Peer city + local time in the 1:1 chat header
+Shows the OTHER user's city and 24h local time between the name and last-seen (e.g. "Rome 14:54 local time"). Web-team contract: new optional `users.timezone` (IANA); `setOnlineStatus` accepts optional `timezone`; `getUserById` returns `timezone`.
+- **Send tz:** `src/hooks/usePresenceHeartbeat.ts` now sends `Intl.DateTimeFormat().resolvedOptions().timeZone` with every online heartbeat.
+- **Read + render:** `app/chat/[conversationId].tsx` reads the peer timezone (from `getUserById` via `useSafeConvexQuery`, falling back to embedded `otherUser.timezone`), derives label via new `src/lib/localTime.ts` (`cityFromTimezone` = last IANA segment, underscores→spaces, shortened >16 chars; `localTimeInTimezone` = en-GB 24h), ticks every 30s. New header line `chatHeaderCityTime` between title and subtitle. DM-only (broadcast/group excluded; groups have no single peer so tz is null).
+- Verified helper output matches spec (Rome 14:54 / Accra 12:54); invalid tz → no label. Lint clean; app boots. ⚠️ Live header only visible signed-in on device; a peer's city/time appears only after they've run this build once (heartbeat populates their `users.timezone`).
+
+
+## iter-318 (Jun 2026): Personal chat link — `/u/<userId>` + `smilers://chat-with/<userId>`
+Every user now has a shareable link that opens a direct chat with them (web-team contract; backend `api.users.getPublicChatLinkPreview` + existing `getOrCreateDirect`).
+- **Resolver** `app/u/[userId].tsx`: fetches the safe PUBLIC preview via `useSafeConvexQuery(api.users.getPublicChatLinkPreview)` (error-safe → invalid/unknown/system ids show "User not available" instead of a red-screen), shows avatar/name/about + a "Message" button → `getOrCreateDirect({otherUserId})` → `router.replace('/chat/<id>')`. Blocks self-links; handles `?auto=1` for post-sign-in auto-open.
+- **Deep link** `app/chat-with/[userId].tsx` redirects `smilers://chat-with/<id>` → `/u/<id>`.
+- **Signed-out flow:** tapping Message stashes the target (`src/lib/pendingChatLink.ts`) → sign-in → `ResumeLastRoute` resumes to `/u/<id>?auto=1` (priority over last-chat resume).
+- **Share entry point:** Profile → "Share my chat link" (RN `Share`, `src/lib/personalChatLink.ts`, base `https://smilers.online/u/<id>`).
+- **Native config:** added App Links `pathPrefix: "/u/"` for `smilers.online` in `app.json` intentFilters (same verified domain as auth-callback). Routes registered in `_layout.tsx`.
+Lint clean; public resolver verified on web (invalid id → graceful empty state). ⚠️ Authenticated open-chat, deep-link handoff, and App Links need the user's signed-in device / native EAS build. Ashwini's native manifest must include the `/u/` intent-filter if he builds outside Emergent.
+
+
+## iter-317 (Jun 2026): Admin broadcast batching (fix 233-user "Could not send broadcast") + admin-DM-vs-broadcast name spec
+**#2 Broadcast to many users failed (FIXED, app-side).** `admin/messaging:messageUsers` returned a Convex Server Error when broadcasting to all/many users (233) but worked for a few. Cause: sending ALL recipients in ONE mutation blows past Convex per-call limits and one bad record aborts the whole batch. Fix (`app/broadcast-create.tsx handleSend`): deliver in sequential **batches of 25**, tally `sent`, continue past a failing batch, show live "Sending X of Y…" progress, and report partial delivery (retry keeps the composer). Lint clean; app boots. ⚠️ Full e2e needs the user's logged-in admin device (screen is admin/OIDC-gated).
+**#1 Admin personal 1:1 messages show as "Smilers" (BACKEND — spec written).** Broadcasts flag/reuse the admin↔user DIRECT conversation as `isBroadcast:true`, so the admin's later personal 1:1 messages render as read-only "Smilers". A single per-conversation flag can't separate the two. Correct fix requires Convex: broadcasts must target a dedicated **system "Smilers" account** conversation per recipient (the only place `isBroadcast:true` is allowed), while personal DMs stay on the normal `getOrCreateDirect(admin,user)` thread showing the admin's real name + one-time migration to un-flag corrupted threads. Full spec: `/app/frontend/ADMIN_BROADCAST_VS_DM_BACKEND_SPEC.md` (handed to web team).
+
+
+## iter-316 (Jun 2026): P0 — Auth Session Expiry / terminal logout ("only reinstall fixes it") ROOT CAUSE + fix
+**Symptom (user + many users):** "Your sign-in session expired or couldn't be refreshed" recovery screen; only uninstall+reinstall (or sometimes swipe-away-reopen) fixes it.
+**ROOT CAUSE:** Android SecureStore (EncryptedSharedPreferences) rejects values >~2048 bytes. Rotated OIDC refresh tokens / rich id_tokens exceed that. The OLD `storage.setItem` in `src/providers/AuthProvider.tsx` swallowed the write error with `catch {}` → the freshly-ROTATED refresh token was silently dropped while the server retired the previous one → next launch refreshed against the dead token → `invalid_grant` → `setSessionExpired(true)` → terminal logout until reinstall (reinstall clears the poisoned store).
+**FIX (per Hercules OIDC storage playbook):** Rewrote the `storage` abstraction to (a) CHUNK values >1800 chars across multiple `<key>__chunk_N` SecureStore entries with a `<key>__meta` descriptor, (b) fall back to AsyncStorage if SecureStore still fails so the rotated token is NEVER lost, (c) stop swallowing errors — every failure is logged to in-app diagnostics (`callDebug`). Reads transparently support legacy single-key values (existing signed-in users keep their session; auto-migrated to the new format on the next save). Public API (getItem/setItem/removeItem) unchanged → rest of AuthProvider untouched. Directly satisfies the user rule "once signed in, only sign out on intentional request or reinstall".
+**Status:** JS-only (ships via Emergent build, no native/Ashwini sync needed). Lint clean (only 2 pre-existing dep warnings); web boots to Sign In. ⚠️ The 2KB SecureStore limit is Android-native-only (web uses localStorage, no limit) → the actual fix must be validated on the user's next EAS Android build.
+
+
 ## iter-277 (Jun 2026): "No chats / ? avatar" ROOT CAUSE = Convex FATAL sync desync + photo-save gating
 **THE no-chats bug is NOT auth.** Device diagnostics showed `[AUTH] getFreshIdToken: refresh OK` immediately followed by `[CONSOLE] [CONVEX FATAL ERROR] Base version 1 passed up doesn't match the current version 0`. That Convex error is FATAL — the client permanently stops syncing → empty chats + "?" header avatar until the app is killed/reinstalled (explains why reinstall "fixes" it and in-place update triggers it). Root cause: `src/providers/useConvexAutoReconnect.ts` fired manual socket reconnects during the boot/auth-handshake window, racing the SDK's own connect/auth and corrupting the session resume version. Fixes:
   - `hardReconnect` now uses the SDK's intended `webSocketManager.closeAndReconnect('client')` (the same coordinated path Convex uses for InactiveServer/FailedToSend) instead of the low-level `stop()+tryRestart()` (which restarted the socket OUTSIDE the SDK lifecycle → version desync). Legacy fallback retained if API shape changes.

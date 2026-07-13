@@ -186,6 +186,11 @@ interface BubbleProps {
   // iter-337: resolved sender name for GROUP incoming bubbles (device-contact
   // name first, Google/account name fallback). Undefined → not shown.
   senderDisplayName?: string;
+  // iter-323 "Receive once" 🔂: when the backend hides a duplicate file for
+  // this viewer (`msg.receiveOnceHidden === true`), we render a tappable
+  // footprint instead of the media. Tapping fires this so the parent can offer
+  // "View original" / "Allow receipt".
+  onReceiveOncePress?: () => void;
 }
 
 export default function MediaBubble({
@@ -204,6 +209,7 @@ export default function MediaBubble({
   onPressParent,
   isJumpHighlighted,
   senderDisplayName,
+  onReceiveOncePress,
 }: BubbleProps) {
   const time = msg._creationTime ? new Date(msg._creationTime) : new Date();
   const timeStr = time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -308,6 +314,40 @@ export default function MediaBubble({
         })
       : timeStr;
   const isEdited = !!editedAtMs || msg.edited === true || msg.isEdited === true;
+
+  // iter-323 "Receive once" 🔂: a duplicate file the backend has hidden for
+  // this viewer. Show a tappable footprint (like the deleted tombstone) —
+  // tapping opens "View original / Allow receipt". mediaUrl is omitted by the
+  // server when hidden, so we must return BEFORE any media-render path.
+  if (msg.receiveOnceHidden === true) {
+    return (
+      <View style={[styles.bubbleRow, isMine ? styles.bubbleRowMine : styles.bubbleRowOther]}>
+        <TouchableOpacity
+          activeOpacity={0.75}
+          onPress={onReceiveOncePress}
+          style={[
+            styles.bubble,
+            isMine ? styles.bubbleMine : styles.bubbleOther,
+            bubbleDynamicStyle,
+            styles.deletedBubble,
+          ]}
+          testID={`message-bubble-receive-once-${msg._id}`}
+        >
+          <View style={styles.receiveOnceRow}>
+            <Feather name="rotate-cw" size={13} color={Colors.textMuted} />
+            <Text style={[styles.bubbleText, bubbleTextStyle, styles.deletedText]}>
+              file deleted for multiple receipt
+            </Text>
+          </View>
+          <View style={styles.bubbleMeta}>
+            <Text style={[styles.bubbleTime, styles.deletedTimeText, { color: metaTextColor }]}>
+              {timeStr}
+            </Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   if (msg.deletedAt || msg.isDeleted === true) {
     // Web-app parity: the web uses a unified `isDeleted` boolean (set
@@ -2313,6 +2353,7 @@ const styles = StyleSheet.create({
   deletedTimeText: { fontStyle: 'italic', opacity: 0.85 },
   deletedContent: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   deletedText: { fontStyle: 'italic', color: Colors.textMuted },
+  receiveOnceRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   // editedBadge — italic "edited HH:MM" rendered before the real time
   // stamp inside the bubble meta row. Per web-app design parity.
   editedBadge: { fontStyle: 'italic', marginRight: 6, opacity: 0.85 },

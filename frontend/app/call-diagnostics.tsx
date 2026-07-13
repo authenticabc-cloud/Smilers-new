@@ -26,6 +26,7 @@ import {
   clearStoredDiagnostics,
   type DiagnosticEvent,
 } from '../src/lib/diagnostics';
+import { useAuth, type SessionHealth, type StoredValueInfo } from '../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Spacing, Radius } from '../src/theme';
 
 type FilterKey = 'calls' | 'push' | 'all';
@@ -62,6 +63,44 @@ const fmtDate = (ts: number): string => {
   }
 };
 
+// iter-316: human-friendly "how long ago" for the Session health card.
+const fmtRelative = (ts: number | null): string => {
+  if (!ts) return 'never';
+  const diff = Date.now() - ts;
+  if (diff < 0) {
+    // future (e.g. token expiry) → "in Xm"
+    const ahead = Math.abs(diff);
+    if (ahead < 60_000) return `in ${Math.round(ahead / 1000)}s`;
+    if (ahead < 3_600_000) return `in ${Math.round(ahead / 60_000)}m`;
+    return `in ${Math.round(ahead / 3_600_000)}h`;
+  }
+  if (diff < 60_000) return `${Math.round(diff / 1000)}s ago`;
+  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
+  return `${Math.round(diff / 86_400_000)}d ago`;
+};
+
+// A backend is "safe" for persistence if the token survives an app relaunch.
+const isSafeBackend = (b: StoredValueInfo['backend']): boolean =>
+  b === 'securestore' || b === 'securestore-chunked' || b === 'securestore-legacy' || b === 'localStorage';
+
+const backendLabel = (info: StoredValueInfo): string => {
+  switch (info.backend) {
+    case 'securestore':
+      return 'SecureStore';
+    case 'securestore-chunked':
+      return `SecureStore (chunked ×${info.chunks ?? '?'})`;
+    case 'securestore-legacy':
+      return 'SecureStore (legacy)';
+    case 'asyncstorage-fallback':
+      return 'AsyncStorage (fallback)';
+    case 'localStorage':
+      return 'localStorage (web)';
+    default:
+      return 'not stored';
+  }
+};
+
 const tagColor = (tag: string): string => {
   const t = tag.toLowerCase();
   if (t.includes('twilio') || t.includes('call')) return Colors.primary;
@@ -72,7 +111,9 @@ const tagColor = (tag: string): string => {
 
 export default function CallDiagnosticsScreen() {
   const router = useRouter();
+  const { getSessionHealth } = useAuth();
   const [events, setEvents] = useState<DiagnosticEvent[]>([]);
+  const [health, setHealth] = useState<SessionHealth | null>(null);
   const [filter, setFilter] = useState<FilterKey>('calls');
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -82,8 +123,13 @@ export default function CallDiagnosticsScreen() {
     const stored = await getStoredDiagnostics();
     // newest first
     setEvents([...stored].reverse());
+    try {
+      setHealth(await getSessionHealth());
+    } catch {
+      setHealth(null);
+    }
     setLoading(false);
-  }, []);
+  }, [getSessionHealth]);
 
   useFocusEffect(
     useCallback(() => {
@@ -146,6 +192,94 @@ export default function CallDiagnosticsScreen() {
           </TouchableOpacity>
         </View>
       </View>
+
+      {health ? (
+        <View
+          style={[
+            styles.healthCard,
+            health.refreshToken.backend === 'asyncstorage-fallback' && styles.healthCardWarn,
+          ]}
+          testID="session-health-card"
+        >
+          <View style={styles.healthTitleRow}>
+            <Feather
+              name="shield"
+              size={15}
+              color={health.authenticated && !health.sessionExpired ? Colors.success : Colors.danger}
+            />
+            <Text style={styles.healthTitle}>Session health</Text>
+            <View style={styles.flexOne} />
+            <View
+              style={[
+                styles.healthStatusPill,
+                {
+                  backgroundColor: health.sessionExpired
+                    ? `${Colors.danger}22`
+                    : health.authenticated
+                      ? `${Colors.success}22`
+                      : `${Colors.textSecondary}22`,
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.healthStatusText,
+                  { color: health.sessionExpired ? Colors.danger : health.authenticated ? Colors.success : Colors.textSecondary },
+                ]}
+              >
+                {health.sessionExpired ? 'Expired' : health.authenticated ? 'Signed in' : 'Signed out'}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.healthLine}>
+            <Text style={styles.healthLabel}>Last token refresh</Text>
+            <Text style={styles.healthValue}>{fmtRelative(health.lastRefreshAt)}</Text>
+          </View>
+          <View style={styles.healthLine}>
+            <Text style={styles.healthLabel}>Access token expires</Text>
+            <Text style={styles.healthValue}>{fmtRelative(health.tokenExpiry)}</Text>
+          </View>
+          <View style={styles.healthLine}>
+            <Text style={styles.healthLabel}>Refresh token storage</Text>
+            <Text
+              style={[
+                styles.healthValue,
+                !isSafeBackend(health.refreshToken.backend) && styles.healthValueWarn,
+              ]}
+            >
+              {backendLabel(health.refreshToken)}
+              {health.refreshToken.chars > 0 ? ` · ${health.refreshToken.chars}c` : ''}
+            </Text>
+          </View>
+          <View style={styles.healthLine}>
+            <Text style={styles.healthLabel}>ID token storage</Text>
+            <Text style={styles.healthValue}>
+              {backendLabel(health.idToken)}
+              {health.idToken.chars > 0 ? ` · ${health.idToken.chars}c` : ''}
+            </Text>
+          </View>
+          {health.lastRefreshError ? (
+            <View style={styles.healthLine}>
+              <Text style={styles.healthLabel}>Last refresh error</Text>
+              <Text style={[styles.healthValue, styles.healthValueWarn]} numberOfLines={1}>
+                {health.lastRefreshError}
+              </Text>
+            </View>
+          ) : null}
+          {health.refreshToken.backend === 'asyncstorage-fallback' ? (
+            <Text style={styles.healthNote}>
+              ⚠️ Refresh token stored via AsyncStorage fallback (SecureStore rejected it). Session
+              is preserved but less encrypted — report this if you see it.
+            </Text>
+          ) : health.refreshToken.backend === 'securestore-chunked' ? (
+            <Text style={styles.healthNoteOk}>
+              ✓ Large token safely chunked into SecureStore — survives relaunch (this is the
+              iter-316 fix in action).
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
 
       <View style={styles.filterRow}>
         {FILTERS.map((f) => {
@@ -213,6 +347,32 @@ const styles = StyleSheet.create({
   headerTitle: { flex: 1, fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   iconBtn: { padding: 6 },
+  healthCard: {
+    marginHorizontal: Spacing.base,
+    marginTop: Spacing.sm,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.md,
+    padding: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(0,0,0,0.08)',
+  },
+  healthCardWarn: { borderColor: Colors.danger, borderWidth: 1 },
+  healthTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+  healthTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  healthStatusPill: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: Radius.sm },
+  healthStatusText: { fontSize: FontSize.xs, fontWeight: FontWeight.bold },
+  healthLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 3 },
+  healthLabel: { fontSize: FontSize.xs, color: Colors.textSecondary, flexShrink: 0, marginRight: 12 },
+  healthValue: {
+    fontSize: FontSize.xs,
+    color: Colors.textPrimary,
+    fontWeight: FontWeight.semibold,
+    flexShrink: 1,
+    textAlign: 'right',
+  },
+  healthValueWarn: { color: Colors.danger },
+  healthNote: { marginTop: 8, fontSize: FontSize.xs, color: Colors.danger, lineHeight: 17 },
+  healthNoteOk: { marginTop: 8, fontSize: FontSize.xs, color: Colors.success, lineHeight: 17 },
   filterRow: {
     flexDirection: 'row',
     alignItems: 'center',

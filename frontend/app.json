@@ -57,6 +57,11 @@
               "scheme": "https",
               "host": "smilers.online",
               "pathPrefix": "/auth/mobile-callback"
+            },
+            {
+              "scheme": "https",
+              "host": "smilers.online",
+              "pathPrefix": "/u/"
             }
           ],
           "category": [

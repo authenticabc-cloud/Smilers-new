@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { AppState, NativeModules, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useQuery } from 'convex/react';
+import { useMutation, useQuery } from 'convex/react';
 import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
 import { isTwilioEnabled } from '../lib/twilio/twilioApi';
@@ -110,6 +110,15 @@ export function useIncomingCallListener() {
       }
     }
   }, [incomingCall]);
+  // iter-342: reachability ack. As SOON as this device's reactive query sees
+  // the incoming ringing call, tell the backend the call reached us so the
+  // CALLER shows a definitive "Ringing…". This fires whenever JS is alive
+  // (foreground OR backgrounded-but-not-killed) — so a collapsed heads-up
+  // notification no longer makes the caller flip to "Not Ringing", and it also
+  // acks in the call-waiting case (user already on another call). Fully-killed
+  // apps still need the native FCM handler to ack (Ashwini).
+  const markCalleeRinging = useMutation((api as any).calls.markCalleeRinging);
+  const ackedCallId = useRef<string | null>(null);
 
   useEffect(() => {
     if (!incomingCall || !incomingCall._id) return;
@@ -134,6 +143,16 @@ export function useIncomingCallListener() {
     if (myId && recordCallerId && myId === recordCallerId) {
       handledCallId.current = incomingCall._id;
       return;
+    }
+
+    // iter-342: it's a genuine incoming ringing call for me → ack reachability
+    // NOW (idempotent backend-side), before any of the navigation/call-waiting
+    // guards below, so the caller sees "Ringing…" the instant it reaches us.
+    if (ackedCallId.current !== incomingCall._id) {
+      ackedCallId.current = incomingCall._id;
+      void markCalleeRinging({ callId: String(incomingCall._id) }).catch(() => {
+        ackedCallId.current = null; // allow a retry on the next tick
+      });
     }
 
     // iter-325 CALL WAITING: if the user is ALREADY on an active call, do NOT
@@ -292,5 +311,5 @@ export function useIncomingCallListener() {
     userAnsweredRef.current = true;
     dismissNativeRingNotification(String(incomingCall._id), conversationId);
     router.push(incUrl as any);
-  }, [incomingCall, router, me]);
+  }, [incomingCall, router, me, markCalleeRinging]);
 }

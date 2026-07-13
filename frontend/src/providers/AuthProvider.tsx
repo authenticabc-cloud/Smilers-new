@@ -3,6 +3,7 @@ import { AppState, AppStateStatus, Platform } from 'react-native';
 import * as AuthSession from 'expo-auth-session';
 import * as SecureStore from 'expo-secure-store';
 import * as WebBrowser from 'expo-web-browser';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { sentry } from '../lib/sentry';
 import { setDiagnosticUser } from '../lib/diagnostics';
 import { callDebug } from '../lib/callDebugLog';
@@ -20,42 +21,221 @@ const STORAGE_KEYS = {
   TOKEN_EXPIRY: 'smilers_token_expiry',
 };
 
+// ────────────────────────────────────────────────────────────────────────────
 // Storage abstraction — SecureStore on native, localStorage fallback on web
+// ────────────────────────────────────────────────────────────────────────────
+//
+// iter-316 CRITICAL AUTH FIX — "Your sign-in session expired or couldn't be
+// refreshed" (terminal logout only fixed by reinstall).
+//
+// ROOT CAUSE: Android's SecureStore (EncryptedSharedPreferences) rejects values
+// larger than ~2048 bytes. Rotated OIDC refresh tokens (and rich id_tokens)
+// routinely exceed that. The OLD `setItem` swallowed the write error with
+// `catch {}`, so the freshly-rotated refresh token was SILENTLY dropped while
+// the server had already retired the previous one. On the next launch we
+// refreshed against the now-dead token → `invalid_grant` → sessionExpired →
+// the user was kicked out until they reinstalled the app.
+//
+// FIX (per Hercules OIDC storage playbook): CHUNK large values across multiple
+// <2KB SecureStore entries, fall back to AsyncStorage if SecureStore still
+// fails, and NEVER swallow write failures silently — every failure is logged
+// to the in-app diagnostics so a stored token is never lost unnoticed.
+// Existing single-key (legacy) values are still read transparently and are
+// re-written in the new format on the next save (one-time migration).
+const SECURE_CHUNK_SIZE = 1800; // chars; conservative margin under the ~2KB limit
+const META_SUFFIX = '__meta';
+const CHUNK_SUFFIX = '__chunk_';
+
+const isWeb = Platform.OS === 'web';
+
+function webGet(key: string): string | null {
+  if (typeof window !== 'undefined' && window.localStorage) return window.localStorage.getItem(key);
+  return null;
+}
+function webSet(key: string, value: string): void {
+  if (typeof window !== 'undefined' && window.localStorage) window.localStorage.setItem(key, value);
+}
+function webRemove(key: string): void {
+  if (typeof window !== 'undefined' && window.localStorage) window.localStorage.removeItem(key);
+}
+
+// Write `value` to SecureStore, chunking if it exceeds the size limit. Throws on
+// failure (after cleaning up any partial chunks) so the caller can fall back.
+async function secureWriteChunked(key: string, value: string): Promise<void> {
+  if (value.length <= SECURE_CHUNK_SIZE) {
+    await SecureStore.setItemAsync(key, value);
+    await SecureStore.setItemAsync(key + META_SUFFIX, JSON.stringify({ strategy: 'single' }));
+    return;
+  }
+  const chunks: string[] = [];
+  for (let offset = 0; offset < value.length; offset += SECURE_CHUNK_SIZE) {
+    chunks.push(value.slice(offset, offset + SECURE_CHUNK_SIZE));
+  }
+  try {
+    for (let i = 0; i < chunks.length; i += 1) {
+      await SecureStore.setItemAsync(`${key}${CHUNK_SUFFIX}${i}`, chunks[i]);
+    }
+    await SecureStore.setItemAsync(key + META_SUFFIX, JSON.stringify({ strategy: 'chunks', count: chunks.length }));
+  } catch (err) {
+    // Roll back partial writes so a later read never reconstructs a corrupt value.
+    for (let i = 0; i < chunks.length; i += 1) {
+      await SecureStore.deleteItemAsync(`${key}${CHUNK_SUFFIX}${i}`).catch(() => {});
+    }
+    await SecureStore.deleteItemAsync(key + META_SUFFIX).catch(() => {});
+    throw err;
+  }
+}
+
+async function secureReadChunked(key: string): Promise<string | null> {
+  const metaRaw = await SecureStore.getItemAsync(key + META_SUFFIX);
+  if (!metaRaw) {
+    // No metadata → legacy single-key value (or nothing).
+    return SecureStore.getItemAsync(key);
+  }
+  let meta: { strategy?: string; count?: number };
+  try {
+    meta = JSON.parse(metaRaw);
+  } catch {
+    return SecureStore.getItemAsync(key);
+  }
+  if (meta.strategy === 'single') return SecureStore.getItemAsync(key);
+  if (meta.strategy === 'chunks' && typeof meta.count === 'number') {
+    const parts: string[] = [];
+    for (let i = 0; i < meta.count; i += 1) {
+      const part = await SecureStore.getItemAsync(`${key}${CHUNK_SUFFIX}${i}`);
+      if (part == null) return null; // incomplete → treat as missing, don't reconstruct garbage
+      parts.push(part);
+    }
+    return parts.join('');
+  }
+  return null;
+}
+
+async function secureRemoveChunked(key: string): Promise<void> {
+  const metaRaw = await SecureStore.getItemAsync(key + META_SUFFIX);
+  if (metaRaw) {
+    try {
+      const meta = JSON.parse(metaRaw) as { strategy?: string; count?: number };
+      if (meta.strategy === 'chunks' && typeof meta.count === 'number') {
+        for (let i = 0; i < meta.count; i += 1) {
+          await SecureStore.deleteItemAsync(`${key}${CHUNK_SUFFIX}${i}`).catch(() => {});
+        }
+      }
+    } catch {
+      /* fall through */
+    }
+    await SecureStore.deleteItemAsync(key + META_SUFFIX).catch(() => {});
+  }
+  await SecureStore.deleteItemAsync(key).catch(() => {});
+}
+
+// iter-316: describe HOW a value is currently persisted (which backend, size,
+// chunk count) — powers the on-device "Session health" card so the user can
+// confirm token persistence on their real device without pulling logs.
+export interface StoredValueInfo {
+  backend:
+    | 'securestore'
+    | 'securestore-chunked'
+    | 'securestore-legacy'
+    | 'asyncstorage-fallback'
+    | 'localStorage'
+    | 'none';
+  chars: number;
+  chunks?: number;
+}
+
+async function describeStoredValue(key: string): Promise<StoredValueInfo> {
+  if (isWeb) {
+    const v = webGet(key);
+    return { backend: v != null ? 'localStorage' : 'none', chars: v?.length ?? 0 };
+  }
+  const metaRaw = await SecureStore.getItemAsync(key + META_SUFFIX).catch(() => null);
+  if (metaRaw) {
+    try {
+      const meta = JSON.parse(metaRaw) as { strategy?: string; count?: number };
+      if (meta.strategy === 'single') {
+        const v = await SecureStore.getItemAsync(key).catch(() => null);
+        return { backend: 'securestore', chars: v?.length ?? 0 };
+      }
+      if (meta.strategy === 'chunks') {
+        const full = await secureReadChunked(key).catch(() => null);
+        return { backend: 'securestore-chunked', chars: full?.length ?? 0, chunks: meta.count };
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  const legacy = await SecureStore.getItemAsync(key).catch(() => null);
+  if (legacy != null) return { backend: 'securestore-legacy', chars: legacy.length };
+  const asyncVal = await AsyncStorage.getItem(key).catch(() => null);
+  if (asyncVal != null) return { backend: 'asyncstorage-fallback', chars: asyncVal.length };
+  return { backend: 'none', chars: 0 };
+}
+
+export interface SessionHealth {
+  authenticated: boolean;
+  sessionExpired: boolean;
+  lastRefreshAt: number | null;
+  lastRefreshError: string | null;
+  refreshTokenDead: boolean;
+  tokenExpiry: number | null;
+  refreshToken: StoredValueInfo;
+  idToken: StoredValueInfo;
+  accessToken: StoredValueInfo;
+}
+
 const storage = {
   async getItem(key: string): Promise<string | null> {
+    if (isWeb) return webGet(key);
     try {
-      if (Platform.OS === 'web') {
-        if (typeof window !== 'undefined' && window.localStorage) {
-          return window.localStorage.getItem(key);
-        }
-        return null;
-      }
-      return await SecureStore.getItemAsync(key);
-    } catch {
-      return null;
+      const secureValue = await secureReadChunked(key);
+      if (secureValue != null) return secureValue;
+    } catch (err) {
+      callDebug.push('ERR', `AUTH storage.getItem(${key}) SecureStore read failed: ${String(err).slice(0, 120)}`);
     }
+    // AsyncStorage fallback (values written when SecureStore rejected them).
+    try {
+      const asyncValue = await AsyncStorage.getItem(key);
+      if (asyncValue != null) return asyncValue;
+    } catch {
+      /* ignore */
+    }
+    return null;
   },
   async setItem(key: string, value: string): Promise<void> {
+    if (isWeb) {
+      webSet(key, value);
+      return;
+    }
     try {
-      if (Platform.OS === 'web') {
-        if (typeof window !== 'undefined' && window.localStorage) {
-          window.localStorage.setItem(key, value);
-        }
-        return;
+      await secureWriteChunked(key, value);
+      // Success via SecureStore → drop any stale AsyncStorage fallback copy.
+      await AsyncStorage.removeItem(key).catch(() => {});
+      return;
+    } catch (secureErr) {
+      // SecureStore still failed (e.g. oversized even chunked, or keystore
+      // issue). Fall back to AsyncStorage so the ROTATED token is NEVER lost —
+      // losing it is what silently logs the user out. Log loudly; never swallow.
+      callDebug.push(
+        'ERR',
+        `AUTH storage.setItem(${key}) SecureStore FAILED (${String(secureErr).slice(0, 100)}) → AsyncStorage fallback`,
+      );
+      try {
+        await AsyncStorage.setItem(key, value);
+        // Clear any partial SecureStore state so reads prefer the fallback.
+        await secureRemoveChunked(key).catch(() => {});
+      } catch (asyncErr) {
+        callDebug.push('ERR', `AUTH storage.setItem(${key}) AsyncStorage fallback ALSO FAILED: ${String(asyncErr).slice(0, 100)}`);
       }
-      await SecureStore.setItemAsync(key, value);
-    } catch {}
+    }
   },
   async removeItem(key: string): Promise<void> {
-    try {
-      if (Platform.OS === 'web') {
-        if (typeof window !== 'undefined' && window.localStorage) {
-          window.localStorage.removeItem(key);
-        }
-        return;
-      }
-      await SecureStore.deleteItemAsync(key);
-    } catch {}
+    if (isWeb) {
+      webRemove(key);
+      return;
+    }
+    await secureRemoveChunked(key).catch(() => {});
+    await AsyncStorage.removeItem(key).catch(() => {});
   },
 };
 
@@ -81,6 +261,9 @@ interface AuthContextValue {
     expiresIn?: number;
   }) => Promise<void>;
   setAuthError: (msg: string | null) => void;
+  // iter-316: on-device session/token-persistence snapshot for the
+  // "Session health" diagnostics card.
+  getSessionHealth: () => Promise<SessionHealth>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -358,6 +541,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const setAuthError = useCallback((msg: string | null) => setLastError(msg), []);
+
+  // iter-316: snapshot of the current session + how each token is persisted.
+  const getSessionHealth = useCallback(async (): Promise<SessionHealth> => {
+    const [refreshInfo, idInfo, accessInfo] = await Promise.all([
+      describeStoredValue(STORAGE_KEYS.REFRESH_TOKEN),
+      describeStoredValue(STORAGE_KEYS.ID_TOKEN),
+      describeStoredValue(STORAGE_KEYS.ACCESS_TOKEN),
+    ]);
+    const expiryStr = await storage.getItem(STORAGE_KEYS.TOKEN_EXPIRY);
+    const expiry = expiryStr ? parseInt(expiryStr, 10) : 0;
+    return {
+      authenticated: !!idToken,
+      sessionExpired,
+      lastRefreshAt: lastRefreshAtRef.current || null,
+      lastRefreshError: lastRefreshErrorRef.current,
+      refreshTokenDead: refreshTokenDeadRef.current,
+      tokenExpiry: expiry || null,
+      refreshToken: refreshInfo,
+      idToken: idInfo,
+      accessToken: accessInfo,
+    };
+  }, [idToken, sessionExpired]);
 
   const storeTokens = useCallback(
     async (tokenResult: AuthSession.TokenResponse) => {
@@ -733,6 +938,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         getFreshIdToken,
         acceptTokens,
         setAuthError,
+        getSessionHealth,
       }}
     >
       {children}

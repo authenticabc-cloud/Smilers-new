@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { usePathname, useRouter } from 'expo-router';
 import { useAuth } from '../providers/AuthProvider';
 import { consumeResumableChatRoute } from '../lib/lastRoute';
+import { consumePendingChatWith } from '../lib/pendingChatLink';
 
 // Module-scoped so it only ever runs ONCE per app launch (cold start). A warm
 // foreground resume keeps the navigation stack in memory, so there's nothing
@@ -29,6 +30,19 @@ export default function ResumeLastRoute() {
 
     resumeAttempted = true;
     (async () => {
+      // Priority: a personal chat link tapped while signed out (`/u/<id>`)
+      // takes the user straight into that chat once they've authenticated.
+      const pendingChatWith = await consumePendingChatWith();
+      if (pendingChatWith) {
+        timerRef.current = setTimeout(() => {
+          try {
+            router.push(`/u/${pendingChatWith}?auto=1` as any);
+          } catch {
+            /* ignore */
+          }
+        }, 350);
+        return;
+      }
       const route = await consumeResumableChatRoute();
       if (!route) return;
       // Let the tabs settle, then confirm the user hasn't navigated away in the

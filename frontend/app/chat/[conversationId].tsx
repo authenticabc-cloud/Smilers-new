@@ -101,8 +101,11 @@ import { loadChatDraft, saveChatDraft, clearChatDraft, isChatDraftEmpty } from '
 import { rememberChatRoute } from '../../src/lib/lastRoute';
 import { translateIncomingMessageText } from '../../src/lib/translation';
 import { uploadFile } from '../../src/lib/uploadFile';
+import { computeFileHashFromUri } from '../../src/lib/fileHash';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { useConversationOtherUser } from '../../src/hooks/useConversationOtherUser';
+import { formatCityLocalTime } from '../../src/lib/localTime';
+import { cityFromTimezone, formatTimeDifference, getLocalTimezone } from '../../src/lib/localTime';
 import { useConversationE2EE } from '../../src/hooks/useConversationE2EE';
 import { useViewerSuspension } from '../../src/hooks/useViewerSuspension';
 import { decryptText } from '../../src/lib/e2eeCrypto';
@@ -737,6 +740,8 @@ export default function ChatScreen() {
   const respondToDeletionRequest = useMutation((api as any).messages.respondToDeletionRequest);
   const toggleReaction = useMutation(api.messages.toggleReaction);
   const deleteMessage = useMutation(api.messages.deleteMessage);
+  // iter-323 "Receive once" 🔂: reveal a hidden duplicate for this viewer.
+  const allowReceiptMutation = useMutation(api.messages.allowReceipt);
   // iter-322: PER-VIEWER deletes ("Delete for me" / "Delete for receiver") are
   // handled by the shared Convex backend by REMOVING the message from the
   // actor's query results entirely (verified w/ Emergent support) — it does NOT
@@ -1402,6 +1407,60 @@ export default function ChatScreen() {
       }, 1800);
     },
     [timeline],
+  );
+
+  // iter-323 "Receive once" 🔂: tapping the "file deleted for multiple
+  // receipt" footprint offers to jump to the ORIGINAL copy of the file (in
+  // this or another conversation) or to reveal (allow) this hidden copy.
+  const handleReceiveOnceTombstone = useCallback(
+    (message: any) => {
+      const fileHash = message?.fileHash ? String(message.fileHash) : '';
+      const messageId = message?._id ? String(message._id) : '';
+      const buttons: any[] = [];
+      if (fileHash) {
+        buttons.push({
+          text: 'View original',
+          onPress: async () => {
+            try {
+              const origin: any = await convex.query((api as any).messages.getReceiveOnceOrigin, { fileHash });
+              if (!origin || !origin.firstMessageId) {
+                Alert.alert('Original not found', 'The first copy of this file is no longer available.');
+                return;
+              }
+              const originConvId = String(origin.firstConversationId || '');
+              const originMsgId = String(origin.firstMessageId || '');
+              if (originConvId && originConvId === String(conversationId)) {
+                jumpToMessage(originMsgId);
+              } else if (originConvId) {
+                router.push(`/chat/${originConvId}?mid=${originMsgId}` as any);
+              }
+            } catch {
+              Alert.alert('Could not open original', 'Please try again.');
+            }
+          },
+        });
+      }
+      if (messageId) {
+        buttons.push({
+          text: 'Allow receipt',
+          onPress: async () => {
+            try {
+              await allowReceiptMutation({ messageId });
+              await refetchMessages();
+            } catch {
+              Alert.alert('Could not allow receipt', 'Please try again.');
+            }
+          },
+        });
+      }
+      buttons.push({ text: 'Cancel', style: 'cancel' });
+      Alert.alert(
+        'File received before',
+        'You already received this file, so this copy was hidden. You can view the original or allow this copy.',
+        buttons,
+      );
+    },
+    [allowReceiptMutation, conversationId, convex, jumpToMessage, refetchMessages, router],
   );
 
   useEffect(
@@ -2138,6 +2197,9 @@ export default function ChatScreen() {
         callDebug.push('IMG', `upload OK storageId=${String(storageId).slice(0, 10)}…`);
         const meta = await getMediaMeta(uri, mimeType || 'image/jpeg', 'image');
         callDebug.push('IMG', `meta name=${meta.fileName} size=${meta.fileSize}`);
+        // iter-323 "Receive once": SHA-256 of the plaintext file bytes so the
+        // backend can hide duplicate copies for a receiver.
+        const fileHash = await computeFileHashFromUri(uri);
         await sendMessage({
           conversationId,
           type: 'image',
@@ -2150,6 +2212,7 @@ export default function ChatScreen() {
           fileName: meta.fileName,
           fileSize: meta.fileSize,
           mimeType: mimeType || 'image/jpeg',
+          ...(fileHash ? { fileHash } : {}),
           ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
         });
         callDebug.push('IMG', 'messages.send OK');
@@ -2248,7 +2311,8 @@ export default function ChatScreen() {
         const mime = asset.mimeType || 'video/mp4';
         const storageId = await uploadFile(convex, asset.uri, mime);
         const vmeta = await getMediaMeta(asset.uri, mime, 'video');
-        const sentVideoId: any = await sendMessage({ conversationId, type: 'video', storageId, fileName: (asset as any)?.fileName || vmeta.fileName, fileSize: (asset as any)?.fileSize || vmeta.fileSize, mimeType: mime });
+        const videoHash = await computeFileHashFromUri(asset.uri);
+        const sentVideoId: any = await sendMessage({ conversationId, type: 'video', storageId, fileName: (asset as any)?.fileName || vmeta.fileName, fileSize: (asset as any)?.fileSize || vmeta.fileSize, mimeType: mime, ...(videoHash ? { fileHash: videoHash } : {}) });
         const messageId = typeof sentVideoId === 'string'
           ? sentVideoId
           : (sentVideoId?._id || sentVideoId?.id || '');
@@ -2305,7 +2369,8 @@ export default function ChatScreen() {
       const mime = asset.mimeType || 'video/mp4';
       const storageId = await uploadFile(convex, asset.uri, mime);
       const vmeta = await getMediaMeta(asset.uri, mime, 'video');
-      const sentVideoId: any = await sendMessage({ conversationId, type: 'video', storageId, fileName: (asset as any)?.fileName || vmeta.fileName, fileSize: (asset as any)?.fileSize || vmeta.fileSize, mimeType: mime });
+      const videoHash = await computeFileHashFromUri(asset.uri);
+      const sentVideoId: any = await sendMessage({ conversationId, type: 'video', storageId, fileName: (asset as any)?.fileName || vmeta.fileName, fileSize: (asset as any)?.fileSize || vmeta.fileSize, mimeType: mime, ...(videoHash ? { fileHash: videoHash } : {}) });
       await refetchMessages();
       const messageId = typeof sentVideoId === 'string'
         ? sentVideoId
@@ -2396,6 +2461,7 @@ export default function ChatScreen() {
       const mime = file.mimeType || 'application/octet-stream';
       const replyToMessageId = replyTo?._id;
       const storageId = await uploadFile(convex, file.uri, mime);
+      const docHash = await computeFileHashFromUri(file.uri);
       await sendMessage({
         conversationId,
         type: 'file',
@@ -2403,6 +2469,7 @@ export default function ChatScreen() {
         mimeType: mime,
         fileName: file.name,
         fileSize: file.size,
+        ...(docHash ? { fileHash: docHash } : {}),
         ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
       });
       setReplyTo(null);
@@ -3382,6 +3449,27 @@ export default function ChatScreen() {
     }),
     [hydratedConversation, savedContactRecord],
   );
+
+  // iter-319: peer CITY + LOCAL TIME for the DM header. Read the other user's
+  // IANA timezone (getUserById is contract-guaranteed to return it) and derive
+  // a "City HH:MM local time" label shown between the name and last-seen.
+  const { data: peerProfileForTz } = useSafeConvexQuery<any | null>(
+    (api as any).users?.getUserById,
+    callCalleeId ? { userId: callCalleeId } : {},
+    null,
+    !!callCalleeId,
+  );
+  const peerTimezone =
+    (mergedPresenceSource as any)?.otherUser?.timezone ||
+    (peerProfileForTz as any)?.timezone ||
+    null;
+  const [nowTick, setNowTick] = useState<number>(() => Date.now());
+  useEffect(() => {
+    if (!peerTimezone) return;
+    const id = setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, [peerTimezone]);
+
   // iter-111: isDiary detection REMOVED. Diary is now a fully separate
   // local-only screen (/app/diary.tsx) — the chat screen no longer has
   // any awareness of Diary mode. This eliminates the iter-109 leak
@@ -3435,6 +3523,24 @@ export default function ChatScreen() {
   const subtitle = isBroadcastReadOnly
     ? 'Announcement · read-only'
     : (typingLabel || formatPresenceSubtitle(mergedPresenceSource));
+  // iter-319: DM-only city + local time (hidden for broadcast; groups have no
+  // single peer so `peerTimezone` is naturally null → label null).
+  const isGroupConversation =
+    (mergedPresenceSource as any)?.type === 'group' ||
+    (hydratedConversation as any)?.isGroup === true;
+  const cityLocalTimeLabel =
+    !isBroadcastReadOnly && !isGroupConversation
+      ? formatCityLocalTime(peerTimezone, new Date(nowTick))
+      : null;
+  // iter-319b: tapping the city/time line shows the full offset vs YOU.
+  const onPressCityTime = useCallback(() => {
+    const time = formatCityLocalTime(peerTimezone, new Date());
+    const diff = formatTimeDifference(peerTimezone, getLocalTimezone(), new Date());
+    Alert.alert(
+      cityFromTimezone(peerTimezone) || 'Local time',
+      [time, diff].filter(Boolean).join('\n') || 'Local time unavailable',
+    );
+  }, [peerTimezone]);
   const avatarInitial = getDisplayInitials(title);
   // DM-only online state for the header avatar dot (mirrors web). Online if the
   // peer flag is set or they were seen within 2 min; never on groups/broadcast.
@@ -3618,6 +3724,13 @@ export default function ChatScreen() {
             </View>
             <View style={styles.headerTextWrap}>
               <Text style={styles.chatHeaderTitle} numberOfLines={1} testID="chat-header-title">{title}</Text>
+              {cityLocalTimeLabel ? (
+                <TouchableOpacity onPress={onPressCityTime} hitSlop={6} testID="chat-header-citytime-btn" activeOpacity={0.6}>
+                  <Text style={styles.chatHeaderCityTime} numberOfLines={1} testID="chat-header-citytime">
+                    {cityLocalTimeLabel}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
               <Text style={styles.chatHeaderSubtitle} numberOfLines={1} testID="chat-header-subtitle">{subtitle}</Text>
             </View>
           </TouchableOpacity>
@@ -4073,6 +4186,7 @@ export default function ChatScreen() {
                       }
                       parentMsg={parentMsg}
                       onPressParent={parentMsg ? () => jumpToMessage(parentId) : undefined}
+                      onReceiveOncePress={() => handleReceiveOnceTombstone(item)}
                       isJumpHighlighted={jumpHighlightId === String(item._id)}
                       appearance={chatAppearance}
                       e2eeStatus={e2eeStatus}
@@ -4973,6 +5087,13 @@ const styles = StyleSheet.create({
     marginTop: 3,
     fontSize: 14,
     color: 'rgba(255,255,255,0.92)',
+    fontWeight: FontWeight.medium,
+  },
+  chatHeaderCityTime: {
+    // iter-319: peer city + local time, sits between name and last-seen.
+    marginTop: 2,
+    fontSize: 12.5,
+    color: 'rgba(255,255,255,0.78)',
     fontWeight: FontWeight.medium,
   },
   encryptionBanner: {
