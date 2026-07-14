@@ -35,6 +35,7 @@ import { SharedContactBubble } from '../../src/components/chat/SharedContactBubb
 import EmojiPickerSheet from '../../src/components/EmojiPickerSheet';
 import GiphyPicker, { GiphyAsset } from '../../src/components/GiphyPicker';
 import MediaBubble from '../../src/components/MediaBubble';
+import { ChatMessageRow } from '../../src/components/chat/ChatMessageRow';
 import MessageInfoSheet from '../../src/components/chat/MessageInfoSheet';
 import { processComposerChange, toggleListFormat, currentLineListKind } from '../../src/lib/autoNumbering';
 import { LiveLocationRequestBanner } from '../../src/components/LiveLocationRequestBanner';
@@ -113,13 +114,10 @@ import ScheduleMessageSheet, { ScheduleSelection } from '../../src/components/Sc
 import CameraCapture from '../../src/components/CameraCapture';
 import { Colors } from '../../src/theme';
 import { styles } from '../../src/components/chat/chatScreenStyles';
-import { formatChatDayChip, isSameCalendarDay } from '../../src/lib/chatFormat';
-import { CallPill } from '../../src/components/chat/CallPill';
 import { RecordingPlaybackModal } from '../../src/components/chat/RecordingPlayback';
 import { EditPermissionModals } from '../../src/components/chat/EditPermissionModals';
 import { friendlyConvexError } from '../../src/lib/friendlyError';
 import { ChatOptionsMenu } from '../../src/components/chat/ChatOptionsMenu';
-import { SwipeToReply } from '../../src/components/chat/SwipeToReply';
 import { MessageActionSheet } from '../../src/components/chat/MessageActionSheet';
 import { DeleteMessageSheet } from '../../src/components/chat/DeleteMessageSheet';
 import { DisappearingSheet, DISAPPEARING_OPTIONS } from '../../src/components/chat/DisappearingSheet';
@@ -4102,133 +4100,41 @@ export default function ChatScreen() {
             data={timeline}
             keyExtractor={(item: any) => item._id}
             contentContainerStyle={styles.listContent}
-            renderItem={({ item, index }) => {
-              const previous = index > 0 ? timeline[index - 1] : null;
-              const showDayChip = !previous || !isSameCalendarDay(item?._creationTime, previous?._creationTime);
-              // Call-log pill branch (iter 156, web parity).
-              if (item?.__kind === 'call') {
-                return (
-                  <>
-                    {showDayChip ? (
-                      <View style={styles.dayChipWrap} testID={`chat-day-chip-${item._id}`}>
-                        <Text style={styles.dayChipText}>{formatChatDayChip(item?._creationTime)}</Text>
-                      </View>
-                    ) : null}
-                    <CallPill
-                      item={item}
-                      hasRecording={item.wasRecorded && recordingByCallId.has(item._callId)}
-                      onPress={() => {
-                        const rec = recordingByCallId.get(item._callId);
-                        if (rec && rec.url) {
-                          setActiveRecording({
-                            url: String(rec.url),
-                            durationSeconds: Number(rec.durationSeconds || item.durationSeconds || 0),
-                            callType: item.callType,
-                            outcome: item.outcome,
-                          });
-                        }
-                      }}
-                      onCallBack={(callType) => {
-                        // iter-231/232: route call-backs through the same
-                        // Twilio path as the header call buttons, using the
-                        // canonical callee resolver (was reading only
-                        // otherUser.userId → empty → legacy WebRTC fallback).
-                        startCall({
-                          router,
-                          callerIdentity: String(me?._id || ''),
-                          callerDisplayName: String((me as any)?.name || (me as any)?.displayName || ''),
-                          calleeIdentities: callCalleeId ? [callCalleeId] : [],
-                          conversationId: String(conversationId || ''),
-                          isVideo: callType === 'video',
-                          displayName: title,
-                        });
-                      }}
-                      testID={`chat-call-pill-${item._id}`}
-                    />
-                  </>
-                );
-              }
-              return (
-                <>
-                  {showDayChip ? (
-                    <View style={styles.dayChipWrap} testID={`chat-day-chip-${item._id}`}>
-                      <Text style={styles.dayChipText}>{formatChatDayChip(item?._creationTime)}</Text>
-                    </View>
-                  ) : null}
-                  <SwipeToReply
-                    // iter-185 WhatsApp-style swipe-to-reply. Disabled in
-                    // multi-select mode (pan conflicts with tap-to-toggle),
-                    // for suspended viewers, and on deleted messages.
-                    enabled={!viewerSuspension && !isBroadcastReadOnly && !multiSelectIds && !item.deletedAt && !item.__outbox && isConversationAvailable}
-                    onReply={() => {
-                      setReplyTo(item);
-                      messageInputRef.current?.focus();
-                    }}
-                  >
-                    {(() => {
-                      // Backend field name normalisation (iter-101):
-                      // Smilers Convex stores the parent reference under
-                      // `replyToId` per the public spec, but the mobile
-                      // client historically wrote `replyToMessageId`.
-                      // Look up by either to be robust against both
-                      // historical AND fresh messages.
-                      const parentId = item.replyToId || item.replyToMessageId;
-                      const parentMsg = parentId ? msgById.get(parentId) : undefined;
-                      return (
-                    <MediaBubble
-                      msg={item}
-                      isMine={item.senderId === effectiveMe?._id}
-                      myUserId={effectiveMe?._id}
-                      senderDisplayName={
-                        isGroupChat && item.senderId !== effectiveMe?._id
-                          ? resolveSenderName(item.senderId, item.senderName)
-                          : undefined
-                      }
-                      parentMsg={parentMsg}
-                      onPressParent={parentMsg ? () => jumpToMessage(parentId) : undefined}
-                      onReceiveOncePress={() => handleReceiveOnceTombstone(item)}
-                      isJumpHighlighted={jumpHighlightId === String(item._id)}
-                      appearance={chatAppearance}
-                      e2eeStatus={e2eeStatus}
-                      onLongPress={viewerSuspension || isBroadcastReadOnly ? () => {} : () => {
-                        // While in multi-select mode, long-press is reserved
-                        // for toggling selection (matching the easier muscle
-                        // memory of "tap to toggle, long-press to enter").
-                        if (multiSelectIds) {
-                          onToggleMultiSelect(String(item._id));
-                          return;
-                        }
-                        // Local outbox (RED) messages aren't on the server yet —
-                        // the action sheet's server ops don't apply. Long-press
-                        // retries the send instead.
-                        if (item.__outbox) {
-                          void flushOutbox();
-                          return;
-                        }
-                        onLongPressMessage(item);
-                      }}
-                      onPress={
-                        item.__outbox
-                          ? () => { void flushOutbox(); }
-                          : multiSelectIds
-                            ? () => onToggleMultiSelect(String(item._id))
-                            : undefined
-                      }
-                      multiSelected={multiSelectIds ? multiSelectIds.includes(String(item._id)) : undefined}
-                      searchTerm={searchTermNorm || null}
-                      isActiveSearchMatch={activeMatchTimelineIdx >= 0 && index === activeMatchTimelineIdx}
-                      onToggleReaction={
-                        viewerSuspension || isBroadcastReadOnly || multiSelectIds
-                          ? () => {}
-                          : (emoji) => onToggleMyReaction(item._id, emoji)
-                      }
-                    />
-                      );
-                    })()}
-                  </SwipeToReply>
-                </>
-              );
-            }}
+            renderItem={({ item, index }) => (
+              <ChatMessageRow
+                item={item}
+                index={index}
+                timeline={timeline}
+                recordingByCallId={recordingByCallId}
+                setActiveRecording={setActiveRecording}
+                router={router}
+                me={me}
+                effectiveMe={effectiveMe}
+                callCalleeId={callCalleeId}
+                conversationId={conversationId}
+                title={title}
+                viewerSuspension={viewerSuspension}
+                isBroadcastReadOnly={isBroadcastReadOnly}
+                multiSelectIds={multiSelectIds}
+                isConversationAvailable={isConversationAvailable}
+                setReplyTo={setReplyTo}
+                messageInputRef={messageInputRef}
+                msgById={msgById}
+                jumpToMessage={jumpToMessage}
+                jumpHighlightId={jumpHighlightId}
+                handleReceiveOnceTombstone={handleReceiveOnceTombstone}
+                chatAppearance={chatAppearance}
+                e2eeStatus={e2eeStatus}
+                isGroupChat={isGroupChat}
+                resolveSenderName={resolveSenderName}
+                onToggleMultiSelect={onToggleMultiSelect}
+                flushOutbox={flushOutbox}
+                onLongPressMessage={onLongPressMessage}
+                searchTermNorm={searchTermNorm}
+                activeMatchTimelineIdx={activeMatchTimelineIdx}
+                onToggleMyReaction={onToggleMyReaction}
+              />
+            )}
             onScroll={(e) => {
               // iter-231: remember if the user is near the bottom. Used to
               // decide whether content-size changes should snap to the latest
