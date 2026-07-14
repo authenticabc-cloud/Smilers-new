@@ -666,6 +666,59 @@ function TwilioCallScreenInner() {
     return () => clearTimeout(t);
   }, [isCaller, host.state, host.participants, host.session, roomName, closeScreen]);
 
+  // sml-007: caller-only IMMEDIATE close when the callee declines (or the
+  // room is otherwise torn down) before ever answering. The existing
+  // disconnected/failed effect further up (hadConnectedRef-gated) only fires
+  // once OUR OWN session reached 'connected' at least once; a fast decline
+  // that lands while we're still 'connecting' falls through that guard and
+  // was previously only caught by the 35s no-answer timeout above — so the
+  // caller sat on the ring screen for the full window even though the
+  // callee declined within a second or two. Scoped to isCaller + zero
+  // participants so it can't fire once a call is genuinely connected (the
+  // "remote left" effect owns that) and never touches the callee's own
+  // "stay so I can retry" behavior on an initial connection failure.
+  useEffect(() => {
+    if (!isCaller) return;
+    if ((host.participants?.length || 0) > 0) return;
+    if (host.state !== 'disconnected' && host.state !== 'failed') return;
+    if (navigatedRef.current) return;
+    recordDiagnostic({
+      tag: 'TWILIO-CALL',
+      source: 'screen',
+      message: `caller-early-end room=${roomName} state=${host.state} (room ended before answer, likely declined)`,
+    });
+    closeScreen();
+  }, [isCaller, host.state, host.participants, roomName, closeScreen]);
+
+  // sml-006: connecting-state safety net for BOTH sides. The three auto-close
+  // effects above only fire once this device's own session has reached
+  // 'connected' at some point (disconnected/failed-after-connect, remote-left)
+  // or, for the no-answer timeout right above, only for the caller. None of
+  // them cover a callee whose OWN connect() never resolves — e.g. the caller
+  // hangs up and completes the room while the callee's connect() is still in
+  // flight, and the native Twilio SDK never fires onRoomDidConnect or
+  // onRoomDidFailToConnect for that race. Without this, the callee is stuck
+  // on "Connecting…" forever with no way out but manually ending the call.
+  useEffect(() => {
+    if (host.state !== 'connecting') return;
+    const CONNECT_TIMEOUT_MS = 35000;
+    const t = setTimeout(() => {
+      if (host.state === 'connecting' && !navigatedRef.current) {
+        recordDiagnostic({
+          tag: 'TWILIO-CALL',
+          source: 'screen',
+          message: `connecting-timeout room=${roomName}`,
+        });
+        try {
+          host.session?.leave();
+        } catch {}
+        endTwilioCall(roomName).catch(() => {});
+        closeScreen();
+      }
+    }, CONNECT_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [host.state, host.session, roomName, closeScreen]);
+
   // iter-242: caller-side RINGBACK tone. While the caller is waiting for the
   // callee to answer (we're in the Twilio room but no remote participant has
   // joined yet) play the looping ringback so the caller audibly hears the call

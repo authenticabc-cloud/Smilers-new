@@ -1,5 +1,14 @@
 # Smilers Mobile App — PRD
 
+## iter-343 (Jun 2026): CONSOLIDATION — pulled full GitHub `main` (incl. native android/) into this Emergent workspace
+Context: GitHub `authenticabc-cloud/Smilers-new@main` became the complete source of truth (my JS features + Ashwini's merged native call code). Emergent Mobile Agent has NO in-project "Pull from GitHub" (push-only), so to let the user keep developing WITH this agent (instead of a fresh imported project), I manually synced the workspace up to `main` via the branch tarball (`codeload.../main.tar.gz`).
+- Brought in: `frontend/android/` (69 files incl. 37 binaries — icons/ringtones/keystore/gradle-wrapper.jar, preserved via tarball extract), 2 missing config plugins (`withNativeCallService.js`, `withNotifeeLocalMaven.js`), `index.js` entry (imports `src/push/backgroundTaskSetup` then expo-router), and synced 24 differing/missing source files (`silent-decline.tsx`, convex/_generated/*, push handlers `backgroundTaskSetup/notifeeCallWake/useEmergentPush/useIncomingCallListener/usePushNotifications`, `call/[conversationId].tsx`, `chats.tsx`, `_layout.tsx`, `incoming-call.tsx`, `twilio-call.tsx`, libs, `app.json`, `package.json`).
+- `package.json`: only new dep vs local was `expo-dev-client ~6.0.21`; `main` field now `index.js`. `app.json`: adopted main's native config (version 2.2.18, versionCode 2295, newArchEnabled=false, +REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, +2 plugins, +notification sounds). Protected `.env` (EXPO_PACKAGER_*) NOT touched.
+- `yarn install` OK (ran Ashwini's postinstall patch scripts: patch-notifee/webrtc/share-intent). Web preview boots to Sign In cleanly.
+- RESULT: workspace == main → future work continues in THIS Emergent project, and "Save/Push to GitHub → main" from here is now SAFE (won't clobber native code). My earlier features (receive-once, city/time, personal link, iter-342 ringing ack, search privacy) all present (already in main).
+⚠️ Native AAB build correctness can only be verified via an actual Emergent build/deploy (can't run a native Android build from chat); the current code already produced Ashwini's working AAB, so a faithful mirror should build equivalently.
+
+
 ## iter-342 (Jun 2026): Ringing / Not Ringing reachability — stop false "Not Ringing"
 **Issue (user):** Caller flips to "Not Ringing" whenever the callee's incoming-call heads-up notification collapses (even though the phone keeps ringing), then back to "Ringing" when the callee opens the app. User wants "Not Ringing" ONLY for true unreachability (airplane / device off / no internet); once the call reaches the receiver it must show "Ringing".
 **Root cause:** the callee's reachability ack (`calls.markCalleeRinging` → `calls.calleeRingingAt`) only fired when the full `call/[conversationId]` JS screen mounted. A background heads-up (screen not open) never acked, so after a 7s grace the caller concluded "Not Ringing".

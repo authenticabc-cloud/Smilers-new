@@ -41,6 +41,7 @@ import { api } from '../../src/convexApi';
 import CallDebugOverlay from '../../src/components/CallDebugOverlay';
 import { callDebug } from '../../src/lib/callDebugLog';
 import CallErrorBoundary from '../../src/components/CallErrorBoundary';
+import { forceConvexReconnect } from '../../src/providers/useConvexAutoReconnect';
 import ConferenceHUD from '../../src/components/ConferenceHUD';
 import ScreenShareOverlay from '../../src/components/ScreenShareOverlay';
 import ScreenShareSwitchControls from '../../src/components/ScreenShareSwitchControls';
@@ -137,8 +138,16 @@ export default function CallScreen() {
     // remount CallScreenInner, dropping taps on the Answer button (the
     // intermittent "Answer not responding" report).
     requestAnimationFrame(() => {
-      if (router.canGoBack()) router.back();
-      else router.replace('/(tabs)/chats' as any);
+      const canGoBack = router.canGoBack();
+      // sml-017: this route is now reached directly from a killed-app cold
+      // launch (the notification's Answer action deep-links straight here,
+      // see sml-016) — that's exactly when canGoBack() is false, since this
+      // is the very first route ever pushed. Previously that fallback went
+      // to the chats LIST tab; client asked for Home specifically for this
+      // case. Logged so a retest can confirm which branch actually fires.
+      callDebug.push('CALL', `call-shim pop: canGoBack=${canGoBack} → ${canGoBack ? 'back()' : 'replace(home)'}`);
+      if (canGoBack) router.back();
+      else router.replace('/' as any);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -157,6 +166,32 @@ export function CallScreenInner() {
   // iter-297: suppress the "lock when leaving" PIN re-lock while a call is on
   // screen (WebRTC's frequent background/active flips were re-locking the app).
   useEffect(() => callActivity.enter(), []);
+
+  // sml-012: this screen is frequently mounted by answering a call from a
+  // backgrounded/killed app (notification tray Answer). useConvexAutoReconnect's
+  // 12s post-resume "settle window" (there to avoid racing AuthProvider's token
+  // re-auth handshake, see its iter-277/iter-292 comments) intentionally holds
+  // off ANY reconnect assist for ~12s after every foreground transition, then
+  // relies on a 15s heartbeat — so a ghost-disconnected socket from backgrounding
+  // could sit unrecovered for 15-20s. Until it recovers, this screen's
+  // getActiveCall subscription can't learn the call ended, so "Connecting…"
+  // lingers long after the call is actually over. forceConvexReconnect() is the
+  // same escape hatch the chat header's "tap to reconnect" already uses — it
+  // fires a SAFE soft reconnect unconditionally (a no-op if already connected)
+  // and skips the heavier hard-reconnect entirely while callHost.isActive(), so
+  // it can't disrupt an ongoing call's socket. Firing it once on mount costs
+  // nothing when the socket was already healthy (the normal foreground-answer
+  // case) and shortcuts the 12s+ stall in the backgrounded-answer case.
+  useEffect(() => {
+    const mountedAt = Date.now();
+    void forceConvexReconnect('call-screen-mount')
+      .then((attempted) => {
+        callDebug.push('CONVEX', `forceConvexReconnect(call-screen-mount) attempted=${attempted} elapsedMs=${Date.now() - mountedAt}`);
+      })
+      .catch((e) => {
+        callDebug.push('ERR', `forceConvexReconnect(call-screen-mount) threw: ${e?.message || e}`);
+      });
+  }, []);
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
 
   // ── Draggable self-view (video PiP) ───────────────────────────────────────
@@ -873,9 +908,20 @@ export function CallScreenInner() {
 
   // ====== Initiate (auto-start outgoing call if none exists) ======
   useEffect(() => {
+    // sml-017: arriving with answer=1 means "answer an existing call" —
+    // NEVER "start a new one". Without this guard, if this screen's params
+    // ever get forwarded again after the original call already ended (e.g.
+    // activeCall has gone back to null/cleared), the conditions below alone
+    // look identical to a genuine "no call yet, start one" state, and this
+    // effect places a brand new outgoing call the callee never asked for
+    // (reported: reopening the app after a call ends re-dials the caller).
+    const arrivedToAnswer = Boolean(
+      Array.isArray(rawAnswerParam) ? rawAnswerParam[0] : rawAnswerParam,
+    );
     const shouldAutoInitiate =
       !activeCall &&
       !callId &&
+      !arrivedToAnswer &&
       canRunCallQueries &&
       conversationId &&
       conversation &&
@@ -892,7 +938,41 @@ export function CallScreenInner() {
       // Conference mode similarly must NOT touch the `calls` table — it uses
       // the separate `conferences` table and its own signaling channel.
       !isConferenceMode;
-    if (!shouldAutoInitiate) return;
+    if (!shouldAutoInitiate) {
+      // sml-018 (fixed after regression report): self-close when arrived-to-
+      // answer but there's genuinely nothing to answer — but ONLY once the
+      // SAME readiness gates `shouldAutoInitiate` itself requires are all
+      // true (canRunCallQueries, conversationId/conversation/me present).
+      // The first version of this fix checked only the *Loading flags, which
+      // read `false` while a query is still `'skip'`-ped (auth/conversation
+      // not ready yet on a cold launch) — not because the call is actually
+      // gone. That false "settled" reading closed the overlay WHILE the real
+      // incoming-call data was still about to arrive, breaking Answer
+      // entirely (reported: tapping Answer opened the app but never
+      // connected, landing back on the ringing screen). Mirroring
+      // `shouldAutoInitiate`'s full condition set (already proven safe for
+      // that exact readiness question) closes that race. A short debounce
+      // is kept as an extra margin against any single-render blip.
+      const settledWithNothingToAnswer =
+        arrivedToAnswer &&
+        !activeCall &&
+        !callId &&
+        canRunCallQueries &&
+        !!conversationId &&
+        !!conversation &&
+        !!me &&
+        !activeCallLoading &&
+        !conversationLoading &&
+        !meLoading &&
+        !isScreenOnly &&
+        !isConferenceMode;
+      if (!settledWithNothingToAnswer) return undefined;
+      const closeTimeoutId = setTimeout(() => {
+        callDebug.push('CALL', 'arrived with answer=1 but no activeCall/callId after queries settled — self-closing (stale/already-ended call)');
+        callHost.end();
+      }, 1500);
+      return () => clearTimeout(closeTimeoutId);
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -933,7 +1013,7 @@ export function CallScreenInner() {
     return () => {
       cancelled = true;
     };
-  }, [activeCall, activeCallLoading, callId, canRunCallQueries, conversation, conversationId, conversationLoading, fetchedOtherUser, initiateCall, isAuthenticated, isConferenceMode, isScreenOnly, me, meLoading, requestedType]);
+  }, [activeCall, activeCallLoading, callId, canRunCallQueries, conversation, conversationId, conversationLoading, fetchedOtherUser, initiateCall, isAuthenticated, isConferenceMode, isScreenOnly, me, meLoading, rawAnswerParam, requestedType]);
 
   // ====== Update status text based on state ======
   useEffect(() => {
@@ -1570,28 +1650,36 @@ export function CallScreenInner() {
       try {
         if (activeCall?.status === 'ringing') {
           await declineCall({ callId: id });
-          // iter-318: if WE are the caller cancelling during ringing, tell the
-          // callee's device to drop the incoming-call ring IMMEDIATELY (their
-          // native service otherwise waits out a 35s timeout before showing a
-          // missed call). Distinct idempotency key so it isn't deduped against
-          // the original 'call' ring push.
+          // Caller cancelling during ringing: send call-cancelled FCM to the callee
+          // so their Kotlin ring notification is dismissed immediately (< 2s) rather
+          // than waiting for the 35s ring-timeout runnable.
           if (isCaller) {
-            try {
-              const meId = me?._id ? String(me._id) : null;
-              const recipients = getConversationMemberIds(
-                { ...(conversation || {}), otherUser: (conversation as any)?.otherUser || fetchedOtherUser },
-                meId,
+            const ac = activeCall as any;
+            const calleeId = String(
+              ac?.calleeId ||
+              ac?.calleeUserId ||
+              ac?.recipientId ||
+              ac?.recipientUserId ||
+              (fetchedOtherUser as any)?._id ||
+              (conversation as any)?.otherUser?._id ||
+              '',
+            );
+            if (calleeId) {
+              const myName = String(
+                (me as any)?.displayName ||
+                (me as any)?.name ||
+                (me as any)?.fullName ||
+                'Smilers user',
               );
               notifyEventPush({
-                recipients,
+                recipients: [calleeId],
                 event: 'call-cancelled',
-                title: getDisplayNameFromUser(me, 'Smilers'),
-                message: 'Missed call',
-                conversationId: String(conversationId),
-                callId: String(id),
-                idempotencyKey: `${id}:cancel`,
+                title: myName,
+                message: 'Call ended',
+                conversationId,
+                callId: conversationId, // ring FCM used conversationId as callId
               });
-            } catch {}
+            }
           }
         } else {
           await endCall({ callId: id });
@@ -1613,8 +1701,12 @@ export function CallScreenInner() {
       // server-side, and the dead-call cron (`expireDeadCalls`) handles
       // pruning expired signaling rows automatically.
     }
+    // sml-017 issue-2 diagnostics: same AppState check as the remote-ended
+    // paths below — this is the LOCAL hangup (this device tapped End), the
+    // one path that previously had no AppState logging at all.
+    callDebug.push('CALL', `local hangup → callHost.end() AppState=${AppState.currentState}`);
     callHost.end();
-  }, [activeCall?.status, callId, declineCall, endCall, router, callDurationSec, callType, engagement, isCaller, me, conversation, fetchedOtherUser, conversationId]);
+  }, [activeCall, callId, declineCall, endCall, router, callDurationSec, callType, engagement, isCaller, fetchedOtherUser, conversation, me, conversationId]);
 
   const handleDecline = useCallback(async () => {
     const id = callId || (activeCall as any)?._id || null;
@@ -1961,6 +2053,16 @@ export function CallScreenInner() {
   }, [isActive]);
 
   useEffect(() => {
+    // sml-012 diagnostics: this effect is the ONLY thing that can close the
+    // screen once a call ends. Logging every time its inputs change gives a
+    // timeline of exactly when activeCall's status/existence actually
+    // updates — needed to tell apart "the query is starved because the
+    // socket hasn't recovered" from any other cause of a slow close.
+    callDebug.push(
+      'CALL',
+      `close-effect tick status=${(activeCall as any)?.status ?? '(none)'} activeCallLoading=${activeCallLoading} isActive=${isActive} wasLive=${wasLiveRef.current}`,
+    );
+
     if (isIncoming) {
       incomingCallSeenRef.current = true;
       incomingCallAnsweredRef.current = false;
@@ -1970,34 +2072,33 @@ export function CallScreenInner() {
       incomingCallAnsweredRef.current = true;
     }
 
-    const teardownLocalSession = () => {
+    if (
+      activeCall &&
+      (activeCall.status === 'ended' || activeCall.status === 'declined')
+    ) {
+      // Close WebRTC session only if one was established (active calls). During
+      // the ringing phase sessionRef.current is null — the session is only
+      // created after the callee answers — so we guard it separately to avoid
+      // blocking the UI teardown when the call is declined before answer.
       if (sessionRef.current) {
-        try {
-          sessionRef.current.close();
-        } catch {}
+        sessionRef.current.close();
         sessionRef.current = null;
+        initStartedRef.current = false;
       }
-      initStartedRef.current = false;
       if (inCallStartedRef.current) {
         InCallAudio.stop();
         inCallStartedRef.current = false;
         callDebug.push('AUDIO', 'InCallManager.stop() (remote-ended)');
       }
-    };
-
-    // Case 1: backend explicitly reports the call ended/declined.
-    // iter-308: no longer gated on `sessionRef.current` — the survivor must
-    // exit even if their peer connection had already dropped.
-    if (activeCall && (activeCall.status === 'ended' || activeCall.status === 'declined')) {
-      teardownLocalSession();
-      wasLiveRef.current = false;
-      // iter-327: if a SECOND (held) call exists, DON'T close the screen — the
-      // promotion effect keeps it alive and brings the held call to foreground.
-      if (secondaryInfo) {
-        return undefined;
-      }
-      // Give the user 700ms to see the "Call ended" state before popping
-      const timeoutId = setTimeout(() => callHost.end(), 700);
+      // Give the user 700ms to see the "Call ended" / "Declined" state before popping.
+      // This now fires even when sessionRef is null (call declined while still ringing).
+      const timeoutId = setTimeout(() => {
+        // sml-017 diagnostics: same AppState check as the local hangup/decline
+        // handlers, for the REMOTE-end path — reported to background the
+        // callee's app "if either user ends the call".
+        callDebug.push('CALL', `remote-ended → callHost.end() AppState=${AppState.currentState}`);
+        callHost.end();
+      }, 700);
       return () => clearTimeout(timeoutId);
     }
 
@@ -2011,8 +2112,17 @@ export function CallScreenInner() {
     if (Platform.OS !== 'web' && wasLiveRef.current && !activeCallLoading && !activeCall) {
       const timeoutId = setTimeout(() => {
         if (!activeCallLoading && !activeCall && wasLiveRef.current) {
-          callDebug.push('CALL', 'active-call doc cleared while live → remote hung up, exiting');
-          teardownLocalSession();
+          callDebug.push('CALL', `active-call doc cleared while live → remote hung up, exiting AppState=${AppState.currentState}`);
+          if (sessionRef.current) {
+            sessionRef.current.close();
+            sessionRef.current = null;
+            initStartedRef.current = false;
+          }
+          if (inCallStartedRef.current) {
+            InCallAudio.stop();
+            inCallStartedRef.current = false;
+            callDebug.push('AUDIO', 'InCallManager.stop() (remote-ended, doc-cleared path)');
+          }
           wasLiveRef.current = false;
           callHost.end();
         }

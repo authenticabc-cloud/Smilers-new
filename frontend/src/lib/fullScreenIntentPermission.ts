@@ -30,6 +30,7 @@ import * as IntentLauncher from 'expo-intent-launcher';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const PROMPTED_KEY = '@smilers/full-screen-intent-prompted-v1';
+const BATTERY_OPT_PROMPTED_KEY = '@smilers/battery-opt-prompted-v1';
 
 /**
  * Android 14+ (API 34+) is the only OS that requires the runtime grant.
@@ -101,6 +102,77 @@ export async function clearPromptMemory(): Promise<void> {
  * Returns true if an Activity was launched, false otherwise (so the
  * caller can show a manual-instructions Alert as fallback).
  */
+// ---------------------------------------------------------------------------
+// Battery optimization exemption
+// Android aggressively kills background processes for battery savings.
+// OEM devices (Motorola, Samsung, Xiaomi, OnePlus) are especially strict.
+// Exempting Smilers lets Android reliably wake the headless JS process when
+// a data-only FCM call push arrives while the app is killed — without this,
+// calls do not ring in killed state on affected devices.
+// Requires REQUEST_IGNORE_BATTERY_OPTIMIZATIONS in app.json permissions.
+// ---------------------------------------------------------------------------
+
+export function shouldCheckBatteryOptimization(): boolean {
+  return Platform.OS === 'android';
+}
+
+export async function wasBatteryOptPrompted(): Promise<boolean> {
+  try {
+    const v = await AsyncStorage.getItem(BATTERY_OPT_PROMPTED_KEY);
+    return v === '1';
+  } catch {
+    return false;
+  }
+}
+
+export async function markBatteryOptPrompted(): Promise<void> {
+  try {
+    await AsyncStorage.setItem(BATTERY_OPT_PROMPTED_KEY, '1');
+  } catch {
+    /* swallow */
+  }
+}
+
+export async function clearBatteryOptPromptMemory(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(BATTERY_OPT_PROMPTED_KEY);
+  } catch {
+    /* swallow */
+  }
+}
+
+/**
+ * Opens the system dialog: "Allow Smilers to always run in the background?"
+ * (Android shows this natively via ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS.)
+ * Falls back to the battery optimization list if the direct dialog fails.
+ */
+export async function requestBatteryOptimizationExemption(): Promise<boolean> {
+  if (Platform.OS !== 'android') return false;
+  const packageName =
+    Application.applicationId ||
+    (Platform as any).constants?.PackageName ||
+    'com.smilers.app';
+  try {
+    await IntentLauncher.startActivityAsync(
+      'android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
+      { data: `package:${packageName}` },
+    );
+    return true;
+  } catch (errorValue: any) {
+    // eslint-disable-next-line no-console
+    console.log('[battery-opt] direct dialog failed:', (errorValue as any)?.message);
+  }
+  // Fallback: open the battery optimization list — user can find Smilers there.
+  try {
+    await IntentLauncher.startActivityAsync(
+      'android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS',
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function openFullScreenIntentSettings(): Promise<boolean> {
   if (Platform.OS !== 'android') return false;
 

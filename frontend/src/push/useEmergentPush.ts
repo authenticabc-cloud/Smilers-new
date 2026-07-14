@@ -227,6 +227,9 @@ export function useEmergentPush() {
   const { isAuthenticated, userInfo } = useAuth();
   const stateRef = useRef<RegisterState>('idle');
   const inFlightRef = useRef<Promise<void> | null>(null);
+  // sml-009: fixed reference point for the diagnostic logs below, so we can
+  // see how long the convex_user_id race actually takes on a fresh install.
+  const hookMountedAtRef = useRef<number>(Date.now());
 
   const userId = userInfo?.sub || null;
   // iter-198: capture the Convex users._id alongside the OIDC sub so the
@@ -294,6 +297,18 @@ export function useEmergentPush() {
         }
 
         stateRef.current = 'registering';
+        // sml-009: this is the exact race iter-208 documents — if
+        // effectiveConvexUserId is empty here, this POST lands without
+        // convex_user_id, and the backend's push_tokens lookup for
+        // call/message recipients (addressed by Convex id) will match
+        // zero tokens until a later retry successfully includes it.
+        try {
+          recordDiagnostic({
+            tag: 'NOTIFY',
+            source: 'emergentPush/register',
+            message: `posting register-push convexUserId=${effectiveConvexUserId || '(missing)'} elapsedMs=${Date.now() - hookMountedAtRef.current}`,
+          });
+        } catch {}
         await postRegisterPush({
           userId,
           platform: Platform.OS as 'ios' | 'android',
@@ -383,6 +398,13 @@ export function useEmergentPush() {
         // Only retry while the mapping is still unknown — once we've
         // saved a convex_user_id we stop hammering the endpoint.
         if (!lastConvexUserId) {
+          try {
+            recordDiagnostic({
+              tag: 'NOTIFY',
+              source: 'emergentPush/register',
+              message: `convexId-retry @${delay}ms — still missing, re-registering elapsedMs=${Date.now() - hookMountedAtRef.current}`,
+            });
+          } catch {}
           lastRegisteredAt = 0; // bust the 5-minute throttle
           void register();
         }
@@ -401,6 +423,13 @@ export function useEmergentPush() {
     if (Platform.OS === 'web') return;
     if (!convexUserId) return;
     if (lastConvexUserId === convexUserId) return; // already persisted
+    try {
+      recordDiagnostic({
+        tag: 'NOTIFY',
+        source: 'emergentPush/register',
+        message: `convexUserId resolved elapsedMs=${Date.now() - hookMountedAtRef.current} — busting throttle to re-register`,
+      });
+    } catch {}
     lastRegisteredAt = 0;
     void register();
   }, [convexUserId, register]);

@@ -1,11 +1,27 @@
 import { useEffect, useRef } from 'react';
-import { AppState } from 'react-native';
+import { AppState, NativeModules, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
 import { isTwilioEnabled } from '../lib/twilio/twilioApi';
 import { hasOtherActiveCall } from '../lib/call/activeCallRegistry';
+
+// sml-013: the native FCM handler posts a heads-up ring notification for EVERY
+// incoming call regardless of app state — it has no way to know this listener's
+// own Convex live-query path is about to show the in-app incoming-call UI for
+// the exact same call. Called right before navigating so the user sees only
+// ONE incoming-call UI (ours) instead of the system notification banner AND
+// our full-screen UI stacked on top of each other.
+function dismissNativeRingNotification(callId: string, conversationId: string) {
+  if (Platform.OS !== 'android') return;
+  try {
+    NativeModules.SmilersCallModule?.dismissRingNotification?.(
+      callId || '',
+      conversationId || '',
+    )?.catch?.(() => {});
+  } catch {}
+}
 
 /**
  * Real-time incoming-call listener — when foregrounded, Convex's reactive
@@ -22,6 +38,78 @@ export function useIncomingCallListener() {
     isAuthenticated ? {} : 'skip'
   );
   const handledCallId = useRef<string | null>(null);
+  const prevCallRef = useRef<{
+    _id: string;
+    callerName: string;
+    conversationId: string;
+    isVideo: boolean;
+  } | null>(null);
+  const userAnsweredRef = useRef(false);
+
+  // Detect caller-cancel: tracks ringing→gone transition and triggers an
+  // immediate missed-call notification (instead of waiting 35s for the timeout).
+  // Only fires when app is backgrounded — foreground is handled by the call screen.
+  useEffect(() => {
+    const prev = prevCallRef.current;
+    if (incomingCall && incomingCall.status === 'ringing') {
+      prevCallRef.current = {
+        _id: String(incomingCall._id),
+        callerName: String(
+          (incomingCall as any)?.callerName ||
+          (incomingCall as any)?.caller?.displayName ||
+          (incomingCall as any)?.caller?.name ||
+          '',
+        ),
+        conversationId: String((incomingCall as any)?.conversationId || ''),
+        isVideo:
+          (incomingCall as any)?.isVideo === true ||
+          String((incomingCall as any)?.callType || '').toLowerCase() === 'video',
+      };
+      userAnsweredRef.current = false;
+    } else if (prev) {
+      const stillSameCall =
+        incomingCall &&
+        String(incomingCall._id) === prev._id &&
+        incomingCall.status === 'ringing';
+      if (!stillSameCall && !userAnsweredRef.current) {
+        // Caller cancelled — dismiss the call UI and show missed call.
+        prevCallRef.current = null;
+        if (AppState.currentState !== 'active') {
+          // Background: trigger missed-call via Notifee (Kotlin owns the
+          // ring notification and will also cancel it via the backend FCM).
+          import('./notifeeCallWake')
+            .then(({ cancelRingAndShowMissedCall }) => {
+              cancelRingAndShowMissedCall({
+                callId: prev._id,
+                callerName: prev.callerName,
+                conversationId: prev.conversationId,
+                isVideo: prev.isVideo,
+              }).catch(() => {});
+            })
+            .catch(() => {});
+        } else {
+          // Foreground (in-app incoming-call screen visible): navigate home
+          // immediately so the user isn't stuck on the ringing screen after
+          // the caller hangs up. Also cancel the Kotlin ring notification
+          // in the shade + post missed-call via native module bridge.
+          try { router.replace('/' as any); } catch {}
+          try {
+            const mod = NativeModules.SmilersCallModule;
+            if (mod?.handleCallerCancelled) {
+              mod.handleCallerCancelled(
+                prev._id || '',
+                prev.conversationId || '',
+                prev.callerName || 'Smilers user',
+              ).catch(() => {});
+            }
+          } catch {}
+        }
+      } else if (!stillSameCall) {
+        // User answered — just clear the ref, no missed call.
+        prevCallRef.current = null;
+      }
+    }
+  }, [incomingCall]);
   // iter-342: reachability ack. As SOON as this device's reactive query sees
   // the incoming ringing call, tell the backend the call reached us so the
   // CALLER shows a definitive "Ringing…". This fires whenever JS is alive
@@ -115,6 +203,25 @@ export function useIncomingCallListener() {
     ).trim();
     if (!conversationId) return;
 
+    // Check global decline flag: if THIS SPECIFIC call was just declined from
+    // the notification tray, don't push the call screen (prevents the race
+    // where the decline deeplink navigates home but useIncomingCallListener
+    // re-routes for the same still-'ringing' record before the mutation
+    // commits). Keyed by callId, NOT conversationId — a fresh call on the
+    // same conversation gets its own _id and must ring normally even if it
+    // arrives seconds after the previous one was declined.
+    try {
+      const declinedMap = (globalThis as any).__smilersDeclinedByConv as Map<string, number> | undefined;
+      if (declinedMap) {
+        const thisCallId = String(incomingCall._id || '');
+        const declinedAt = (thisCallId && declinedMap.get(`callId:${thisCallId}`)) || 0;
+        if (declinedAt && Date.now() - declinedAt < 15000) {
+          handledCallId.current = incomingCall._id;
+          return;
+        }
+      }
+    } catch {}
+
     // iter-240: respect the runtime engine flag (EXPO_PUBLIC_USE_TWILIO).
     // When Twilio is DISABLED the app's outgoing calls use the legacy WebRTC
     // stack, which NEVER creates a Twilio room. Previously this foreground
@@ -123,6 +230,12 @@ export function useIncomingCallListener() {
     // "Connecting" forever (the exact mismatch support flagged). Route the
     // foreground answer to the legacy /call/<id> screen when Twilio is off.
     if (!isTwilioEnabled()) {
+      // Only ring when the app is actually active — same guard as the Twilio
+      // path below. Without this, useIncomingCallListener pushed /call/<id>
+      // while the app was backgrounded, creating a stale call screen that the
+      // notification decline deeplink then had to navigate through.
+      if (AppState.currentState !== 'active') return;
+
       // Group (conference) call → join the dedicated mesh room with the shared
       // callId (the calls doc id). 1:1 calls keep the legacy /call screen.
       const isConferenceCall =
@@ -133,6 +246,7 @@ export function useIncomingCallListener() {
         const confIsVideo =
           (incomingCall as any)?.isVideo === true ||
           String((incomingCall as any)?.callType || '').toLowerCase() === 'video';
+        dismissNativeRingNotification(String(incomingCall._id), conversationId);
         router.push(
           `/group-call/${conversationId}?callId=${encodeURIComponent(String(incomingCall._id))}&video=${confIsVideo ? '1' : '0'}&adhoc=1` as any,
         );
@@ -143,6 +257,8 @@ export function useIncomingCallListener() {
         incomingType === 'video' ||
         String(incomingCall?.callType || '').toLowerCase() === 'video';
       const typeQs = `type=${callIsVideo ? 'video' : 'voice'}`;
+      userAnsweredRef.current = true;
+      dismissNativeRingNotification(String(incomingCall._id), conversationId);
       router.push(
         displayName
           ? (`/call/${conversationId}?${typeQs}&displayName=${encodeURIComponent(displayName)}` as any)
@@ -192,6 +308,8 @@ export function useIncomingCallListener() {
       `&isVideo=${isVideo ? '1' : '0'}` +
       `&conversationId=${encodeURIComponent(String(conversationId))}` +
       `&convexCallId=${encodeURIComponent(String(incomingCall._id))}`;
+    userAnsweredRef.current = true;
+    dismissNativeRingNotification(String(incomingCall._id), conversationId);
     router.push(incUrl as any);
   }, [incomingCall, router, me, markCalleeRinging]);
 }
