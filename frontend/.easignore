@@ -2,8 +2,25 @@
 dist/
 .expo/
 .metro-cache/
-android/
+
+# iOS has NO committed native folder → EAS auto-runs `expo prebuild` for iOS.
+# (Keeping this here also prevents a locally-generated ios/ from being uploaded,
+#  so iOS always stays on Continuous Native Generation.)
 ios/
+
+# NOTE: android/ is intentionally NOT ignored. The committed android/ folder
+# contains the custom native call-reliability code (Kotlin modules, Notifee
+# config, plugin-baked manifest/gradle). Uploading it makes EAS build Android
+# as a bare project (prebuild skipped) so that native code ships. Only the
+# heavy build OUTPUTS below are excluded (.easignore can override nested
+# android/.gitignore, so we list them explicitly).
+android/build/
+android/app/build/
+android/.gradle/
+android/.cxx/
+android/app/.cxx/
+android/app/release/
+android/local.properties
 
 # Test artifacts
 test_reports/
