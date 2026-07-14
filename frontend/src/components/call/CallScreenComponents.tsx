@@ -14,7 +14,7 @@ import { Colors } from '../../theme';
 import { styles } from './callScreenStyles';
 import type { AudioOutputRoute } from './callTypes';
 
-export function ControlBtn({
+function ControlBtnBase({
   testID,
   onPress,
   backgroundColor,
@@ -48,7 +48,7 @@ export function ControlBtn({
  * When `animate=true`, the rings expand and fade in a staggered loop
  * (similar to FaceTime / WhatsApp incoming call screens).
  */
-export function RingingAvatar({
+function RingingAvatarBase({
   name,
   size,
   animate,
@@ -153,7 +153,7 @@ export function RingingAvatar({
   );
 }
 
-export function AudioOutputMenu({
+function AudioOutputMenuBase({
   value,
   onSelect,
 }: {
@@ -210,7 +210,7 @@ export function AudioOutputMenu({
 /**
  * Three bouncing dots while we wait for the other side to pick up.
  */
-export function BouncingDot({ delay }: { delay: number }) {
+function BouncingDotBase({ delay }: { delay: number }) {
   const sv = useSharedValue(0);
   useEffect(() => {
     setTimeout(() => {
@@ -229,7 +229,7 @@ export function BouncingDot({ delay }: { delay: number }) {
   return <Animated.View style={[styles.dot, style]} />;
 }
 
-export function SmallControl({
+function SmallControlBase({
   testID,
   onPress,
   active,
@@ -256,3 +256,9 @@ export function SmallControl({
     </View>
   );
 }
+
+export const ControlBtn = React.memo(ControlBtnBase);
+export const RingingAvatar = React.memo(RingingAvatarBase);
+export const AudioOutputMenu = React.memo(AudioOutputMenuBase);
+export const BouncingDot = React.memo(BouncingDotBase);
+export const SmallControl = React.memo(SmallControlBase);
