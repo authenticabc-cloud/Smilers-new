@@ -47,7 +47,7 @@ export type ChatMessageRowProps = {
   onToggleMyReaction: (messageId: string, emoji: string) => void;
 };
 
-export function ChatMessageRow({
+function ChatMessageRowBase({
   item,
   index,
   timeline,
@@ -206,3 +206,5 @@ export function ChatMessageRow({
     </>
   );
 }
+
+export const ChatMessageRow = React.memo(ChatMessageRowBase);
