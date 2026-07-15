@@ -2705,6 +2705,23 @@ export default function ChatScreen() {
     [audioRecorder, conversationId, recorderState.durationMillis, replyTo]
   );
 
+  // iter-317: salvage-on-background. If the app is pushed to the background
+  // WHILE recording (some aggressive-OEM power managers suspend the app after
+  // ~30s even with the screen kept on), finalize the clip and stage it for
+  // review instead of losing everything to a "Recording lost" error.
+  const isRecordingRef = useRef(false);
+  useEffect(() => {
+    isRecordingRef.current = isRecording;
+  }, [isRecording]);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'background' && isRecordingRef.current) {
+        void finishRecording('send');
+      }
+    });
+    return () => sub.remove();
+  }, [finishRecording]);
+
   // iter-304: actually upload + send a (reviewed) voice note.
   const uploadAndSendVoice = useCallback(
     async (uri: string, totalSec: number, replyToMessageId?: string) => {

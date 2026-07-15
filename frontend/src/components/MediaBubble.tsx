@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import Slider from '@react-native-community/slider';
 import {
   createAudioPlayer,
   setAudioModeAsync as setExpoAudioModeAsync,
@@ -1105,6 +1106,27 @@ function VideoMessage({
     void togglePlay();
   }, [player, togglePlay, markConsumed]);
 
+  // Seek to an absolute position (seconds) — used by the scrubber + 5s skips.
+  const seekVideoSec = useCallback(
+    (sec: number) => {
+      if (!player) return;
+      const durS =
+        typeof player.duration === 'number' && player.duration > 0
+          ? player.duration
+          : durMs / 1000;
+      const clamped = Math.max(0, Math.min(sec, durS > 0 ? durS : sec));
+      try {
+        if (typeof player.seekTo === 'function') {
+          void player.seekTo(clamped);
+        } else {
+          player.currentTime = clamped;
+        }
+      } catch {}
+      setPosMs(clamped * 1000);
+    },
+    [player, durMs],
+  );
+
   // iter-314: one-tap Save-to-gallery directly on the video bubble (WhatsApp
   // parity) so users don't have to open the fullscreen viewer first.
   const convex = useConvex();
@@ -1198,6 +1220,19 @@ function VideoMessage({
             <Text style={styles.videoTimePillText}>{timeLabel}</Text>
           </View>
         </TouchableOpacity>
+
+        {/* Scrubber + 5s rewind/forward (seek before, during, or after play) */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+          <TouchableOpacity onPress={() => seekVideoSec(posMs / 1000 - 5)} hitSlop={8} style={{ padding: 4 }} testID="video-rewind">
+            <MaterialCommunityIcons name="rewind-5" size={22} color={Colors.textSecondary} />
+          </TouchableOpacity>
+          <View style={{ flex: 1, marginHorizontal: 4 }}>
+            <SeekBar positionSec={posMs / 1000} durationSec={durMs / 1000} onSeek={seekVideoSec} testIDPrefix="video" />
+          </View>
+          <TouchableOpacity onPress={() => seekVideoSec(posMs / 1000 + 5)} hitSlop={8} style={{ padding: 4 }} testID="video-forward">
+            <MaterialCommunityIcons name="fast-forward-5" size={22} color={Colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
 
         {/* Caption (if any) */}
         {msg.text ? <RichMessageText text={msg.text} textStyle={[textStyle, styles.imageCaption]} /> : null}
@@ -1412,6 +1447,74 @@ function VideoViewer({
   );
 }
 
+// Shared draggable seek bar for audio + video bubbles. Lets the user scrub to
+// any position — before, during, or after playback. Uses local `scrubbing`
+// state so the thumb tracks the finger smoothly instead of fighting the
+// periodic timeUpdate events.
+function SeekBar({
+  positionSec,
+  durationSec,
+  onSeek,
+  dark = false,
+  testIDPrefix,
+}: {
+  positionSec: number;
+  durationSec: number;
+  onSeek: (sec: number) => void;
+  dark?: boolean;
+  testIDPrefix: string;
+}) {
+  const [scrubbing, setScrubbing] = useState(false);
+  const [scrubVal, setScrubVal] = useState(0);
+  const max = durationSec > 0 ? durationSec : 1;
+  const value = scrubbing ? scrubVal : Math.max(0, Math.min(positionSec, max));
+  return (
+    <Slider
+      style={{ width: '100%', height: 28 }}
+      minimumValue={0}
+      maximumValue={max}
+      value={value}
+      minimumTrackTintColor={Colors.primary}
+      maximumTrackTintColor={dark ? 'rgba(255,255,255,0.35)' : Colors.border}
+      thumbTintColor={dark ? Colors.white : Colors.primary}
+      onValueChange={(v) => {
+        setScrubbing(true);
+        setScrubVal(v);
+      }}
+      onSlidingComplete={(v) => {
+        setScrubbing(false);
+        onSeek(v);
+      }}
+      testID={`${testIDPrefix}-seek`}
+    />
+  );
+}
+
+// Shared 5-second rewind / fast-forward buttons for audio + video bubbles.
+function SkipButtons({
+  onRewind,
+  onForward,
+  dark = false,
+  testIDPrefix,
+}: {
+  onRewind: () => void;
+  onForward: () => void;
+  dark?: boolean;
+  testIDPrefix: string;
+}) {
+  const color = dark ? Colors.white : Colors.textSecondary;
+  return (
+    <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 32, marginTop: 2 }}>
+      <TouchableOpacity onPress={onRewind} hitSlop={10} style={{ padding: 4 }} testID={`${testIDPrefix}-rewind`}>
+        <MaterialCommunityIcons name="rewind-5" size={24} color={color} />
+      </TouchableOpacity>
+      <TouchableOpacity onPress={onForward} hitSlop={10} style={{ padding: 4 }} testID={`${testIDPrefix}-forward`}>
+        <MaterialCommunityIcons name="fast-forward-5" size={24} color={color} />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EEStatus | null; isMine: boolean }) {
   const totalSec = getMessageDurationSec(msg);
   const { url: src, error: srcError } = useDecryptedMediaUrl(msg, e2eeStatus);
@@ -1456,90 +1559,102 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
     }
   };
 
+  // Create the AudioPlayer + attach the status listener on first use, WITHOUT
+  // auto-playing. Both play/pause (toggle) and the seek slider reuse this so
+  // the user can scrub before ever pressing play.
+  const ensurePlayer = (): AudioPlayer | null => {
+    if (!src) return null;
+    if (playerRef.current) return playerRef.current;
+    const newPlayer = createAudioPlayer({ uri: src } as AudioSource);
+    try {
+      newPlayer.volume = 1.0;
+    } catch {}
+    const listener = newPlayer.addListener('playbackStatusUpdate', (status: any) => {
+      if (!status) return;
+      if (typeof status.isLoaded === 'boolean' && !status.isLoaded) return;
+      setIsPlaying(!!status.playing);
+      const pos = typeof status.currentTime === 'number'
+        ? status.currentTime
+        : typeof status.positionMillis === 'number'
+          ? status.positionMillis / 1000
+          : 0;
+      setPosSec(pos);
+      if (status.didJustFinish) {
+        // Spec: voice notes play once. Stop and reset to start so
+        // the user can replay by tapping again.
+        setIsPlaying(false);
+        setPosSec(0);
+        try {
+          newPlayer.pause();
+        } catch {}
+        try {
+          if (typeof newPlayer.seekTo === 'function') {
+            newPlayer.seekTo(0);
+          } else {
+            newPlayer.currentTime = 0;
+          }
+        } catch {}
+        if (CURRENT_SOUND === newPlayer) {
+          CURRENT_SOUND = null;
+          CURRENT_STOP = null;
+        }
+      }
+    });
+    statusListenerRef.current = listener;
+    playerRef.current = newPlayer;
+    return newPlayer;
+  };
+
   const toggle = async () => {
     if (!src) return;
     try {
       markConsumed();
       stopOtherSounds();
-      let player = playerRef.current;
-      if (!player) {
-        // Create + start a fresh player. expo-audio: createAudioPlayer
-        // replaces Audio.Sound.createAsync. We then subscribe to
-        // 'playbackStatusUpdate' for play/pause/position events.
-        const newPlayer = createAudioPlayer({ uri: src } as AudioSource);
+      const player = ensurePlayer();
+      if (!player) return;
+      if (player.playing) {
         try {
-          newPlayer.volume = 1.0;
+          player.pause();
         } catch {}
-        const listener = newPlayer.addListener('playbackStatusUpdate', (status: any) => {
-          if (!status) return;
-          if (typeof status.isLoaded === 'boolean' && !status.isLoaded) return;
-          setIsPlaying(!!status.playing);
-          const pos = typeof status.currentTime === 'number'
-            ? status.currentTime
-            : typeof status.positionMillis === 'number'
-              ? status.positionMillis / 1000
-              : 0;
-          setPosSec(pos);
-          if (status.didJustFinish) {
-            // Spec: voice notes play once. Stop and reset to start so
-            // the user can replay by tapping again.
-            setIsPlaying(false);
-            setPosSec(0);
-            try {
-              newPlayer.pause();
-            } catch {}
-            try {
-              if (typeof newPlayer.seekTo === 'function') {
-                newPlayer.seekTo(0);
-              } else {
-                newPlayer.currentTime = 0;
-              }
-            } catch {}
-            if (CURRENT_SOUND === newPlayer) {
-              CURRENT_SOUND = null;
-              CURRENT_STOP = null;
+      } else {
+        // If we reached the end, rewind before playing again.
+        try {
+          const dur = typeof player.duration === 'number' ? player.duration : 0;
+          const cur = typeof player.currentTime === 'number' ? player.currentTime : 0;
+          if (dur > 0 && cur >= dur - 0.05) {
+            if (typeof player.seekTo === 'function') {
+              await player.seekTo(0);
+            } else {
+              player.currentTime = 0;
             }
           }
-        });
-        statusListenerRef.current = listener;
-        try {
-          newPlayer.play();
         } catch {}
-        player = newPlayer;
-        playerRef.current = newPlayer;
-        CURRENT_SOUND = newPlayer;
+        try {
+          player.play();
+        } catch {}
+        CURRENT_SOUND = player;
         CURRENT_STOP = () => setIsPlaying(false);
-      } else {
-        // Toggle existing player.
-        const playing = !!player.playing;
-        if (playing) {
-          try {
-            player.pause();
-          } catch {}
-        } else {
-          // If we reached the end, rewind before playing again.
-          try {
-            const dur = typeof player.duration === 'number' ? player.duration : 0;
-            const cur = typeof player.currentTime === 'number' ? player.currentTime : 0;
-            if (dur > 0 && cur >= dur - 0.05) {
-              if (typeof player.seekTo === 'function') {
-                await player.seekTo(0);
-              } else {
-                player.currentTime = 0;
-              }
-            }
-          } catch {}
-          try {
-            player.play();
-          } catch {}
-          CURRENT_SOUND = player;
-          CURRENT_STOP = () => setIsPlaying(false);
-        }
       }
     } catch {}
   };
 
-  const progress = totalSec > 0 ? Math.min(1, posSec / totalSec) : 0;
+  // Seek to an absolute position (seconds). Works before, during, or after
+  // playback; creates the player lazily if needed and keeps the current
+  // play/pause state.
+  const seekToSec = (sec: number) => {
+    const player = ensurePlayer();
+    if (!player) return;
+    const clamped = Math.max(0, Math.min(sec, totalSec > 0 ? totalSec : sec));
+    try {
+      if (typeof player.seekTo === 'function') {
+        void player.seekTo(clamped);
+      } else {
+        player.currentTime = clamped;
+      }
+    } catch {}
+    setPosSec(clamped);
+  };
+
   const remaining = Math.max(0, Math.ceil(totalSec - posSec));
 
   if (!src) {
@@ -1576,11 +1691,16 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
         <TouchableOpacity onPress={toggle} style={styles.voicePlayBtn} testID="voice-play">
           <Feather name={isPlaying ? 'pause' : 'play'} size={16} color={Colors.white} />
         </TouchableOpacity>
-        <View style={styles.voiceBar}>
-          <View style={[styles.voiceProgress, { width: `${progress * 100}%` }]} />
+        <View style={{ flex: 1, marginHorizontal: 6 }}>
+          <SeekBar positionSec={posSec} durationSec={totalSec} onSeek={seekToSec} testIDPrefix="voice" />
         </View>
         <Text style={styles.voiceDuration}>{fmtDur(remaining)}</Text>
       </View>
+      <SkipButtons
+        onRewind={() => seekToSec(posSec - 5)}
+        onForward={() => seekToSec(posSec + 5)}
+        testIDPrefix="voice"
+      />
       <TranscriptionPill msg={msg} />
     </View>
   );
