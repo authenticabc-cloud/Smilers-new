@@ -168,6 +168,7 @@
       "./plugins/withWebRTCScreenshare.js",
       "./plugins/withNotifeeLocalMaven.js",
       "./plugins/withNativeCallService.js",
+      "./plugins/withPodfileResourceBundleSigning.js",
       [
         "expo-splash-screen",
         {
