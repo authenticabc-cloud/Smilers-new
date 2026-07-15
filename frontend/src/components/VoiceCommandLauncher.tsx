@@ -18,6 +18,7 @@ import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter, usePathname } from 'expo-router';
 import { useConvex, useMutation, useQuery } from 'convex/react';
 import { useAudioRecorder, useAudioRecorderState, RecordingPresets, setAudioModeAsync } from 'expo-audio';
+import { recordingActivity } from '../lib/recordingActivity';
 import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
 import { readStoredJson, writeStoredJson } from '../lib/settingsStorage';
@@ -210,6 +211,17 @@ function VoiceCommandSheetInner({ visible, onClose }: VoiceCommandSheetProps) {
       cancelled = true;
     };
   }, [convex, visible]);
+
+  // iter-331: suppress the App-Lock PIN re-lock for the WHOLE voice session.
+  // Requesting mic/speech permission and starting the recognizer briefly flips
+  // AppState to inactive/background; with "Lock when leaving" enabled that
+  // return-to-active was re-locking the app and killing the mic (the same class
+  // of bug fixed for chat voice notes in iter-307). This sheet is mounted only
+  // while a session is open, so a mount-scoped guard exactly brackets it.
+  useEffect(() => {
+    const dispose = recordingActivity.enter();
+    return () => dispose();
+  }, []);
 
   // Reset state and stop recognition when closed
   useEffect(() => {
