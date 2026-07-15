@@ -11,6 +11,7 @@ import {
   Modal,
   Pressable,
   ActivityIndicator,
+  Image,
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -30,13 +31,18 @@ import {
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/theme';
 
 type VisibilityKey = 'lastSeen' | 'profilePhoto' | 'about' | 'status';
-type VisibilityValue = 'everyone' | 'contacts' | 'nobody';
+type VisibilityValue = 'everyone' | 'contacts' | 'nobody' | 'only' | 'everyone_except';
+type ListKey = 'lastSeenList' | 'profilePhotoList' | 'aboutList' | 'statusList';
 
 interface PrivacySettings {
   lastSeen: VisibilityValue;
   profilePhoto: VisibilityValue;
   about: VisibilityValue;
   status: VisibilityValue;
+  lastSeenList: string[];
+  profilePhotoList: string[];
+  aboutList: string[];
+  statusList: string[];
   readReceipts: boolean;
   typingIndicators: boolean;
 }
@@ -46,12 +52,31 @@ const DEFAULTS: PrivacySettings = {
   profilePhoto: 'everyone',
   about: 'everyone',
   status: 'contacts',
+  lastSeenList: [],
+  profilePhotoList: [],
+  aboutList: [],
+  statusList: [],
   readReceipts: true,
   typingIndicators: true,
 };
 
-const VISIBILITY_LABEL: Record<VisibilityValue, string> = { everyone: 'Everyone', contacts: 'My contacts', nobody: 'Nobody' };
-const VISIBILITY_OPTIONS: VisibilityValue[] = ['everyone', 'contacts', 'nobody'];
+// Maps each visibility field to the users-id list that backs its
+// `only` (allow-list) / `everyone_except` (deny-list) policy.
+const LIST_KEY: Record<VisibilityKey, ListKey> = {
+  lastSeen: 'lastSeenList',
+  profilePhoto: 'profilePhotoList',
+  about: 'aboutList',
+  status: 'statusList',
+};
+
+const VISIBILITY_LABEL: Record<VisibilityValue, string> = {
+  everyone: 'Everyone',
+  contacts: 'My contacts',
+  nobody: 'Nobody',
+  only: 'Nobody except…',
+  everyone_except: 'Everyone except…',
+};
+const VISIBILITY_OPTIONS: VisibilityValue[] = ['everyone', 'contacts', 'nobody', 'only', 'everyone_except'];
 
 const SECTIONS: Array<{ key: VisibilityKey; label: string; sub: string; icon: keyof typeof Feather.glyphMap }> = [
   { key: 'lastSeen', label: 'Last seen', sub: 'Who can see when you were last online', icon: 'clock' },
@@ -70,6 +95,15 @@ export default function PrivacyScreen() {
   const [saving, setSaving] = useState(false);
   const [pickerKey, setPickerKey] = useState<VisibilityKey | GroupsKey | null>(null);
   const controlsDisabled = !cloudSyncEnabled || saving;
+  // People-picker (for `only` / `everyone_except` policies).
+  const [contactPicker, setContactPicker] = useState<{ key: VisibilityKey; mode: VisibilityValue } | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const { data: contacts } = useSafeConvexQuery<any[]>(
+    api.contacts.getContacts,
+    {},
+    [],
+    cloudSyncEnabled && !!contactPicker,
+  );
 
   useEffect(() => {
     // Preserve the locally-managed typingIndicators across server echoes —
@@ -106,16 +140,20 @@ export default function PrivacyScreen() {
     void writeStoredJson(PRIVACY_SETTINGS_KEY, { ...DEFAULT_PRIVACY_SETTINGS, ...next });
     setSaving(true);
     try {
-      const { typingIndicators, ...cloud } = next;
-      void typingIndicators;
-      // iter-326 READ RECEIPTS FIX: the backend stores read receipts in a
-      // TOP-LEVEL `readReceipts` arg (→ users.privacyReadReceipts), NOT inside
-      // the `settings` blob. Sending it only nested under `settings` (as we did
-      // before) meant the server never patched privacyReadReceipts, so it always
-      // read back as the default ON → the toggle "snapped back". We now send it
-      // BOTH ways: the visibility fields via `settings`, plus `readReceipts` as
-      // a real top-level boolean (literal `false` when OFF — never undefined).
-      await updateSettings({ settings: cloud, readReceipts: next.readReceipts === true });
+      // iter-330: the Convex `updateSettings` mutation now takes TOP-LEVEL args
+      // (per the web team's contract) — the policy strings, their allow/deny
+      // user-id lists, and readReceipts. typingIndicators stays device-local.
+      await updateSettings({
+        lastSeen: next.lastSeen,
+        profilePhoto: next.profilePhoto,
+        about: next.about,
+        status: next.status,
+        lastSeenList: next.lastSeenList,
+        profilePhotoList: next.profilePhotoList,
+        aboutList: next.aboutList,
+        statusList: next.statusList,
+        readReceipts: next.readReceipts === true,
+      });
     } catch {
       if (serverSettings) {
         setDraft((prev) => ({ ...DEFAULTS, ...serverSettings, typingIndicators: prev.typingIndicators }));
@@ -135,7 +173,38 @@ export default function PrivacyScreen() {
 
   const onPickVisibility = (key: VisibilityKey | GroupsKey, value: VisibilityValue | GroupsValue) => {
     setPickerKey(null);
+    // `only` / `everyone_except` need a people list → open the contact picker,
+    // seeded with the field's current list. Other policies persist right away.
+    if (value === 'only' || value === 'everyone_except') {
+      const k = key as VisibilityKey;
+      const existing = draft[LIST_KEY[k]];
+      setSelectedIds(Array.isArray(existing) ? [...existing] : []);
+      setContactPicker({ key: k, mode: value });
+      return;
+    }
     persist({ ...draft, [key]: value } as PrivacySettings);
+  };
+
+  const confirmContactPicker = () => {
+    if (!contactPicker) return;
+    const { key, mode } = contactPicker;
+    persist({ ...draft, [key]: mode, [LIST_KEY[key]]: selectedIds } as PrivacySettings);
+    setContactPicker(null);
+  };
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  // Row summary, e.g. "Everyone except (3)" / "Nobody except (2)".
+  const summarizeValue = (key: VisibilityKey): string => {
+    const v = draft[key] as VisibilityValue;
+    if (v === 'only' || v === 'everyone_except') {
+      const list = draft[LIST_KEY[key]];
+      const count = Array.isArray(list) ? list.length : 0;
+      return `${VISIBILITY_LABEL[v]} (${count})`;
+    }
+    return VISIBILITY_LABEL[v];
   };
 
   const onToggle = (key: 'readReceipts' | 'typingIndicators', value: boolean) => {
@@ -169,8 +238,6 @@ export default function PrivacyScreen() {
 
         <Text style={styles.section}>WHO CAN SEE MY INFO</Text>
         {SECTIONS.map((section) => {
-          const value = draft[section.key];
-          const labelMap = section.groups ? GROUPS_LABEL : VISIBILITY_LABEL;
           return (
             <TouchableOpacity key={section.key} style={styles.row} activeOpacity={0.7} onPress={() => setPickerKey(section.key)} disabled={controlsDisabled} testID={`privacy-${section.key}`}>
               <View style={styles.iconWrap}><Feather name={section.icon} size={20} color={Colors.primary} /></View>
@@ -178,7 +245,7 @@ export default function PrivacyScreen() {
                 <Text style={styles.rowTitle}>{section.label}</Text>
                 <Text style={styles.rowSub}>{section.sub}</Text>
               </View>
-              <Text style={styles.rowValue}>{labelMap[value as VisibilityValue & GroupsValue]}</Text>
+              <Text style={styles.rowValue}>{summarizeValue(section.key)}</Text>
               <Feather name="chevron-right" size={18} color={Colors.textMuted} />
             </TouchableOpacity>
           );
@@ -222,6 +289,52 @@ export default function PrivacyScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      <Modal visible={!!contactPicker} animationType="slide" onRequestClose={() => setContactPicker(null)}>
+        <SafeAreaView style={styles.container} edges={['top']} testID="privacy-contact-picker">
+          <View style={styles.pickerHeader}>
+            <TouchableOpacity onPress={() => setContactPicker(null)} testID="privacy-contact-cancel">
+              <Text style={styles.pickerCancel}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={styles.pickerHeaderTitle} numberOfLines={1}>
+              {contactPicker ? VISIBILITY_LABEL[contactPicker.mode].replace('…', '') : ''}
+            </Text>
+            <TouchableOpacity onPress={confirmContactPicker} testID="privacy-contact-done">
+              <Text style={styles.pickerDone}>Done</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.pickerSubtitle}>
+            {contactPicker?.mode === 'only'
+              ? 'Only the people you select can see this.'
+              : 'Everyone can see this except the people you select.'}
+          </Text>
+          <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+            {(Array.isArray(contacts) ? contacts : []).map((c: any) => {
+              const id = String(c._id);
+              const sel = selectedIds.includes(id);
+              const name = c.name || 'Unknown';
+              return (
+                <TouchableOpacity key={id} style={styles.contactRow} onPress={() => toggleSelected(id)} testID={`privacy-contact-${id}`}>
+                  {c.avatar ? (
+                    <Image source={{ uri: c.avatar }} style={styles.contactAvatar} />
+                  ) : (
+                    <View style={[styles.contactAvatar, styles.contactAvatarFallback]}>
+                      <Text style={styles.contactInitial}>{name.charAt(0).toUpperCase()}</Text>
+                    </View>
+                  )}
+                  <Text style={styles.contactName} numberOfLines={1}>{name}</Text>
+                  <View style={[styles.checkCircle, sel && styles.checkCircleOn]}>
+                    {sel ? <Feather name="check" size={14} color={Colors.white} /> : null}
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+            {!contacts || contacts.length === 0 ? (
+              <Text style={styles.emptyContacts}>No contacts to choose from yet.</Text>
+            ) : null}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -245,4 +358,17 @@ const styles = StyleSheet.create({
   optionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: Spacing.base },
   optionLabel: { fontSize: FontSize.base, color: Colors.textPrimary },
   flexOne: { flex: 1 },
+  pickerHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: Spacing.base, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: Colors.borderLight, backgroundColor: Colors.surface },
+  pickerHeaderTitle: { flex: 1, textAlign: 'center', fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.textPrimary, marginHorizontal: 8 },
+  pickerCancel: { fontSize: FontSize.base, color: Colors.textSecondary },
+  pickerDone: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.primary },
+  pickerSubtitle: { fontSize: FontSize.sm, color: Colors.textSecondary, paddingHorizontal: Spacing.base, paddingVertical: Spacing.sm },
+  contactRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: Spacing.base, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: Colors.borderLight },
+  contactAvatar: { width: 42, height: 42, borderRadius: 21, backgroundColor: Colors.primaryLight },
+  contactAvatarFallback: { alignItems: 'center', justifyContent: 'center' },
+  contactInitial: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: Colors.primary },
+  contactName: { flex: 1, fontSize: FontSize.base, color: Colors.textPrimary },
+  checkCircle: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center' },
+  checkCircleOn: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  emptyContacts: { textAlign: 'center', color: Colors.textMuted, fontSize: FontSize.sm, paddingVertical: 40 },
 });
