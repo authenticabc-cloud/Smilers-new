@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, AppState, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, AppState, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Redirect, Tabs, useRootNavigationState } from 'expo-router';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
@@ -15,7 +15,7 @@ export default function TabsLayout() {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { useSafeAreaInsets } = require('react-native-safe-area-context');
   const insets = useSafeAreaInsets();
-  const { isLoading, isAuthenticated, sessionExpired, signOut } = useAuth();
+  const { isLoading, isAuthenticated, sessionExpired, signOut, trySilentReauth } = useAuth();
   const updateCurrentUser = useMutation(api.users.updateCurrentUser);
   // Reactive subscription: changes from verifyOtp/savePhoneVerified propagate instantly.
   const meQuery = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip');
@@ -219,7 +219,7 @@ export default function TabsLayout() {
   // recovery gate and left the user on a logged-in-but-empty screen. When the
   // refresh token is terminally dead there is nothing to render but recovery.
   if (sessionExpired && isAuthenticated) {
-    return <AuthRecovery onSignIn={signOut} />;
+    return <AuthRecoveryOrSilent onSignIn={signOut} trySilentReauth={trySilentReauth} />;
   }
 
   if ((meLoading || syncingUser) && !meGateTimedOut && !everReady) {
@@ -234,13 +234,13 @@ export default function TabsLayout() {
   // cache-clear could fix. Instead, surface an actionable recovery screen so
   // the user can re-authenticate in-app without reinstalling.
   if (meGateTimedOut && !me && !syncingUser && !everReady) {
-    return <AuthRecovery onSignIn={signOut} />;
+    return <AuthRecoveryOrSilent onSignIn={signOut} trySilentReauth={trySilentReauth} />;
   }
 
   // iter-295: surface recovery INSTANTLY (no 10s wait) when the refresh token
   // was terminally rejected — the session can't be silently renewed.
   if (sessionExpired && isAuthenticated && !me) {
-    return <AuthRecovery onSignIn={signOut} />;
+    return <AuthRecoveryOrSilent onSignIn={signOut} trySilentReauth={trySilentReauth} />;
   }
 
   // If the me query resolved to null (or hung past the gate) but the user has the
@@ -338,6 +338,43 @@ function AuthGateLoading({ label }) {
       <Text style={styles.loadingText}>{label}</Text>
     </View>
   );
+}
+
+// Attempts a silent (prompt=none) re-auth ONCE before showing the sign-in wall,
+// giving a WhatsApp-style "tap and you're back in" experience when the refresh
+// token died but the Hercules SSO browser session is still alive. On success the
+// AuthProvider clears sessionExpired and this unmounts; on failure it falls back
+// to the interactive recovery screen. Skipped on web (a popup would be blocked
+// without a user gesture — web users just tap "Sign in again").
+function AuthRecoveryOrSilent({
+  onSignIn,
+  trySilentReauth,
+}: {
+  onSignIn: () => Promise<void> | void;
+  trySilentReauth: () => Promise<boolean>;
+}) {
+  const [phase, setPhase] = React.useState<'trying' | 'wall'>(
+    Platform.OS === 'web' ? 'wall' : 'trying',
+  );
+  const attempted = React.useRef(false);
+  React.useEffect(() => {
+    if (phase !== 'trying' || attempted.current) return;
+    attempted.current = true;
+    let cancelled = false;
+    (async () => {
+      const ok = await trySilentReauth();
+      if (!cancelled && !ok) setPhase('wall');
+      // On success sessionExpired clears → parent stops rendering recovery.
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [phase, trySilentReauth]);
+
+  if (phase === 'trying') {
+    return <AuthGateLoading label="Reconnecting…" />;
+  }
+  return <AuthRecovery onSignIn={onSignIn} />;
 }
 
 // iter-293: shown when the session token was rejected and we couldn't load the

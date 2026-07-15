@@ -254,6 +254,7 @@ interface AuthContextValue {
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
   getFreshIdToken: (force?: boolean) => Promise<string | null>;
+  trySilentReauth: () => Promise<boolean>;
   acceptTokens: (tokens: {
     idToken: string;
     accessToken?: string;
@@ -751,6 +752,64 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await clearTokens();
   }, []);
 
+  // WhatsApp-style silent recovery. When the refresh token is terminally dead
+  // (invalid_grant / rotation-reuse revoked) but the Hercules SSO browser
+  // session is still alive, an OIDC `prompt=none` authorize call mints a fresh
+  // token set WITHOUT showing the sign-in portal. Returns true if the session
+  // was seamlessly restored (acceptTokens clears sessionExpired). On native the
+  // system browser shares cookies with the Hercules SSO session, so this is
+  // usually invisible; if the SSO session is also gone it fails fast with
+  // login_required and the caller falls back to the interactive sign-in wall.
+  const trySilentReauth = useCallback(async (): Promise<boolean> => {
+    const disco = discovery || cachedDiscoveryRef.current;
+    if (!disco) return false;
+    try {
+      const req = new AuthSession.AuthRequest({
+        clientId: OIDC_CLIENT_ID,
+        scopes: ['openid', 'profile', 'email', 'offline_access'],
+        redirectUri: directRedirectUri,
+        responseType: AuthSession.ResponseType.Code,
+        usePKCE: true,
+        extraParams: { prompt: 'none' },
+      });
+      await req.makeAuthUrlAsync(disco);
+      const result = await req.promptAsync(disco);
+      if (result.type !== 'success' || !result.params?.code) {
+        callDebug.push(
+          'AUTH',
+          `silent reauth: no code (type=${result.type}, err=${(result as any)?.params?.error || '-'})`,
+        );
+        return false;
+      }
+      const tokenResult = await AuthSession.exchangeCodeAsync(
+        {
+          clientId: OIDC_CLIENT_ID,
+          code: result.params.code,
+          redirectUri: directRedirectUri,
+          extraParams: req.codeVerifier ? { code_verifier: req.codeVerifier } : undefined,
+        },
+        disco,
+      );
+      const anyResult = tokenResult as AuthSession.TokenResponse & {
+        idToken?: string;
+        id_token?: string;
+      };
+      const idv = anyResult.idToken || anyResult.id_token;
+      if (!idv) return false;
+      await acceptTokens({
+        idToken: idv,
+        accessToken: tokenResult.accessToken,
+        refreshToken: tokenResult.refreshToken,
+        expiresIn: tokenResult.expiresIn || 3600,
+      });
+      callDebug.push('AUTH', 'silent reauth: SUCCESS → session restored without sign-in wall');
+      return true;
+    } catch (e: any) {
+      callDebug.push('ERR', `silent reauth failed: ${String(e?.message || e).slice(0, 140)}`);
+      return false;
+    }
+  }, [discovery, directRedirectUri, acceptTokens]);
+
   // Always call the LATEST refreshTokens (its closure captures `discovery`,
   // which is null on the very first calls after a cold start).
   const refreshTokensRef = useRef(refreshTokens);
@@ -936,6 +995,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signIn,
         signOut,
         getFreshIdToken,
+        trySilentReauth,
         acceptTokens,
         setAuthError,
         getSessionHealth,
