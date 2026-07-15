@@ -27,6 +27,7 @@ import {
 import { registerAppLockHandlers } from '../lib/appLockController';
 import { callActivity } from '../lib/callActivity';
 import { recordingActivity } from '../lib/recordingActivity';
+import { systemUIActivity } from '../lib/systemUIActivity';
 import { useAuth } from '../providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../theme';
 
@@ -182,7 +183,11 @@ export default function AppLockGate({ children }: AppLockGateProps) {
         // calls fire frequent background/inactive/active transitions (audio
         // route, proximity, in-call notification), which with "Lock when
         // leaving" was re-locking the app every few seconds during a call.
-        if (callActivity.isActive() || recordingActivity.isActive()) {
+        // iter-331: also skip re-lock while a native picker / share sheet is
+        // on screen (file attach, image/camera picker, share). These background
+        // the app and return to `active`, which "Lock when leaving" was
+        // treating as leaving the app — locking mid-attachment.
+        if (callActivity.isActive() || recordingActivity.isActive() || systemUIActivity.isActive()) {
           backgroundedAtRef.current = null;
           return;
         }

@@ -26,6 +26,7 @@ import { useQuery, useConvex } from 'convex/react';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
+import { shareFile } from '../src/lib/nativePickers';
 import { api } from '../src/convexApi';
 import { useAuth } from '../src/providers/AuthProvider';
 import Header from '../src/components/Header';
@@ -111,7 +112,7 @@ export default function MyRecordingsScreen() {
         }
       }
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, {
+        await shareFile(uri, {
           mimeType: isVideo ? 'video/mp4' : 'audio/m4a',
           dialogTitle: 'Save or share recording',
         });

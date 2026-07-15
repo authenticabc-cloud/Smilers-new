@@ -14,6 +14,7 @@ import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useConvex, useMutation } from 'convex/react';
 import * as ImagePicker from 'expo-image-picker';
+import { pickImageLibrary } from '../../src/lib/nativePickers';
 import Header from '../../src/components/Header';
 import CountrySelectorModal from '../../src/components/CountrySelectorModal';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
@@ -50,7 +51,7 @@ export default function CreateAdScreen() {
       Alert.alert('Permission needed', 'Allow photo access to attach a product image.');
       return;
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
+    const result = await pickImageLibrary({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 0.7,
       allowsEditing: false,

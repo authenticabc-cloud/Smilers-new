@@ -21,6 +21,7 @@ import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useConvex, useMutation, useQuery } from 'convex/react';
 import * as ImagePicker from 'expo-image-picker';
+import { pickImageLibrary, pickCamera } from '../../src/lib/nativePickers';
 import * as MediaLibrary from 'expo-media-library';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import Header from '../../src/components/Header';
@@ -198,7 +199,7 @@ export default function ProfileScreen() {
       );
       return;
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
+    const result = await pickImageLibrary({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [1, 1],
@@ -219,7 +220,7 @@ export default function ProfileScreen() {
       );
       return;
     }
-    const result = await ImagePicker.launchCameraAsync({
+    const result = await pickCamera({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [1, 1],

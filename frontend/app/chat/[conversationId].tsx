@@ -24,10 +24,10 @@ import { useConvex, useMutation, useQuery } from 'convex/react';
 import { forceConvexReconnect } from '../../src/providers/useConvexAutoReconnect';
 import { recordingActivity } from '../../src/lib/recordingActivity';
 import * as Clipboard from 'expo-clipboard';
-import * as DocumentPicker from 'expo-document-picker';
 import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
+import { pickImageLibrary, pickCamera, pickDocument } from '../../src/lib/nativePickers';
 import * as Location from 'expo-location';
 import AttachmentSheet from '../../src/components/AttachmentSheet';
 import ShareContactsDialog from '../../src/components/ShareContactsDialog';
@@ -2245,7 +2245,7 @@ export default function ChatScreen() {
     // iter-164 data-friendly tuning: route through centralized chat defaults
     // (quality 0.7, exif stripped, no base64) — cuts typical photo from
     // 5–10 MB to ~250–600 KB on cellular.
-    const result = await ImagePicker.launchImageLibraryAsync({
+    const result = await pickImageLibrary({
       ...IMAGE_PICKER_OPTIONS_CHAT,
       allowsMultipleSelection: true,
       selectionLimit: 10,
@@ -2291,7 +2291,7 @@ export default function ChatScreen() {
 
     // iter-271: allow picking MULTIPLE videos at once (parity with photos).
     // iter-164 data-friendly: 60s cap + lower quality → smaller payloads.
-    const result = await ImagePicker.launchImageLibraryAsync({
+    const result = await pickImageLibrary({
       ...VIDEO_PICKER_OPTIONS_CHAT,
       allowsMultipleSelection: true,
       selectionLimit: 10,
@@ -2354,7 +2354,7 @@ export default function ChatScreen() {
     // iter-164 data-friendly: 60s cap + reduced quality.
     let result: any;
     try {
-      result = await ImagePicker.launchCameraAsync(VIDEO_PICKER_OPTIONS_CHAT);
+      result = await pickCamera(VIDEO_PICKER_OPTIONS_CHAT);
     } finally {
       if (conversationId) clearTyping?.({ conversationId }).catch(() => {});
     }
@@ -2425,7 +2425,7 @@ export default function ChatScreen() {
     if (!conversationId || !isConversationAvailable) return;
 
     try {
-      const result = await DocumentPicker.getDocumentAsync({
+      const result = await pickDocument({
         type: '*/*',
         copyToCacheDirectory: true,
         multiple: false,

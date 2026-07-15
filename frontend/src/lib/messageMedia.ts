@@ -24,6 +24,7 @@ import * as FileSystem from 'expo-file-system';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
+import { shareFile } from './nativePickers';
 import { ConvexReactClient } from 'convex/react';
 import { api } from '../convexApi';
 
@@ -230,7 +231,7 @@ export async function shareMessage(args: {
   try {
     const sharingAvailable = await Sharing.isAvailableAsync();
     if (sharingAvailable) {
-      await Sharing.shareAsync(cacheUri, {
+      await shareFile(cacheUri, {
         mimeType: info.mimeType || undefined,
         dialogTitle: text ? `Share: ${text.slice(0, 60)}` : 'Share with…',
         UTI: info.mimeType?.startsWith('image/')

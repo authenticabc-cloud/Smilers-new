@@ -63,7 +63,7 @@ import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useMutation, useQuery, useConvex } from 'convex/react';
 import * as Clipboard from 'expo-clipboard';
-import * as DocumentPicker from 'expo-document-picker';
+import { pickDocument } from '../src/lib/nativePickers';
 import * as Haptics from 'expo-haptics';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import {
@@ -254,7 +254,7 @@ export default function DiaryScreen() {
   const handleAttach = useCallback(async () => {
     if (uploading || isRecording) return;
     try {
-      const res = await DocumentPicker.getDocumentAsync({
+      const res = await pickDocument({
         type: '*/*',
         copyToCacheDirectory: true,
         multiple: false,

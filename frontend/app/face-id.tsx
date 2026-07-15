@@ -36,6 +36,7 @@ import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
 import * as ImagePicker from 'expo-image-picker';
+import { pickCamera } from '../src/lib/nativePickers';
 import { api } from '../src/convexApi';
 import { useFirstSuccessfulConvexQuery } from '../src/hooks/useFirstSuccessfulConvexQuery';
 import { useAuth } from '../src/providers/AuthProvider';
@@ -266,7 +267,7 @@ function FaceIdScreen() {
         return;
       }
 
-      const result = await ImagePicker.launchCameraAsync({
+      const result = await pickCamera({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         quality: 0.6,
         allowsEditing: true,

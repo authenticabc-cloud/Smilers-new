@@ -5,6 +5,7 @@ import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useQuery, useMutation, useConvex } from 'convex/react';
 import * as ImagePicker from 'expo-image-picker';
+import { pickImageLibrary } from '../../src/lib/nativePickers';
 import Header from '../../src/components/Header';
 import Avatar from '../../src/components/Avatar';
 import { api } from '../../src/convexApi';
@@ -59,7 +60,7 @@ export default function StatusScreen() {
           return;
         }
 
-        const result = await ImagePicker.launchImageLibraryAsync({
+        const result = await pickImageLibrary({
           mediaTypes: kind === 'image' ? ImagePicker.MediaTypeOptions.Images : ImagePicker.MediaTypeOptions.Videos,
           quality: kind === 'image' ? 0.7 : 0.5,
           allowsEditing: false,
