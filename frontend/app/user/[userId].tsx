@@ -22,6 +22,7 @@ import { api } from '../../src/convexApi';
 import { lookupUserByPhone } from '../../src/lib/phoneLookup';
 import { friendlyConvexError } from '../../src/lib/friendlyError';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
+import { useReactiveSafeConvexQuery } from '../../src/hooks/useReactiveSafeConvexQuery';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { savePhotoToGallery } from '../../src/lib/savePhotoToGallery';
 import { startCall } from '../../src/lib/twilio/startCall';
@@ -39,6 +40,7 @@ import {
 import { formatLastSeenLabel, isPresenceOnline } from '../../src/lib/presence';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 import ActionButton from '../../src/components/user-profile/ActionButton';
+import FilterIndicator from '../../src/components/FilterIndicator';
 import GroupInCommonRow from '../../src/components/user-profile/GroupInCommonRow';
 import MediaGrid, { MediaTabBtn } from '../../src/components/user-profile/MediaGrid';
 import type { MediaTab } from '../../src/components/user-profile/types';
@@ -72,6 +74,19 @@ export default function UserProfileScreen() {
     null,
     isAuthenticated && hasValidUserId,
   );
+
+  // Filter relationship (soft alternative to blocking). Reactive so the
+  // indicator + toggle update instantly after filter/unfilter.
+  const { data: filterState } = useReactiveSafeConvexQuery<any>(
+    (api as any).filtering?.isFiltered,
+    hasValidUserId ? { otherUserId: userId } : {},
+    { iFilteredThem: false, theyFilteredMe: false },
+    isAuthenticated && hasValidUserId,
+  );
+  const iFilteredThem = !!filterState?.iFilteredThem;
+  const theyFilteredMe = !!filterState?.theyFilteredMe;
+  const filterUserM = useMutation((api as any).filtering?.filterUser);
+  const unfilterUserM = useMutation((api as any).filtering?.unfilterUser);
 
   // iter-206: detect whether the viewed user is already saved as a
   // contact. We hit `api.contacts.getContacts` (warm cache from chats
@@ -450,6 +465,41 @@ export default function UserProfileScreen() {
     );
   };
 
+  const handleFilter = () => {
+    if (!hasValidUserId) return;
+    if (iFilteredThem) {
+      Alert.alert(
+        `Unfilter ${displayName}?`,
+        'Their messages and calls will return to your normal chats.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Unfilter',
+            onPress: () =>
+              unfilterUserM?.({ filteredId: userId }).catch((e: any) =>
+                Alert.alert('Unfilter failed', String(e?.message || e)),
+              ),
+          },
+        ],
+      );
+    } else {
+      Alert.alert(
+        `Filter ${displayName}?`,
+        "Their messages will arrive in your Filter Bin and their calls won't ring you (you'll see a notice). You can still message and call them normally. Unfilter anytime.",
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Filter',
+            onPress: () =>
+              filterUserM?.({ filteredId: userId }).catch((e: any) =>
+                Alert.alert('Filter failed', String(e?.message || e)),
+              ),
+          },
+        ],
+      );
+    }
+  };
+
   // --- Loading / fallback -------------------------------------------------
   if (!isAuthenticated || !hasValidUserId) {
     return (
@@ -530,9 +580,17 @@ export default function UserProfileScreen() {
 
         {/* Name + last seen */}
         <View style={styles.identityBlock}>
-          <Text style={styles.name} numberOfLines={1} testID="user-profile-name">
-            {displayName}
-          </Text>
+          <View style={styles.nameRow}>
+            <FilterIndicator
+              iFilteredThem={iFilteredThem}
+              theyFilteredMe={theyFilteredMe}
+              size={18}
+              style={styles.nameFilterIcon}
+            />
+            <Text style={styles.name} numberOfLines={1} testID="user-profile-name">
+              {displayName}
+            </Text>
+          </View>
           <Text
             style={[styles.lastSeen, profileOnline ? styles.lastSeenOnline : null]}
             numberOfLines={1}
@@ -701,8 +759,19 @@ export default function UserProfileScreen() {
           />
         </View>
 
-        {/* Block button */}
+        {/* Filter + Block buttons */}
         <View style={styles.blockSection}>
+          <TouchableOpacity
+            style={styles.filterBtn}
+            onPress={handleFilter}
+            activeOpacity={0.85}
+            testID="user-profile-filter-btn"
+          >
+            <Ionicons name={iFilteredThem ? 'funnel' : 'funnel-outline'} size={18} color={Colors.textPrimary} />
+            <Text style={styles.filterBtnText}>
+              {iFilteredThem ? `Unfilter ${displayName}` : `Filter ${displayName}`}
+            </Text>
+          </TouchableOpacity>
           <TouchableOpacity
             style={styles.blockBtn}
             onPress={handleBlock}
@@ -890,6 +959,8 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     textAlign: 'center',
   },
+  nameRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  nameFilterIcon: { marginRight: 8 },
   lastSeen: {
     marginTop: 4,
     fontSize: FontSize.base,
@@ -1020,6 +1091,23 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     borderRadius: Radius.md,
     backgroundColor: '#FDE2E2',
+  },
+  filterBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 16,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(60,40,0,0.15)',
+    marginBottom: 12,
+  },
+  filterBtnText: {
+    fontSize: FontSize.base,
+    color: Colors.textPrimary,
+    fontWeight: FontWeight.semibold,
   },
   blockBtnText: {
     fontSize: FontSize.base,

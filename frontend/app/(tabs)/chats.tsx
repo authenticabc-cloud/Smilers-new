@@ -402,6 +402,12 @@ export default function ChatsScreen() {
               onPress={() => handleMenuPress('/archived')}
               testID="menu-archived"
             />
+            <MenuItem
+              icon={<Feather name="filter" size={20} color={Colors.textPrimary} />}
+              label="Filter Bin"
+              onPress={() => handleMenuPress('/filter-bin')}
+              testID="menu-filter-bin"
+            />
             <TouchableOpacity
               style={menuStyles.row}
               onPress={togglePinVoiceTasks}

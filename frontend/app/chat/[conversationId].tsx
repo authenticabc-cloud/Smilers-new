@@ -43,6 +43,8 @@ import { LiveLocationSharingPill } from '../../src/components/LiveLocationSharin
 import PollComposer from '../../src/components/PollComposer';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery, useSafeConvexSubscription } from '../../src/hooks/useSafeConvexQuery';
+import { useReactiveSafeConvexQuery } from '../../src/hooks/useReactiveSafeConvexQuery';
+import FilterIndicator from '../../src/components/FilterIndicator';
 import { useScreenCaptureProtection } from '../../src/hooks/useScreenCaptureProtection';
 import { useEngagementTracker } from '../../src/hooks/useEngagementTracker';
 import { recordDiagnostic } from '../../src/lib/diagnostics';
@@ -3559,6 +3561,15 @@ export default function ChatScreen() {
   const avatarInitial = getDisplayInitials(title);
   // DM-only online state for the header avatar dot (mirrors web). Online if the
   // peer flag is set or they were seen within 2 min; never on groups/broadcast.
+  // Filter relationship for the header symbol (direct chats only). Reactive
+  // so the indicator appears/updates the moment either side filters.
+  const { data: chatFilterState } = useReactiveSafeConvexQuery<any>(
+    (api as any).filtering?.isFiltered,
+    !isGroupChat && callCalleeId ? { otherUserId: callCalleeId } : {},
+    { iFilteredThem: false, theyFilteredMe: false },
+    !isGroupChat && callCalleeId.length > 5,
+  );
+
   const headerOnline = (() => {
     if (isBroadcastReadOnly) return false;
     const src: any = mergedPresenceSource;
@@ -3740,7 +3751,15 @@ export default function ChatScreen() {
               {headerOnline ? <View style={styles.headerOnlineDot} testID="chat-header-online" /> : null}
             </View>
             <View style={styles.headerTextWrap}>
-              <Text style={styles.chatHeaderTitle} numberOfLines={1} testID="chat-header-title">{title}</Text>
+              <View style={styles.headerTitleRow}>
+                <FilterIndicator
+                  iFilteredThem={chatFilterState?.iFilteredThem}
+                  theyFilteredMe={chatFilterState?.theyFilteredMe}
+                  size={15}
+                  style={styles.headerFilterIcon}
+                />
+                <Text style={styles.chatHeaderTitle} numberOfLines={1} testID="chat-header-title">{title}</Text>
+              </View>
               {cityLocalTimeLabel ? (
                 <TouchableOpacity onPress={onPressCityTime} hitSlop={6} testID="chat-header-citytime-btn" activeOpacity={0.6}>
                   <Text style={styles.chatHeaderCityTime} numberOfLines={1} testID="chat-header-citytime">

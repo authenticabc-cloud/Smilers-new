@@ -124,6 +124,11 @@ export const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
     color: Colors.white,
   },
+  headerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  headerFilterIcon: { marginRight: 6 },
   chatHeaderSubtitle: {
     // iter-174: brighter presence subtitle. Was 0.78 alpha → tougher to
     // read on a brown background; bumped to 0.92 + slightly larger font.
