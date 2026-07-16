@@ -931,8 +931,42 @@ async def download_server_py():
     )
 
 
+# ── Generic per-IP rate limiting (in-process, best-effort per node) ───────
+# Protects unauthenticated, cost-bearing endpoints (LLM translate/transcribe,
+# Google Safe Browsing) from anonymous abuse. Not distributed — swap for a
+# shared store (e.g. Redis) if the backend is scaled to multiple instances.
+_RATE_STORES: dict[str, dict[str, list[float]]] = {}
+
+
+def _client_ip_of(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _rate_limit_ok(namespace: str, client_ip: str, max_hits: int, window_sec: int) -> bool:
+    import time
+    now = time.time()
+    cutoff = now - window_sec
+    store = _RATE_STORES.setdefault(namespace, {})
+    bucket = store.setdefault(client_ip, [])
+    bucket[:] = [t for t in bucket if t > cutoff]  # prune old hits
+    if len(bucket) >= max_hits:
+        return False
+    bucket.append(now)
+    if len(store) > 5000:  # opportunistic cleanup so the dict stays bounded
+        for ip in list(store.keys()):
+            hits = store.get(ip)
+            if not hits or hits[-1] < cutoff:
+                store.pop(ip, None)
+    return True
+
+
 @api_router.post("/translate", response_model=TranslationResponse)
-async def translate_text(payload: TranslationRequest):
+async def translate_text(payload: TranslationRequest, request: Request):
+    if not _rate_limit_ok("translate", _client_ip_of(request), 60, 60):
+        raise HTTPException(status_code=429, detail="Too many translation requests; please slow down.")
     text = (payload.text or "").strip()
     target_language = (payload.target_language or "").strip()
     skip_languages = [item.strip() for item in payload.skip_languages if isinstance(item, str) and item.strip()]
@@ -1022,10 +1056,13 @@ class TranscriptionResponse(BaseModel):
 
 
 @api_router.post("/transcribe", response_model=TranscriptionResponse)
-async def transcribe_media(payload: TranscriptionRequest) -> TranscriptionResponse:
+async def transcribe_media(payload: TranscriptionRequest, request: Request) -> TranscriptionResponse:
     """Download the media at ``payload.media_url`` and transcribe it with
     OpenAI Whisper. Supports voice notes (.m4a/.mp3/.webm/.wav) and short
     videos (.mp4/.mov) — Whisper extracts the audio internally."""
+
+    if not _rate_limit_ok("transcribe", _client_ip_of(request), 30, 60):
+        raise HTTPException(status_code=429, detail="Too many transcription requests; please slow down.")
 
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -1069,11 +1106,15 @@ async def transcribe_media(payload: TranscriptionRequest) -> TranscriptionRespon
 async def transcribe_uploaded_media(
     file: UploadFile = File(...),
     language_hint: str | None = Form(default=None),
+    request: Request = None,
 ) -> TranscriptionResponse:
     """Multipart-upload variant of /transcribe — used by the mobile client
     when the message is E2EE-encrypted (mediaUrl points at ciphertext, so
     fetching by URL is useless). The mobile sends the PLAINTEXT audio
     bytes directly here, before Convex upload + encryption."""
+
+    if request is not None and not _rate_limit_ok("transcribe", _client_ip_of(request), 30, 60):
+        raise HTTPException(status_code=429, detail="Too many transcription requests; please slow down.")
 
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -2654,44 +2695,13 @@ _SAFE_BROWSING_API_URL = (
     "https://safebrowsing.googleapis.com/v4/threatMatches:find?key="
 )
 
-# Lightweight in-process per-IP rate limit (sliding window) to protect the
-# shared Google Safe Browsing quota (10k/day) from anonymous abuse, since this
-# endpoint is unauthenticated. Not distributed — best-effort per backend node.
-_SAFE_BROWSING_RATE: dict[str, list[float]] = {}
-_SAFE_BROWSING_RATE_WINDOW_SEC = 60
-_SAFE_BROWSING_RATE_MAX = 60  # max requests per IP per 60s window
-
-
-def _safe_browsing_rate_ok(client_ip: str) -> bool:
-    import time
-    now = time.time()
-    cutoff = now - _SAFE_BROWSING_RATE_WINDOW_SEC
-    bucket = _SAFE_BROWSING_RATE.setdefault(client_ip, [])
-    bucket[:] = [t for t in bucket if t > cutoff]  # prune old hits
-    if len(bucket) >= _SAFE_BROWSING_RATE_MAX:
-        return False
-    bucket.append(now)
-    # Opportunistic cleanup so the dict cannot grow unbounded.
-    if len(_SAFE_BROWSING_RATE) > 5000:
-        for ip in list(_SAFE_BROWSING_RATE.keys()):
-            hits = _SAFE_BROWSING_RATE.get(ip)
-            if not hits or hits[-1] < cutoff:
-                _SAFE_BROWSING_RATE.pop(ip, None)
-    return True
-
 
 @api_router.post("/safe-browsing/check", response_model=SafeBrowsingCheckResponse)
 async def safe_browsing_check(payload: SafeBrowsingCheckRequest, request: Request):
     """Check up to 100 URLs against Google Safe Browsing. Returns the
     subset that Google flagged. Empty `matches` ≡ all safe."""
     # Per-IP rate limit (endpoint is unauthenticated; protects Google quota).
-    client_ip = "unknown"
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        client_ip = fwd.split(",")[0].strip()
-    elif request.client:
-        client_ip = request.client.host
-    if not _safe_browsing_rate_ok(client_ip):
+    if not _rate_limit_ok("safe_browsing", _client_ip_of(request), 60, 60):
         raise HTTPException(
             status_code=429,
             detail="Too many URL safety checks; please slow down.",
