@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Modal,
   StyleSheet,
   Text,
   TextInput,
@@ -15,7 +16,10 @@ import { useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
+import { useReactiveSafeConvexQuery } from '../../src/hooks/useReactiveSafeConvexQuery';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
+
+const MAX_PINNED_GROUPS = 20;
 
 type Tab = 'groups' | 'conferences';
 
@@ -64,7 +68,10 @@ export default function GroupsScreen() {
   const [search, setSearch] = useState('');
   const [inviteCode, setInviteCode] = useState('');
 
-  const { data: groups, loading: groupsLoading } = useSafeConvexQuery<any[]>(
+  // Reactive so pin / unpin / reorder re-sorts the list live. The backend
+  // returns groups already sorted (pinned first in pinOrder, then unpinned by
+  // latest message), each carrying `isPinned` and `pinOrder`.
+  const { data: groups, loading: groupsLoading } = useReactiveSafeConvexQuery<any[]>(
     api.conversations.listGroups,
     {},
     [],
@@ -158,6 +165,95 @@ export default function GroupsScreen() {
       setJoining(false);
     }
   }, [inviteCode, joining, joinByCodeM, router]);
+
+  // --- Pinned groups (api.pinnedGroups.*) ---
+  const pinGroupM = useMutation((api as any).pinnedGroups?.pinGroup);
+  const unpinGroupM = useMutation((api as any).pinnedGroups?.unpinGroup);
+  const reorderPinnedM = useMutation((api as any).pinnedGroups?.reorderPinnedGroups);
+  const [reorderOpen, setReorderOpen] = useState(false);
+  const [reorderList, setReorderList] = useState<any[]>([]);
+  const [pinBusy, setPinBusy] = useState(false);
+
+  const pinnedGroups = useMemo(
+    () => (Array.isArray(groups) ? groups.filter((g: any) => g?.isPinned) : []),
+    [groups],
+  );
+
+  const togglePin = useCallback(
+    async (item: any) => {
+      const id = getListItemId(item);
+      if (!id) return;
+      const isPinned = !!item.isPinned;
+      if (!isPinned && pinnedGroups.length >= MAX_PINNED_GROUPS) {
+        Alert.alert('Pin limit reached', `You can pin up to ${MAX_PINNED_GROUPS} groups. Unpin one first.`);
+        return;
+      }
+      const fn = isPinned ? unpinGroupM : pinGroupM;
+      if (typeof fn !== 'function') {
+        Alert.alert('Unavailable', 'Pinning will be available after the next update.');
+        return;
+      }
+      setPinBusy(true);
+      try {
+        await fn({ conversationId: id });
+      } catch (e: any) {
+        Alert.alert(isPinned ? 'Unpin failed' : 'Pin failed', String(e?.message || e || 'Please try again.'));
+      } finally {
+        setPinBusy(false);
+      }
+    },
+    [pinnedGroups.length, pinGroupM, unpinGroupM],
+  );
+
+  const onLongPressGroup = useCallback(
+    (item: any) => {
+      const id = getListItemId(item);
+      if (!id) return;
+      const isPinned = !!item.isPinned;
+      const buttons: any[] = [
+        { text: isPinned ? 'Unpin group' : 'Pin to top', onPress: () => togglePin(item) },
+      ];
+      if (pinnedGroups.length > 1) {
+        buttons.push({
+          text: 'Reorder pinned groups',
+          onPress: () => {
+            setReorderList(pinnedGroups);
+            setReorderOpen(true);
+          },
+        });
+      }
+      buttons.push({ text: 'Cancel', style: 'cancel' });
+      Alert.alert(item.name || 'Group', isPinned ? 'Pinned to the top of your groups.' : undefined, buttons);
+    },
+    [pinnedGroups, togglePin],
+  );
+
+  const moveReorderItem = useCallback((index: number, dir: -1 | 1) => {
+    setReorderList((prev) => {
+      const next = [...prev];
+      const j = index + dir;
+      if (j < 0 || j >= next.length) return prev;
+      [next[index], next[j]] = [next[j], next[index]];
+      return next;
+    });
+  }, []);
+
+  const saveReorder = useCallback(async () => {
+    const orderedGroupIds = reorderList.map((g) => getListItemId(g)).filter(Boolean);
+    if (typeof reorderPinnedM !== 'function') {
+      Alert.alert('Unavailable', 'Reordering will be available after the next update.');
+      return;
+    }
+    setPinBusy(true);
+    try {
+      await reorderPinnedM({ orderedGroupIds });
+      setReorderOpen(false);
+    } catch (e: any) {
+      Alert.alert('Reorder failed', String(e?.message || e || 'Please try again.'));
+    } finally {
+      setPinBusy(false);
+    }
+  }, [reorderList, reorderPinnedM]);
 
   if (tab === 'conferences') {
     return (
@@ -355,10 +451,14 @@ export default function GroupsScreen() {
           const stamp = formatRelativeDays(item.lastMessageAt || item.updatedAt || item._creationTime);
           const initial = (item.name || 'G').charAt(0).toUpperCase();
           const itemId = getListItemId(item);
+          const isGroupsTab = tab === 'groups';
+          const pinned = isGroupsTab && !!item.isPinned;
           return (
             <TouchableOpacity
               style={styles.row}
               onPress={() => openItem(item)}
+              onLongPress={isGroupsTab ? () => onLongPressGroup(item) : undefined}
+              delayLongPress={300}
               activeOpacity={0.7}
               disabled={!itemId}
               testID={`group-${itemId || 'unknown'}`}
@@ -367,9 +467,20 @@ export default function GroupsScreen() {
                 <Text style={styles.avatarText}>{initial}</Text>
               </View>
               <View style={styles.rowMid}>
-                <Text style={styles.rowName} numberOfLines={1}>
-                  {item.name || 'Group'}
-                </Text>
+                <View style={styles.rowNameLine}>
+                  {pinned ? (
+                    <Ionicons
+                      name="pin"
+                      size={14}
+                      color={Colors.primary}
+                      style={styles.pinIcon}
+                      testID={`group-pin-${itemId}`}
+                    />
+                  ) : null}
+                  <Text style={styles.rowName} numberOfLines={1}>
+                    {item.name || 'Group'}
+                  </Text>
+                </View>
                 <Text style={styles.rowSub} numberOfLines={1}>
                   {sub}
                 </Text>
@@ -411,12 +522,113 @@ export default function GroupsScreen() {
           )
         }
       />
+
+      {/* Reorder pinned groups modal */}
+      <Modal
+        visible={reorderOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setReorderOpen(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard} testID="reorder-pinned-modal">
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Reorder pinned groups</Text>
+              <TouchableOpacity onPress={() => setReorderOpen(false)} testID="reorder-close">
+                <Ionicons name="close" size={24} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.modalHint}>Move groups up or down to set their pinned order.</Text>
+            <FlatList
+              data={reorderList}
+              keyExtractor={(item: any, index) => getListItemId(item) || `reorder-${index}`}
+              style={{ maxHeight: 380 }}
+              renderItem={({ item, index }) => (
+                <View style={styles.reorderRow} testID={`reorder-row-${getListItemId(item)}`}>
+                  <Text style={styles.reorderIndex}>{index + 1}</Text>
+                  <Text style={styles.reorderName} numberOfLines={1}>{item.name || 'Group'}</Text>
+                  <TouchableOpacity
+                    style={[styles.reorderBtn, index === 0 && styles.reorderBtnDisabled]}
+                    disabled={index === 0}
+                    onPress={() => moveReorderItem(index, -1)}
+                    testID={`reorder-up-${getListItemId(item)}`}
+                  >
+                    <Feather name="arrow-up" size={20} color={index === 0 ? Colors.textMuted : Colors.primary} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.reorderBtn, index === reorderList.length - 1 && styles.reorderBtnDisabled]}
+                    disabled={index === reorderList.length - 1}
+                    onPress={() => moveReorderItem(index, 1)}
+                    testID={`reorder-down-${getListItemId(item)}`}
+                  >
+                    <Feather name="arrow-down" size={20} color={index === reorderList.length - 1 ? Colors.textMuted : Colors.primary} />
+                  </TouchableOpacity>
+                </View>
+              )}
+            />
+            <TouchableOpacity
+              style={[styles.reorderSave, pinBusy && styles.reorderBtnDisabled]}
+              onPress={saveReorder}
+              disabled={pinBusy}
+              testID="reorder-save"
+            >
+              {pinBusy ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.reorderSaveText}>Save order</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
+  rowNameLine: { flexDirection: 'row', alignItems: 'center' },
+  pinIcon: { marginRight: 5, transform: [{ rotate: '45deg' }] },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  modalCard: {
+    backgroundColor: Colors.background,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    paddingHorizontal: Spacing.base,
+    paddingTop: Spacing.base,
+    paddingBottom: 32,
+  },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  modalTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  modalHint: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 4, marginBottom: 12 },
+  reorderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(60,40,0,0.08)',
+  },
+  reorderIndex: { width: 22, textAlign: 'center', fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textSecondary },
+  reorderName: { flex: 1, fontSize: FontSize.base, color: Colors.textPrimary },
+  reorderBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primaryLight,
+  },
+  reorderBtnDisabled: { opacity: 0.5 },
+  reorderSave: {
+    marginTop: 16,
+    height: 50,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reorderSaveText: { color: '#fff', fontSize: FontSize.base, fontWeight: FontWeight.bold },
   conferenceScreen: { flex: 1, backgroundColor: '#F7F3EC' },
   conferenceHeader: {
     flexDirection: 'row',
