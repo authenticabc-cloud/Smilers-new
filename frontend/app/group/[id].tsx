@@ -777,7 +777,7 @@ function GroupInfoInner() {
               </>
             ) : (
               <>
-                <Text style={styles.modalBody}>Only admins can generate and share invite links.</Text>
+                <Text style={styles.modalBody}>Generate a link that anyone can use to join this group. You can disable it anytime.</Text>
                 <TouchableOpacity style={styles.modalSave} onPress={onGenerateInvite} testID="group-info-invite-generate">
                   <Text style={styles.modalSaveText}>Generate Invite Link</Text>
                 </TouchableOpacity>
