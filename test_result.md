@@ -1629,3 +1629,20 @@
 ## agent_communication:
 ##   - agent: "main"
 ##     message: "Iteration 173 (BACKEND-ONLY TEST REQUESTED): Please test the POST /api/safe-browsing/check endpoint on the external preview URL. Scenarios: (1) malware URL https://testsafebrowsing.appspot.com/s/malware.html -> expect matches[] contains that url with threat_type MALWARE; (2) known phishing/social-engineering test URL https://testsafebrowsing.appspot.com/s/phishing.html -> expect a match (SOCIAL_ENGINEERING); (3) safe URLs https://www.google.com and https://en.wikipedia.org -> expect matches: []; (4) mixed batch of malicious+safe -> only malicious returned; (5) empty urls [] -> matches: []; (6) non-http string -> ignored, matches: []. Also confirm the endpoint responds 200 and does NOT 500. This validates the restored malicious-link detection after re-adding GOOGLE_SAFE_BROWSING_API_KEY to backend/.env. Do NOT attempt Google OIDC login / in-chat E2E (auth-gated, not automatable). Backend base URL: https://smilers-launch.preview.emergentagent.com"
+
+## backend:
+##   - task: "Per-IP rate limiting + Retry-After header on unauthenticated endpoints"
+##     implemented: true
+##     working: true
+##     file: "/app/backend/server.py"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##       - working: true
+##         agent: "main"
+##         comment: "Iteration 174: Added generic per-IP sliding-window rate limiter (_rate_limit_ok / _rate_limit_ok_async) with optional Redis backend (REDIS_URL, graceful in-memory fallback) applied to 4 unauthenticated endpoints: POST /api/safe-browsing/check (60/60s), POST /api/translate (60/60s), POST /api/transcribe (30/60s), POST /api/transcribe/upload (30/60s, shared 'transcribe' namespace). On 429 the response now includes a Retry-After header (seconds). Verified locally: translate 60x200 then 429 with 'retry-after: 60'; safe-browsing malware detection still works; Redis path creates rl:* keys. REDIS_URL currently empty (in-memory). Startup logs Safe Browsing key presence."
+
+## agent_communication:
+##   - agent: "main"
+##     message: "Iteration 174 (BACKEND-ONLY REGRESSION TEST): Verify per-IP rate limiting + Retry-After on the EXTERNAL preview URL https://smilers-launch.preview.emergentagent.com. IMPORTANT nuance: the ingress may present a shared/forwarded client IP, so limits are per that IP. Tests: (A) NORMAL requests are unaffected — a single POST to each endpoint returns its normal status (translate with {text:'',target_language:'',skip_languages:[]} -> 200; safe-browsing with {urls:[]} -> 200 matches:[]; safe-browsing malware URL https://testsafebrowsing.appspot.com/s/malware.html -> 200 MALWARE). (B) RATE LIMIT: fire >60 rapid POSTs to /api/translate (use empty text so NO LLM cost) within 60s and confirm you start receiving HTTP 429 AND that the 429 response carries a 'Retry-After' header whose value is a positive integer (<=60). (C) Same 429+Retry-After check for /api/safe-browsing/check using {urls:[]} (empty, no Google quota cost) firing >60 rapid requests. (D) For /api/transcribe use empty/invalid so no Whisper cost is ideal, but transcribe limit is 30/60s -> DO NOT flood it with real media; instead just confirm ONE normal call is not falsely 429'd (rate-limit wiring already unit-verified locally). (E) Confirm no endpoint returns 500. DO NOT attempt Google OIDC login or in-chat E2E (auth-gated). If the shared-IP hypothesis makes counts behave oddly, report observed counts. Base URL: https://smilers-launch.preview.emergentagent.com"
