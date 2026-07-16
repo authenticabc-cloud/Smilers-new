@@ -36,7 +36,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
@@ -97,6 +97,7 @@ export default function GroupInfoScreen() {
 
 function GroupInfoInner() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const conversationId = id;
 
@@ -712,7 +713,7 @@ function GroupInfoInner() {
       {/* ----- Edit Name Modal ----- */}
       <Modal visible={editNameOpen} transparent animationType="slide" onRequestClose={() => setEditNameOpen(false)}>
         <Pressable style={styles.modalBackdrop} onPress={() => setEditNameOpen(false)}>
-          <Pressable style={styles.modalCard} onPress={() => {}}>
+          <Pressable style={[styles.modalCard, { paddingBottom: Spacing.lg + insets.bottom }]} onPress={() => {}}>
             <Text style={styles.modalTitle}>Edit Group</Text>
             <Text style={styles.modalLabel}>Name</Text>
             <TextInput
@@ -746,7 +747,7 @@ function GroupInfoInner() {
       {/* ----- Invite Link Modal ----- */}
       <Modal visible={inviteModalOpen} transparent animationType="slide" onRequestClose={() => setInviteModalOpen(false)}>
         <Pressable style={styles.modalBackdrop} onPress={() => setInviteModalOpen(false)}>
-          <Pressable style={styles.modalCard} onPress={() => {}}>
+          <Pressable style={[styles.modalCard, { paddingBottom: Spacing.lg + insets.bottom }]} onPress={() => {}}>
             <Text style={styles.modalTitle}>🔗 Invite Link</Text>
             {inviteLinkEnabled && inviteCode ? (
               <>
@@ -789,7 +790,7 @@ function GroupInfoInner() {
       {/* ----- Transfer Chief Modal ----- */}
       <Modal visible={transferModalOpen} transparent animationType="slide" onRequestClose={() => setTransferModalOpen(false)}>
         <Pressable style={styles.modalBackdrop} onPress={() => setTransferModalOpen(false)}>
-          <Pressable style={styles.modalCard} onPress={() => {}}>
+          <Pressable style={[styles.modalCard, { paddingBottom: Spacing.lg + insets.bottom }]} onPress={() => {}}>
             <Text style={styles.modalTitle}>👑 Transfer Chief Admin</Text>
             <Text style={styles.modalBody}>You can transfer Chief Admin to any admin in the group.</Text>
             {eligibleTransferAdmins.length === 0 ? (
@@ -832,7 +833,7 @@ function GroupInfoInner() {
       {/* ----- Suspend Member Modal ----- */}
       <Modal visible={!!suspendTarget} transparent animationType="slide" onRequestClose={() => setSuspendTarget(null)}>
         <Pressable style={styles.modalBackdrop} onPress={() => setSuspendTarget(null)}>
-          <Pressable style={styles.modalCard} onPress={() => {}}>
+          <Pressable style={[styles.modalCard, { paddingBottom: Spacing.lg + insets.bottom }]} onPress={() => {}}>
             <Text style={styles.modalTitle}>🚫 Suspend Member</Text>
             <Text style={styles.modalBody}>
               Suspended members enter spectator mode — they can read messages but cannot send.
@@ -884,7 +885,7 @@ function GroupInfoInner() {
       {/* ----- Add Members Modal ----- */}
       <Modal visible={addMembersOpen} transparent animationType="slide" onRequestClose={() => setAddMembersOpen(false)}>
         <Pressable style={styles.modalBackdrop} onPress={() => setAddMembersOpen(false)}>
-          <Pressable style={styles.modalCard} onPress={() => {}}>
+          <Pressable style={[styles.modalCard, { paddingBottom: Spacing.lg + insets.bottom }]} onPress={() => {}}>
             <Text style={styles.modalTitle}>➕ Add Members</Text>
             <Text style={styles.modalBody}>Pick Smilers contacts to add to this group.</Text>
             <TextInput
