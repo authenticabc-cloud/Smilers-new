@@ -963,9 +963,53 @@ def _rate_limit_ok(namespace: str, client_ip: str, max_hits: int, window_sec: in
     return True
 
 
+# Optional distributed backend: when REDIS_URL is set, rate limits are shared
+# across all backend replicas (fixed-window counter). If Redis is unset or
+# unreachable, we transparently fall back to the in-memory limiter above so a
+# single node keeps working and a Redis blip never blocks traffic.
+_REDIS_URL = os.environ.get("REDIS_URL", "").strip()
+_redis_client = None
+_redis_disabled = False
+
+
+def _get_rate_redis():
+    global _redis_client, _redis_disabled
+    if not _REDIS_URL or _redis_disabled:
+        return None
+    if _redis_client is None:
+        try:
+            import redis.asyncio as aioredis
+            _redis_client = aioredis.from_url(
+                _REDIS_URL, socket_connect_timeout=2, socket_timeout=2
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"rate-limit: Redis init failed, using in-memory: {e}")
+            _redis_disabled = True
+            return None
+    return _redis_client
+
+
+async def _rate_limit_ok_async(namespace: str, client_ip: str, max_hits: int, window_sec: int) -> bool:
+    r = _get_rate_redis()
+    if r is not None:
+        try:
+            import time
+            window = int(time.time() // window_sec)
+            key = f"rl:{namespace}:{client_ip}:{window}"
+            pipe = r.pipeline()
+            pipe.incr(key, 1)
+            pipe.expire(key, window_sec)
+            count, _ = await pipe.execute()
+            return int(count) <= max_hits
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"rate-limit: Redis error, falling back to in-memory: {e}")
+            # fall through to in-memory below
+    return _rate_limit_ok(namespace, client_ip, max_hits, window_sec)
+
+
 @api_router.post("/translate", response_model=TranslationResponse)
 async def translate_text(payload: TranslationRequest, request: Request):
-    if not _rate_limit_ok("translate", _client_ip_of(request), 60, 60):
+    if not await _rate_limit_ok_async("translate", _client_ip_of(request), 60, 60):
         raise HTTPException(status_code=429, detail="Too many translation requests; please slow down.")
     text = (payload.text or "").strip()
     target_language = (payload.target_language or "").strip()
@@ -1061,7 +1105,7 @@ async def transcribe_media(payload: TranscriptionRequest, request: Request) -> T
     OpenAI Whisper. Supports voice notes (.m4a/.mp3/.webm/.wav) and short
     videos (.mp4/.mov) — Whisper extracts the audio internally."""
 
-    if not _rate_limit_ok("transcribe", _client_ip_of(request), 30, 60):
+    if not await _rate_limit_ok_async("transcribe", _client_ip_of(request), 30, 60):
         raise HTTPException(status_code=429, detail="Too many transcription requests; please slow down.")
 
     api_key = os.environ.get("OPENAI_API_KEY")
@@ -1113,7 +1157,7 @@ async def transcribe_uploaded_media(
     fetching by URL is useless). The mobile sends the PLAINTEXT audio
     bytes directly here, before Convex upload + encryption."""
 
-    if request is not None and not _rate_limit_ok("transcribe", _client_ip_of(request), 30, 60):
+    if request is not None and not await _rate_limit_ok_async("transcribe", _client_ip_of(request), 30, 60):
         raise HTTPException(status_code=429, detail="Too many transcription requests; please slow down.")
 
     api_key = os.environ.get("OPENAI_API_KEY")
@@ -2701,7 +2745,7 @@ async def safe_browsing_check(payload: SafeBrowsingCheckRequest, request: Reques
     """Check up to 100 URLs against Google Safe Browsing. Returns the
     subset that Google flagged. Empty `matches` ≡ all safe."""
     # Per-IP rate limit (endpoint is unauthenticated; protects Google quota).
-    if not _rate_limit_ok("safe_browsing", _client_ip_of(request), 60, 60):
+    if not await _rate_limit_ok_async("safe_browsing", _client_ip_of(request), 60, 60):
         raise HTTPException(
             status_code=429,
             detail="Too many URL safety checks; please slow down.",
