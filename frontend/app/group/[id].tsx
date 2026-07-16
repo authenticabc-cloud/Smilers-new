@@ -41,6 +41,7 @@ import { Feather, Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
 import * as Clipboard from 'expo-clipboard';
+import QRCode from 'react-native-qrcode-svg';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
@@ -755,6 +756,15 @@ function GroupInfoInner() {
             {inviteLinkEnabled && inviteCode ? (
               <>
                 <Text style={styles.modalBody}>Share this link with anyone you want to add.</Text>
+                <View style={styles.qrCard}>
+                  <QRCode
+                    value={`https://smilers.online/join/${inviteCode}`}
+                    size={160}
+                    backgroundColor="#FFFFFF"
+                    color="#1A1207"
+                  />
+                  <Text style={styles.qrCaption}>Scan to join {groupName}</Text>
+                </View>
                 <View style={styles.linkBox}>
                   <Text style={styles.linkBoxText} numberOfLines={1}>
                     https://smilers.online/join/{inviteCode}
@@ -1217,6 +1227,17 @@ const styles = StyleSheet.create({
     borderColor: Colors.borderLight,
   },
   linkBoxText: { fontSize: FontSize.sm, color: Colors.textPrimary, fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }) as any },
+  qrCard: {
+    alignSelf: 'center',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: Radius.lg,
+    padding: Spacing.base,
+    gap: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.borderLight,
+  },
+  qrCaption: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center' },
   emptyModal: { alignItems: 'center', gap: 6, paddingVertical: Spacing.lg },
   emptyModalTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   emptyModalBody: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center' },
