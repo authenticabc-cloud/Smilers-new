@@ -1,7 +1,8 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   FlatList,
   Modal,
   StyleSheet,
@@ -176,6 +177,23 @@ export default function GroupsScreen() {
   const [reorderOpen, setReorderOpen] = useState(false);
   const [reorderList, setReorderList] = useState<any[]>([]);
   const [pinBusy, setPinBusy] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastOpacity = useRef(new Animated.Value(0)).current;
+
+  const showToast = useCallback(
+    (msg: string) => {
+      setToast(msg);
+      toastOpacity.stopAnimation();
+      Animated.sequence([
+        Animated.timing(toastOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
+        Animated.delay(1600),
+        Animated.timing(toastOpacity, { toValue: 0, duration: 250, useNativeDriver: true }),
+      ]).start(({ finished }) => {
+        if (finished) setToast(null);
+      });
+    },
+    [toastOpacity],
+  );
 
   const pinnedGroups = useMemo(
     () => (Array.isArray(groups) ? groups.filter((g: any) => g?.isPinned) : []),
@@ -200,13 +218,14 @@ export default function GroupsScreen() {
       try {
         await fn({ conversationId: id });
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+        showToast(isPinned ? 'Unpinned' : 'Pinned to top');
       } catch (e: any) {
         Alert.alert(isPinned ? 'Unpin failed' : 'Pin failed', String(e?.message || e || 'Please try again.'));
       } finally {
         setPinBusy(false);
       }
     },
-    [pinnedGroups.length, pinGroupM, unpinGroupM],
+    [pinnedGroups.length, pinGroupM, unpinGroupM, showToast],
   );
 
   const onLongPressGroup = useCallback(
@@ -252,12 +271,13 @@ export default function GroupsScreen() {
     try {
       await reorderPinnedM({ orderedGroupIds });
       setReorderOpen(false);
+      showToast('Pin order saved');
     } catch (e: any) {
       Alert.alert('Reorder failed', String(e?.message || e || 'Please try again.'));
     } finally {
       setPinBusy(false);
     }
-  }, [reorderList, reorderPinnedM]);
+  }, [reorderList, reorderPinnedM, showToast]);
 
   if (tab === 'conferences') {
     return (
@@ -608,6 +628,13 @@ export default function GroupsScreen() {
           </GestureHandlerRootView>
         </View>
       </Modal>
+
+      {toast ? (
+        <Animated.View pointerEvents="none" style={[styles.toast, { opacity: toastOpacity }]} testID="groups-toast">
+          <Ionicons name="checkmark-circle" size={16} color="#fff" />
+          <Text style={styles.toastText}>{toast}</Text>
+        </Animated.View>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -649,6 +676,19 @@ const styles = StyleSheet.create({
   reorderBtnDisabled: { opacity: 0.5 },
   reorderRowActive: { backgroundColor: Colors.primaryLight, borderRadius: Radius.md },
   reorderHandle: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  toast: {
+    position: 'absolute',
+    bottom: 90,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(20,20,20,0.92)',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: Radius.pill,
+  },
+  toastText: { color: '#fff', fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   reorderSave: {
     marginTop: 16,
     height: 50,
