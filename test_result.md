@@ -1646,3 +1646,20 @@
 ## agent_communication:
 ##   - agent: "main"
 ##     message: "Iteration 174 (BACKEND-ONLY REGRESSION TEST): Verify per-IP rate limiting + Retry-After on the EXTERNAL preview URL https://smilers-launch.preview.emergentagent.com. IMPORTANT nuance: the ingress may present a shared/forwarded client IP, so limits are per that IP. Tests: (A) NORMAL requests are unaffected — a single POST to each endpoint returns its normal status (translate with {text:'',target_language:'',skip_languages:[]} -> 200; safe-browsing with {urls:[]} -> 200 matches:[]; safe-browsing malware URL https://testsafebrowsing.appspot.com/s/malware.html -> 200 MALWARE). (B) RATE LIMIT: fire >60 rapid POSTs to /api/translate (use empty text so NO LLM cost) within 60s and confirm you start receiving HTTP 429 AND that the 429 response carries a 'Retry-After' header whose value is a positive integer (<=60). (C) Same 429+Retry-After check for /api/safe-browsing/check using {urls:[]} (empty, no Google quota cost) firing >60 rapid requests. (D) For /api/transcribe use empty/invalid so no Whisper cost is ideal, but transcribe limit is 30/60s -> DO NOT flood it with real media; instead just confirm ONE normal call is not falsely 429'd (rate-limit wiring already unit-verified locally). (E) Confirm no endpoint returns 500. DO NOT attempt Google OIDC login or in-chat E2E (auth-gated). If the shared-IP hypothesis makes counts behave oddly, report observed counts. Base URL: https://smilers-launch.preview.emergentagent.com"
+
+## frontend:
+##   - task: "Server Status screen + degraded banner + /api/health version/uptime"
+##     implemented: true
+##     working: "NA"
+##     file: "/app/frontend/app/server-status.tsx, /app/frontend/app/settings.tsx, /app/backend/server.py"
+##     stuck_count: 0
+##     priority: "medium"
+##     needs_retesting: true
+##     status_history:
+##       - working: "NA"
+##         agent: "main"
+##         comment: "Iteration 175: Added GET /api/health (integrations readiness + version + uptimeSeconds + rate_limit_store) and an unauthenticated in-app Server Status screen at route /server-status that fetches it. Also a degraded banner in Settings (auth-gated). Pinned-groups feature added but is auth-gated (Google OIDC) so cannot be E2E tested here."
+
+## agent_communication:
+##   - agent: "main"
+##     message: "Iteration 175 (NON-AUTH-GATED TEST): Two parts. BACKEND: GET https://smilers-launch.preview.emergentagent.com/api/health -> expect 200 JSON with fields: status ('ok'|'degraded'), degraded (array), integrations (object with booleans: safe_browsing, openai_transcription, llm_translation, twilio_video, push, mongo), rate_limit_store ('in_memory'|'redis'), version (string), startedAt (ISO string), uptimeSeconds (integer >=0). Confirm status=='ok' and mongo==true and safe_browsing==true. FRONTEND (web preview, route is NOT auth-gated): open https://smilers-launch.preview.emergentagent.com/server-status -> expect the screen renders a status banner ('All systems operational'), a Version row, an Uptime row, a Rate-limit store row, and an INTEGRATIONS list where each of the 6 integrations shows 'Up'. Use pull-to-refresh should re-fetch (optional). DO NOT attempt Google OIDC login. The Groups pinned feature, Settings degraded banner, and group admin screens ARE auth-gated -> SKIP them (cannot log in). Report only on /server-status and /api/health. testIDs on server-status screen: server-status-screen, server-status-badge, server-status-int-<key> (e.g. server-status-int-safe_browsing)."
