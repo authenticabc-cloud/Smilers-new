@@ -2891,7 +2891,7 @@ async def get_app_version():
 # misconfiguration (e.g. a dropped API key) is obvious right after a deploy.
 # `status` is "ok" when nothing critical is missing, else "degraded".
 @api_router.get("/health")
-async def health_check():
+async def health_readiness():
     def _present(var: str) -> bool:
         return bool(os.environ.get(var, "").strip())
 
