@@ -2654,11 +2654,49 @@ _SAFE_BROWSING_API_URL = (
     "https://safebrowsing.googleapis.com/v4/threatMatches:find?key="
 )
 
+# Lightweight in-process per-IP rate limit (sliding window) to protect the
+# shared Google Safe Browsing quota (10k/day) from anonymous abuse, since this
+# endpoint is unauthenticated. Not distributed — best-effort per backend node.
+_SAFE_BROWSING_RATE: dict[str, list[float]] = {}
+_SAFE_BROWSING_RATE_WINDOW_SEC = 60
+_SAFE_BROWSING_RATE_MAX = 60  # max requests per IP per 60s window
+
+
+def _safe_browsing_rate_ok(client_ip: str) -> bool:
+    import time
+    now = time.time()
+    cutoff = now - _SAFE_BROWSING_RATE_WINDOW_SEC
+    bucket = _SAFE_BROWSING_RATE.setdefault(client_ip, [])
+    bucket[:] = [t for t in bucket if t > cutoff]  # prune old hits
+    if len(bucket) >= _SAFE_BROWSING_RATE_MAX:
+        return False
+    bucket.append(now)
+    # Opportunistic cleanup so the dict cannot grow unbounded.
+    if len(_SAFE_BROWSING_RATE) > 5000:
+        for ip in list(_SAFE_BROWSING_RATE.keys()):
+            hits = _SAFE_BROWSING_RATE.get(ip)
+            if not hits or hits[-1] < cutoff:
+                _SAFE_BROWSING_RATE.pop(ip, None)
+    return True
+
 
 @api_router.post("/safe-browsing/check", response_model=SafeBrowsingCheckResponse)
-async def safe_browsing_check(payload: SafeBrowsingCheckRequest):
+async def safe_browsing_check(payload: SafeBrowsingCheckRequest, request: Request):
     """Check up to 100 URLs against Google Safe Browsing. Returns the
     subset that Google flagged. Empty `matches` ≡ all safe."""
+    # Per-IP rate limit (endpoint is unauthenticated; protects Google quota).
+    client_ip = "unknown"
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        client_ip = fwd.split(",")[0].strip()
+    elif request.client:
+        client_ip = request.client.host
+    if not _safe_browsing_rate_ok(client_ip):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many URL safety checks; please slow down.",
+        )
+
     api_key = os.environ.get("GOOGLE_SAFE_BROWSING_API_KEY", "").strip()
     if not api_key:
         # We never want to *block* delivery when the API key is missing —
@@ -2789,6 +2827,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+async def _warn_missing_integration_keys():
+    """Surface silent-outage risks at boot. A missing Safe Browsing key makes
+    /api/safe-browsing/check fail-open (all links treated as safe), which is
+    exactly the kind of regression that hides until a user notices."""
+    if not os.environ.get("GOOGLE_SAFE_BROWSING_API_KEY", "").strip():
+        logger.warning(
+            "⚠️  GOOGLE_SAFE_BROWSING_API_KEY is missing — malicious-link "
+            "detection is DISABLED (endpoint will treat every URL as safe)."
+        )
+    else:
+        logger.info("Safe Browsing key present — malicious-link detection active.")
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
