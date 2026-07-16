@@ -1,4 +1,5 @@
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+import { fetchWithRetryAfter } from './fetchWithRetryAfter';
 const translationCache = new Map<string, string>();
 
 export interface TranslationResult {
@@ -31,7 +32,7 @@ export async function translateIncomingMessageText(input: {
   }
 
   try {
-    const response = await fetch(`${BACKEND_URL}/api/translate`, {
+    const response = await fetchWithRetryAfter(`${BACKEND_URL}/api/translate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

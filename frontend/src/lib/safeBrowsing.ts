@@ -16,6 +16,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { fetchWithRetryAfter } from './fetchWithRetryAfter';
 
 const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/$/, '');
 
@@ -37,11 +38,11 @@ const inflight = new Map<string, Promise<SafeBrowsingResult>>();
 async function fetchOne(url: string): Promise<SafeBrowsingResult> {
   if (!BACKEND_URL) return { state: 'safe' };
   try {
-    const resp = await fetch(`${BACKEND_URL}/api/safe-browsing/check`, {
+    const resp = await fetchWithRetryAfter(`${BACKEND_URL}/api/safe-browsing/check`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ urls: [url] }),
-    });
+    }, { maxWaitMs: 8000 });
     if (!resp.ok) return { state: 'safe' };
     const data = (await resp.json()) as { matches?: Array<{ url: string; threat_type?: string }> };
     const match = (data.matches || []).find((m) => m.url === url);

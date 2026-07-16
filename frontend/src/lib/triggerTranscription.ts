@@ -14,6 +14,7 @@
 import { ConvexReactClient } from 'convex/react';
 import { api } from '../convexApi';
 import { readStoredJson, writeStoredJson } from './settingsStorage';
+import { fetchWithRetryAfter } from './fetchWithRetryAfter';
 
 const TRANSCRIBE_ENDPOINT = `${process.env.EXPO_PUBLIC_BACKEND_URL || ''}/api/transcribe`;
 const TRANSCRIBE_UPLOAD_ENDPOINT = `${process.env.EXPO_PUBLIC_BACKEND_URL || ''}/api/transcribe/upload`;
@@ -192,7 +193,7 @@ export async function triggerTranscription(args: TriggerArgs): Promise<void> {
       form.append('file', { uri: localFileUri, name: inferredName, type: mime } as any);
       if (languageHint) form.append('language_hint', languageHint);
 
-      const response = await fetch(TRANSCRIBE_UPLOAD_ENDPOINT, {
+      const response = await fetchWithRetryAfter(TRANSCRIBE_UPLOAD_ENDPOINT, {
         method: 'POST',
         body: form as any,
       });
@@ -220,7 +221,7 @@ export async function triggerTranscription(args: TriggerArgs): Promise<void> {
         await failPatch(convex, messageId, 'Could not resolve media URL', storageId);
         return;
       }
-      const response = await fetch(TRANSCRIBE_ENDPOINT, {
+      const response = await fetchWithRetryAfter(TRANSCRIBE_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
