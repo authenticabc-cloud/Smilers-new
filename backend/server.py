@@ -2883,6 +2883,60 @@ async def get_app_version():
     return AppVersionResponse(**APP_VERSION_CONFIG)
 
 
+# ── Health / readiness ────────────────────────────────────────────────────
+# GET /api/health — at-a-glance readiness of each integration so a silent
+# misconfiguration (e.g. a dropped API key) is obvious right after a deploy.
+# `status` is "ok" when nothing critical is missing, else "degraded".
+@api_router.get("/health")
+async def health_check():
+    def _present(var: str) -> bool:
+        return bool(os.environ.get(var, "").strip())
+
+    # MongoDB ping (best-effort, short timeout).
+    mongo_ok = False
+    try:
+        await db.command("ping")
+        mongo_ok = True
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"health: mongo ping failed: {e}")
+
+    # Rate-limit store backend.
+    if _REDIS_URL and not _redis_disabled:
+        r = _get_rate_redis()
+        rate_store = "in_memory"
+        if r is not None:
+            try:
+                await r.ping()
+                rate_store = "redis"
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"health: redis ping failed: {e}")
+                rate_store = "in_memory_fallback"
+    else:
+        rate_store = "in_memory"
+
+    integrations = {
+        "safe_browsing": _present("GOOGLE_SAFE_BROWSING_API_KEY"),
+        "openai_transcription": _present("OPENAI_API_KEY"),
+        "llm_translation": _present("EMERGENT_LLM_KEY"),
+        "twilio_video": _present("TWILIO_ACCOUNT_SID")
+        and _present("TWILIO_API_KEY_SID")
+        and _present("TWILIO_API_KEY_SECRET"),
+        "push": _present("EMERGENT_PUSH_KEY"),
+        "mongo": mongo_ok,
+    }
+
+    # Critical integrations whose absence should flip status to degraded.
+    critical = ["safe_browsing", "mongo"]
+    degraded = [k for k in critical if not integrations[k]]
+
+    return {
+        "status": "ok" if not degraded else "degraded",
+        "degraded": degraded,
+        "integrations": integrations,
+        "rate_limit_store": rate_store,
+    }
+
+
 # Include the router in the main app
 app.include_router(api_router)
 
