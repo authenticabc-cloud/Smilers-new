@@ -11,6 +11,7 @@
  */
 
 import { MeshPeer, MeshSignalType } from './MeshPeer';
+import { VOICE_AUDIO_CONSTRAINTS } from '../../webrtc/audioConstraints';
 
 type Any = any;
 type WebRTCModule = typeof import('react-native-webrtc');
@@ -64,7 +65,7 @@ export class MeshController {
     this.started = true;
     const webrtc = await this.getWebRTC();
     this.localStream = await webrtc.mediaDevices.getUserMedia({
-      audio: true,
+      audio: VOICE_AUDIO_CONSTRAINTS,
       video: this.wantsVideo ? ({ facingMode: 'user' } as Any) : false,
     });
     this.startSpeakingPoll();

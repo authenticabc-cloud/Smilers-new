@@ -1,4 +1,5 @@
 import { PEER_CONNECTION_CONFIG, getPeerConnectionConfig } from './iceServers';
+import { VOICE_AUDIO_CONSTRAINTS } from './audioConstraints';
 import { callDebug } from '../callDebugLog';
 
 type MediaStream = any;
@@ -116,7 +117,7 @@ export class CallSession {
       const screenStream = await this.captureScreen();
       // Add a mic audio track so the remote can still hear us
       try {
-        const audioStream = (await webrtc.mediaDevices.getUserMedia({ audio: true, video: false })) as unknown as MediaStream;
+        const audioStream = (await webrtc.mediaDevices.getUserMedia({ audio: VOICE_AUDIO_CONSTRAINTS, video: false })) as unknown as MediaStream;
         audioStream.getAudioTracks().forEach((track) => {
           try {
             screenStream.addTrack(track);
@@ -141,27 +142,7 @@ export class CallSession {
     // Camera path — clear any prior screen-share state.
     this.screenShareActive = false;
     const constraints: any = {
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        // Hint to react-native-webrtc to set the AudioRecord source to
-        // VOICE_COMMUNICATION (Android MediaRecorder.AudioSource = 7)
-        // instead of the default MIC source — VOICE_COMMUNICATION is
-        // the source that gets hardware AEC + NS on most Android
-        // chipsets (Qualcomm/MediaTek/Samsung).
-        sourceId: 'default',
-        mandatory: {
-          googEchoCancellation: true,
-          googEchoCancellation2: true,
-          googAutoGainControl: true,
-          googAutoGainControl2: true,
-          googNoiseSuppression: true,
-          googNoiseSuppression2: true,
-          googHighpassFilter: true,
-          googTypingNoiseDetection: true,
-        },
-      },
+      audio: VOICE_AUDIO_CONSTRAINTS,
       video:
         this.opts.callType === 'video'
           ? {
