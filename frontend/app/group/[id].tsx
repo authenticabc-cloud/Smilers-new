@@ -18,12 +18,13 @@
  *   - api.messageApproval.toggleApproval
  *   - api.groupSuspensions.suspendMember / liftSuspension
  */
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
   Image,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -42,6 +43,9 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
 import * as Clipboard from 'expo-clipboard';
 import QRCode from 'react-native-qrcode-svg';
+import * as MediaLibrary from 'expo-media-library';
+import * as Sharing from 'expo-sharing';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
@@ -401,6 +405,53 @@ function GroupInfoInner() {
     } catch {}
   };
 
+  // Export the invite QR as a PNG → save to Photos (falls back to the share
+  // sheet if Photos access is denied, so the user is never dead-ended).
+  const qrRef = useRef<any>(null);
+  const [savingQr, setSavingQr] = useState(false);
+  const onSaveQr = useCallback(() => {
+    const ref = qrRef.current;
+    if (!ref || typeof ref.toDataURL !== 'function') {
+      Alert.alert('QR not ready', 'Please try again in a moment.');
+      return;
+    }
+    setSavingQr(true);
+    ref.toDataURL(async (base64: string) => {
+      try {
+        const fs: any = LegacyFileSystem;
+        const target = `${fs.cacheDirectory}smilers_group_invite_${Date.now()}.png`;
+        await fs.writeAsStringAsync(target, base64, { encoding: 'base64' });
+        const perm = await MediaLibrary.getPermissionsAsync();
+        let status = perm.status;
+        if (status !== 'granted' && perm.canAskAgain !== false) {
+          status = (await MediaLibrary.requestPermissionsAsync()).status;
+        }
+        if (status === 'granted') {
+          await (MediaLibrary as any).saveToLibraryAsync(target);
+          Alert.alert('Saved', 'Invite QR code saved to your Photos.');
+        } else if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(target, {
+            mimeType: 'image/png',
+            dialogTitle: 'Save or share invite QR',
+          });
+        } else {
+          Alert.alert(
+            'Photos access needed',
+            'Enable Photos access in Settings to save the QR code.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Open Settings', onPress: () => Linking.openSettings() },
+            ],
+          );
+        }
+      } catch (e: any) {
+        Alert.alert('Could not save', e?.message || 'Failed to save the QR code.');
+      } finally {
+        setSavingQr(false);
+      }
+    });
+  }, []);
+
   const onPromote = async (userId: string) => {
     if (!conversationId) return;
     if (currentAdminCount >= maxAdmins) {
@@ -756,15 +807,33 @@ function GroupInfoInner() {
             {inviteLinkEnabled && inviteCode ? (
               <>
                 <Text style={styles.modalBody}>Share this link with anyone you want to add.</Text>
-                <View style={styles.qrCard}>
+                <TouchableOpacity
+                  style={styles.qrCard}
+                  activeOpacity={0.85}
+                  onPress={onSaveQr}
+                  onLongPress={onSaveQr}
+                  disabled={savingQr}
+                  testID="group-info-invite-qr"
+                >
                   <QRCode
                     value={`https://smilers.online/join/${inviteCode}`}
                     size={160}
                     backgroundColor="#FFFFFF"
                     color="#1A1207"
+                    getRef={(c: any) => (qrRef.current = c)}
                   />
                   <Text style={styles.qrCaption}>Scan to join {groupName}</Text>
-                </View>
+                  <View style={styles.qrSaveHint}>
+                    {savingQr ? (
+                      <ActivityIndicator size="small" color={Colors.primary} />
+                    ) : (
+                      <Feather name="download" size={13} color={Colors.textSecondary} />
+                    )}
+                    <Text style={styles.qrSaveHintText}>
+                      {savingQr ? 'Saving…' : 'Tap to save QR to Photos'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
                 <View style={styles.linkBox}>
                   <Text style={styles.linkBoxText} numberOfLines={1}>
                     https://smilers.online/join/{inviteCode}
@@ -1238,6 +1307,8 @@ const styles = StyleSheet.create({
     borderColor: Colors.borderLight,
   },
   qrCaption: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center' },
+  qrSaveHint: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  qrSaveHintText: { fontSize: FontSize.sm, color: Colors.textSecondary },
   emptyModal: { alignItems: 'center', gap: 6, paddingVertical: Spacing.lg },
   emptyModalTitle: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   emptyModalBody: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center' },
