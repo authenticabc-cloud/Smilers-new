@@ -267,11 +267,22 @@ function GroupInfoInner() {
     }
   }, [conversationId, selectedAdd, addGroupMemberM, refetchMembers, refetchAdmin]);
 
-  const currentAdminCount = adminInfo?.currentAdminCount ?? 1;
-  const maxAdmins = adminInfo?.maxAdmins ?? Math.max(1, Math.floor(memberCount * 0.2));
   const messageApprovalEnabled = !!adminInfo?.messageApprovalEnabled;
+  const currentAdminCount = adminInfo?.currentAdminCount ?? 1;
+  // Cap ratio mirrors the server (native-group-admin-cap-contract): 1 admin
+  // per 5 members when message approval is ON, else 1 per 10.
+  const adminRatio = messageApprovalEnabled ? 5 : 10;
+  const maxAdmins = adminInfo?.maxAdmins ?? Math.max(1, Math.floor(memberCount / adminRatio));
   const inviteLinkEnabled = !!adminInfo?.inviteLinkEnabled;
   const inviteCode: string | null = adminInfo?.inviteCode || null;
+
+  // Reserve admins: members who hold an admin slot in adminOrder but are
+  // currently OUTSIDE the effective cap (display only — they hold no admin
+  // rights until the cap grows or approval is toggled on).
+  const reserveAdminIds = useMemo(
+    () => new Set<string>((adminInfo?.reserveAdmins || []).map((a: any) => String(a))),
+    [adminInfo],
+  );
 
   const groupName = conversation?.name || 'Group';
 
@@ -388,7 +399,10 @@ function GroupInfoInner() {
   const onPromote = async (userId: string) => {
     if (!conversationId) return;
     if (currentAdminCount >= maxAdmins) {
-      return Alert.alert('Admin cap reached', `This group allows at most ${maxAdmins} admin(s) (20% of ${memberCount} members).`);
+      return Alert.alert(
+        'Admin cap reached',
+        `This group allows at most ${maxAdmins} admin(s) — 1 per ${adminRatio} members ${messageApprovalEnabled ? 'while message approval is on' : 'while message approval is off'}. Turn on Message Approval to allow more admins.`,
+      );
     }
     const ok = await callMutation('promoteToAdmin', promoteAdminM, { conversationId, userId });
     if (ok) void refetchAdmin();
@@ -520,7 +534,7 @@ function GroupInfoInner() {
           </TouchableOpacity>
           <Text style={styles.memberCountLine}>{memberCount} members</Text>
           <Text style={styles.adminCapLine}>
-            Admins: {currentAdminCount}/{maxAdmins} (20% cap)
+            Admins: {currentAdminCount}/{maxAdmins} (1 per {adminRatio})
           </Text>
         </View>
 
@@ -614,6 +628,10 @@ function GroupInfoInner() {
                     ) : isAdminMember ? (
                       <View style={styles.adminBadge}>
                         <Text style={styles.adminBadgeText}>Admin</Text>
+                      </View>
+                    ) : reserveAdminIds.has(mid) ? (
+                      <View style={styles.reserveBadge}>
+                        <Text style={styles.reserveBadgeText}>Reserve</Text>
                       </View>
                     ) : null}
                   </View>
@@ -1098,6 +1116,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(50,120,200,0.15)',
   },
   adminBadgeText: { fontSize: FontSize.xs, color: '#3278C8', fontWeight: FontWeight.bold },
+  reserveBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    backgroundColor: 'rgba(120,120,120,0.15)',
+  },
+  reserveBadgeText: { fontSize: FontSize.xs, color: Colors.textSecondary, fontWeight: FontWeight.bold },
   memberBio: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
   memberActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   iconBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },

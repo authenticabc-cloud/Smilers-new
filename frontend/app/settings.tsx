@@ -7,6 +7,7 @@ import { useQuery } from 'convex/react';
 import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
 import { useAuth } from '../src/providers/AuthProvider';
+import { useServerStatus } from '../src/hooks/useServerStatus';
 import { Colors, FontSize, FontWeight, Spacing } from '../src/theme';
 
 type IconLib = 'ion' | 'mc';
@@ -69,11 +70,25 @@ export default function SettingsScreen() {
   const me: any = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip');
   const isAdmin = me?.role === 'admin';
   const visibleItems = ITEMS.filter((item) => !item.adminOnly || isAdmin);
+  const { status: serverStatus } = useServerStatus();
+  const isDegraded = serverStatus?.status === 'degraded';
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="settings-screen">
       <Header title="Settings" showBack onBack={() => router.back()} variant="dark" />
       <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+        {isDegraded ? (
+          <TouchableOpacity
+            style={styles.degradedBanner}
+            activeOpacity={0.8}
+            testID="settings-degraded-banner"
+            onPress={() => router.push('/server-status' as any)}
+          >
+            <Ionicons name="alert-circle" size={20} color={Colors.danger} />
+            <Text style={styles.degradedText}>Some services are degraded — tap for details</Text>
+            <Feather name="chevron-right" size={18} color={Colors.danger} />
+          </TouchableOpacity>
+        ) : null}
         {visibleItems.map((item) => (
           <TouchableOpacity
             key={item.key}
@@ -123,6 +138,19 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
+  degradedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginHorizontal: Spacing.base,
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#FEE2E2',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.danger,
+  },
+  degradedText: { flex: 1, fontSize: FontSize.sm, color: Colors.danger, fontWeight: FontWeight.semibold },
   // iter-142: bring Settings rows visually in line with the web app.
   //  • Bumped title to 17 (web uses ~17/18 px bold).
   //  • Lowered divider opacity so the page reads as a continuous
