@@ -199,6 +199,7 @@ export default function GroupsScreen() {
       setPinBusy(true);
       try {
         await fn({ conversationId: id });
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
       } catch (e: any) {
         Alert.alert(isPinned ? 'Unpin failed' : 'Pin failed', String(e?.message || e || 'Please try again.'));
       } finally {
