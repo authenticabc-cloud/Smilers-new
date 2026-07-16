@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -21,9 +21,11 @@ import { useMutation } from 'convex/react';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useReactiveSafeConvexQuery } from '../../src/hooks/useReactiveSafeConvexQuery';
+import { readStoredString, writeStoredString } from '../../src/lib/settingsStorage';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 
 const MAX_PINNED_GROUPS = 20;
+const PIN_TIP_KEY = 'smilers_pin_tip_dismissed';
 
 type Tab = 'groups' | 'conferences';
 
@@ -199,6 +201,19 @@ export default function GroupsScreen() {
     () => (Array.isArray(groups) ? groups.filter((g: any) => g?.isPinned) : []),
     [groups],
   );
+
+  // First-time discoverability tip: shown only until the user pins a group or
+  // dismisses it.
+  const [tipDismissed, setTipDismissed] = useState(true);
+  useEffect(() => {
+    readStoredString(PIN_TIP_KEY).then((v) => setTipDismissed(v === '1')).catch(() => {});
+  }, []);
+  const dismissTip = useCallback(() => {
+    setTipDismissed(true);
+    writeStoredString(PIN_TIP_KEY, '1').catch(() => {});
+  }, []);
+  const showPinTip =
+    tab === 'groups' && !tipDismissed && Array.isArray(groups) && groups.length > 0 && pinnedGroups.length === 0;
 
   const togglePin = useCallback(
     async (item: any) => {
@@ -462,6 +477,17 @@ export default function GroupsScreen() {
         data={list}
         keyExtractor={(item: any, index) => getListItemId(item) || `${tab}-fallback-${index}`}
         contentContainerStyle={{ paddingBottom: 120 }}
+        ListHeaderComponent={
+          showPinTip ? (
+            <View style={styles.pinTip} testID="pin-tip">
+              <Ionicons name="pin" size={16} color={Colors.primary} style={{ transform: [{ rotate: '45deg' }] }} />
+              <Text style={styles.pinTipText}>Tip: long-press any group to pin it to the top.</Text>
+              <TouchableOpacity onPress={dismissTip} hitSlop={8} testID="pin-tip-dismiss">
+                <Ionicons name="close" size={18} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+          ) : null
+        }
         renderItem={({ item }) => {
           const memberCount = item.memberCount || item.members?.length || 0;
           const sub =
@@ -689,6 +715,17 @@ const styles = StyleSheet.create({
     borderRadius: Radius.pill,
   },
   toastText: { color: '#fff', fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  pinTip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: Spacing.base,
+    marginTop: 12,
+    padding: 12,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.primaryLight,
+  },
+  pinTipText: { flex: 1, fontSize: FontSize.sm, color: Colors.textPrimary },
   reorderSave: {
     marginTop: 16,
     height: 50,
