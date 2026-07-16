@@ -3,10 +3,13 @@ dist/
 .expo/
 .metro-cache/
 
-# iOS has NO committed native folder → EAS auto-runs `expo prebuild` for iOS.
-# (Keeping this here also prevents a locally-generated ios/ from being uploaded,
-#  so iOS always stays on Continuous Native Generation.)
-ios/
+# NOTE: ios/ is now COMMITTED (like android/) so EAS builds iOS as a bare
+# project and uses our patched Podfile directly. This guarantees the Xcode-14
+# resource-bundle signing fix (post_install CODE_SIGNING_ALLOWED=NO) is applied
+# even when EAS does not run `expo prebuild`. Only build OUTPUTS are excluded.
+ios/build/
+ios/Pods/
+ios/DerivedData/
 
 # NOTE: android/ is intentionally NOT ignored. The committed android/ folder
 # contains the custom native call-reliability code (Kotlin modules, Notifee

@@ -1,0 +1,88 @@
+require File.join(File.dirname(`node --print "require.resolve('expo/package.json')"`), "scripts/autolinking")
+require File.join(File.dirname(`node --print "require.resolve('react-native/package.json')"`), "scripts/react_native_pods")
+
+require 'json'
+podfile_properties = JSON.parse(File.read(File.join(__dir__, 'Podfile.properties.json'))) rescue {}
+
+def ccache_enabled?(podfile_properties)
+  # Environment variable takes precedence
+  return ENV['USE_CCACHE'] == '1' if ENV['USE_CCACHE']
+  
+  # Fall back to Podfile properties
+  podfile_properties['apple.ccacheEnabled'] == 'true'
+end
+
+ENV['RCT_NEW_ARCH_ENABLED'] ||= '0' if podfile_properties['newArchEnabled'] == 'false'
+ENV['EX_DEV_CLIENT_NETWORK_INSPECTOR'] ||= podfile_properties['EX_DEV_CLIENT_NETWORK_INSPECTOR']
+ENV['RCT_USE_RN_DEP'] ||= '1' if podfile_properties['ios.buildReactNativeFromSource'] != 'true' && podfile_properties['newArchEnabled'] != 'false'
+ENV['RCT_USE_PREBUILT_RNCORE'] ||= '1' if podfile_properties['ios.buildReactNativeFromSource'] != 'true' && podfile_properties['newArchEnabled'] != 'false'
+platform :ios, podfile_properties['ios.deploymentTarget'] || '15.1'
+
+prepare_react_native_project!
+
+target 'Smilers' do
+  use_expo_modules!
+
+  if ENV['EXPO_USE_COMMUNITY_AUTOLINKING'] == '1'
+    config_command = ['node', '-e', "process.argv=['', '', 'config'];require('@react-native-community/cli').run()"];
+  else
+    config_command = [
+      'node',
+      '--no-warnings',
+      '--eval',
+      'require(\'expo/bin/autolinking\')',
+      'expo-modules-autolinking',
+      'react-native-config',
+      '--json',
+      '--platform',
+      'ios'
+    ]
+  end
+
+  config = use_native_modules!(config_command)
+
+  use_frameworks! :linkage => podfile_properties['ios.useFrameworks'].to_sym if podfile_properties['ios.useFrameworks']
+  use_frameworks! :linkage => ENV['USE_FRAMEWORKS'].to_sym if ENV['USE_FRAMEWORKS']
+
+  use_react_native!(
+    :path => config[:reactNativePath],
+    :hermes_enabled => podfile_properties['expo.jsEngine'] == nil || podfile_properties['expo.jsEngine'] == 'hermes',
+    # An absolute path to your application root.
+    :app_path => "#{Pod::Config.instance.installation_root}/..",
+    :privacy_file_aggregation_enabled => podfile_properties['apple.privacyManifestAggregationEnabled'] != 'false',
+  )
+
+  post_install do |installer|
+    react_native_post_install(
+      installer,
+      config[:reactNativePath],
+      :mac_catalyst_enabled => false,
+      :ccache_enabled => ccache_enabled?(podfile_properties),
+    )
+
+    # withPodfileResourceBundleSigning — Xcode14 resource-bundle signing fix
+    installer.pods_project.targets.each do |__rb_target|
+      if __rb_target.respond_to?(:product_type) && __rb_target.product_type == 'com.apple.product-type.bundle'
+        __rb_target.build_configurations.each do |__rb_config|
+          __rb_config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
+          __rb_config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
+          __rb_config.build_settings['CODE_SIGN_IDENTITY'] = ''
+          __rb_config.build_settings['EXPANDED_CODE_SIGN_IDENTITY'] = ''
+        end
+      end
+    end
+    if installer.respond_to?(:target_installation_results)
+      installer.target_installation_results.pod_target_installation_results.each do |__rb_name, __rb_result|
+        next unless __rb_result.respond_to?(:resource_bundle_targets)
+        __rb_result.resource_bundle_targets.each do |__rb_bundle|
+          __rb_bundle.build_configurations.each do |__rb_config|
+            __rb_config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
+            __rb_config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
+            __rb_config.build_settings['CODE_SIGN_IDENTITY'] = ''
+            __rb_config.build_settings['EXPANDED_CODE_SIGN_IDENTITY'] = ''
+          end
+        end
+      end
+    end
+  end
+end
