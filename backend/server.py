@@ -945,22 +945,24 @@ def _client_ip_of(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _rate_limit_ok(namespace: str, client_ip: str, max_hits: int, window_sec: int) -> bool:
-    import time
+def _rate_limit_ok(namespace: str, client_ip: str, max_hits: int, window_sec: int) -> tuple[bool, int]:
+    """Returns (allowed, retry_after_seconds). retry_after is 0 when allowed."""
+    import time, math
     now = time.time()
     cutoff = now - window_sec
     store = _RATE_STORES.setdefault(namespace, {})
     bucket = store.setdefault(client_ip, [])
     bucket[:] = [t for t in bucket if t > cutoff]  # prune old hits
     if len(bucket) >= max_hits:
-        return False
+        retry_after = max(1, int(math.ceil(bucket[0] + window_sec - now)))
+        return False, retry_after
     bucket.append(now)
     if len(store) > 5000:  # opportunistic cleanup so the dict stays bounded
         for ip in list(store.keys()):
             hits = store.get(ip)
             if not hits or hits[-1] < cutoff:
                 store.pop(ip, None)
-    return True
+    return True, 0
 
 
 # Optional distributed backend: when REDIS_URL is set, rate limits are shared
@@ -989,7 +991,8 @@ def _get_rate_redis():
     return _redis_client
 
 
-async def _rate_limit_ok_async(namespace: str, client_ip: str, max_hits: int, window_sec: int) -> bool:
+async def _rate_limit_ok_async(namespace: str, client_ip: str, max_hits: int, window_sec: int) -> tuple[bool, int]:
+    """Returns (allowed, retry_after_seconds). retry_after is 0 when allowed."""
     r = _get_rate_redis()
     if r is not None:
         try:
@@ -1000,7 +1003,10 @@ async def _rate_limit_ok_async(namespace: str, client_ip: str, max_hits: int, wi
             pipe.incr(key, 1)
             pipe.expire(key, window_sec)
             count, _ = await pipe.execute()
-            return int(count) <= max_hits
+            if int(count) <= max_hits:
+                return True, 0
+            retry_after = window_sec - (int(time.time()) % window_sec)
+            return False, max(1, retry_after)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"rate-limit: Redis error, falling back to in-memory: {e}")
             # fall through to in-memory below
@@ -1009,8 +1015,9 @@ async def _rate_limit_ok_async(namespace: str, client_ip: str, max_hits: int, wi
 
 @api_router.post("/translate", response_model=TranslationResponse)
 async def translate_text(payload: TranslationRequest, request: Request):
-    if not await _rate_limit_ok_async("translate", _client_ip_of(request), 60, 60):
-        raise HTTPException(status_code=429, detail="Too many translation requests; please slow down.")
+    _ok, _retry = await _rate_limit_ok_async("translate", _client_ip_of(request), 60, 60)
+    if not _ok:
+        raise HTTPException(status_code=429, detail="Too many translation requests; please slow down.", headers={"Retry-After": str(_retry)})
     text = (payload.text or "").strip()
     target_language = (payload.target_language or "").strip()
     skip_languages = [item.strip() for item in payload.skip_languages if isinstance(item, str) and item.strip()]
@@ -1105,8 +1112,9 @@ async def transcribe_media(payload: TranscriptionRequest, request: Request) -> T
     OpenAI Whisper. Supports voice notes (.m4a/.mp3/.webm/.wav) and short
     videos (.mp4/.mov) — Whisper extracts the audio internally."""
 
-    if not await _rate_limit_ok_async("transcribe", _client_ip_of(request), 30, 60):
-        raise HTTPException(status_code=429, detail="Too many transcription requests; please slow down.")
+    _ok, _retry = await _rate_limit_ok_async("transcribe", _client_ip_of(request), 30, 60)
+    if not _ok:
+        raise HTTPException(status_code=429, detail="Too many transcription requests; please slow down.", headers={"Retry-After": str(_retry)})
 
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -1157,8 +1165,10 @@ async def transcribe_uploaded_media(
     fetching by URL is useless). The mobile sends the PLAINTEXT audio
     bytes directly here, before Convex upload + encryption."""
 
-    if request is not None and not await _rate_limit_ok_async("transcribe", _client_ip_of(request), 30, 60):
-        raise HTTPException(status_code=429, detail="Too many transcription requests; please slow down.")
+    if request is not None:
+        _ok, _retry = await _rate_limit_ok_async("transcribe", _client_ip_of(request), 30, 60)
+        if not _ok:
+            raise HTTPException(status_code=429, detail="Too many transcription requests; please slow down.", headers={"Retry-After": str(_retry)})
 
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -2745,10 +2755,12 @@ async def safe_browsing_check(payload: SafeBrowsingCheckRequest, request: Reques
     """Check up to 100 URLs against Google Safe Browsing. Returns the
     subset that Google flagged. Empty `matches` ≡ all safe."""
     # Per-IP rate limit (endpoint is unauthenticated; protects Google quota).
-    if not await _rate_limit_ok_async("safe_browsing", _client_ip_of(request), 60, 60):
+    _ok, _retry = await _rate_limit_ok_async("safe_browsing", _client_ip_of(request), 60, 60)
+    if not _ok:
         raise HTTPException(
             status_code=429,
             detail="Too many URL safety checks; please slow down.",
+            headers={"Retry-After": str(_retry)},
         )
 
     api_key = os.environ.get("GOOGLE_SAFE_BROWSING_API_KEY", "").strip()
