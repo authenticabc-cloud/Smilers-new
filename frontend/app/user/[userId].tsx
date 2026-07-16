@@ -36,7 +36,7 @@ import {
   useDeviceContactIndex,
   lookupDeviceContactName,
 } from '../../src/lib/deviceContactIndex';
-import { formatLastSeenLabel } from '../../src/lib/presence';
+import { formatLastSeenLabel, isPresenceOnline } from '../../src/lib/presence';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 import ActionButton from '../../src/components/user-profile/ActionButton';
 import GroupInCommonRow from '../../src/components/user-profile/GroupInCommonRow';
@@ -337,14 +337,9 @@ export default function UserProfileScreen() {
     (typeof user?.status === 'string' && user.status) ||
     '';
   const lastSeenLabel = formatLastSeenLabel(user, 'last seen recently');
-  const profileOnline =
-    (user as any)?.isOnline === true ||
-    (user as any)?.online === true ||
-    (() => {
-      const ls = (user as any)?.lastSeen;
-      const t = typeof ls === 'number' ? ls : typeof ls === 'string' ? new Date(ls).getTime() : NaN;
-      return Number.isFinite(t) && Date.now() - t < 120000;
-    })();
+  // Show online only when isOnline is true AND lastSeen is within 2 min —
+  // guards against a stale cached isOnline flag (presence contract).
+  const profileOnline = isPresenceOnline(user);
   const presenceLabel = profileOnline ? 'Online' : lastSeenLabel;
   const level: string =
     (typeof user?.level === 'string' && user.level) ||

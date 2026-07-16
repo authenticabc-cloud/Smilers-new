@@ -614,11 +614,13 @@ function peerIsOnline(item: any): boolean {
     (Array.isArray(item?.participants) && item.participants.length > 2);
   if (isGroup) return false;
   const peer = item?.otherUser || item?.otherParticipant || item;
-  if (peer?.isOnline === true || peer?.online === true) return true;
+  // Online only if the peer flag is set AND they were seen within 2 min.
+  // A stale cached `isOnline: true` must NOT keep the dot lit forever.
+  if (peer?.isOnline !== true && peer?.online !== true) return false;
   const ls = peer?.lastSeen ?? item?.lastSeen;
   const t = typeof ls === 'number' ? ls : typeof ls === 'string' ? new Date(ls).getTime() : NaN;
   if (!Number.isFinite(t)) return false;
-  return Date.now() - t < 120000; // online if seen within 2 min
+  return Date.now() - t <= 120000; // online if seen within 2 min
 }
 
 function ConversationRow({ item, currentUserId, contacts, draft, onPress }: { item: any; currentUserId?: string; contacts?: any[]; draft?: DraftPreview; onPress: () => void }) {

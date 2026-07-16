@@ -3564,10 +3564,12 @@ export default function ChatScreen() {
     const src: any = mergedPresenceSource;
     if (!src || src?.type === 'group') return false;
     const peer = src?.otherUser || src;
-    if (peer?.isOnline === true || peer?.online === true || src?.isOnline === true) return true;
+    // Online only if the flag is set AND lastSeen is within 2 min — a stale
+    // cached isOnline flag must not keep the header dot lit indefinitely.
+    if (peer?.isOnline !== true && peer?.online !== true && src?.isOnline !== true) return false;
     const ls = peer?.lastSeen ?? src?.lastSeen;
     const t = typeof ls === 'number' ? ls : typeof ls === 'string' ? new Date(ls).getTime() : NaN;
-    return Number.isFinite(t) && Date.now() - t < 120000;
+    return Number.isFinite(t) && Date.now() - t <= 120000;
   })();
 
   // Slice B of Groups spec — when the current user is suspended in this

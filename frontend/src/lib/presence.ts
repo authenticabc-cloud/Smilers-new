@@ -15,6 +15,50 @@ function toTimestamp(value: unknown): number {
   return 0;
 }
 
+// Presence freshness window. A user is only shown as "online" when their
+// `isOnline` flag is true AND their `lastSeen` is within this window — this
+// guards against a stale/cached `isOnline: true` lingering forever after the
+// user actually went away. Mirrors the server-side rule (2 minutes).
+export const PRESENCE_ONLINE_WINDOW_MS = 120000;
+
+/**
+ * Canonical presence check (native-presence-stale-online-contract):
+ * show online ONLY if `isOnline === true` AND a `lastSeen` timestamp exists
+ * AND `(now - lastSeen) <= 120000ms`. Handles the common entity shapes
+ * (raw user, contact row, or a conversation carrying `otherUser`/
+ * `otherParticipant`).
+ */
+export function isPresenceOnline(entity: any): boolean {
+  if (!entity) {
+    return false;
+  }
+
+  const peer = entity?.otherUser ?? entity?.otherParticipant ?? entity;
+
+  const onlineFlag =
+    entity?.isOnline === true ||
+    entity?.online === true ||
+    peer?.isOnline === true ||
+    peer?.online === true;
+
+  if (!onlineFlag) {
+    return false;
+  }
+
+  const lastSeen = toTimestamp(
+    peer?.lastSeen ??
+      entity?.lastSeen ??
+      peer?.lastActiveAt ??
+      entity?.lastActiveAt,
+  );
+
+  if (!lastSeen) {
+    return false;
+  }
+
+  return Date.now() - lastSeen <= PRESENCE_ONLINE_WINDOW_MS;
+}
+
 export function canShowLastSeen(entity: any): boolean {
   if (!entity) {
     return true;
@@ -45,7 +89,7 @@ export function formatLastSeenLabel(entity: any, fallback = 'last seen recently'
     return fallback;
   }
 
-  if (entity?.online || entity?.isOnline || entity?.otherUser?.online || entity?.otherUser?.isOnline) {
+  if (isPresenceOnline(entity)) {
     return 'online';
   }
 

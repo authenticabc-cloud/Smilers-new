@@ -29,6 +29,7 @@ import { lookupUsersByPhones } from '../../src/lib/phoneLookup';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { getDisplayInitials, getDisplayNameFromUser, getResolvedDisplayName } from '../../src/lib/displayName';
 import { useDeviceContactIndex, useDeviceContactRefresh, lookupDeviceContactName, fetchAllDeviceContacts } from '../../src/lib/deviceContactIndex';
+import { isPresenceOnline } from '../../src/lib/presence';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../src/theme';
 
 type TabKey = 'my' | 'device';
@@ -660,7 +661,9 @@ export default function ContactsScreen() {
           }
           renderItem={({ item }) => {
             const uid = getContactUserId(item);
-            const online = !!item.online || !!item.isOnline;
+            // Online only if isOnline is true AND lastSeen is fresh (<2 min) —
+            // avoids a stale cached flag showing a permanent green dot.
+            const online = isPresenceOnline(item);
             // iter-176: device address-book name takes priority over the
             // Smilers display name. If you have this user's number saved
             // as "ABC Albania", you see "ABC Albania" here.
