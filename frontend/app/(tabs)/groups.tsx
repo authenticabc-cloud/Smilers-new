@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import DraggableFlatList, { ScaleDecorator, type RenderItemParams } from 'react-native-draggable-flatlist';
+import * as Haptics from 'expo-haptics';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
@@ -545,7 +546,10 @@ export default function GroupsScreen() {
               data={reorderList}
               keyExtractor={(item: any, index) => getListItemId(item) || `reorder-${index}`}
               style={{ maxHeight: 380 }}
-              onDragEnd={({ data }: { data: any[] }) => setReorderList(data)}
+              onDragEnd={({ data }: { data: any[] }) => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+                setReorderList(data);
+              }}
               renderItem={({ item, drag, isActive, getIndex }: RenderItemParams<any>) => {
                 const index = getIndex() ?? 0;
                 return (
@@ -573,7 +577,10 @@ export default function GroupsScreen() {
                         <Feather name="arrow-down" size={18} color={index === reorderList.length - 1 ? Colors.textMuted : Colors.primary} />
                       </TouchableOpacity>
                       <TouchableOpacity
-                        onLongPress={drag}
+                        onLongPress={() => {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                          drag();
+                        }}
                         delayLongPress={120}
                         style={styles.reorderHandle}
                         testID={`reorder-drag-${getListItemId(item)}`}
