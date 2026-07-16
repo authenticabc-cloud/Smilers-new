@@ -59,6 +59,7 @@ const ITEMS: Row[] = [
   { key: 'emergency', route: '/emergency', title: 'Emergency', sub: 'Alert your trustees in an emergency', icon: 'alert-circle-outline', lib: 'ion', danger: true, premium: true },
   { key: 'chat-once', route: '/chat-once', title: 'Chat Once', sub: 'Temporary anonymous conversations', icon: 'message-circle', lib: 'mc', premium: true },
   { key: 'help', route: '/help', title: 'Help & Support', sub: 'FAQs, contact support team', icon: 'help-circle-outline', lib: 'ion' },
+  { key: 'server-status', route: '/server-status', title: 'Server Status', sub: 'Backend health, version & integrations', icon: 'pulse-outline', lib: 'ion' },
   { key: 'account', route: '/account', title: 'Account', sub: 'Sign out, delete account', icon: 'lock-closed-outline', lib: 'ion', danger: true },
 ];
 

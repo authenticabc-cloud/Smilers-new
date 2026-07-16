@@ -41,6 +41,9 @@ db = client[os.environ['DB_NAME']]
 # Create the main app without a prefix
 app = FastAPI()
 
+# Process start time — used by /api/health to report uptime.
+_SERVER_STARTED_AT = datetime.now(timezone.utc)
+
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
@@ -2929,11 +2932,16 @@ async def health_check():
     critical = ["safe_browsing", "mongo"]
     degraded = [k for k in critical if not integrations[k]]
 
+    uptime_seconds = int((datetime.now(timezone.utc) - _SERVER_STARTED_AT).total_seconds())
+
     return {
         "status": "ok" if not degraded else "degraded",
         "degraded": degraded,
         "integrations": integrations,
         "rate_limit_store": rate_store,
+        "version": APP_VERSION_CONFIG.get("latestVersion"),
+        "startedAt": _SERVER_STARTED_AT.isoformat(),
+        "uptimeSeconds": uptime_seconds,
     }
 
 
