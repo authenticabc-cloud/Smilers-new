@@ -11,6 +11,8 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import DraggableFlatList, { ScaleDecorator, type RenderItemParams } from 'react-native-draggable-flatlist';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
@@ -531,40 +533,57 @@ export default function GroupsScreen() {
         onRequestClose={() => setReorderOpen(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalCard} testID="reorder-pinned-modal">
+          <GestureHandlerRootView style={styles.modalCard} testID="reorder-pinned-modal">
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Reorder pinned groups</Text>
               <TouchableOpacity onPress={() => setReorderOpen(false)} testID="reorder-close">
                 <Ionicons name="close" size={24} color={Colors.textSecondary} />
               </TouchableOpacity>
             </View>
-            <Text style={styles.modalHint}>Move groups up or down to set their pinned order.</Text>
-            <FlatList
+            <Text style={styles.modalHint}>Drag the handle to reorder, or use the arrows.</Text>
+            <DraggableFlatList
               data={reorderList}
               keyExtractor={(item: any, index) => getListItemId(item) || `reorder-${index}`}
               style={{ maxHeight: 380 }}
-              renderItem={({ item, index }) => (
-                <View style={styles.reorderRow} testID={`reorder-row-${getListItemId(item)}`}>
-                  <Text style={styles.reorderIndex}>{index + 1}</Text>
-                  <Text style={styles.reorderName} numberOfLines={1}>{item.name || 'Group'}</Text>
-                  <TouchableOpacity
-                    style={[styles.reorderBtn, index === 0 && styles.reorderBtnDisabled]}
-                    disabled={index === 0}
-                    onPress={() => moveReorderItem(index, -1)}
-                    testID={`reorder-up-${getListItemId(item)}`}
-                  >
-                    <Feather name="arrow-up" size={20} color={index === 0 ? Colors.textMuted : Colors.primary} />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.reorderBtn, index === reorderList.length - 1 && styles.reorderBtnDisabled]}
-                    disabled={index === reorderList.length - 1}
-                    onPress={() => moveReorderItem(index, 1)}
-                    testID={`reorder-down-${getListItemId(item)}`}
-                  >
-                    <Feather name="arrow-down" size={20} color={index === reorderList.length - 1 ? Colors.textMuted : Colors.primary} />
-                  </TouchableOpacity>
-                </View>
-              )}
+              onDragEnd={({ data }: { data: any[] }) => setReorderList(data)}
+              renderItem={({ item, drag, isActive, getIndex }: RenderItemParams<any>) => {
+                const index = getIndex() ?? 0;
+                return (
+                  <ScaleDecorator>
+                    <View
+                      style={[styles.reorderRow, isActive && styles.reorderRowActive]}
+                      testID={`reorder-row-${getListItemId(item)}`}
+                    >
+                      <Text style={styles.reorderIndex}>{index + 1}</Text>
+                      <Text style={styles.reorderName} numberOfLines={1}>{item.name || 'Group'}</Text>
+                      <TouchableOpacity
+                        style={[styles.reorderBtn, index === 0 && styles.reorderBtnDisabled]}
+                        disabled={index === 0}
+                        onPress={() => moveReorderItem(index, -1)}
+                        testID={`reorder-up-${getListItemId(item)}`}
+                      >
+                        <Feather name="arrow-up" size={18} color={index === 0 ? Colors.textMuted : Colors.primary} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.reorderBtn, index === reorderList.length - 1 && styles.reorderBtnDisabled]}
+                        disabled={index === reorderList.length - 1}
+                        onPress={() => moveReorderItem(index, 1)}
+                        testID={`reorder-down-${getListItemId(item)}`}
+                      >
+                        <Feather name="arrow-down" size={18} color={index === reorderList.length - 1 ? Colors.textMuted : Colors.primary} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onLongPress={drag}
+                        delayLongPress={120}
+                        style={styles.reorderHandle}
+                        testID={`reorder-drag-${getListItemId(item)}`}
+                      >
+                        <Feather name="menu" size={22} color={Colors.textMuted} />
+                      </TouchableOpacity>
+                    </View>
+                  </ScaleDecorator>
+                );
+              }}
             />
             <TouchableOpacity
               style={[styles.reorderSave, pinBusy && styles.reorderBtnDisabled]}
@@ -578,7 +597,7 @@ export default function GroupsScreen() {
                 <Text style={styles.reorderSaveText}>Save order</Text>
               )}
             </TouchableOpacity>
-          </View>
+          </GestureHandlerRootView>
         </View>
       </Modal>
     </SafeAreaView>
@@ -620,6 +639,8 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primaryLight,
   },
   reorderBtnDisabled: { opacity: 0.5 },
+  reorderRowActive: { backgroundColor: Colors.primaryLight, borderRadius: Radius.md },
+  reorderHandle: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   reorderSave: {
     marginTop: 16,
     height: 50,

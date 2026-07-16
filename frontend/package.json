@@ -88,6 +88,7 @@
     "react-native-callkeep": "^4.3.16",
     "react-native-country-codes-picker": "^2.3.5",
     "react-native-dotenv": "^3.4.11",
+    "react-native-draggable-flatlist": "^4.0.3",
     "react-native-gesture-handler": "~2.28.0",
     "react-native-incall-manager": "^4.2.1",
     "react-native-qrcode-svg": "^6.3.21",
