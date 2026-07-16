@@ -365,7 +365,10 @@ function GroupInfoInner() {
   const onGenerateInvite = async () => {
     if (!conversationId) return;
     const ok = await callMutation('generateInviteLink', generateInviteM, { conversationId });
-    if (ok) void refetchAdmin();
+    if (ok) {
+      void refetchAdmin();
+      Alert.alert('Invite link ready', 'Your group invite link has been generated. Tap Copy or Share to send it.');
+    }
   };
 
   const onDisableInvite = async () => {
@@ -778,8 +781,15 @@ function GroupInfoInner() {
             ) : (
               <>
                 <Text style={styles.modalBody}>Generate a link that anyone can use to join this group. You can disable it anytime.</Text>
-                <TouchableOpacity style={styles.modalSave} onPress={onGenerateInvite} testID="group-info-invite-generate">
-                  <Text style={styles.modalSaveText}>Generate Invite Link</Text>
+                <TouchableOpacity
+                  style={[styles.modalSave, busy === 'generateInviteLink' ? { opacity: 0.6 } : null]}
+                  onPress={onGenerateInvite}
+                  disabled={busy === 'generateInviteLink'}
+                  testID="group-info-invite-generate"
+                >
+                  <Text style={styles.modalSaveText}>
+                    {busy === 'generateInviteLink' ? 'Generating…' : 'Generate Invite Link'}
+                  </Text>
                 </TouchableOpacity>
               </>
             )}
