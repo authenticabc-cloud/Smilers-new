@@ -1,5 +1,5 @@
 import { PEER_CONNECTION_CONFIG, getPeerConnectionConfig } from './iceServers';
-import { VOICE_AUDIO_CONSTRAINTS } from './audioConstraints';
+import { getVoiceAudioConstraints } from './audioConstraints';
 import { callDebug } from '../callDebugLog';
 
 type MediaStream = any;
@@ -117,7 +117,7 @@ export class CallSession {
       const screenStream = await this.captureScreen();
       // Add a mic audio track so the remote can still hear us
       try {
-        const audioStream = (await webrtc.mediaDevices.getUserMedia({ audio: VOICE_AUDIO_CONSTRAINTS, video: false })) as unknown as MediaStream;
+        const audioStream = (await webrtc.mediaDevices.getUserMedia({ audio: getVoiceAudioConstraints(), video: false })) as unknown as MediaStream;
         audioStream.getAudioTracks().forEach((track) => {
           try {
             screenStream.addTrack(track);
@@ -142,7 +142,7 @@ export class CallSession {
     // Camera path — clear any prior screen-share state.
     this.screenShareActive = false;
     const constraints: any = {
-      audio: VOICE_AUDIO_CONSTRAINTS,
+      audio: getVoiceAudioConstraints(),
       video:
         this.opts.callType === 'video'
           ? {

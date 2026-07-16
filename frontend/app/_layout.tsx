@@ -28,6 +28,7 @@ import CallReturnBanner from '../src/components/call/CallReturnBanner';
 import ResumeLastRoute from '../src/components/ResumeLastRoute';
 import UpdateBanner from '../src/components/UpdateBanner';import { recordTouchActivity } from '../src/lib/touchActivity';
 import { applyInterFontPatch } from '../src/lib/fontPatch';
+import { loadNoiseCancellationPref } from '../src/lib/webrtc/audioConstraints';
 import {
   installGlobalDiagnostics,
   flushDiagnostics,
@@ -408,6 +409,11 @@ export default function RootLayout() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      try {
+        // Restore the user's saved noise-cancellation preference so
+        // getVoiceAudioConstraints() reflects it before the first call.
+        await loadNoiseCancellationPref();
+      } catch {}
       try {
         const flushed = await flushDiagnostics();
         if (!cancelled && flushed > 0) {

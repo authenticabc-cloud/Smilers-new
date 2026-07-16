@@ -25,6 +25,10 @@ import CallBackground from '../../src/components/CallBackground';
 import InviteContactPicker from '../../src/components/InviteContactPicker';
 import { stashCallHandoff } from '../../src/lib/call/handoff';
 import { InCallAudio } from '../../src/lib/webrtc/inCallManager';
+import {
+  isNoiseCancellationEnabled,
+  setNoiseCancellationPref,
+} from '../../src/lib/webrtc/audioConstraints';
 import * as Haptics from 'expo-haptics';
 import { useKeepAwake } from 'expo-keep-awake';
 import { callActivity } from '../../src/lib/callActivity';
@@ -528,6 +532,7 @@ export function CallScreenInner() {
   const [remoteVideoGen, setRemoteVideoGen] = useState(0);
   const remoteHasVideoRef = useRef(false);
   const [muted, setMuted] = useState(false);
+  const [noiseCancel, setNoiseCancel] = useState(isNoiseCancellationEnabled());
   const [cameraOff, setCameraOff] = useState(false);
   const [audioOutput, setAudioOutput] = useState<AudioOutputRoute>(requestedType === 'voice' ? 'earpiece' : 'speaker');
   const [audioOutputMenuVisible, setAudioOutputMenuVisible] = useState(false);
@@ -2212,6 +2217,26 @@ export function CallScreenInner() {
     setMuted(next);
   }, [muted]);
 
+  // Noise-cancellation toggle. Persists the preference (applied to the next
+  // getUserMedia) and best-effort applies it to the live audio track so the
+  // change takes effect immediately mid-call where the platform supports
+  // MediaStreamTrack.applyConstraints (echo cancellation always stays ON).
+  const toggleNoiseCancel = useCallback(() => {
+    const next = !noiseCancel;
+    setNoiseCancel(next);
+    void setNoiseCancellationPref(next);
+    try {
+      const track = sessionRef.current?.localStream?.getAudioTracks?.()?.[0] as any;
+      if (track && typeof track.applyConstraints === 'function') {
+        void track.applyConstraints({
+          echoCancellation: true,
+          noiseSuppression: next,
+          autoGainControl: next,
+        });
+      }
+    } catch {}
+  }, [noiseCancel]);
+
   const toggleCamera = useCallback(() => {
     const next = !cameraOff;
     sessionRef.current?.setCameraOff(next);
@@ -3123,6 +3148,19 @@ export function CallScreenInner() {
             active={muted}
             icon={<Feather name={muted ? 'mic-off' : 'mic'} size={22} color={Colors.white} />}
             label="Mute"
+          />
+          <SmallControl
+            testID="noise-cancel-btn"
+            onPress={toggleNoiseCancel}
+            active={noiseCancel}
+            icon={
+              <MaterialCommunityIcons
+                name={noiseCancel ? 'waveform' : 'water-off-outline'}
+                size={22}
+                color={Colors.white}
+              />
+            }
+            label="Noise"
           />
           <SmallControl
             testID="audio-output-btn"
