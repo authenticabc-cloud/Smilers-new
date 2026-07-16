@@ -125,6 +125,14 @@ function GroupInfoInner() {
     [],
     !!conversationId,
   );
+  // Reactive count of messages awaiting approval — drives the red badge on the
+  // "Pending Messages" row. Returns 0 for non-admins (server-enforced).
+  const { data: pendingCount } = useSafeConvexQuery<number>(
+    (api as any).messageApproval?.getPendingCount,
+    conversationId ? { conversationId } : {},
+    0,
+    !!conversationId,
+  );
 
   // -------- Mutations --------
   const updateGroupM = useMutation((api as any).conversations?.updateGroup);
@@ -546,6 +554,7 @@ function GroupInfoInner() {
               <ActionRow
                 icon="inbox"
                 label="Pending Messages"
+                badgeCount={Number(pendingCount) || 0}
                 onPress={() => router.push(`/group/${conversationId}/pending` as any)}
                 testID="group-info-pending"
               />
@@ -947,12 +956,14 @@ function ActionRow({
   icon,
   label,
   trailing,
+  badgeCount,
   onPress,
   testID,
 }: {
   icon: any;
   label: string;
   trailing?: string;
+  badgeCount?: number;
   onPress: () => void;
   testID?: string;
 }) {
@@ -960,6 +971,11 @@ function ActionRow({
     <TouchableOpacity style={styles.actionRow} onPress={onPress} testID={testID} activeOpacity={0.7}>
       <Feather name={icon} size={20} color={Colors.primary} />
       <Text style={styles.actionLabel}>{label}</Text>
+      {badgeCount && badgeCount > 0 ? (
+        <View style={styles.actionBadge} testID={`${testID}-badge`}>
+          <Text style={styles.actionBadgeText}>{badgeCount > 99 ? '99+' : badgeCount}</Text>
+        </View>
+      ) : null}
       {trailing ? <Text style={styles.actionTrailing}>{trailing}</Text> : null}
       <Feather name="chevron-right" size={18} color={Colors.textMuted} />
     </TouchableOpacity>
@@ -1036,6 +1052,17 @@ const styles = StyleSheet.create({
   },
   actionLabel: { flex: 1, fontSize: FontSize.base, color: Colors.textPrimary },
   actionTrailing: { fontSize: FontSize.sm, color: Colors.textSecondary, marginRight: 4 },
+  actionBadge: {
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#E5342B',
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  actionBadgeText: { color: '#FFFFFF', fontSize: FontSize.xs, fontWeight: FontWeight.bold },
   memberRow: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -13,6 +13,7 @@ import { useMutation } from 'convex/react';
 import { api } from '../../../src/convexApi';
 import { useSafeConvexQuery } from '../../../src/hooks/useSafeConvexQuery';
 import ScreenErrorBoundary from '../../../src/components/ScreenErrorBoundary';
+import MediaBubble from '../../../src/components/MediaBubble';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../../src/theme';
 
 export default function PendingMessagesScreen() {
@@ -94,6 +95,14 @@ function PendingInner() {
           renderItem={({ item }: any) => {
             const id = String(item._id);
             const isBusy = busyId === id;
+            // Render the real media (image/video/voice/file) with the SAME
+            // components used in normal chat — driven by the ready-to-use
+            // `mediaUrl` the backend returns (never rebuilt from storageId).
+            const isMediaItem =
+              !!item.mediaUrl ||
+              ['image', 'video', 'voice', 'audio', 'file', 'document'].includes(
+                String(item.type),
+              );
             return (
               <View style={styles.card} testID={`pending-card-${id}`}>
                 <View style={styles.cardHeader}>
@@ -101,8 +110,19 @@ function PendingInner() {
                   <Text style={styles.cardTime}>{relativeTime(item._creationTime)}</Text>
                 </View>
                 <Text style={styles.cardType}>{String(item.type || 'text').toUpperCase()}</Text>
-                {item.text ? <Text style={styles.cardText} numberOfLines={6}>{item.text}</Text> : null}
-                {item.mediaUrl ? <Text style={styles.cardMedia}>📎 {item.fileName || 'Media attachment'}</Text> : null}
+                {isMediaItem ? (
+                  <View style={styles.mediaPreviewWrap}>
+                    <MediaBubble
+                      msg={item}
+                      isMine={false}
+                      e2eeStatus={null}
+                      onLongPress={() => {}}
+                      onToggleReaction={() => {}}
+                    />
+                  </View>
+                ) : item.text ? (
+                  <Text style={styles.cardText} numberOfLines={6}>{item.text}</Text>
+                ) : null}
                 <View style={styles.cardActions}>
                   <TouchableOpacity
                     style={[styles.rejectBtn, isBusy && styles.disabled]}
@@ -171,6 +191,7 @@ const styles = StyleSheet.create({
   cardType: { fontSize: FontSize.xs, color: Colors.primary, fontWeight: FontWeight.bold, letterSpacing: 1.2 },
   cardText: { fontSize: FontSize.base, color: Colors.textPrimary, lineHeight: 22 },
   cardMedia: { fontSize: FontSize.sm, color: Colors.textSecondary },
+  mediaPreviewWrap: { marginTop: 2, marginBottom: 2 },
   cardActions: { flexDirection: 'row', gap: Spacing.sm, marginTop: 4 },
   rejectBtn: { flex: 1, height: 44, borderRadius: Radius.md, borderWidth: 1.5, borderColor: '#D63030', alignItems: 'center', justifyContent: 'center' },
   rejectBtnText: { color: '#D63030', fontWeight: FontWeight.bold },
