@@ -1609,3 +1609,23 @@
 
 ##   - agent: "main"
 ##     message: "Iteration 172: Finished the AD CLICKS MOBILE MONEY flow (last item from handoff). The user-facing screen app/ad-clicks-payment.tsx, the generic admin panel src/components/admin/PaymentRequestsPanel.tsx, the segmented admin src/components/admin/PaymentsAdmin.tsx, and the admin.tsx Payments-tab wiring (with pending badge combining mobileMoneyRequests + adClickRequests) were already in place and verified. GAP FOUND & FIXED: the 'Pay with Mobile Money' entry point had never actually been wired into the Buy Clicks modal in app/(tabs)/ads.tsx — so users had no way to reach /ad-clicks-payment (only the Hercules card checkout existed, and the route was referenced nowhere). FIX: (1) added an onMobileMoney prop to BuyClicksModal; (2) rendered a 'Pay with Mobile Money' outlined button (cellphone icon, testID buy-clicks-mobile-money) directly under the card Pay button, mirroring the Premium flow in premium.tsx; (3) wired it at the call site to close the modal and router.push({pathname:'/ad-clicks-payment', params:{adId, adTitle: productName||businessName||'your ad', clicks: String(purchaseQty)}}); (4) added mobileMoneyBtn/mobileMoneyBtnText styles. Also DELETED the now-orphaned src/components/admin/MobileMoneyAdmin.tsx (superseded by PaymentsAdmin + PaymentRequestsPanel; confirmed no imports anywhere). VERIFIED: tsc has no new errors in ads.tsx/admin.tsx/ad-clicks-payment.tsx/PaymentsAdmin.tsx/PaymentRequestsPanel.tsx (pre-existing implicit-any warnings elsewhere unchanged); ESLint clean on ads.tsx; web bundle compiles; app boots to Sign-In with 0 errors. Convex contract used (per user, iter earlier): api.adClickRequests.createRequest({adId, clicks, country, phone?}) @ €0.04/click, getMyRequests, listPendingRequests, listRequestHistory, completeRequest, declineRequest, countPendingRequests. NOTE: the full flow is Google-OAuth gated + requires creating an approved ad, so end-to-end can't be auto-tested on web; requesting testing_agent to validate bundle health, ads-tab route stability, and that the Buy Clicks modal renders the new Mobile Money button + navigation wiring is correct. The ad-clicks screen amounts are client-side ≈ estimates until the Convex mutation returns the authoritative amount (MOCKED estimate only, per FALLBACK_EUR_RATES)."
+
+## backend:
+##   - task: "Malicious link/message detection (Google Safe Browsing) restored"
+##     implemented: true
+##     working: true
+##     file: "/app/backend/server.py"
+##     stuck_count: 0
+##     priority: "critical"
+##     needs_retesting: true
+##     status_history:
+##       - working: false
+##         agent: "user"
+##         comment: "User reported the auto-detect/delete malicious links/files/messages security feature stopped working (was working before)."
+##       - working: true
+##         agent: "main"
+##         comment: "Iteration 173: Root cause — GOOGLE_SAFE_BROWSING_API_KEY was missing from backend/.env (dropped during fork). The /api/safe-browsing/check endpoint fail-opens (returns empty matches = all safe) when the key is absent, silently disabling URL malware detection. Client file-type blocking (isDangerousFile) is pure client-side and was unaffected. FIX: re-added GOOGLE_SAFE_BROWSING_API_KEY to backend/.env (same key present in frontend .env), restarted backend. Verified via curl (local + external preview URL): malware test URL https://testsafebrowsing.appspot.com/s/malware.html returns threat_type=MALWARE; safe URLs (google.com/wikipedia.org) return empty matches. Client LinkPreviewMessage/RichMessageText gate rendering on useUrlSafety verdict -> shows 'This message was removed for security reasons' for malicious."
+
+## agent_communication:
+##   - agent: "main"
+##     message: "Iteration 173 (BACKEND-ONLY TEST REQUESTED): Please test the POST /api/safe-browsing/check endpoint on the external preview URL. Scenarios: (1) malware URL https://testsafebrowsing.appspot.com/s/malware.html -> expect matches[] contains that url with threat_type MALWARE; (2) known phishing/social-engineering test URL https://testsafebrowsing.appspot.com/s/phishing.html -> expect a match (SOCIAL_ENGINEERING); (3) safe URLs https://www.google.com and https://en.wikipedia.org -> expect matches: []; (4) mixed batch of malicious+safe -> only malicious returned; (5) empty urls [] -> matches: []; (6) non-http string -> ignored, matches: []. Also confirm the endpoint responds 200 and does NOT 500. This validates the restored malicious-link detection after re-adding GOOGLE_SAFE_BROWSING_API_KEY to backend/.env. Do NOT attempt Google OIDC login / in-chat E2E (auth-gated, not automatable). Backend base URL: https://smilers-launch.preview.emergentagent.com"
