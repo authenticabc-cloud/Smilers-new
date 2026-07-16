@@ -13,7 +13,10 @@ import type { StyleProp, TextStyle } from 'react-native';
  *   - hidden → no filter in either direction.
  */
 
-export const FILTER_BLACK = '#111111';
+// "Dark" indicator tone. A softer slate-gray (not pure black) so it stays
+// legible on BOTH the light profile background and the dark chat header,
+// while still reading clearly as "dark, not red".
+export const FILTER_BLACK = '#6B7280';
 export const FILTER_RED = '#E5342B';
 
 export function getFilterIndicatorColor(
