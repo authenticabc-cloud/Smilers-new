@@ -112,6 +112,7 @@ import { useConversationE2EE } from '../../src/hooks/useConversationE2EE';
 import { useViewerSuspension } from '../../src/hooks/useViewerSuspension';
 import { decryptText } from '../../src/lib/e2eeCrypto';
 import { triggerTranscription } from '../../src/lib/triggerTranscription';
+import { markLocallyRead } from '../../src/lib/localReadState';
 import ScheduleMessageSheet, { ScheduleSelection } from '../../src/components/ScheduleMessageSheet';
 import CameraCapture from '../../src/components/CameraCapture';
 import { Colors } from '../../src/theme';
@@ -1565,7 +1566,17 @@ export default function ChatScreen() {
   useEffect(() => {
     if (conversationId && visibleMessages.length > 0) {
       markRead({ conversationId }).catch(() => {});
+      // iter-340: also record a LOCAL read stamp so the chat-list badge clears
+      // immediately even if the backend `getUnreadCounts` doesn't reflect
+      // `markRead`. Stamp "read up to" = the newest message we can see (or now),
+      // so a genuinely newer incoming message re-surfaces the badge.
+      const latestMs = visibleMessages.reduce(
+        (max: number, m: any) => Math.max(max, Number(m?._creationTime) || 0),
+        0,
+      );
+      markLocallyRead(String(conversationId), Math.max(Date.now(), latestMs));
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId, visibleMessages.length, markRead]);
 
   useEffect(() => {

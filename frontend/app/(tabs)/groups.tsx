@@ -25,6 +25,8 @@ import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useReactiveSafeConvexQuery } from '../../src/hooks/useReactiveSafeConvexQuery';
 import { readStoredString, writeStoredString } from '../../src/lib/settingsStorage';
+import { useLocalReadMap } from '../../src/hooks/useLocalReadMap';
+import { conversationLastActivityMs, isLocallyRead, markLocallyRead, clearLocalRead } from '../../src/lib/localReadState';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 
 const MAX_PINNED_GROUPS = 20;
@@ -116,6 +118,19 @@ export default function GroupsScreen() {
     {},
     tab === 'groups',
   );
+  // iter-340: on-device read overlay — opening a group clears its list badge
+  // instantly even if the backend unread count lags.
+  const localRead = useLocalReadMap();
+  const effUnread = useCallback(
+    (item: any): number => {
+      const id = getListItemId(item);
+      if (!id) return 0;
+      const backend = Number(unreadCounts?.[id]) || 0;
+      if (backend <= 0) return 0;
+      return isLocallyRead(localRead, id, conversationLastActivityMs(item)) ? 0 : backend;
+    },
+    [unreadCounts, localRead],
+  );
 
   const list = useMemo(() => {
     const isGroups = tab === 'groups';
@@ -138,31 +153,23 @@ export default function GroupsScreen() {
       const bp = b.g?.isPinned ? 1 : 0;
       if (ap !== bp) return bp - ap; // pinned first
       if (ap === 1) return a.i - b.i; // both pinned → keep pin order
-      const aId = getListItemId(a.g);
-      const bId = getListItemId(b.g);
-      const aUnread = aId && Number(unreadCounts?.[aId]) > 0 ? 1 : 0;
-      const bUnread = bId && Number(unreadCounts?.[bId]) > 0 ? 1 : 0;
+      const aUnread = effUnread(a.g) > 0 ? 1 : 0;
+      const bUnread = effUnread(b.g) > 0 ? 1 : 0;
       if (aUnread !== bUnread) return bUnread - aUnread; // unread first
       return a.i - b.i; // otherwise keep latest-message order
     });
     return decorated.map((x) => x.g);
-  }, [conferences, groups, search, tab, unreadCounts]);
+  }, [conferences, groups, search, tab, effUnread]);
 
   // "Unread" filter chip (Groups tab only).
   const displayGroups = useMemo(() => {
     if (tab !== 'groups' || groupFilter !== 'unread') return list;
-    return list.filter((g: any) => {
-      const id = getListItemId(g);
-      return id && Number(unreadCounts?.[id]) > 0;
-    });
-  }, [list, tab, groupFilter, unreadCounts]);
+    return list.filter((g: any) => effUnread(g) > 0);
+  }, [list, tab, groupFilter, effUnread]);
   const unreadGroupCount = useMemo(
     () =>
-      (Array.isArray(groups) ? groups : []).filter((g: any) => {
-        const id = getListItemId(g);
-        return id && Number(unreadCounts?.[id]) > 0;
-      }).length,
-    [groups, unreadCounts],
+      (Array.isArray(groups) ? groups : []).filter((g: any) => effUnread(g) > 0).length,
+    [groups, effUnread],
   );
 
   // Optional single list-level typing query (feature-flagged, same backend as
@@ -651,7 +658,7 @@ export default function GroupsScreen() {
           const itemId = getListItemId(item);
           const isGroupsTab = tab === 'groups';
           const pinned = isGroupsTab && !!item.isPinned;
-          const rowUnread = isGroupsTab && itemId ? Number(unreadCounts?.[itemId]) || 0 : 0;
+          const rowUnread = isGroupsTab && itemId ? effUnread(item) : 0;
           const rowTyping =
             isGroupsTab && itemId && BATCH_TYPING_ENABLED
               ? formatTypingLabel((typingMap as any)?.[itemId] || [], myId)
@@ -713,6 +720,7 @@ export default function GroupsScreen() {
               <GroupSwipeRow
                 onMarkRead={async () => {
                   Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+                  markLocallyRead(itemId, conversationLastActivityMs(item));
                   try {
                     await markReadM({ conversationId: itemId });
                   } catch {}
@@ -862,6 +870,7 @@ export default function GroupsScreen() {
         message="Marked as read"
         onUndo={async () => {
           if (!undoReadId) return;
+          clearLocalRead(undoReadId);
           try {
             await markUnreadM({ conversationId: undoReadId });
           } catch {}

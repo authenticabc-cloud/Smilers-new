@@ -33,6 +33,8 @@ import UndoSnackbar from '../../src/components/UndoSnackbar';
 import { readStoredString, writeStoredString } from '../../src/lib/settingsStorage';
 import ConversationRow, { formatTypingLabel } from '../../src/components/ConversationRow';
 import ChatSwipeRow from '../../src/components/ChatSwipeRow';
+import { useLocalReadMap } from '../../src/hooks/useLocalReadMap';
+import { conversationLastActivityMs, isLocallyRead, markLocallyRead, clearLocalRead } from '../../src/lib/localReadState';
 
 const CHAT_FILTER_KEY = 'chats_filter_v1';
 const WHATS_NEW_KEY = 'whatsnew_swipe_read_v1';
@@ -122,6 +124,18 @@ export default function ChatsScreen() {
     | undefined;
   const markRead = useMutation(api.messages.markRead);
   const markUnread = useMutation((api as any).messages.markUnread);
+  // iter-340: on-device read overlay so opening a chat clears its list badge
+  // instantly even when the backend unread count is slow/inconsistent.
+  const localRead = useLocalReadMap();
+  const effUnread = useCallback(
+    (item: any): number => {
+      const id = String(item?._id || '');
+      const backend = Number(unreadCounts?.[id]) || 0;
+      if (backend <= 0) return 0;
+      return isLocallyRead(localRead, id, conversationLastActivityMs(item)) ? 0 : backend;
+    },
+    [unreadCounts, localRead],
+  );
   const [markingAllRead, setMarkingAllRead] = useState(false);
   const [undoReadId, setUndoReadId] = useState<string | null>(null);
   const [whatsNewVisible, setWhatsNewVisible] = useState(false);
@@ -137,19 +151,8 @@ export default function ChatsScreen() {
     writeStoredString(WHATS_NEW_KEY, '1').catch(() => {});
   }, []);
 
-  // Keep the app-icon (launcher) badge in sync with the total unread count
-  // whenever the app is foregrounded and the unread counts change.
-  useEffect(() => {
-    const total = Object.values(unreadCounts || {}).reduce(
-      (sum, c) => sum + (Number(c) > 0 ? Number(c) : 0),
-      0,
-    );
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { setAppBadgeCount } = require('../../src/push/notifeeMessageDisplay');
-      void setAppBadgeCount(total);
-    } catch {}
-  }, [unreadCounts]);
+  // Keep the app-icon (launcher) badge in sync — see the effect below
+  // `displayList` where we can compute the locally-adjusted total.
 
   const handleMarkAllRead = useCallback(() => {
     setShowMenu(false);
@@ -175,6 +178,7 @@ export default function ChatsScreen() {
               clearFn = require('../../src/push/notifeeMessageDisplay').clearConversationNotifications;
             } catch {}
             for (const id of ids) {
+              markLocallyRead(id);
               try {
                 await markRead({ conversationId: id });
               } catch {}
@@ -406,23 +410,33 @@ export default function ChatsScreen() {
     if (pinVoiceTasks) return finalList;
     const rank = (c: any): number => {
       if (drafts && drafts[String(c?._id)]) return 3; // drafts stay on top
-      const id = String(c?._id || '');
-      if (id && Number(unreadCounts?.[id]) > 0) return 2; // then unread
+      if (effUnread(c) > 0) return 2; // then unread
       return 1;
     };
     const decorated = finalList.map((c: any, i: number) => ({ c, i }));
     decorated.sort((a, b) => rank(b.c) - rank(a.c) || a.i - b.i);
     return decorated.map((x) => x.c);
-  }, [pinVoiceTasks, finalList, drafts, unreadCounts]);
+  }, [pinVoiceTasks, finalList, drafts, effUnread]);
+
+  // Keep the app-icon (launcher) badge in sync with the LOCALLY-adjusted total
+  // unread count (opened chats are suppressed even if the backend count lags).
+  useEffect(() => {
+    const total = displayList.reduce((sum: number, c: any) => sum + effUnread(c), 0);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { setAppBadgeCount } = require('../../src/push/notifeeMessageDisplay');
+      void setAppBadgeCount(total);
+    } catch {}
+  }, [displayList, effUnread]);
 
   // "Unread" filter chip: show only conversations with unread messages.
   const filteredList = useMemo(() => {
     if (chatFilter !== 'unread') return displayList;
-    return displayList.filter((c: any) => Number(unreadCounts?.[String(c?._id)]) > 0);
-  }, [chatFilter, displayList, unreadCounts]);
+    return displayList.filter((c: any) => effUnread(c) > 0);
+  }, [chatFilter, displayList, effUnread]);
   const totalUnreadChats = useMemo(
-    () => displayList.filter((c: any) => Number(unreadCounts?.[String(c?._id)]) > 0).length,
-    [displayList, unreadCounts],
+    () => displayList.filter((c: any) => effUnread(c) > 0).length,
+    [displayList, effUnread],
   );
 
   // One list-level typing subscription for all visible rows (perf: avoids one
@@ -705,13 +719,14 @@ export default function ChatsScreen() {
           </>
         }
         renderItem={({ item }) => {
-          const rowUnread = Number(unreadCounts?.[String(item._id)]) || 0;
+          const rowUnread = effUnread(item);
           return (
           <ChatSwipeRow
             onArchive={() => handleArchive(item._id)}
             hasUnread={rowUnread > 0}
             onMarkRead={async () => {
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+              markLocallyRead(String(item._id), conversationLastActivityMs(item));
               try {
                 await markRead({ conversationId: String(item._id) });
               } catch {}
@@ -792,6 +807,7 @@ export default function ChatsScreen() {
         message="Marked as read"
         onUndo={async () => {
           if (!undoReadId) return;
+          clearLocalRead(undoReadId);
           try {
             await markUnread({ conversationId: undoReadId });
           } catch {}
