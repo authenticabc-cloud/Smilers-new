@@ -61,6 +61,7 @@ import {
 } from '../src/lib/twilio/twilioApi';
 import { useTwilioCallSession } from '../src/lib/twilio/useTwilioCallSession';
 import { recordDiagnostic } from '../src/lib/diagnostics';
+import { registerActiveCall, clearActiveCall } from '../src/lib/callControl';
 import { setPipParams, enterPip, useIsInPip, isPipSupported } from '../src/lib/pip';
 import { InCallAudio } from '../src/lib/webrtc/inCallManager';
 import CallErrorBoundary from '../src/components/CallErrorBoundary';
@@ -295,6 +296,22 @@ function TwilioCallScreenInner() {
   const [audioOutput, setAudioOutput] = useState<AudioOutputRoute>(isVideo ? 'speaker' : 'earpiece');
   const [showAudioPicker, setShowAudioPicker] = useState(false);
   const [btAvailable, setBtAvailable] = useState(false);
+
+  // Drive Mode "answer" while already in a call: expose a hold handler that
+  // mutes this call's local mic so the driver can take the incoming call.
+  const holdRef = useRef<() => void>(() => {});
+  holdRef.current = () => {
+    setMuted(true);
+    try {
+      host.session?.setMuted(true);
+    } catch {}
+  };
+  useEffect(() => {
+    const fn = () => holdRef.current();
+    registerActiveCall(fn);
+    return () => clearActiveCall(fn);
+  }, []);
+
 
   // iter-233 — multiparty (add participant) + privacy-aware roster.
   const me = useQuery(api.users.getCurrentUser, {}) as any;

@@ -11,6 +11,7 @@ import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
 import { Colors } from '../theme';
 import { DRIVE_DECLINE_REPLY, useDriveMode } from '../lib/driveMode';
+import { holdActiveCall, hasActiveCall } from '../lib/callControl';
 
 // Lazy require so the app still bundles if the native module isn't present.
 let ExpoSpeechRecognitionModule: any = null;
@@ -24,9 +25,10 @@ try {
   ExpoSpeechRecognitionModule = null;
 }
 
-// While actively in a call the microphone belongs to the call, so we pause
-// Drive listening on those routes (the incoming-call RING screen is fine).
-const CALL_ROUTE_PREFIXES = ['/twilio-call', '/group-call'];
+// While in a MULTIPARTY (group) call the mic is fully committed, so we pause
+// Drive listening there. For 1:1 calls we KEEP listening so "answer" can put the
+// current call on hold and pick up a second incoming call.
+const CALL_ROUTE_PREFIXES = ['/group-call'];
 
 type CmdKind = 'answer' | 'decline' | 'reject' | 'listen' | 'watch' | null;
 
@@ -201,7 +203,12 @@ export default function DriveModeController() {
       setFlash('No incoming call');
       return;
     }
-    setFlash('Answering…');
+    // If already in a 1:1 call, put it on hold (mute) before taking the new one.
+    const held = hasActiveCall() ? holdActiveCall() : false;
+    setFlash(
+      held ? 'Holding call + answering…' : 'Answering…',
+      held ? 'Holding your current call and answering' : 'Answering',
+    );
     if (call.inviteId) {
       void answerInvite({ inviteId: call.inviteId }).catch(() => {});
       router.push(`/group-call/${call.conversationId}` as any);
