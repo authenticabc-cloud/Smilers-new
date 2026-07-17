@@ -800,10 +800,15 @@ function GroupInfoInner() {
       </Modal>
 
       {/* ----- Invite Link Modal ----- */}
-      <Modal visible={inviteModalOpen} transparent animationType="slide" onRequestClose={() => setInviteModalOpen(false)}>
-        <Pressable style={styles.modalBackdrop} onPress={() => setInviteModalOpen(false)}>
-          <Pressable style={[styles.modalCard, { paddingBottom: Spacing.lg + insets.bottom }]} onPress={() => {}}>
+      <Modal visible={inviteModalOpen} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setInviteModalOpen(false)}>
+        <Pressable style={[styles.modalBackdrop, { justifyContent: 'center', padding: Spacing.lg }]} onPress={() => setInviteModalOpen(false)}>
+          <Pressable style={[styles.modalCard, styles.modalCardCentered]} onPress={() => {}}>
             <Text style={styles.modalTitle}>🔗 Invite Link</Text>
+            <ScrollView
+              style={{ alignSelf: 'stretch' }}
+              contentContainerStyle={{ gap: Spacing.md, paddingBottom: Spacing.sm }}
+              showsVerticalScrollIndicator={false}
+            >
             {inviteLinkEnabled && inviteCode ? (
               <>
                 <Text style={styles.modalBody}>Share this link with anyone you want to add.</Text>
@@ -872,6 +877,7 @@ function GroupInfoInner() {
                 </TouchableOpacity>
               </>
             )}
+            </ScrollView>
           </Pressable>
         </Pressable>
       </Modal>
@@ -1250,6 +1256,11 @@ const styles = StyleSheet.create({
     padding: Spacing.lg,
     maxHeight: '90%',
     gap: Spacing.md,
+  },
+  modalCardCentered: {
+    borderRadius: 20,
+    width: '100%',
+    maxHeight: '80%',
   },
   modalTitle: { fontSize: 20, fontWeight: FontWeight.bold, color: Colors.textPrimary },
   modalBody: { fontSize: FontSize.base, color: Colors.textSecondary, lineHeight: 20 },
