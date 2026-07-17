@@ -31,6 +31,7 @@ import ConnectionStatusBanner from '../../src/components/ConnectionStatusBanner'
 import { AppState } from 'react-native';
 // sml-008: don't tear down the live socket mid-call — see handlePullToReconnect below.
 import { callHost } from '../../src/lib/call/callHost';
+import * as Haptics from 'expo-haptics';
 import { readStoredString, writeStoredString } from '../../src/lib/settingsStorage';
 
 const CHAT_FILTER_KEY = 'chats_filter_v1';
@@ -678,6 +679,7 @@ export default function ChatsScreen() {
             onArchive={() => handleArchive(item._id)}
             hasUnread={rowUnread > 0}
             onMarkRead={async () => {
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
               try {
                 await markRead({ conversationId: String(item._id) });
               } catch {}

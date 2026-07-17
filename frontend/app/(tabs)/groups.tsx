@@ -645,6 +645,7 @@ export default function GroupsScreen() {
             return (
               <GroupSwipeRow
                 onMarkRead={async () => {
+                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
                   try {
                     await markReadM({ conversationId: itemId });
                   } catch {}
