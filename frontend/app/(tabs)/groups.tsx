@@ -531,6 +531,7 @@ export default function GroupsScreen() {
           const itemId = getListItemId(item);
           const isGroupsTab = tab === 'groups';
           const pinned = isGroupsTab && !!item.isPinned;
+          const rowUnread = isGroupsTab && itemId ? Number(unreadCounts?.[itemId]) || 0 : 0;
           return (
             <TouchableOpacity
               style={styles.row}
@@ -555,20 +556,20 @@ export default function GroupsScreen() {
                       testID={`group-pin-${itemId}`}
                     />
                   ) : null}
-                  <Text style={styles.rowName} numberOfLines={1}>
+                  <Text style={[styles.rowName, rowUnread > 0 && styles.rowNameUnread]} numberOfLines={1}>
                     {item.name || 'Group'}
                   </Text>
                 </View>
-                <Text style={styles.rowSub} numberOfLines={1}>
+                <Text style={[styles.rowSub, rowUnread > 0 && styles.rowSubUnread]} numberOfLines={1}>
                   {sub}
                 </Text>
               </View>
               <View style={styles.rowRight}>
                 <Text style={styles.rowStamp}>{stamp}</Text>
-                {isGroupsTab && itemId && Number(unreadCounts?.[itemId]) > 0 ? (
+                {rowUnread > 0 ? (
                   <View style={styles.unreadBadge} testID={`group-unread-${itemId}`}>
                     <Text style={styles.unreadBadgeText}>
-                      {Number(unreadCounts[itemId]) > 99 ? '99+' : Number(unreadCounts[itemId])}
+                      {rowUnread > 99 ? '99+' : rowUnread}
                     </Text>
                   </View>
                 ) : memberCount > 0 ? (
@@ -1008,7 +1009,9 @@ const styles = StyleSheet.create({
   avatarText: { color: Colors.primary, fontWeight: FontWeight.bold, fontSize: FontSize.xl },
   rowMid: { flex: 1 },
   rowName: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  rowNameUnread: { color: Colors.textPrimary },
   rowSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
+  rowSubUnread: { color: Colors.textPrimary, fontWeight: FontWeight.medium },
   rowRight: { alignItems: 'flex-end', gap: 4 },
   rowStamp: { fontSize: FontSize.sm, color: Colors.textSecondary },
   memberCount: { flexDirection: 'row', alignItems: 'center', gap: 4 },

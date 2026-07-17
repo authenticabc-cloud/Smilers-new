@@ -625,6 +625,7 @@ export default function ChatsScreen() {
               currentUserId={me?._id}
               contacts={contacts}
               draft={drafts[String(item._id)]}
+              unreadCount={Number(unreadCounts?.[String(item._id)]) || 0}
               onPress={() => router.push(`/chat/${item._id}` as any)}
             />
           </SwipeToArchive>
@@ -716,7 +717,7 @@ function peerIsOnline(item: any): boolean {
   return Date.now() - t <= 120000; // online if seen within 2 min
 }
 
-function ConversationRow({ item, currentUserId, contacts, draft, onPress }: { item: any; currentUserId?: string; contacts?: any[]; draft?: DraftPreview; onPress: () => void }) {
+function ConversationRow({ item, currentUserId, contacts, draft, unreadCount = 0, onPress }: { item: any; currentUserId?: string; contacts?: any[]; draft?: DraftPreview; unreadCount?: number; onPress: () => void }) {
   // iter-176: Device address-book name beats both the saved-contact name
   // AND the Smilers display name. e.g. if your phone has the other user
   // saved as "ABC Albania", you'll see "ABC Albania" here instead of the
@@ -770,11 +771,12 @@ function ConversationRow({ item, currentUserId, contacts, draft, onPress }: { it
     const names = others.map((u: any) => u?.name || u?.userName || u?.displayName || 'Someone');
     return names.length === 1 ? `${names[0]} is typing\u2026` : `${names.join(', ')} are typing\u2026`;
   }, [rowTypingRaw, currentUserId]);
+  const hasUnread = unreadCount > 0;
   return (
     <TouchableOpacity onPress={onPress} style={styles.row} activeOpacity={0.7} testID={`conv-${item._id}`}>
       <Avatar name={name} size={52} uri={photoUri} online={peerIsOnline(item)} />
       <View style={styles.rowMiddle}>
-        <Text style={styles.rowTitle}>{name}</Text>
+        <Text style={[styles.rowTitle, hasUnread && styles.rowTitleUnread]} numberOfLines={1}>{name}</Text>
         {typingLabel ? (
           <Text style={[styles.rowSubtitle, styles.rowTyping]} numberOfLines={1}>
             {typingLabel}
@@ -785,12 +787,19 @@ function ConversationRow({ item, currentUserId, contacts, draft, onPress }: { it
             {draft.text || (draft.hasImages ? '📷 Photo' : '')}
           </Text>
         ) : (
-          <Text style={styles.rowSubtitle} numberOfLines={1}>
+          <Text style={[styles.rowSubtitle, hasUnread && styles.rowSubtitleUnread]} numberOfLines={1}>
             {item.lastMessageText || 'Start chatting…'}
           </Text>
         )}
       </View>
-      <Text style={styles.rowTime}>{relTime(item.lastMessageTime)}</Text>
+      <View style={styles.rowRightCol}>
+        <Text style={[styles.rowTime, hasUnread && styles.rowTimeUnread]}>{relTime(item.lastMessageTime)}</Text>
+        {hasUnread ? (
+          <View style={styles.unreadPill} testID={`conv-unread-${item._id}`}>
+            <Text style={styles.unreadPillText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+          </View>
+        ) : null}
+      </View>
     </TouchableOpacity>
   );
 }
@@ -876,9 +885,17 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     marginBottom: 2,
   },
+  rowTitleUnread: {
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+  },
   rowSubtitle: {
     fontSize: FontSize.sm,
     color: Colors.textSecondary,
+  },
+  rowSubtitleUnread: {
+    color: Colors.textPrimary,
+    fontWeight: FontWeight.medium,
   },
   draftPrefix: {
     color: Colors.danger,
@@ -893,6 +910,27 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     marginLeft: Spacing.sm,
   },
+  rowRightCol: {
+    marginLeft: Spacing.sm,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  rowTimeUnread: {
+    color: Colors.tickRed,
+    fontWeight: FontWeight.semibold,
+    marginLeft: 0,
+  },
+  unreadPill: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    backgroundColor: Colors.tickRed,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  unreadPillText: { fontSize: 11, fontWeight: '700', color: Colors.white },
   badge: {
     paddingHorizontal: 10,
     paddingVertical: 4,
