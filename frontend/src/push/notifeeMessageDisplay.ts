@@ -134,12 +134,47 @@ export async function displayGroupedMessageNotification(
       },
     });
 
-    // 2) The group summary (shown when collapsed). onlyAlertOnce + the CHILDREN
-    //    alert behavior keep it from making its own sound each time.
+    // 2) The group summary (shown when collapsed). We build an InboxStyle
+    //    summary from the conversation's currently-displayed messages so it
+    //    reads "N new messages" with a preview of the latest lines (WhatsApp
+    //    style). onlyAlertOnce + CHILDREN alert behavior keep it silent.
+    let lines: string[] = [body];
+    let convName = title;
+    try {
+      const displayed = await native.notifee.getDisplayedNotifications();
+      const children = (Array.isArray(displayed) ? displayed : []).filter((d: any) => {
+        const n = d?.notification;
+        const gid = n?.android?.groupId;
+        const isSummary = n?.android?.groupSummary === true || d?.id === summaryId;
+        return gid === groupId && !isSummary;
+      });
+      const collected = children
+        .map((d: any) => {
+          const n = d?.notification;
+          const text = typeof n?.body === 'string' ? n.body : '';
+          return text.trim();
+        })
+        .filter((t: string) => t.length > 0);
+      if (collected.length > 0) {
+        // Keep the most recent lines (cap at 6, like the OS does).
+        lines = collected.slice(-6);
+      }
+      // Prefer the sender/conversation title from an existing child if present.
+      const withTitle = children.find(
+        (d: any) => typeof d?.notification?.title === 'string' && d.notification.title.trim(),
+      );
+      if (withTitle) convName = withTitle.notification.title.trim();
+    } catch {
+      // getDisplayedNotifications unavailable — fall back to the single line.
+    }
+    const count = lines.length;
+    const summaryBody =
+      count > 1 ? `${count} new messages` : lines[0] || 'New messages';
+
     await native.notifee.displayNotification({
       id: summaryId,
-      title,
-      body: 'New messages',
+      title: convName,
+      body: summaryBody,
       data: routeData,
       android: {
         channelId: MESSAGE_CHANNEL_ID,
@@ -151,6 +186,12 @@ export async function displayGroupedMessageNotification(
         pressAction: { id: 'default', launchActivity: 'default' },
         onlyAlertOnce: true,
         autoCancel: true,
+        style: {
+          type: native.AndroidStyle.INBOX,
+          lines,
+          title: convName,
+          summary: count > 1 ? `${count} new messages` : undefined,
+        },
       },
     });
 
