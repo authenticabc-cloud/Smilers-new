@@ -21,6 +21,15 @@ export default function TabsLayout() {
   const meQuery = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip');
   const me: any = meQuery ?? null;
   const meLoading = isAuthenticated && meQuery === undefined;
+  // iter-260: total unread messages → drives the in-app Chats tab badge.
+  const unreadCounts = useQuery(
+    (api as any).messages.getUnreadCounts,
+    isAuthenticated ? {} : 'skip',
+  ) as Record<string, number> | undefined;
+  const totalUnread = Object.values(unreadCounts || {}).reduce(
+    (sum, c) => sum + (Number(c) > 0 ? Number(c) : 0),
+    0,
+  );
   const [installVerificationChecked, setInstallVerificationChecked] = useState(false);
   const [hasVerifiedInstall, setHasVerifiedInstall] = useState(false);
   const [syncingUser, setSyncingUser] = useState(false);
@@ -285,6 +294,13 @@ export default function TabsLayout() {
           title: 'Chats',
           tabBarIcon: ({ color, size }) => <Feather name="message-square" size={size} color={color} />,
           tabBarButtonTestID: 'tab-chats',
+          tabBarBadge: totalUnread > 0 ? (totalUnread > 99 ? '99+' : totalUnread) : undefined,
+          tabBarBadgeStyle: {
+            backgroundColor: Colors.tickRed,
+            color: Colors.white,
+            fontSize: 10,
+            fontWeight: '700',
+          },
         }}
       />
       <Tabs.Screen
