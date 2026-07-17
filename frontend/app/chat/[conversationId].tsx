@@ -514,14 +514,27 @@ export default function ChatScreen() {
   // Clear this conversation's message notifications when the chat is open, so
   // already-read messages don't linger in the notification shade. Runs on open
   // and whenever new messages arrive while the chat is foregrounded.
+  const unreadCounts = useQuery((api as any).messages.getUnreadCounts, isAuthenticated ? {} : 'skip') as
+    | Record<string, number>
+    | undefined;
+
   useEffect(() => {
     if (!conversationId || typeof conversationId !== 'string') return;
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { clearConversationNotifications } = require('../../src/push/notifeeMessageDisplay');
-      void clearConversationNotifications(conversationId);
+      const mod = require('../../src/push/notifeeMessageDisplay');
+      void mod.clearConversationNotifications(conversationId);
+      // Instantly drop the launcher badge to the total unread of OTHER chats,
+      // since this conversation is now being read (don't wait for the list).
+      if (unreadCounts) {
+        const others = Object.entries(unreadCounts).reduce(
+          (sum, [id, c]) => (id === conversationId ? sum : sum + (Number(c) > 0 ? Number(c) : 0)),
+          0,
+        );
+        void mod.setAppBadgeCount(others);
+      }
     } catch {}
-  }, [conversationId, messagesPage?.page?.length]);
+  }, [conversationId, messagesPage?.page?.length, unreadCounts]);
 
   useEffect(() => {
     if (!isRecording) {
