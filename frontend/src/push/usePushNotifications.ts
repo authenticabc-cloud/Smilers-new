@@ -408,6 +408,27 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
   const body =
     getDisplayNameFromPayload(payload) || 'Open Smilers to view the message';
 
+  // iter-260: bundle message notifications per-conversation (WhatsApp-style)
+  // via notifee, which supports Android notification groups. Falls back to the
+  // expo path below when notifee is unavailable.
+  const groupConversationId = toNonEmptyString(payload.conversationId);
+  if (Platform.OS === 'android' && groupConversationId) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { displayGroupedMessageNotification } = require('./notifeeMessageDisplay');
+      const grouped = await displayGroupedMessageNotification({
+        title,
+        body,
+        conversationId: groupConversationId,
+        data: payload,
+        childId: notificationKey ? `msg-${groupConversationId}-${notificationKey}` : undefined,
+      });
+      if (grouped) return;
+    } catch {
+      // fall through to the expo-notifications path
+    }
+  }
+
   // iter-252: schedule on the VERSIONED message channel (custom Smilers tone),
   // not the legacy immutable `messages-v3` (stuck on the system default tone).
   const messageChannel = 'messages-v4-message_notification';

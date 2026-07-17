@@ -466,6 +466,17 @@ async function handleCallEvent(native: any, type: any, detail: any): Promise<voi
     return;
   }
 
+  // iter-260: grouped message notifications (displayed via notifeeMessageDisplay)
+  // are routed here too — a body press opens the conversation.
+  if (kind === 'message') {
+    if (type === EventType.PRESS && data?.conversationId) {
+      const route = `/chat/${data.conversationId}`;
+      if (callNavigator) callNavigator(route);
+      else pendingCallRoute = route;
+    }
+    return;
+  }
+
   if (kind !== 'call') return;
 
   // DECLINE → end the Twilio room (caller stops ringing) + cancel the ring.
@@ -550,6 +561,10 @@ export async function handleNotifeeInitialCallNotification(): Promise<void> {
       safeRecord(`initial-answer-routed: ${route}`);
     } else if (kind === 'missed-call' && pressId === 'open-chat') {
       const route = data?.conversationId ? `/chat/${data.conversationId}` : '/';
+      if (callNavigator) callNavigator(route);
+      else pendingCallRoute = route;
+    } else if (kind === 'message' && data?.conversationId) {
+      const route = `/chat/${data.conversationId}`;
       if (callNavigator) callNavigator(route);
       else pendingCallRoute = route;
     }

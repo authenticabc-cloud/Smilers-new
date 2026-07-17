@@ -332,6 +332,26 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
   const title = toNonEmptyString(payload.title) || 'New message';
   const body = getDisplayNameFromPayload(payload) || 'Open Smilers to view the message';
 
+  // iter-260: bundle message notifications per-conversation (WhatsApp-style)
+  // via notifee. Runs in the headless (killed-app) context too. Falls back to
+  // the expo path below when notifee is unavailable.
+  const groupConversationId = toNonEmptyString(payload.conversationId);
+  if (Platform.OS === 'android' && groupConversationId) {
+    try {
+      const { displayGroupedMessageNotification } = require('./notifeeMessageDisplay');
+      const grouped = await displayGroupedMessageNotification({
+        title,
+        body,
+        conversationId: groupConversationId,
+        data: payload,
+        childId: `msg-${groupConversationId}-${notificationKey}`,
+      });
+      if (grouped) return;
+    } catch {
+      // fall through to the expo-notifications path
+    }
+  }
+
   const messageChannel = 'messages-v4-message_notification';
   if (Platform.OS === 'android') {
     try {
