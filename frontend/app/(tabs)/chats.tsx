@@ -36,6 +36,7 @@ import UndoSnackbar from '../../src/components/UndoSnackbar';
 import { readStoredString, writeStoredString } from '../../src/lib/settingsStorage';
 
 const CHAT_FILTER_KEY = 'chats_filter_v1';
+const MARK_UNREAD_ENABLED = process.env.EXPO_PUBLIC_MARK_UNREAD_ENABLED === 'true';
 
 function relTime(iso?: string) {
   if (!iso) return '';
@@ -753,7 +754,7 @@ export default function ChatsScreen() {
         onPeople={() => router.push('/groups-create' as any)}
       />
       <UndoSnackbar
-        visible={!!undoReadId}
+        visible={!!undoReadId && MARK_UNREAD_ENABLED}
         message="Marked as read"
         onUndo={async () => {
           if (!undoReadId) return;

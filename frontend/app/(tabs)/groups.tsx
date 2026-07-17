@@ -28,6 +28,7 @@ import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 const MAX_PINNED_GROUPS = 20;
 const PIN_TIP_KEY = 'smilers_pin_tip_dismissed';
 const GROUP_FILTER_KEY = 'groups_filter_v1';
+const MARK_UNREAD_ENABLED = process.env.EXPO_PUBLIC_MARK_UNREAD_ENABLED === 'true';
 
 type Tab = 'groups' | 'conferences';
 
@@ -794,7 +795,7 @@ export default function GroupsScreen() {
         </Animated.View>
       ) : null}
       <UndoSnackbar
-        visible={!!undoReadId}
+        visible={!!undoReadId && MARK_UNREAD_ENABLED}
         message="Marked as read"
         onUndo={async () => {
           if (!undoReadId) return;
