@@ -28,6 +28,7 @@ import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 const MAX_PINNED_GROUPS = 20;
 const PIN_TIP_KEY = 'smilers_pin_tip_dismissed';
 const GROUP_FILTER_KEY = 'groups_filter_v1';
+const GROUP_WHATS_NEW_KEY = 'whatsnew_group_swipe_read_v1';
 const MARK_UNREAD_ENABLED = process.env.EXPO_PUBLIC_MARK_UNREAD_ENABLED === 'true';
 
 type Tab = 'groups' | 'conferences';
@@ -281,6 +282,20 @@ export default function GroupsScreen() {
     if (!groupFilterLoaded.current) return;
     writeStoredString(GROUP_FILTER_KEY, groupFilter).catch(() => {});
   }, [groupFilter]);
+
+  // One-time "what's new" tip for group swipe-to-read + Unread filter.
+  const [whatsNewVisible, setWhatsNewVisible] = useState(false);
+  useEffect(() => {
+    readStoredString(GROUP_WHATS_NEW_KEY)
+      .then((v) => {
+        if (v !== '1') setWhatsNewVisible(true);
+      })
+      .catch(() => {});
+  }, []);
+  const dismissWhatsNew = useCallback(() => {
+    setWhatsNewVisible(false);
+    writeStoredString(GROUP_WHATS_NEW_KEY, '1').catch(() => {});
+  }, []);
   const showPinTip =
     tab === 'groups' && !tipDismissed && Array.isArray(groups) && groups.length > 0 && pinnedGroups.length === 0;
 
@@ -561,6 +576,21 @@ export default function GroupsScreen() {
             <Text style={[styles.filterChipText, groupFilter === 'unread' && styles.filterChipTextActive]}>
               {unreadGroupCount > 0 ? `Unread (${unreadGroupCount > 99 ? '99+' : unreadGroupCount})` : 'Unread'}
             </Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {tab === 'groups' && whatsNewVisible ? (
+        <View style={styles.whatsNewCard} testID="group-whats-new-tip">
+          <Ionicons name="flash-outline" size={18} color={Colors.primary} />
+          <View style={styles.whatsNewTextWrap}>
+            <Text style={styles.whatsNewTitle}>New gestures</Text>
+            <Text style={styles.whatsNewBody}>
+              Swipe a group left to mark it read, and tap the Unread filter to focus on active groups.
+            </Text>
+          </View>
+          <TouchableOpacity onPress={dismissWhatsNew} hitSlop={10} testID="group-whats-new-dismiss">
+            <Ionicons name="close" size={18} color={Colors.textMuted} />
           </TouchableOpacity>
         </View>
       ) : null}
@@ -855,6 +885,21 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   swipeReadText: { color: Colors.white, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
+  whatsNewCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+    marginHorizontal: Spacing.base,
+    marginBottom: Spacing.sm,
+    padding: Spacing.md,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  whatsNewTextWrap: { flex: 1 },
+  whatsNewTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textPrimary, marginBottom: 2 },
+  whatsNewBody: { fontSize: FontSize.xs, color: Colors.textSecondary, lineHeight: 17 },
   rowNameLine: { flexDirection: 'row', alignItems: 'center' },
   pinIcon: { marginRight: 5, transform: [{ rotate: '45deg' }] },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
