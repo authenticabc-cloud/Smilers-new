@@ -374,6 +374,22 @@ export default function ChatsScreen() {
     return [...withDraft, ...without];
   }, [pinVoiceTasks, orderedList, drafts]);
 
+  // Unread-first ordering: chats with unread messages float up (kept below any
+  // Voice-Task pins and drafted chats). Stable — preserves recency order within
+  // each bucket. Skipped entirely when Voice-Task pinning is on (explicit order).
+  const displayList = useMemo(() => {
+    if (pinVoiceTasks) return finalList;
+    const rank = (c: any): number => {
+      if (drafts && drafts[String(c?._id)]) return 3; // drafts stay on top
+      const id = String(c?._id || '');
+      if (id && Number(unreadCounts?.[id]) > 0) return 2; // then unread
+      return 1;
+    };
+    const decorated = finalList.map((c: any, i: number) => ({ c, i }));
+    decorated.sort((a, b) => rank(b.c) - rank(a.c) || a.i - b.i);
+    return decorated.map((x) => x.c);
+  }, [pinVoiceTasks, finalList, drafts, unreadCounts]);
+
   const handleArchive = useCallback(
     async (conversationId: string) => {
       try {
@@ -518,7 +534,7 @@ export default function ChatsScreen() {
       </Modal>
 
       <FlatList
-        data={finalList}
+        data={displayList}
         keyExtractor={(item: any) => item._id}
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
