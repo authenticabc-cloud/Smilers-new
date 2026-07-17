@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { GestureHandlerRootView, Swipeable, RectButton } from 'react-native-gesture-handler';
 import DraggableFlatList, { ScaleDecorator, type RenderItemParams } from 'react-native-draggable-flatlist';
+import UndoSnackbar from '../../src/components/UndoSnackbar';
 import * as Haptics from 'expo-haptics';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -75,6 +76,7 @@ export default function GroupsScreen() {
   const [search, setSearch] = useState('');
   const [groupFilter, setGroupFilter] = useState<'all' | 'unread'>('all');
   const [inviteCode, setInviteCode] = useState('');
+  const [undoReadId, setUndoReadId] = useState<string | null>(null);
 
   // Reactive so pin / unpin / reorder re-sorts the list live. The backend
   // returns groups already sorted (pinned first in pinOrder, then unpinned by
@@ -224,6 +226,7 @@ export default function GroupsScreen() {
   const unpinGroupM = useMutation((api as any).pinnedGroups?.unpinGroup);
   const reorderPinnedM = useMutation((api as any).pinnedGroups?.reorderPinnedGroups);
   const markReadM = useMutation((api as any).messages.markRead);
+  const markUnreadM = useMutation((api as any).messages.markUnread);
   const [reorderOpen, setReorderOpen] = useState(false);
   const [reorderList, setReorderList] = useState<any[]>([]);
   const [pinBusy, setPinBusy] = useState(false);
@@ -649,6 +652,7 @@ export default function GroupsScreen() {
                   try {
                     await markReadM({ conversationId: itemId });
                   } catch {}
+                  setUndoReadId(itemId);
                   try {
                     const { clearConversationNotifications } = require('../../src/push/notifeeMessageDisplay');
                     await clearConversationNotifications(itemId);
@@ -789,6 +793,17 @@ export default function GroupsScreen() {
           <Text style={styles.toastText}>{toast}</Text>
         </Animated.View>
       ) : null}
+      <UndoSnackbar
+        visible={!!undoReadId}
+        message="Marked as read"
+        onUndo={async () => {
+          if (!undoReadId) return;
+          try {
+            await markUnreadM({ conversationId: undoReadId });
+          } catch {}
+        }}
+        onDismiss={() => setUndoReadId(null)}
+      />
     </SafeAreaView>
   );
 }

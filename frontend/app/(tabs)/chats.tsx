@@ -32,6 +32,7 @@ import { AppState } from 'react-native';
 // sml-008: don't tear down the live socket mid-call — see handlePullToReconnect below.
 import { callHost } from '../../src/lib/call/callHost';
 import * as Haptics from 'expo-haptics';
+import UndoSnackbar from '../../src/components/UndoSnackbar';
 import { readStoredString, writeStoredString } from '../../src/lib/settingsStorage';
 
 const CHAT_FILTER_KEY = 'chats_filter_v1';
@@ -130,7 +131,9 @@ export default function ChatsScreen() {
     | Record<string, number>
     | undefined;
   const markRead = useMutation(api.messages.markRead);
+  const markUnread = useMutation((api as any).messages.markUnread);
   const [markingAllRead, setMarkingAllRead] = useState(false);
+  const [undoReadId, setUndoReadId] = useState<string | null>(null);
 
   // Keep the app-icon (launcher) badge in sync with the total unread count
   // whenever the app is foregrounded and the unread counts change.
@@ -683,6 +686,7 @@ export default function ChatsScreen() {
               try {
                 await markRead({ conversationId: String(item._id) });
               } catch {}
+              setUndoReadId(String(item._id));
               try {
                 const { clearConversationNotifications } = require('../../src/push/notifeeMessageDisplay');
                 await clearConversationNotifications(String(item._id));
@@ -747,6 +751,17 @@ export default function ChatsScreen() {
         onBuilding={() => router.push('/community-create' as any)}
         onBroadcast={me?.role === 'admin' ? () => router.push('/broadcast-create' as any) : undefined}
         onPeople={() => router.push('/groups-create' as any)}
+      />
+      <UndoSnackbar
+        visible={!!undoReadId}
+        message="Marked as read"
+        onUndo={async () => {
+          if (!undoReadId) return;
+          try {
+            await markUnread({ conversationId: undoReadId });
+          } catch {}
+        }}
+        onDismiss={() => setUndoReadId(null)}
       />
     </SafeAreaView>
   );
