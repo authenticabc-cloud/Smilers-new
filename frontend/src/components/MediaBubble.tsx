@@ -44,6 +44,8 @@ import { useDecryptedMediaUrl } from '../hooks/useDecryptedMediaUrl';
 import type { E2EEStatus } from '../hooks/useConversationE2EE';
 import { getCachedTranscription, type CachedTranscription, type TranscriptionSegment } from '../lib/triggerTranscription';
 import { SharedContactBubble } from './chat/SharedContactBubble';
+import { getLanguageByCode } from '../lib/languages';
+import { getOrCreateVoiceTranslation, type VoiceTranslation } from '../lib/voiceTranslation';
 // iter-218 — Safe Browsing gate for links
 import { useUrlSafety, isDangerousFile } from '../lib/safeBrowsing';
 // iter-125: full-screen photo viewer toolbar helpers
@@ -1702,6 +1704,7 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
         testIDPrefix="voice"
       />
       <TranscriptionPill msg={msg} />
+      <VoiceTranslationPill msg={msg} />
     </View>
   );
 }
@@ -1781,6 +1784,198 @@ function TranscriptionPill({ msg }: { msg: any }) {
           </Text>
         </>
       )}
+    </View>
+  );
+}
+
+/**
+ * VoiceTranslationPill — auto-translates a RECEIVED voice note's transcript
+ * into the receiver's preferred language and lets them play it aloud (synthetic
+ * voice). Skipped entirely when the receiver already understands the language
+ * the note was spoken in (honours their "skip / spoken languages").
+ */
+function VoiceTranslationPill({ msg }: { msg: any }) {
+  const me = useQuery(api.users.getCurrentUser, {}) as any | null | undefined;
+  const isMine = !!me?._id && String(msg?.senderId || '') === String(me._id);
+
+  const storageId: string | null =
+    (typeof msg?.storageId === 'string' && msg.storageId) ||
+    (typeof msg?.audioStorageId === 'string' && msg.audioStorageId) ||
+    null;
+
+  const [cached, setCached] = useState<CachedTranscription | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      if (!storageId) return;
+      const value = await getCachedTranscription(storageId);
+      if (!cancelled) setCached(value);
+    };
+    void load();
+    const interval = setInterval(() => {
+      if (cached?.status === 'ready' || cached?.status === 'error') return;
+      void load();
+    }, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [storageId, cached?.status]);
+
+  const transcript: string =
+    (typeof msg?.transcription === 'string' && msg.transcription.trim()) || (cached?.text || '');
+  const sourceLanguage: string =
+    (typeof msg?.transcriptionLanguage === 'string' && msg.transcriptionLanguage) ||
+    (cached?.language || '');
+
+  // Receiver's preferred language + the set of languages they understand.
+  const targetCode = (me?.preferredLanguage || '').trim();
+  const targetName = getLanguageByCode(targetCode)?.name || '';
+  const skipCodes = useMemo<string[]>(() => {
+    if (Array.isArray(me?.skipTranslationLanguages)) return me.skipTranslationLanguages;
+    if (Array.isArray(me?.spokenLanguages)) return me.spokenLanguages;
+    if (Array.isArray(me?.languages)) return me.languages;
+    return [];
+  }, [me?.skipTranslationLanguages, me?.spokenLanguages, me?.languages]);
+  const skipLangNames = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          skipCodes
+            .map((c) => getLanguageByCode(String(c))?.name)
+            .filter((n): n is string => !!n),
+        ),
+      ),
+    [skipCodes],
+  );
+  const understood = useMemo(() => {
+    const set = new Set<string>();
+    [targetCode, ...skipCodes].forEach((c) => {
+      const code = String(c || '').trim().toLowerCase();
+      if (!code) return;
+      set.add(code);
+      const name = getLanguageByCode(code)?.name;
+      if (name) set.add(name.toLowerCase());
+    });
+    return set;
+  }, [targetCode, skipCodes]);
+
+  const [result, setResult] = useState<VoiceTranslation | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  // Skip conditions: own message, no target set, transcript not ready, or the
+  // note is already in a language the receiver understands.
+  const srcLower = sourceLanguage.trim().toLowerCase();
+  const shouldSkip =
+    isMine || !targetCode || !targetName || !transcript || (!!srcLower && understood.has(srcLower));
+
+  useEffect(() => {
+    if (shouldSkip || !storageId) {
+      setResult(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    getOrCreateVoiceTranslation({
+      storageId,
+      transcript,
+      targetLangCode: targetCode,
+      targetLangName: targetName,
+      skipLangNames,
+    })
+      .then((r) => {
+        if (!cancelled) setResult(r);
+      })
+      .catch(() => {
+        if (!cancelled) setResult(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shouldSkip, storageId, transcript, targetCode, targetName]);
+
+  // Playback of the synthesized translation.
+  const playerRef = useRef<AudioPlayer | null>(null);
+  const [speaking, setSpeaking] = useState(false);
+  useEffect(() => {
+    return () => {
+      try {
+        playerRef.current?.remove();
+      } catch {}
+      playerRef.current = null;
+    };
+  }, []);
+
+  const toggleSpeak = useCallback(() => {
+    const uri = result?.audioUri;
+    if (!uri) return;
+    try {
+      if (!playerRef.current) {
+        const p = createAudioPlayer({ uri } as AudioSource);
+        playerRef.current = p;
+        p.addListener('playbackStatusUpdate', (status: any) => {
+          setSpeaking(!!status?.playing);
+          if (status?.didJustFinish) {
+            setSpeaking(false);
+            try {
+              p.seekTo(0);
+            } catch {}
+          }
+        });
+      }
+      const player = playerRef.current;
+      if (speaking) {
+        player.pause();
+        setSpeaking(false);
+      } else {
+        try {
+          void setExpoAudioModeAsync({ playsInSilentMode: true } as any);
+        } catch {}
+        player.play();
+        setSpeaking(true);
+      }
+    } catch {
+      /* ignore playback errors */
+    }
+  }, [result?.audioUri, speaking]);
+
+  if (shouldSkip) return null;
+  if (loading && !result) {
+    return (
+      <View style={styles.voiceTransPill} testID={`voice-translation-${msg?._id || ''}`}>
+        <View style={styles.transcriptPendingRow}>
+          <ActivityIndicator size="small" color={Colors.primary} />
+          <Text style={styles.transcriptPendingText}>Translating to {targetName}…</Text>
+        </View>
+      </View>
+    );
+  }
+  if (!result || result.status !== 'ready' || !result.translatedText) return null;
+
+  return (
+    <View style={styles.voiceTransPill} testID={`voice-translation-${msg?._id || ''}`}>
+      <View style={styles.voiceTransHeader}>
+        <Feather name="globe" size={11} color={Colors.primary} />
+        <Text style={styles.transcriptLanguage}>{targetName}</Text>
+        {result.audioUri ? (
+          <TouchableOpacity
+            onPress={toggleSpeak}
+            style={styles.voiceTransPlayBtn}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            testID="voice-translation-play"
+          >
+            <Feather name={speaking ? 'pause' : 'volume-2'} size={12} color={Colors.white} />
+            <Text style={styles.voiceTransPlayText}>{speaking ? 'Stop' : `Play in ${targetName}`}</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+      <Text style={styles.transcriptText} testID="voice-translation-text">
+        {result.translatedText}
+      </Text>
     </View>
   );
 }
@@ -2197,6 +2392,36 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.textSecondary,
     fontWeight: FontWeight.medium,
+  },
+  voiceTransPill: {
+    marginTop: 6,
+    padding: 8,
+    paddingHorizontal: 10,
+    borderRadius: Radius.md,
+    backgroundColor: 'rgba(59,130,246,0.10)',
+    borderLeftWidth: 3,
+    borderLeftColor: '#3b82f6',
+  },
+  voiceTransHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginBottom: 3,
+  },
+  voiceTransPlayBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginLeft: 'auto',
+    backgroundColor: Colors.primary,
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: 999,
+  },
+  voiceTransPlayText: {
+    fontSize: 11,
+    color: Colors.white,
+    fontWeight: FontWeight.bold,
   },
   quoteBlock: {
     flexDirection: 'row',

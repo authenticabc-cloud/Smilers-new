@@ -1064,6 +1064,61 @@ async def translate_text(payload: TranslationRequest, request: Request):
         logger.exception("translation failed")
         raise HTTPException(status_code=502, detail=f"Translation failed: {exc}") from exc
 
+
+# ---------------------------------------------------------------------------
+# Text-to-Speech — speak translated voice-note transcripts in the receiver's
+# language. Powered by OpenAI TTS (multilingual) via the Emergent key.
+# ---------------------------------------------------------------------------
+
+_TTS_VOICES = {"alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"}
+
+
+class TTSRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=4096, description="Text to synthesize.")
+    voice: str = Field(default="alloy", description="OpenAI TTS voice name.")
+    speed: float = Field(default=1.0, ge=0.25, le=4.0)
+
+
+class TTSResponse(BaseModel):
+    audio_base64: str
+    mime: str = "audio/mpeg"
+
+
+@api_router.post("/tts", response_model=TTSResponse)
+async def text_to_speech(payload: TTSRequest, request: Request) -> TTSResponse:
+    """Synthesize `payload.text` to spoken mp3 audio (base64). Used to play a
+    voice note's translated transcript aloud in the receiver's language."""
+    _ok, _retry = await _rate_limit_ok_async("tts", _client_ip_of(request), 40, 60)
+    if not _ok:
+        raise HTTPException(status_code=429, detail="Too many speech requests; please slow down.", headers={"Retry-After": str(_retry)})
+
+    api_key = os.getenv("EMERGENT_LLM_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="Missing EMERGENT_LLM_KEY")
+
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Empty text.")
+    voice = payload.voice if payload.voice in _TTS_VOICES else "alloy"
+
+    try:
+        import base64 as _b64
+        from emergentintegrations.llm.openai.text_to_speech import OpenAITextToSpeech
+
+        tts = OpenAITextToSpeech(api_key=api_key)
+        audio_bytes = await tts.generate_speech(
+            text=text[:4096],
+            model="tts-1",
+            voice=voice,  # type: ignore[arg-type]
+            speed=payload.speed,
+            response_format="mp3",
+        )
+        return TTSResponse(audio_base64=_b64.b64encode(audio_bytes).decode("utf-8"), mime="audio/mpeg")
+    except Exception as exc:
+        logger.exception("tts failed")
+        raise HTTPException(status_code=502, detail=f"Speech synthesis failed: {exc}") from exc
+
+
 @api_router.post("/status", response_model=StatusCheck)
 async def create_status_check(input: StatusCheckCreate):
     status_dict = input.dict()
