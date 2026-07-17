@@ -692,6 +692,14 @@ export default function ChatsScreen() {
                 </View>
                 <Text style={styles.emptyTitle}>No unread chats</Text>
                 <Text style={styles.emptySub}>You&apos;re all caught up</Text>
+                <TouchableOpacity
+                  style={styles.showAllBtn}
+                  onPress={() => setChatFilter('all')}
+                  activeOpacity={0.7}
+                  testID="chat-show-all"
+                >
+                  <Text style={styles.showAllBtnText}>Show all chats</Text>
+                </TouchableOpacity>
               </View>
             ) : (
               <View style={styles.empty}>
@@ -967,6 +975,18 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
   },
   filterChipTextActive: {
+    color: Colors.white,
+  },
+  showAllBtn: {
+    marginTop: Spacing.md,
+    paddingHorizontal: 20,
+    paddingVertical: 9,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.primary,
+  },
+  showAllBtnText: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.bold,
     color: Colors.white,
   },
   rowTitle: {

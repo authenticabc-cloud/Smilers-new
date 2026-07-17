@@ -647,6 +647,20 @@ export default function GroupsScreen() {
               <ActivityIndicator size="small" color={Colors.primary} />
               <Text style={styles.loadingText}>Loading {tab === 'groups' ? 'groups' : 'conferences'}…</Text>
             </View>
+          ) : tab === 'groups' && groupFilter === 'unread' ? (
+            <View style={styles.empty} testID="groups-empty">
+              <Ionicons name="checkmark-circle-outline" size={42} color={Colors.textMuted} />
+              <Text style={styles.emptyTitle}>No unread groups</Text>
+              <Text style={styles.emptySub}>You&apos;re all caught up</Text>
+              <TouchableOpacity
+                style={styles.showAllBtn}
+                onPress={() => setGroupFilter('all')}
+                activeOpacity={0.7}
+                testID="group-show-all"
+              >
+                <Text style={styles.showAllBtnText}>Show all groups</Text>
+              </TouchableOpacity>
+            </View>
           ) : (
             <View style={styles.empty} testID="groups-empty">
               <Ionicons
@@ -1121,6 +1135,14 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary, marginTop: Spacing.sm },
   emptySub: { fontSize: FontSize.sm, color: Colors.textSecondary, textAlign: 'center' },
+  showAllBtn: {
+    marginTop: Spacing.md,
+    paddingHorizontal: 20,
+    paddingVertical: 9,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.primary,
+  },
+  showAllBtnText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.white },
   loadingState: {
     alignItems: 'center',
     justifyContent: 'center',
