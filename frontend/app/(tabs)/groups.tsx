@@ -109,15 +109,35 @@ export default function GroupsScreen() {
   );
 
   const list = useMemo(() => {
-    const raw: any[] = tab === 'groups'
+    const isGroups = tab === 'groups';
+    let raw: any[] = isGroups
       ? (Array.isArray(groups) ? groups : [])
       : (Array.isArray(conferences) ? conferences : []);
     const q = search.trim().toLowerCase();
-    if (!q) return raw;
-    return raw.filter((g: any) =>
-      `${g.name || ''} ${g.description || ''} ${g.lastMessageText || ''}`.toLowerCase().includes(q),
-    );
-  }, [conferences, groups, search, tab]);
+    if (q) {
+      raw = raw.filter((g: any) =>
+        `${g.name || ''} ${g.description || ''} ${g.lastMessageText || ''}`.toLowerCase().includes(q),
+      );
+    }
+    if (!isGroups) return raw;
+    // Stable re-sort for the Groups tab: pinned groups stay on top (in the
+    // backend's pin order), then UNREAD groups float above read ones, while
+    // otherwise preserving the backend's latest-message order.
+    const decorated = raw.map((g: any, i: number) => ({ g, i }));
+    decorated.sort((a, b) => {
+      const ap = a.g?.isPinned ? 1 : 0;
+      const bp = b.g?.isPinned ? 1 : 0;
+      if (ap !== bp) return bp - ap; // pinned first
+      if (ap === 1) return a.i - b.i; // both pinned → keep pin order
+      const aId = getListItemId(a.g);
+      const bId = getListItemId(b.g);
+      const aUnread = aId && Number(unreadCounts?.[aId]) > 0 ? 1 : 0;
+      const bUnread = bId && Number(unreadCounts?.[bId]) > 0 ? 1 : 0;
+      if (aUnread !== bUnread) return bUnread - aUnread; // unread first
+      return a.i - b.i; // otherwise keep latest-message order
+    });
+    return decorated.map((x) => x.g);
+  }, [conferences, groups, search, tab, unreadCounts]);
 
   const onAdd = () => {
     if (tab === 'groups') {
