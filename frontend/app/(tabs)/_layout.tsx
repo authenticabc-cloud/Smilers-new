@@ -21,15 +21,29 @@ export default function TabsLayout() {
   const meQuery = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip');
   const me: any = meQuery ?? null;
   const meLoading = isAuthenticated && meQuery === undefined;
-  // iter-260: total unread messages → drives the in-app Chats tab badge.
+  // iter-260: total unread messages → drives the in-app tab badges. The
+  // unread map covers ALL conversations, so we split it into group vs direct
+  // chats using the groups list, so each tab shows only its own pending count.
   const unreadCounts = useQuery(
     (api as any).messages.getUnreadCounts,
     isAuthenticated ? {} : 'skip',
   ) as Record<string, number> | undefined;
-  const totalUnread = Object.values(unreadCounts || {}).reduce(
-    (sum, c) => sum + (Number(c) > 0 ? Number(c) : 0),
-    0,
+  const groupsList = useQuery(
+    (api as any).conversations.listGroups,
+    isAuthenticated ? {} : 'skip',
+  ) as any[] | undefined;
+  const groupIdSet = new Set(
+    (Array.isArray(groupsList) ? groupsList : [])
+      .map((g: any) => String(g?._id || g?.id || g?.conversationId || ''))
+      .filter(Boolean),
   );
+  let groupsUnread = 0;
+  let chatsUnread = 0;
+  for (const [id, c] of Object.entries(unreadCounts || {})) {
+    const n = Number(c) > 0 ? Number(c) : 0;
+    if (groupIdSet.has(String(id))) groupsUnread += n;
+    else chatsUnread += n;
+  }
   const [installVerificationChecked, setInstallVerificationChecked] = useState(false);
   const [hasVerifiedInstall, setHasVerifiedInstall] = useState(false);
   const [syncingUser, setSyncingUser] = useState(false);
@@ -294,7 +308,7 @@ export default function TabsLayout() {
           title: 'Chats',
           tabBarIcon: ({ color, size }) => <Feather name="message-square" size={size} color={color} />,
           tabBarButtonTestID: 'tab-chats',
-          tabBarBadge: totalUnread > 0 ? (totalUnread > 99 ? '99+' : totalUnread) : undefined,
+          tabBarBadge: chatsUnread > 0 ? (chatsUnread > 99 ? '99+' : chatsUnread) : undefined,
           tabBarBadgeStyle: {
             backgroundColor: Colors.tickRed,
             color: Colors.white,
@@ -325,6 +339,13 @@ export default function TabsLayout() {
           title: 'Groups',
           tabBarIcon: ({ color, size }) => <Ionicons name="people-outline" size={size} color={color} />,
           tabBarButtonTestID: 'tab-groups',
+          tabBarBadge: groupsUnread > 0 ? (groupsUnread > 99 ? '99+' : groupsUnread) : undefined,
+          tabBarBadgeStyle: {
+            backgroundColor: Colors.tickRed,
+            color: Colors.white,
+            fontSize: 10,
+            fontWeight: '700',
+          },
         }}
       />
       <Tabs.Screen
