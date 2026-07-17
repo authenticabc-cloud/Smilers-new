@@ -511,6 +511,18 @@ export default function ChatScreen() {
     }).catch(() => {});
   }, []);
 
+  // Clear this conversation's message notifications when the chat is open, so
+  // already-read messages don't linger in the notification shade. Runs on open
+  // and whenever new messages arrive while the chat is foregrounded.
+  useEffect(() => {
+    if (!conversationId || typeof conversationId !== 'string') return;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { clearConversationNotifications } = require('../../src/push/notifeeMessageDisplay');
+      void clearConversationNotifications(conversationId);
+    } catch {}
+  }, [conversationId, messagesPage?.page?.length]);
+
   useEffect(() => {
     if (!isRecording) {
       return;

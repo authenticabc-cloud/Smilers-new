@@ -200,3 +200,56 @@ export async function displayGroupedMessageNotification(
     return false;
   }
 }
+
+/**
+ * Clear a conversation's message notifications (children + group summary) when
+ * the user opens that chat, so read messages don't linger in the shade.
+ * Handles BOTH the notifee-grouped notifications and the expo-notifications
+ * fallback. Safe/no-op on web or when a module is missing.
+ */
+export async function clearConversationNotifications(conversationId: string): Promise<void> {
+  if (Platform.OS !== 'android' || !conversationId) return;
+  const groupId = `msg-grp-${conversationId}`;
+
+  // 1) notifee-displayed notifications for this conversation's group.
+  const native = loadNative();
+  if (native) {
+    try {
+      const displayed = await native.notifee.getDisplayedNotifications();
+      const toCancel = (Array.isArray(displayed) ? displayed : []).filter((d: any) => {
+        const n = d?.notification;
+        const gid = n?.android?.groupId;
+        const convo = n?.data?.conversationId;
+        return gid === groupId || convo === conversationId;
+      });
+      await Promise.all(
+        toCancel.map((d: any) =>
+          d?.id ? native.notifee.cancelNotification(d.id).catch(() => {}) : Promise.resolve(),
+        ),
+      );
+      // Belt-and-braces: cancel the well-known summary id even if it wasn't listed.
+      await native.notifee.cancelNotification(`msg-summary-${conversationId}`).catch(() => {});
+    } catch {
+      /* best effort */
+    }
+  }
+
+  // 2) expo-notifications fallback (used on builds without notifee).
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Notifications = require('expo-notifications');
+    const presented = await Notifications.getPresentedNotificationsAsync();
+    await Promise.all(
+      (Array.isArray(presented) ? presented : [])
+        .filter((n: any) => {
+          const data = n?.request?.content?.data || {};
+          return String(data?.conversationId || '') === conversationId;
+        })
+        .map((n: any) =>
+          Notifications.dismissNotificationAsync(n.request.identifier).catch(() => {}),
+        ),
+    );
+  } catch {
+    /* best effort */
+  }
+}
