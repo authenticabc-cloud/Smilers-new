@@ -12,7 +12,8 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { GestureHandlerRootView, Swipeable, RectButton } from 'react-native-gesture-handler';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import GroupSwipeRow from '../../src/components/GroupSwipeRow';
 import DraggableFlatList, { ScaleDecorator, type RenderItemParams } from 'react-native-draggable-flatlist';
 import UndoSnackbar from '../../src/components/UndoSnackbar';
 import * as Haptics from 'expo-haptics';
@@ -839,52 +840,9 @@ export default function GroupsScreen() {
   );
 }
 
-// Left-swipe a group row to mark it read (WhatsApp-style). Only mounted for
-// unread groups, so the action is always meaningful.
-function GroupSwipeRow({ onMarkRead, children }: { onMarkRead: () => void; children: React.ReactNode }) {
-  const ref = useRef<Swipeable>(null);
-  const renderLeftActions = () => (
-    <RectButton
-      style={styles.swipeReadAction}
-      onPress={() => {
-        ref.current?.close();
-        onMarkRead();
-      }}
-    >
-      <Ionicons name="checkmark-circle-outline" size={22} color={Colors.white} />
-      <Text style={styles.swipeReadText}>Read</Text>
-    </RectButton>
-  );
-  return (
-    <Swipeable
-      ref={ref}
-      friction={2}
-      leftThreshold={48}
-      overshootLeft={false}
-      renderLeftActions={renderLeftActions}
-      onSwipeableOpen={(direction) => {
-        if (direction === 'left') {
-          ref.current?.close();
-          onMarkRead();
-        }
-      }}
-    >
-      {children}
-    </Swipeable>
-  );
-}
-
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  swipeReadAction: {
-    backgroundColor: Colors.success || '#22c55e',
-    justifyContent: 'center',
-    alignItems: 'center',
-    width: 92,
-    gap: 4,
-  },
-  swipeReadText: { color: Colors.white, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   whatsNewCard: {
     flexDirection: 'row',
     alignItems: 'flex-start',

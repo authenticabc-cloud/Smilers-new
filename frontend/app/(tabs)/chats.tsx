@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Modal, Pressable, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Swipeable, RectButton } from 'react-native-gesture-handler';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useQuery, useConvex, useMutation } from 'convex/react';
@@ -13,9 +12,6 @@ import { LoginApprovalBanner } from '../../src/components/LoginApprovalBanner';
 import { LiveLocationRequestBanner } from '../../src/components/LiveLocationRequestBanner';
 import { PhotoSaveRequestBanner } from '../../src/components/PhotoSaveRequestBanner';
 import { api } from '../../src/convexApi';
-import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
-import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName } from '../../src/lib/displayName';
-import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { readCacheMeta, writeCache } from '../../src/lib/offlineCache';
 import { loadAllChatDrafts, type DraftPreview } from '../../src/lib/chatDrafts';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -34,24 +30,12 @@ import { callHost } from '../../src/lib/call/callHost';
 import * as Haptics from 'expo-haptics';
 import UndoSnackbar from '../../src/components/UndoSnackbar';
 import { readStoredString, writeStoredString } from '../../src/lib/settingsStorage';
+import ConversationRow from '../../src/components/ConversationRow';
+import ChatSwipeRow from '../../src/components/ChatSwipeRow';
 
 const CHAT_FILTER_KEY = 'chats_filter_v1';
 const WHATS_NEW_KEY = 'whatsnew_swipe_read_v1';
 const MARK_UNREAD_ENABLED = process.env.EXPO_PUBLIC_MARK_UNREAD_ENABLED === 'true';
-
-function relTime(iso?: string) {
-  if (!iso) return '';
-  try {
-    const d = new Date(iso);
-    const diff = Date.now() - d.getTime();
-    if (diff < 60_000) return 'now';
-    if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m`;
-    if (diff < 86_400_000) return `${Math.floor(diff / 3600_000)}h`;
-    return `${Math.floor(diff / 86_400_000)}d`;
-  } catch {
-    return '';
-  }
-}
 
 export default function ChatsScreen() {
   const router = useRouter();
@@ -706,7 +690,7 @@ export default function ChatsScreen() {
         renderItem={({ item }) => {
           const rowUnread = Number(unreadCounts?.[String(item._id)]) || 0;
           return (
-          <SwipeToArchive
+          <ChatSwipeRow
             onArchive={() => handleArchive(item._id)}
             hasUnread={rowUnread > 0}
             onMarkRead={async () => {
@@ -729,7 +713,7 @@ export default function ChatsScreen() {
               unreadCount={rowUnread}
               onPress={() => router.push(`/chat/${item._id}` as any)}
             />
-          </SwipeToArchive>
+          </ChatSwipeRow>
           );
         }}
         ListEmptyComponent={
@@ -831,167 +815,6 @@ function PinnedRow({
   );
 }
 
-function peerIsOnline(item: any): boolean {
-  // DM-only presence (mirrors the web chat list — no dot on groups).
-  const isGroup =
-    item?.isGroup ||
-    item?.type === 'group' ||
-    (Array.isArray(item?.participants) && item.participants.length > 2);
-  if (isGroup) return false;
-  const peer = item?.otherUser || item?.otherParticipant || item;
-  // Online only if the peer flag is set AND they were seen within 2 min.
-  // A stale cached `isOnline: true` must NOT keep the dot lit forever.
-  if (peer?.isOnline !== true && peer?.online !== true) return false;
-  const ls = peer?.lastSeen ?? item?.lastSeen;
-  const t = typeof ls === 'number' ? ls : typeof ls === 'string' ? new Date(ls).getTime() : NaN;
-  if (!Number.isFinite(t)) return false;
-  return Date.now() - t <= 120000; // online if seen within 2 min
-}
-
-function ConversationRow({ item, currentUserId, contacts, draft, unreadCount = 0, onPress }: { item: any; currentUserId?: string; contacts?: any[]; draft?: DraftPreview; unreadCount?: number; onPress: () => void }) {
-  // iter-176: Device address-book name beats both the saved-contact name
-  // AND the Smilers display name. e.g. if your phone has the other user
-  // saved as "ABC Albania", you'll see "ABC Albania" here instead of the
-  // user's Google account name "Smilers".
-  const deviceIndex = useDeviceContactIndex();
-  const deviceName = getResolvedConversationDisplayName(item, currentUserId, deviceIndex, lookupDeviceContactName, '');
-  const savedContactName = deviceName || findSavedContactDisplayName(contacts, item, currentUserId);
-  const name = savedContactName || getConversationDisplayName(item, currentUserId, 'Smilers user');
-  // iter-140b: resolve the photo URL from the same sources the web app
-  // uses. Order of precedence:
-  //  1. Conversation-level avatar (group photo or pre-computed
-  //     other-participant photo from `api.conversations.list`).
-  //  2. Other-participant's profilePicture / avatar (DM only).
-  //  3. The saved-contact photo from the user's contacts list.
-  const otherUserPhoto =
-    item?.avatar ||
-    item?.avatarUrl ||
-    item?.photo ||
-    item?.profilePicture ||
-    item?.otherUser?.profilePicture ||
-    item?.otherUser?.avatar ||
-    item?.otherParticipant?.profilePicture ||
-    item?.otherParticipant?.avatar;
-  const contactRecord = (contacts || []).find((c: any) => {
-    const ids = [c?.userId, c?.user?._id, c?._id, c?.contactUserId].filter(Boolean);
-    return (
-      (item?.otherUserId && ids.includes(item.otherUserId)) ||
-      (item?.otherParticipant?._id && ids.includes(item.otherParticipant._id))
-    );
-  });
-  const photoUri: string | undefined =
-    otherUserPhoto ||
-    contactRecord?.profilePicture ||
-    contactRecord?.user?.profilePicture ||
-    contactRecord?.avatar ||
-    contactRecord?.user?.avatar;
-  // Live "typing…" for this row (web contract: typing.getTypingUsers → [{ name }]).
-  const { data: rowTypingRaw } = useSafeConvexQuery<any[]>(
-    (api as any).typing.getTypingUsers,
-    { conversationId: item?._id },
-    [],
-    !!item?._id,
-  );
-  const typingLabel = useMemo(() => {
-    const list = Array.isArray(rowTypingRaw) ? rowTypingRaw : [];
-    const others = list.filter((u: any) => {
-      const uid = u?.userId || u?._id || u?.id;
-      return !uid || !currentUserId || String(uid) !== String(currentUserId);
-    });
-    if (others.length === 0) return null;
-    const names = others.map((u: any) => u?.name || u?.userName || u?.displayName || 'Someone');
-    return names.length === 1 ? `${names[0]} is typing\u2026` : `${names.join(', ')} are typing\u2026`;
-  }, [rowTypingRaw, currentUserId]);
-  const hasUnread = unreadCount > 0;
-  return (
-    <TouchableOpacity onPress={onPress} style={styles.row} activeOpacity={0.7} testID={`conv-${item._id}`}>
-      <Avatar name={name} size={52} uri={photoUri} online={peerIsOnline(item)} />
-      <View style={styles.rowMiddle}>
-        <Text style={[styles.rowTitle, hasUnread && styles.rowTitleUnread]} numberOfLines={1}>{name}</Text>
-        {typingLabel ? (
-          <Text style={[styles.rowSubtitle, styles.rowTyping]} numberOfLines={1}>
-            {typingLabel}
-          </Text>
-        ) : draft ? (
-          <Text style={styles.rowSubtitle} numberOfLines={1}>
-            <Text style={styles.draftPrefix}>Draft: </Text>
-            {draft.text || (draft.hasImages ? '📷 Photo' : '')}
-          </Text>
-        ) : (
-          <Text style={[styles.rowSubtitle, hasUnread && styles.rowSubtitleUnread]} numberOfLines={1}>
-            {item.lastMessageText || 'Start chatting…'}
-          </Text>
-        )}
-      </View>
-      <View style={styles.rowRightCol}>
-        <Text style={[styles.rowTime, hasUnread && styles.rowTimeUnread]}>{relTime(item.lastMessageTime)}</Text>
-        {hasUnread ? (
-          <View style={styles.unreadPill} testID={`conv-unread-${item._id}`}>
-            <Text style={styles.unreadPillText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
-          </View>
-        ) : null}
-      </View>
-    </TouchableOpacity>
-  );
-}
-
-function SwipeToArchive({ onArchive, onMarkRead, hasUnread, children }: { onArchive: () => void; onMarkRead?: () => void; hasUnread?: boolean; children: React.ReactNode }) {
-  const ref = React.useRef<Swipeable>(null);
-  const renderRightActions = () => (
-    <RectButton
-      style={styles.swipeArchiveAction}
-      onPress={() => {
-        ref.current?.close();
-        onArchive();
-      }}
-    >
-      <Feather name="archive" size={22} color={Colors.white} />
-      <Text style={styles.swipeArchiveText}>Archive</Text>
-    </RectButton>
-  );
-  // Left-swipe → mark this conversation read (only offered when it's unread).
-  const renderLeftActions =
-    hasUnread && onMarkRead
-      ? () => (
-          <RectButton
-            style={styles.swipeReadAction}
-            onPress={() => {
-              ref.current?.close();
-              onMarkRead();
-            }}
-          >
-            <Feather name="check-circle" size={22} color={Colors.white} />
-            <Text style={styles.swipeArchiveText}>Read</Text>
-          </RectButton>
-        )
-      : undefined;
-  return (
-    <Swipeable
-      ref={ref}
-      friction={2}
-      rightThreshold={48}
-      leftThreshold={48}
-      overshootRight={false}
-      overshootLeft={false}
-      renderRightActions={renderRightActions}
-      renderLeftActions={renderLeftActions}
-      // iter-216: match the web app — a full left-swipe auto-archives,
-      // no tap needed (the action button was also getting hidden behind
-      // the floating quick-action buttons on the right edge).
-      onSwipeableOpen={(direction) => {
-        if (direction === 'right') {
-          ref.current?.close();
-          onArchive();
-        } else if (direction === 'left' && hasUnread && onMarkRead) {
-          ref.current?.close();
-          onMarkRead();
-        }
-      }}
-    >
-      {children}
-    </Swipeable>
-  );
-}
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
