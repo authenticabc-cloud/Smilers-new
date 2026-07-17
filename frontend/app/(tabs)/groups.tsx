@@ -72,6 +72,7 @@ export default function GroupsScreen() {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>('groups');
   const [search, setSearch] = useState('');
+  const [groupFilter, setGroupFilter] = useState<'all' | 'unread'>('all');
   const [inviteCode, setInviteCode] = useState('');
 
   // Reactive so pin / unpin / reorder re-sorts the list live. The backend
@@ -138,6 +139,23 @@ export default function GroupsScreen() {
     });
     return decorated.map((x) => x.g);
   }, [conferences, groups, search, tab, unreadCounts]);
+
+  // "Unread" filter chip (Groups tab only).
+  const displayGroups = useMemo(() => {
+    if (tab !== 'groups' || groupFilter !== 'unread') return list;
+    return list.filter((g: any) => {
+      const id = getListItemId(g);
+      return id && Number(unreadCounts?.[id]) > 0;
+    });
+  }, [list, tab, groupFilter, unreadCounts]);
+  const unreadGroupCount = useMemo(
+    () =>
+      (Array.isArray(groups) ? groups : []).filter((g: any) => {
+        const id = getListItemId(g);
+        return id && Number(unreadCounts?.[id]) > 0;
+      }).length,
+    [groups, unreadCounts],
+  );
 
   const onAdd = () => {
     if (tab === 'groups') {
@@ -501,8 +519,31 @@ export default function GroupsScreen() {
         </View>
       </View>
 
+      {tab === 'groups' ? (
+        <View style={styles.filterChipsRow}>
+          <TouchableOpacity
+            style={[styles.filterChip, groupFilter === 'all' && styles.filterChipActive]}
+            onPress={() => setGroupFilter('all')}
+            activeOpacity={0.7}
+            testID="group-filter-all"
+          >
+            <Text style={[styles.filterChipText, groupFilter === 'all' && styles.filterChipTextActive]}>All</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.filterChip, groupFilter === 'unread' && styles.filterChipActive]}
+            onPress={() => setGroupFilter('unread')}
+            activeOpacity={0.7}
+            testID="group-filter-unread"
+          >
+            <Text style={[styles.filterChipText, groupFilter === 'unread' && styles.filterChipTextActive]}>
+              {unreadGroupCount > 0 ? `Unread (${unreadGroupCount > 99 ? '99+' : unreadGroupCount})` : 'Unread'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       <FlatList
-        data={list}
+        data={displayGroups}
         keyExtractor={(item: any, index) => getListItemId(item) || `${tab}-fallback-${index}`}
         contentContainerStyle={{ paddingBottom: 120 }}
         ListHeaderComponent={
@@ -972,6 +1013,33 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.md,
     paddingBottom: Spacing.sm,
     backgroundColor: Colors.background,
+  },
+  filterChipsRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.base,
+    paddingBottom: Spacing.sm,
+    backgroundColor: Colors.background,
+  },
+  filterChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 7,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  filterChipActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  filterChipText: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textSecondary,
+  },
+  filterChipTextActive: {
+    color: Colors.white,
   },
   searchPill: {
     flexDirection: 'row',

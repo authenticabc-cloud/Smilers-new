@@ -49,6 +49,7 @@ function relTime(iso?: string) {
 export default function ChatsScreen() {
   const router = useRouter();
   const [showMenu, setShowMenu] = useState(false);
+  const [chatFilter, setChatFilter] = useState<'all' | 'unread'>('all');
   // iter-313: pin Voice Task contacts to the top of the chat list, in their
   // assigned 1..10 order. Off by default (chats stay time-ordered); persisted
   // locally so the choice survives restarts.
@@ -390,6 +391,16 @@ export default function ChatsScreen() {
     return decorated.map((x) => x.c);
   }, [pinVoiceTasks, finalList, drafts, unreadCounts]);
 
+  // "Unread" filter chip: show only conversations with unread messages.
+  const filteredList = useMemo(() => {
+    if (chatFilter !== 'unread') return displayList;
+    return displayList.filter((c: any) => Number(unreadCounts?.[String(c?._id)]) > 0);
+  }, [chatFilter, displayList, unreadCounts]);
+  const totalUnreadChats = useMemo(
+    () => displayList.filter((c: any) => Number(unreadCounts?.[String(c?._id)]) > 0).length,
+    [displayList, unreadCounts],
+  );
+
   const handleArchive = useCallback(
     async (conversationId: string) => {
       try {
@@ -534,11 +545,33 @@ export default function ChatsScreen() {
       </Modal>
 
       <FlatList
-        data={displayList}
+        data={filteredList}
         keyExtractor={(item: any) => item._id}
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
           <>
+            <View style={styles.filterChipsRow}>
+              <TouchableOpacity
+                style={[styles.filterChip, chatFilter === 'all' && styles.filterChipActive]}
+                onPress={() => setChatFilter('all')}
+                activeOpacity={0.7}
+                testID="chat-filter-all"
+              >
+                <Text style={[styles.filterChipText, chatFilter === 'all' && styles.filterChipTextActive]}>All</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.filterChip, chatFilter === 'unread' && styles.filterChipActive]}
+                onPress={() => setChatFilter('unread')}
+                activeOpacity={0.7}
+                testID="chat-filter-unread"
+              >
+                <Text style={[styles.filterChipText, chatFilter === 'unread' && styles.filterChipTextActive]}>
+                  {totalUnreadChats > 0 ? `Unread (${totalUnreadChats > 99 ? '99+' : totalUnreadChats})` : 'Unread'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            {chatFilter === 'all' ? (
+              <>
             {/* iter-186: pending desktop login approvals (contract §5.5) */}
             <LoginApprovalBanner />
             {/* Incoming live-location requests — tap to confirm & share. */}
@@ -616,6 +649,8 @@ export default function ChatsScreen() {
                 </View>
               </TouchableOpacity>
             ) : null}
+              </>
+            ) : null}
           </>
         }
         renderItem={({ item }) => (
@@ -632,13 +667,23 @@ export default function ChatsScreen() {
         )}
         ListEmptyComponent={
           !loading ? (
-            <View style={styles.empty}>
-              <View style={styles.emptyIconWrap}>
-                <Feather name="message-square" size={32} color={Colors.textMuted} />
+            chatFilter === 'unread' ? (
+              <View style={styles.empty}>
+                <View style={styles.emptyIconWrap}>
+                  <Feather name="check-circle" size={32} color={Colors.textMuted} />
+                </View>
+                <Text style={styles.emptyTitle}>No unread chats</Text>
+                <Text style={styles.emptySub}>You&apos;re all caught up</Text>
               </View>
-              <Text style={styles.emptyTitle}>No chats yet</Text>
-              <Text style={styles.emptySub}>Go to Contacts to start a new conversation</Text>
-            </View>
+            ) : (
+              <View style={styles.empty}>
+                <View style={styles.emptyIconWrap}>
+                  <Feather name="message-square" size={32} color={Colors.textMuted} />
+                </View>
+                <Text style={styles.emptyTitle}>No chats yet</Text>
+                <Text style={styles.emptySub}>Go to Contacts to start a new conversation</Text>
+              </View>
+            )
           ) : null
         }
         refreshControl={
@@ -878,6 +923,33 @@ const styles = StyleSheet.create({
   rowMiddle: {
     flex: 1,
     marginLeft: Spacing.md,
+  },
+  filterChipsRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.xs,
+  },
+  filterChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 7,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.surfaceAlt || Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  filterChipActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  filterChipText: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
+    color: Colors.textSecondary,
+  },
+  filterChipTextActive: {
+    color: Colors.white,
   },
   rowTitle: {
     fontSize: FontSize.base,
