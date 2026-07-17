@@ -71,6 +71,27 @@ function alertScreenShareIOSError() {
   );
 }
 
+// After a WebRTC call ends, InCallAudio.stop() restores the *native* audio mode
+// but expo-audio's own session can stay in a stale record/communication state,
+// leaving the microphone input uncaptured — so the NEXT voice-note recording
+// comes out SILENT (while playback of other clips still works). Explicitly
+// reset expo-audio to a clean playback session so the recorder can re-acquire
+// the mic. See troubleshoot RCA (silent-mobile-recordings-after-call).
+async function resetExpoAudioAfterCall() {
+  if (Platform.OS === 'web') return;
+  try {
+    await setAudioModeAsync({
+      allowsRecording: false,
+      playsInSilentMode: true,
+      interruptionMode: 'duckOthers',
+      shouldRouteThroughEarpiece: false,
+    });
+  } catch {
+    /* best-effort — never block call teardown */
+  }
+}
+
+
 function getConversationMemberIds(conversation: any, currentUserId?: string | null) {
   const values = new Set<string>();
   const addValue = (value: any) => {
@@ -1643,6 +1664,7 @@ export function CallScreenInner() {
     if (inCallStartedRef.current) {
       InCallAudio.stop();
       inCallStartedRef.current = false;
+      void resetExpoAudioAfterCall();
       callDebug.push('AUDIO', 'InCallManager.stop() (hangup)');
     }
     if (id) {
@@ -1715,6 +1737,7 @@ export function CallScreenInner() {
     if (inCallStartedRef.current) {
       InCallAudio.stop();
       inCallStartedRef.current = false;
+      void resetExpoAudioAfterCall();
       callDebug.push('AUDIO', 'InCallManager.stop() (decline)');
     }
     if (id) {
@@ -2087,6 +2110,7 @@ export function CallScreenInner() {
       if (inCallStartedRef.current) {
         InCallAudio.stop();
         inCallStartedRef.current = false;
+        void resetExpoAudioAfterCall();
         callDebug.push('AUDIO', 'InCallManager.stop() (remote-ended)');
       }
       // Give the user 700ms to see the "Call ended" / "Declined" state before popping.
@@ -2120,6 +2144,7 @@ export function CallScreenInner() {
           if (inCallStartedRef.current) {
             InCallAudio.stop();
             inCallStartedRef.current = false;
+            void resetExpoAudioAfterCall();
             callDebug.push('AUDIO', 'InCallManager.stop() (remote-ended, doc-cleared path)');
           }
           wasLiveRef.current = false;
@@ -2170,6 +2195,7 @@ export function CallScreenInner() {
       if (inCallStartedRef.current) {
         InCallAudio.stop();
         inCallStartedRef.current = false;
+        void resetExpoAudioAfterCall();
       }
     };
   }, []);

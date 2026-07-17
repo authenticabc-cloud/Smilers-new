@@ -2668,6 +2668,11 @@ export default function ChatScreen() {
         interruptionMode: 'duckOthers',
         shouldRouteThroughEarpiece: false,
       });
+      // Give the native audio session a beat to actually reconfigure to a
+      // mic-capturing category before we start recording. Without this, a
+      // session still settling from a prior state (e.g. just after a call)
+      // can start the recorder before the mic route is live → silent clip.
+      await new Promise((resolve) => setTimeout(resolve, 120));
       await audioRecorder.prepareToRecordAsync();
       audioRecorder.record();
       setIsRecording(true);
