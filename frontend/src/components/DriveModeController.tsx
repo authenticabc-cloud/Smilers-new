@@ -5,6 +5,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter, usePathname } from 'expo-router';
 import { useConvex, useMutation, useQuery } from 'convex/react';
 import { createAudioPlayer, type AudioPlayer, type AudioSource } from 'expo-audio';
+import * as Speech from 'expo-speech';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
@@ -85,11 +86,30 @@ export default function DriveModeController() {
     incomingRef.current = incomingCall;
   }, [incomingCall]);
 
-  const setFlash = useCallback((msg: string) => {
+  const setFlash = useCallback((msg: string, spoken?: string) => {
     setStatus(msg);
     if (flash.current) clearTimeout(flash.current);
     flash.current = setTimeout(() => setStatus('Listening…'), 4000);
+    // Spoken confirmation so the driver never needs to look at the screen.
+    try {
+      Speech.stop();
+      Speech.speak(spoken ?? msg, { rate: 1.0, pitch: 1.0 });
+    } catch {
+      /* TTS is best-effort */
+    }
   }, []);
+
+  // Announce Drive Mode turning on/off.
+  const prevEnabled = useRef(enabled);
+  useEffect(() => {
+    if (enabled !== prevEnabled.current) {
+      prevEnabled.current = enabled;
+      try {
+        Speech.stop();
+        Speech.speak(enabled ? 'Drive Mode on' : 'Drive Mode off', { rate: 1.0 });
+      } catch {}
+    }
+  }, [enabled]);
 
   // ---- speech recognizer lifecycle -----------------------------------------
   const startRec = useCallback(async () => {
@@ -206,7 +226,7 @@ export default function DriveModeController() {
         setFlash('No incoming call');
         return;
       }
-      setFlash(withMessage ? 'Declining + replying…' : 'Rejecting…');
+      setFlash(withMessage ? 'Declining + replying…' : 'Rejecting…', withMessage ? 'Declining and sending your reply' : 'Call rejected');
       if (call.inviteId) {
         void declineInvite({ inviteId: call.inviteId }).catch(() => {});
       } else {
@@ -268,6 +288,9 @@ export default function DriveModeController() {
     return () => {
       try {
         audioRef.current?.remove();
+      } catch {}
+      try {
+        Speech.stop();
       } catch {}
       if (flash.current) clearTimeout(flash.current);
     };
