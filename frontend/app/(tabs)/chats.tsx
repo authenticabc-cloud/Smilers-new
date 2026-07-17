@@ -671,18 +671,33 @@ export default function ChatsScreen() {
             ) : null}
           </>
         }
-        renderItem={({ item }) => (
-          <SwipeToArchive onArchive={() => handleArchive(item._id)}>
+        renderItem={({ item }) => {
+          const rowUnread = Number(unreadCounts?.[String(item._id)]) || 0;
+          return (
+          <SwipeToArchive
+            onArchive={() => handleArchive(item._id)}
+            hasUnread={rowUnread > 0}
+            onMarkRead={async () => {
+              try {
+                await markRead({ conversationId: String(item._id) });
+              } catch {}
+              try {
+                const { clearConversationNotifications } = require('../../src/push/notifeeMessageDisplay');
+                await clearConversationNotifications(String(item._id));
+              } catch {}
+            }}
+          >
             <ConversationRow
               item={item}
               currentUserId={me?._id}
               contacts={contacts}
               draft={drafts[String(item._id)]}
-              unreadCount={Number(unreadCounts?.[String(item._id)]) || 0}
+              unreadCount={rowUnread}
               onPress={() => router.push(`/chat/${item._id}` as any)}
             />
           </SwipeToArchive>
-        )}
+          );
+        }}
         ListEmptyComponent={
           !loading ? (
             chatFilter === 'unread' ? (
@@ -875,7 +890,7 @@ function ConversationRow({ item, currentUserId, contacts, draft, unreadCount = 0
   );
 }
 
-function SwipeToArchive({ onArchive, children }: { onArchive: () => void; children: React.ReactNode }) {
+function SwipeToArchive({ onArchive, onMarkRead, hasUnread, children }: { onArchive: () => void; onMarkRead?: () => void; hasUnread?: boolean; children: React.ReactNode }) {
   const ref = React.useRef<Swipeable>(null);
   const renderRightActions = () => (
     <RectButton
@@ -889,13 +904,32 @@ function SwipeToArchive({ onArchive, children }: { onArchive: () => void; childr
       <Text style={styles.swipeArchiveText}>Archive</Text>
     </RectButton>
   );
+  // Left-swipe → mark this conversation read (only offered when it's unread).
+  const renderLeftActions =
+    hasUnread && onMarkRead
+      ? () => (
+          <RectButton
+            style={styles.swipeReadAction}
+            onPress={() => {
+              ref.current?.close();
+              onMarkRead();
+            }}
+          >
+            <Feather name="check-circle" size={22} color={Colors.white} />
+            <Text style={styles.swipeArchiveText}>Read</Text>
+          </RectButton>
+        )
+      : undefined;
   return (
     <Swipeable
       ref={ref}
       friction={2}
       rightThreshold={48}
+      leftThreshold={48}
       overshootRight={false}
+      overshootLeft={false}
       renderRightActions={renderRightActions}
+      renderLeftActions={renderLeftActions}
       // iter-216: match the web app — a full left-swipe auto-archives,
       // no tap needed (the action button was also getting hidden behind
       // the floating quick-action buttons on the right edge).
@@ -903,6 +937,9 @@ function SwipeToArchive({ onArchive, children }: { onArchive: () => void; childr
         if (direction === 'right') {
           ref.current?.close();
           onArchive();
+        } else if (direction === 'left' && hasUnread && onMarkRead) {
+          ref.current?.close();
+          onMarkRead();
         }
       }}
     >
@@ -928,6 +965,13 @@ const styles = StyleSheet.create({
     color: Colors.white,
     fontSize: FontSize.xs,
     fontWeight: FontWeight.semibold,
+  },
+  swipeReadAction: {
+    backgroundColor: Colors.success || '#22c55e',
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 92,
+    gap: 4,
   },
   row: {
     flexDirection: 'row',
