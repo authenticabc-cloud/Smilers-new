@@ -17,7 +17,6 @@ import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
 import {
   createAudioPlayer,
-  setAudioModeAsync as setExpoAudioModeAsync,
   type AudioPlayer,
   type AudioSource,
 } from 'expo-audio';
@@ -1898,17 +1897,35 @@ function VoiceTranslationPill({ msg }: { msg: any }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldSkip, storageId, transcript, targetCode, targetName]);
 
-  // Playback of the synthesized translation.
+  // Playback of the synthesized translation. Shares the module-level
+  // single-sound singleton (CURRENT_SOUND / CURRENT_STOP) with the voice-note
+  // player so the two never fight over the audio session, and does NOT mutate
+  // the global audio mode (the voice player relies on the platform default).
   const playerRef = useRef<AudioPlayer | null>(null);
   const [speaking, setSpeaking] = useState(false);
+
+  const releaseAsCurrent = useCallback(() => {
+    if (CURRENT_SOUND === playerRef.current) {
+      CURRENT_SOUND = null;
+      CURRENT_STOP = null;
+    }
+  }, []);
+
   useEffect(() => {
     return () => {
-      try {
-        playerRef.current?.remove();
-      } catch {}
+      const p = playerRef.current;
+      releaseAsCurrent();
       playerRef.current = null;
+      if (p) {
+        try {
+          p.pause();
+        } catch {}
+        try {
+          p.remove();
+        } catch {}
+      }
     };
-  }, []);
+  }, [releaseAsCurrent]);
 
   const toggleSpeak = useCallback(() => {
     const uri = result?.audioUri;
@@ -1916,6 +1933,9 @@ function VoiceTranslationPill({ msg }: { msg: any }) {
     try {
       if (!playerRef.current) {
         const p = createAudioPlayer({ uri } as AudioSource);
+        try {
+          p.volume = 1.0;
+        } catch {}
         playerRef.current = p;
         p.addListener('playbackStatusUpdate', (status: any) => {
           setSpeaking(!!status?.playing);
@@ -1924,6 +1944,10 @@ function VoiceTranslationPill({ msg }: { msg: any }) {
             try {
               p.seekTo(0);
             } catch {}
+            if (CURRENT_SOUND === p) {
+              CURRENT_SOUND = null;
+              CURRENT_STOP = null;
+            }
           }
         });
       }
@@ -1931,9 +1955,25 @@ function VoiceTranslationPill({ msg }: { msg: any }) {
       if (speaking) {
         player.pause();
         setSpeaking(false);
+        releaseAsCurrent();
       } else {
+        // Stop whatever else is currently playing (a voice note or another
+        // translation) so only one sound plays at a time.
+        if (CURRENT_SOUND && CURRENT_SOUND !== player) {
+          try {
+            CURRENT_SOUND.pause();
+          } catch {}
+          if (CURRENT_STOP) CURRENT_STOP();
+        }
+        CURRENT_SOUND = player;
+        CURRENT_STOP = () => {
+          try {
+            player.pause();
+          } catch {}
+          setSpeaking(false);
+        };
         try {
-          void setExpoAudioModeAsync({ playsInSilentMode: true } as any);
+          if (typeof player.seekTo === 'function') player.seekTo(0);
         } catch {}
         player.play();
         setSpeaking(true);
@@ -1941,7 +1981,7 @@ function VoiceTranslationPill({ msg }: { msg: any }) {
     } catch {
       /* ignore playback errors */
     }
-  }, [result?.audioUri, speaking]);
+  }, [result?.audioUri, speaking, releaseAsCurrent]);
 
   if (shouldSkip) return null;
   if (loading && !result) {
