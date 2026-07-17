@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import GroupSwipeRow from '../../src/components/GroupSwipeRow';
+import { formatTypingLabel } from '../../src/components/ConversationRow';
 import DraggableFlatList, { ScaleDecorator, type RenderItemParams } from 'react-native-draggable-flatlist';
 import UndoSnackbar from '../../src/components/UndoSnackbar';
 import * as Haptics from 'expo-haptics';
@@ -30,6 +31,7 @@ const MAX_PINNED_GROUPS = 20;
 const PIN_TIP_KEY = 'smilers_pin_tip_dismissed';
 const GROUP_FILTER_KEY = 'groups_filter_v1';
 const GROUP_WHATS_NEW_KEY = 'whatsnew_group_swipe_read_v1';
+const BATCH_TYPING_ENABLED = process.env.EXPO_PUBLIC_BATCH_TYPING_ENABLED === 'true';
 const MARK_UNREAD_ENABLED = process.env.EXPO_PUBLIC_MARK_UNREAD_ENABLED === 'true';
 
 type Tab = 'groups' | 'conferences';
@@ -161,6 +163,29 @@ export default function GroupsScreen() {
         return id && Number(unreadCounts?.[id]) > 0;
       }).length,
     [groups, unreadCounts],
+  );
+
+  // Optional single list-level typing query (feature-flagged, same backend as
+  // Chats). Shows "…is typing" on group rows. Falls back to nothing when off.
+  const { data: meDoc } = useReactiveSafeConvexQuery<any>(
+    (api as any).users.getCurrentUser,
+    {},
+    null,
+    tab === 'groups',
+  );
+  const myId = meDoc?._id;
+  const typingConvIds = useMemo(
+    () =>
+      BATCH_TYPING_ENABLED && tab === 'groups'
+        ? (Array.isArray(groups) ? groups : []).map((g: any) => getListItemId(g)).filter(Boolean)
+        : [],
+    [groups, tab],
+  );
+  const { data: typingMap } = useReactiveSafeConvexQuery<Record<string, any[]>>(
+    (api as any).typing.getTypingForConversations,
+    { conversationIds: typingConvIds },
+    {},
+    BATCH_TYPING_ENABLED && tab === 'groups' && typingConvIds.length > 0,
   );
 
   const onAdd = () => {
@@ -627,6 +652,10 @@ export default function GroupsScreen() {
           const isGroupsTab = tab === 'groups';
           const pinned = isGroupsTab && !!item.isPinned;
           const rowUnread = isGroupsTab && itemId ? Number(unreadCounts?.[itemId]) || 0 : 0;
+          const rowTyping =
+            isGroupsTab && itemId && BATCH_TYPING_ENABLED
+              ? formatTypingLabel((typingMap as any)?.[itemId] || [], myId)
+              : null;
           const rowEl = (
             <TouchableOpacity
               style={styles.row}
@@ -655,8 +684,11 @@ export default function GroupsScreen() {
                     {item.name || 'Group'}
                   </Text>
                 </View>
-                <Text style={[styles.rowSub, rowUnread > 0 && styles.rowSubUnread]} numberOfLines={1}>
-                  {sub}
+                <Text
+                  style={[styles.rowSub, rowTyping ? styles.rowTyping : rowUnread > 0 && styles.rowSubUnread]}
+                  numberOfLines={1}
+                >
+                  {rowTyping || sub}
                 </Text>
               </View>
               <View style={styles.rowRight}>
@@ -1194,6 +1226,7 @@ const styles = StyleSheet.create({
   rowName: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
   rowNameUnread: { color: Colors.textPrimary },
   rowSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
+  rowTyping: { fontSize: FontSize.sm, color: Colors.primary, fontStyle: 'italic', marginTop: 2 },
   rowSubUnread: { color: Colors.textPrimary, fontWeight: FontWeight.medium },
   rowRight: { alignItems: 'flex-end', gap: 4 },
   rowStamp: { fontSize: FontSize.sm, color: Colors.textSecondary },
