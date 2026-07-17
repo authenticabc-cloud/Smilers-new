@@ -36,6 +36,7 @@ import UndoSnackbar from '../../src/components/UndoSnackbar';
 import { readStoredString, writeStoredString } from '../../src/lib/settingsStorage';
 
 const CHAT_FILTER_KEY = 'chats_filter_v1';
+const WHATS_NEW_KEY = 'whatsnew_swipe_read_v1';
 const MARK_UNREAD_ENABLED = process.env.EXPO_PUBLIC_MARK_UNREAD_ENABLED === 'true';
 
 function relTime(iso?: string) {
@@ -135,6 +136,18 @@ export default function ChatsScreen() {
   const markUnread = useMutation((api as any).messages.markUnread);
   const [markingAllRead, setMarkingAllRead] = useState(false);
   const [undoReadId, setUndoReadId] = useState<string | null>(null);
+  const [whatsNewVisible, setWhatsNewVisible] = useState(false);
+  useEffect(() => {
+    readStoredString(WHATS_NEW_KEY)
+      .then((v) => {
+        if (v !== '1') setWhatsNewVisible(true);
+      })
+      .catch(() => {});
+  }, []);
+  const dismissWhatsNew = useCallback(() => {
+    setWhatsNewVisible(false);
+    writeStoredString(WHATS_NEW_KEY, '1').catch(() => {});
+  }, []);
 
   // Keep the app-icon (launcher) badge in sync with the total unread count
   // whenever the app is foregrounded and the unread counts change.
@@ -595,6 +608,20 @@ export default function ChatsScreen() {
             </View>
             {chatFilter === 'all' ? (
               <>
+            {whatsNewVisible ? (
+              <View style={styles.whatsNewCard} testID="whats-new-tip">
+                <Feather name="zap" size={18} color={Colors.primary} />
+                <View style={styles.whatsNewTextWrap}>
+                  <Text style={styles.whatsNewTitle}>New gestures</Text>
+                  <Text style={styles.whatsNewBody}>
+                    Swipe a chat left to mark it read, and tap the Unread filter to focus on what needs a reply.
+                  </Text>
+                </View>
+                <TouchableOpacity onPress={dismissWhatsNew} hitSlop={10} testID="whats-new-dismiss">
+                  <Feather name="x" size={18} color={Colors.textMuted} />
+                </TouchableOpacity>
+              </View>
+            ) : null}
             {/* iter-186: pending desktop login approvals (contract §5.5) */}
             <LoginApprovalBanner />
             {/* Incoming live-location requests — tap to confirm & share. */}
@@ -1051,6 +1078,26 @@ const styles = StyleSheet.create({
     fontWeight: FontWeight.bold,
     color: Colors.white,
   },
+  whatsNewCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+    marginHorizontal: Spacing.md,
+    marginBottom: Spacing.sm,
+    padding: Spacing.md,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  whatsNewTextWrap: { flex: 1 },
+  whatsNewTitle: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+    marginBottom: 2,
+  },
+  whatsNewBody: { fontSize: FontSize.xs, color: Colors.textSecondary, lineHeight: 17 },
   rowTitle: {
     fontSize: FontSize.base,
     fontWeight: FontWeight.semibold,
