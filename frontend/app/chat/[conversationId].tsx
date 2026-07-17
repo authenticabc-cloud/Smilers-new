@@ -24,7 +24,7 @@ import { useConvex, useMutation, useQuery } from 'convex/react';
 import { forceConvexReconnect } from '../../src/providers/useConvexAutoReconnect';
 import { recordingActivity } from '../../src/lib/recordingActivity';
 import * as Clipboard from 'expo-clipboard';
-import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
+import { requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { pickImageLibrary, pickCamera, pickDocument } from '../../src/lib/nativePickers';
@@ -113,6 +113,7 @@ import { useViewerSuspension } from '../../src/hooks/useViewerSuspension';
 import { decryptText } from '../../src/lib/e2eeCrypto';
 import { triggerTranscription } from '../../src/lib/triggerTranscription';
 import { markLocallyRead } from '../../src/lib/localReadState';
+import { VOICE_RECORDING_OPTIONS } from '../../src/lib/audioRecording';
 import ScheduleMessageSheet, { ScheduleSelection } from '../../src/components/ScheduleMessageSheet';
 import CameraCapture from '../../src/components/CameraCapture';
 import { Colors } from '../../src/theme';
@@ -324,7 +325,7 @@ export default function ChatScreen() {
   // "typing…". Loaded from on-device storage and refreshed on focus (so
   // toggling it in Privacy takes effect when they return to the chat).
   const typingIndicatorsEnabledRef = useRef(true);
-  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const audioRecorder = useAudioRecorder(VOICE_RECORDING_OPTIONS);
   const recorderState = useAudioRecorderState(audioRecorder, 200);
 
   // iter-304: voice-note REVIEW-before-send. After the user stops a recording
@@ -4533,16 +4534,29 @@ export default function ChatScreen() {
               </TouchableOpacity>
               <View style={styles.recIndicator}>
                 <View style={styles.recWaveWrap}>
-                  {[10, 16, 22, 14, 20, 26, 18, 12, 24, 15, 21, 13].map((height, index) => (
-                    <View
-                      key={`wave-${index}`}
-                      style={[
-                        styles.recWaveBar,
-                        { height: height + ((recDuration + index) % 3) * 3 },
-                        isRecordingPaused ? styles.recWaveBarPaused : null,
-                      ]}
-                    />
-                  ))}
+                  {[10, 16, 22, 14, 20, 26, 18, 12, 24, 15, 21, 13].map((height, index) => {
+                    // Drive the bars from the REAL mic level (metering, in dB).
+                    // If the mic is capturing your voice the bars react; if they
+                    // stay flat the microphone isn't being captured. On web
+                    // (no metering) fall back to the decorative animation.
+                    const m = recorderState.metering;
+                    const hasLevel = typeof m === 'number' && Number.isFinite(m);
+                    const level = hasLevel ? Math.max(0, Math.min(1, (m + 60) / 55)) : null;
+                    const barHeight =
+                      level != null
+                        ? 4 + Math.round((height / 26) * 30 * Math.max(0.06, level))
+                        : height + ((recDuration + index) % 3) * 3;
+                    return (
+                      <View
+                        key={`wave-${index}`}
+                        style={[
+                          styles.recWaveBar,
+                          { height: barHeight },
+                          isRecordingPaused ? styles.recWaveBarPaused : null,
+                        ]}
+                      />
+                    );
+                  })}
                 </View>
                 <Text style={styles.recTimer}>
                   {`${Math.floor(recDuration / 60)}:${(recDuration % 60).toString().padStart(2, '0')}`}

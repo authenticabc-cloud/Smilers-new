@@ -17,8 +17,9 @@ import {
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter, usePathname } from 'expo-router';
 import { useConvex, useMutation, useQuery } from 'convex/react';
-import { useAudioRecorder, useAudioRecorderState, RecordingPresets, setAudioModeAsync } from 'expo-audio';
+import { useAudioRecorder, useAudioRecorderState, setAudioModeAsync } from 'expo-audio';
 import { recordingActivity } from '../lib/recordingActivity';
+import { VOICE_RECORDING_OPTIONS } from '../lib/audioRecording';
 import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
 import { readStoredJson, writeStoredJson } from '../lib/settingsStorage';
@@ -110,7 +111,7 @@ function VoiceCommandSheetInner({ visible, onClose }: VoiceCommandSheetProps) {
     conversationId: string;
     name: string;
   } | null>(null);
-  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const audioRecorder = useAudioRecorder(VOICE_RECORDING_OPTIONS);
   const recorderState = useAudioRecorderState(audioRecorder, 250);
   const recordingStartedAtRef = useRef<number>(0);
   const sendMessage = useMutation(api.messages.send);
