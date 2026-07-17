@@ -195,6 +195,10 @@ export async function displayGroupedMessageNotification(
       },
     });
 
+    // Bump the launcher badge for background/killed posts; the foreground
+    // reactive sync (chats screen) corrects the exact total on next open.
+    await incrementAppBadgeCount();
+
     return true;
   } catch {
     return false;
@@ -251,5 +255,55 @@ export async function clearConversationNotifications(conversationId: string): Pr
     );
   } catch {
     /* best effort */
+  }
+}
+
+/**
+ * Set the app-icon (launcher) unread badge count. Uses notifee on Android
+ * (OEM-launcher dependent) and expo-notifications for the iOS badge. A count
+ * of 0 clears the badge. Best-effort / no-op when a module is missing.
+ */
+export async function setAppBadgeCount(count: number): Promise<void> {
+  const n = Math.max(0, Math.floor(Number(count) || 0));
+  const native = loadNative();
+  if (native) {
+    try {
+      await native.notifee.setBadgeCount(n);
+    } catch {
+      /* best effort */
+    }
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Notifications = require('expo-notifications');
+    await Notifications.setBadgeCountAsync(n);
+  } catch {
+    /* best effort */
+  }
+}
+
+/**
+ * Increment the launcher badge by one (used when a message notification is
+ * posted while the app is backgrounded/killed and no reactive unread total is
+ * running). The foreground reactive sync corrects the exact value on next open.
+ */
+export async function incrementAppBadgeCount(): Promise<void> {
+  const native = loadNative();
+  if (native && typeof native.notifee.incrementBadgeCount === 'function') {
+    try {
+      await native.notifee.incrementBadgeCount(1);
+      return;
+    } catch {
+      /* fall through */
+    }
+  }
+  // No incrementBadgeCount available — best-effort read + set via notifee.
+  if (native && typeof native.notifee.getBadgeCount === 'function') {
+    try {
+      const current = Number(await native.notifee.getBadgeCount()) || 0;
+      await native.notifee.setBadgeCount(current + 1);
+    } catch {
+      /* best effort */
+    }
   }
 }

@@ -112,6 +112,20 @@ export default function ChatsScreen() {
   const markRead = useMutation(api.messages.markRead);
   const [markingAllRead, setMarkingAllRead] = useState(false);
 
+  // Keep the app-icon (launcher) badge in sync with the total unread count
+  // whenever the app is foregrounded and the unread counts change.
+  useEffect(() => {
+    const total = Object.values(unreadCounts || {}).reduce(
+      (sum, c) => sum + (Number(c) > 0 ? Number(c) : 0),
+      0,
+    );
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { setAppBadgeCount } = require('../../src/push/notifeeMessageDisplay');
+      void setAppBadgeCount(total);
+    } catch {}
+  }, [unreadCounts]);
+
   const handleMarkAllRead = useCallback(() => {
     setShowMenu(false);
     const ids = Object.entries(unreadCounts || {})
@@ -143,6 +157,11 @@ export default function ChatsScreen() {
                 if (clearFn) await clearFn(id);
               } catch {}
             }
+            // Reset the launcher badge immediately (reactive sync also follows).
+            try {
+              const { setAppBadgeCount } = require('../../src/push/notifeeMessageDisplay');
+              await setAppBadgeCount(0);
+            } catch {}
             setMarkingAllRead(false);
           },
         },
