@@ -68,6 +68,24 @@ function VoiceCommandSheetInner({ visible, onClose }: VoiceCommandSheetProps) {
   const convex = useConvex();
   const deviceIndex = useDeviceContactIndex();
   const contacts = useQuery(api.contacts.getContacts, {}) as any[] | undefined;
+  const me = useQuery(api.users.getCurrentUser, {}) as any | null | undefined;
+  // iter-320: pass the sender's spoken language(s) so the backend routes
+  // Asante Twi (code 'ak') voice notes to Gemini instead of Whisper.
+  const transcribeLangHintRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const codes = new Set<string>();
+    if (typeof me?.preferredLanguage === 'string' && me.preferredLanguage.trim()) {
+      codes.add(me.preferredLanguage.trim().toLowerCase());
+    }
+    [me?.spokenLanguages, me?.languages].forEach((list) => {
+      if (Array.isArray(list)) {
+        list.forEach((code) => {
+          if (typeof code === 'string' && code.trim()) codes.add(code.trim().toLowerCase());
+        });
+      }
+    });
+    transcribeLangHintRef.current = Array.from(codes).join(',') || undefined;
+  }, [me?.preferredLanguage, me?.spokenLanguages, me?.languages]);
   // iter-311: voice-task rows stored only the Smilers/Google account name.
   // Resolve to THIS phone's saved contact name (via phone match) so the
   // launcher UI + TTS announce the same name the user knows.
@@ -474,6 +492,7 @@ function VoiceCommandSheetInner({ visible, onClose }: VoiceCommandSheetProps) {
             storageId: String(storageId),
             localFileUri: uri,
             fileName: 'voice-task-note.m4a',
+            languageHint: transcribeLangHintRef.current,
           });
         } catch {
           // Transcription failure is non-fatal — the message is already sent.

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
 from datetime import datetime, timezone, timedelta
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
 
 # Twilio Programmable Video — Phase A.1
 # Used to mint short-lived JWT access tokens server-side and to create
@@ -1154,6 +1154,10 @@ async def transcribe_media(payload: TranscriptionRequest, request: Request) -> T
             suffix = candidate
             break
 
+    # Route Asante Twi (Akan) to Gemini — Whisper handles it poorly. All other
+    # languages stay on Whisper (also yields caption timestamps for video).
+    if _hint_is_akan_twi(payload.language_hint):
+        return await _run_gemini_transcription(content, suffix)
     return await _run_whisper(content, suffix, payload.language_hint, api_key)
 
 
@@ -1192,7 +1196,103 @@ async def transcribe_uploaded_media(
             suffix = candidate
             break
 
+    if _hint_is_akan_twi(language_hint):
+        return await _run_gemini_transcription(content, suffix)
     return await _run_whisper(content, suffix, language_hint, api_key)
+
+
+# Asante Twi (Akan) is a low-resource language OpenAI Whisper barely supports,
+# so voice/video in Twi comes back garbled. Gemini (the same engine that powers
+# our already-good translations) transcribes Akan far more accurately, following
+# correct Twi orthography. We route Twi/Akan audio to Gemini and keep Whisper as
+# the default for every other language (it also gives caption timestamps for video).
+_AKAN_TWI_TOKENS = ("ak", "tw", "twi", "akan", "asante", "asanti", "fante", "fanti")
+
+
+def _hint_is_akan_twi(language_hint: str | None) -> bool:
+    if not language_hint:
+        return False
+    tokens = {
+        part.strip().lower()
+        for chunk in language_hint.replace(";", ",").split(",")
+        for part in chunk.split()
+    }
+    if tokens & {"ak", "tw", "twi", "akan"}:
+        return True
+    lowered = language_hint.lower()
+    return any(word in lowered for word in ("twi", "akan", "asante", "fante"))
+
+
+def _suffix_to_audio_mime(suffix: str) -> str:
+    return {
+        ".m4a": "audio/mp4",
+        ".mp3": "audio/mp3",
+        ".wav": "audio/wav",
+        ".webm": "audio/webm",
+        ".ogg": "audio/ogg",
+        ".aac": "audio/aac",
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+    }.get(suffix.lower(), "audio/mp4")
+
+
+async def _run_gemini_transcription(
+    content: bytes,
+    suffix: str,
+) -> TranscriptionResponse:
+    """Transcribe Asante Twi (Akan) audio with Gemini, which handles this
+    low-resource language markedly better than Whisper. Returns the transcript
+    as a single segment (Gemini does not emit per-word timestamps)."""
+
+    emergent_key = os.getenv("EMERGENT_LLM_KEY")
+    if not emergent_key:
+        raise HTTPException(status_code=503, detail="Twi transcription unavailable: EMERGENT_LLM_KEY missing on server.")
+
+    import tempfile
+
+    mime = _suffix_to_audio_mime(suffix)
+    system_message = (
+        "You are an expert speech-to-text engine for Asante Twi (Akan), a Ghanaian language. "
+        "Transcribe the spoken audio VERBATIM into written Asante Twi using correct Akan "
+        "orthography, including the special letters ɛ and ɔ and proper tone/word boundaries. "
+        "Do NOT translate to English. Do NOT add commentary, labels, timestamps, or quotation marks. "
+        "Preserve names, numbers and any code-switched English words exactly as spoken. "
+        "If the audio contains no intelligible speech, return an empty string."
+    )
+    prompt = "Transcribe this Asante Twi audio verbatim in Akan. Return only the transcript text."
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+
+        chat = LlmChat(
+            api_key=emergent_key,
+            session_id=f"smilers-transcribe-tw-{uuid.uuid4()}",
+            system_message=system_message,
+        ).with_model("gemini", "gemini-2.5-flash")
+        file_content = FileContentWithMimeType(mime, tmp_path)
+        raw = await chat.send_message(UserMessage(text=prompt, file_contents=[file_content]))
+        text = (raw or "").strip()
+
+        return TranscriptionResponse(
+            text=text,
+            language="ak",
+            duration_sec=None,
+            segments=None,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("transcribe: Gemini (Twi) call failed")
+        raise HTTPException(status_code=502, detail=f"Twi transcription failed: {exc}") from exc
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 async def _run_whisper(
@@ -1220,8 +1320,11 @@ async def _run_whisper(
                 "file": audio_file,
                 "response_format": "verbose_json",
             }
-            if language_hint:
-                kwargs["language"] = language_hint
+            # Whisper only accepts ISO-639-1 codes. Pass the hint through only
+            # when it looks like a plain 2-letter code so a free-text/Akan hint
+            # (routed to Gemini elsewhere) can't 400 the Whisper request.
+            if language_hint and len(language_hint.strip()) == 2 and language_hint.strip().isalpha():
+                kwargs["language"] = language_hint.strip().lower()
             result = client_openai.audio.transcriptions.create(**kwargs)
 
         # Whisper verbose_json returns a list of segments with start/end times

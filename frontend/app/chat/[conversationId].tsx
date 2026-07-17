@@ -1199,6 +1199,28 @@ export default function ChatScreen() {
     return Array.from(values);
   }, [me?.languages, me?.skipTranslationLanguages, me?.spokenLanguages, preferredLanguageLabel]);
 
+  // iter-320: hint the transcription backend which language(s) the sender
+  // speaks. When Asante Twi (Akan, code 'ak') is among them the backend routes
+  // to Gemini (far better Twi accuracy) instead of Whisper.
+  const transcribeLangHint = useMemo(() => {
+    const codes = new Set<string>();
+    if (preferredLanguage) codes.add(preferredLanguage.trim().toLowerCase());
+    const lists = [me?.spokenLanguages, me?.languages];
+    lists.forEach((list) => {
+      if (Array.isArray(list)) {
+        list.forEach((code) => {
+          if (typeof code === 'string' && code.trim()) codes.add(code.trim().toLowerCase());
+        });
+      }
+    });
+    return Array.from(codes).join(',') || undefined;
+  }, [preferredLanguage, me?.spokenLanguages, me?.languages]);
+  const transcribeLangHintRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    transcribeLangHintRef.current = transcribeLangHint;
+  }, [transcribeLangHint]);
+
+
   useEffect(() => {
     if (!preferredLanguageLabel || visibleMessages.length === 0) {
       return;
@@ -2352,6 +2374,7 @@ export default function ChatScreen() {
             conversationId,
             localFileUri: asset.uri,
             fileName: (asset as any)?.fileName || 'video.mp4',
+            languageHint: transcribeLangHintRef.current,
           }).catch(() => {});
         }
       }
@@ -2408,6 +2431,7 @@ export default function ChatScreen() {
           conversationId,
           localFileUri: asset.uri,
           fileName: (asset as any)?.fileName || 'video.mp4',
+          languageHint: transcribeLangHintRef.current,
         }).catch(() => {});
       }
     } catch (errorValue: any) {
@@ -2778,6 +2802,7 @@ export default function ChatScreen() {
             conversationId,
             localFileUri: uri,
             fileName: 'voice.m4a',
+            languageHint: transcribeLangHintRef.current,
           }).catch(() => {});
         }
       } catch (errorValue: any) {
