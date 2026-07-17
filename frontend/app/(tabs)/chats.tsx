@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Swipeable, RectButton } from 'react-native-gesture-handler';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { useQuery, useConvex } from 'convex/react';
+import { useQuery, useConvex, useMutation } from 'convex/react';
 import Header from '../../src/components/Header';
 import Avatar from '../../src/components/Avatar';
 import FabStack from '../../src/components/FabStack';
@@ -103,6 +103,52 @@ export default function ChatsScreen() {
   // filter client-side — exactly how the web app does it.
   const convex = useConvex();
   const archivedIds = useQuery((api as any).archives.getArchivedIds, {}) as string[] | undefined;
+
+  // Per-conversation unread counts { convId: count } — drives the "Mark all as
+  // read" menu action.
+  const unreadCounts = useQuery((api as any).messages.getUnreadCounts, {}) as
+    | Record<string, number>
+    | undefined;
+  const markRead = useMutation(api.messages.markRead);
+  const [markingAllRead, setMarkingAllRead] = useState(false);
+
+  const handleMarkAllRead = useCallback(() => {
+    setShowMenu(false);
+    const ids = Object.entries(unreadCounts || {})
+      .filter(([, count]) => Number(count) > 0)
+      .map(([id]) => id);
+    if (ids.length === 0) {
+      Alert.alert('All caught up', 'You have no unread chats.');
+      return;
+    }
+    Alert.alert(
+      'Mark all as read?',
+      `This will mark ${ids.length} chat${ids.length > 1 ? 's' : ''} as read and clear their notifications.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Mark all read',
+          onPress: async () => {
+            setMarkingAllRead(true);
+            let clearFn: ((id: string) => Promise<void>) | null = null;
+            try {
+              // eslint-disable-next-line @typescript-eslint/no-require-imports
+              clearFn = require('../../src/push/notifeeMessageDisplay').clearConversationNotifications;
+            } catch {}
+            for (const id of ids) {
+              try {
+                await markRead({ conversationId: id });
+              } catch {}
+              try {
+                if (clearFn) await clearFn(id);
+              } catch {}
+            }
+            setMarkingAllRead(false);
+          },
+        },
+      ],
+    );
+  }, [unreadCounts, markRead]);
 
   // iter 160 (offline persistence): hydrate the conversation list from
   // AsyncStorage on cold launch so users see their last-known chats
@@ -384,6 +430,12 @@ export default function ChatsScreen() {
       >
         <Pressable style={menuStyles.backdrop} onPress={() => setShowMenu(false)}>
           <View style={menuStyles.popover}>
+            <MenuItem
+              icon={<Feather name="check-circle" size={20} color={Colors.textPrimary} />}
+              label={markingAllRead ? 'Marking…' : 'Mark all as read'}
+              onPress={handleMarkAllRead}
+              testID="menu-mark-all-read"
+            />
             <MenuItem
               icon={<Feather name="phone" size={20} color={Colors.textPrimary} />}
               label="Calls"
