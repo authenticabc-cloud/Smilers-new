@@ -100,6 +100,14 @@ export default function GroupsScreen() {
 
   const activeLoading = tab === 'conferences' ? conferencesLoading : groupsLoading;
 
+  // Per-conversation unread counts { convId: count } → per-group row badges.
+  const { data: unreadCounts } = useReactiveSafeConvexQuery<Record<string, number>>(
+    (api as any).messages.getUnreadCounts,
+    {},
+    {},
+    tab === 'groups',
+  );
+
   const list = useMemo(() => {
     const raw: any[] = tab === 'groups'
       ? (Array.isArray(groups) ? groups : [])
@@ -537,7 +545,13 @@ export default function GroupsScreen() {
               </View>
               <View style={styles.rowRight}>
                 <Text style={styles.rowStamp}>{stamp}</Text>
-                {memberCount > 0 ? (
+                {isGroupsTab && itemId && Number(unreadCounts?.[itemId]) > 0 ? (
+                  <View style={styles.unreadBadge} testID={`group-unread-${itemId}`}>
+                    <Text style={styles.unreadBadgeText}>
+                      {Number(unreadCounts[itemId]) > 99 ? '99+' : Number(unreadCounts[itemId])}
+                    </Text>
+                  </View>
+                ) : memberCount > 0 ? (
                   <View style={styles.memberCount}>
                     <Ionicons name="people-outline" size={14} color={Colors.textSecondary} />
                     <Text style={styles.memberCountText}>{memberCount}</Text>
@@ -979,6 +993,16 @@ const styles = StyleSheet.create({
   rowStamp: { fontSize: FontSize.sm, color: Colors.textSecondary },
   memberCount: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   memberCountText: { fontSize: FontSize.sm, color: Colors.textSecondary },
+  unreadBadge: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    backgroundColor: Colors.tickRed,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  unreadBadgeText: { fontSize: 11, fontWeight: '700', color: Colors.white },
 
   empty: {
     alignItems: 'center',
