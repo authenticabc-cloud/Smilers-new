@@ -31,6 +31,9 @@ import ConnectionStatusBanner from '../../src/components/ConnectionStatusBanner'
 import { AppState } from 'react-native';
 // sml-008: don't tear down the live socket mid-call — see handlePullToReconnect below.
 import { callHost } from '../../src/lib/call/callHost';
+import { readStoredString, writeStoredString } from '../../src/lib/settingsStorage';
+
+const CHAT_FILTER_KEY = 'chats_filter_v1';
 
 function relTime(iso?: string) {
   if (!iso) return '';
@@ -50,6 +53,21 @@ export default function ChatsScreen() {
   const router = useRouter();
   const [showMenu, setShowMenu] = useState(false);
   const [chatFilter, setChatFilter] = useState<'all' | 'unread'>('all');
+  const chatFilterLoaded = useRef(false);
+  useEffect(() => {
+    readStoredString(CHAT_FILTER_KEY)
+      .then((v) => {
+        if (v === 'unread') setChatFilter('unread');
+      })
+      .catch(() => {})
+      .finally(() => {
+        chatFilterLoaded.current = true;
+      });
+  }, []);
+  useEffect(() => {
+    if (!chatFilterLoaded.current) return;
+    writeStoredString(CHAT_FILTER_KEY, chatFilter).catch(() => {});
+  }, [chatFilter]);
   // iter-313: pin Voice Task contacts to the top of the chat list, in their
   // assigned 1..10 order. Off by default (chats stay time-ordered); persisted
   // locally so the choice survives restarts.

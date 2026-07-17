@@ -26,6 +26,7 @@ import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 
 const MAX_PINNED_GROUPS = 20;
 const PIN_TIP_KEY = 'smilers_pin_tip_dismissed';
+const GROUP_FILTER_KEY = 'groups_filter_v1';
 
 type Tab = 'groups' | 'conferences';
 
@@ -258,6 +259,23 @@ export default function GroupsScreen() {
     setTipDismissed(true);
     writeStoredString(PIN_TIP_KEY, '1').catch(() => {});
   }, []);
+
+  // Persist the Groups "All/Unread" filter across restarts.
+  const groupFilterLoaded = useRef(false);
+  useEffect(() => {
+    readStoredString(GROUP_FILTER_KEY)
+      .then((v) => {
+        if (v === 'unread') setGroupFilter('unread');
+      })
+      .catch(() => {})
+      .finally(() => {
+        groupFilterLoaded.current = true;
+      });
+  }, []);
+  useEffect(() => {
+    if (!groupFilterLoaded.current) return;
+    writeStoredString(GROUP_FILTER_KEY, groupFilter).catch(() => {});
+  }, [groupFilter]);
   const showPinTip =
     tab === 'groups' && !tipDismissed && Array.isArray(groups) && groups.length > 0 && pinnedGroups.length === 0;
 
