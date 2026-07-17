@@ -27,6 +27,7 @@ import * as LegacyFileSystem from 'expo-file-system/legacy';
 import Header from '../../src/components/Header';
 import Avatar from '../../src/components/Avatar';
 import SosButton from '../../src/components/SosButton';
+import DriveModeToggle from '../../src/components/DriveModeToggle';
 import { api } from '../../src/convexApi';
 import { getLanguageByCode } from '../../src/lib/languages';
 import { buildPersonalChatShareMessage } from '../../src/lib/personalChatLink';
@@ -473,6 +474,7 @@ export default function ProfileScreen() {
         <View style={{ height: 80 }} />
       </ScrollView>
       <SosButton onPress={() => router.push('/emergency' as any)} />
+      <DriveModeToggle />
 
       {/* Edit-field modal (Name / About) */}
       <Modal

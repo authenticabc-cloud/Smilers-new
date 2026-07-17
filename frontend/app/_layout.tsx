@@ -22,6 +22,7 @@ import { usePushNotifications } from '../src/push/usePushNotifications';
 import { useEmergentPush } from '../src/push/useEmergentPush';
 import AppLockGate from '../src/components/AppLockGate';
 import VoiceCommandLauncher from '../src/components/VoiceCommandLauncher';
+import DriveModeController from '../src/components/DriveModeController';
 import IncomingScreenShareModal from '../src/components/IncomingScreenShareModal';
 import CallHost from '../src/components/call/CallHost';
 import CallReturnBanner from '../src/components/call/CallReturnBanner';
@@ -510,6 +511,7 @@ export default function RootLayout() {
               <Stack.Screen name="share-receiver" />
             </Stack>
             <VoiceCommandLauncher />
+            <DriveModeController />
             <IncomingScreenShareModal />
             <CallHost />
             <CallReturnBanner />

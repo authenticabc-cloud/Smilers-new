@@ -1149,3 +1149,28 @@ compiles; Sign-In renders. Native-only — verify on EAS device build.
 - Admin: app/admin.tsx new "Payments" tab (badge = countPendingRequests) → src/components/admin/MobileMoneyAdmin.tsx: Pending/History toggle; per-request Message (admin.messaging.messageUsers) / Complete (completeRequest → auto-activates plan) / Decline (declineRequest). Completed/declined move to History.
 - Shared constants mirrored verbatim from web convex/lib/mobileMoney.ts in src/lib/mobileMoney.ts (MOBILE_MONEY_COUNTRIES, FALLBACK_EUR_RATES, roundLocalAmount, PREMIUM_PLANS). country=ISO alpha-2; phone omitted (undefined) when blank.
 - Files: src/lib/mobileMoney.ts, app/mobile-money.tsx, src/components/admin/MobileMoneyAdmin.tsx, app/premium.tsx, app/admin.tsx. Backend Convex funcs assumed deployed on web side.
+
+
+---
+
+## Session addendum (fork continuation)
+
+### Asante Twi transcription (DONE)
+- Backend `/api/transcribe` + `/api/transcribe/upload` route Akan/Twi audio to **Gemini 2.5-flash** (Twi-tuned prompt); other languages stay on Whisper. Frontend passes sender's spoken language(s) as `language_hint`. Verified via curl.
+
+### Voice-note translation → receiver's language (DONE, device build needed to verify)
+- New backend `POST /api/tts` (OpenAI `tts-1`, multilingual, Emergent key). Reuses `/api/translate`.
+- Frontend `src/lib/voiceTranslation.ts` + `VoiceTranslationPill` in `MediaBubble`: auto-translates RECEIVED voice notes to the receiver's preferred language (text + "Play in <lang>" TTS), honouring the receiver's skip/spoken languages. Cached on-device.
+
+### Unread badge not clearing (DONE, device build needed)
+- On-device read overlay `src/lib/localReadState.ts` + `useLocalReadMap`: opening a chat / swipe-read / mark-all-read clears the list badge instantly (backend `getUnreadCounts` was lagging); badge re-shows only when a newer message arrives. Wired into chats, groups, tab badges, app-icon badge.
+
+### Silent mobile voice-note recordings (FIX SHIPPED, awaiting device confirmation)
+- Root cause hypothesis: `RecordingPresets.HIGH_QUALITY` records STEREO; mono-mic phones produce a valid-but-silent .m4a.
+- Fix: `src/lib/audioRecording.ts` `VOICE_RECORDING_OPTIONS` = mono + metering enabled; applied to chat + voice-command recorders. Record bar now shows a **live mic-level meter** (diagnostic). Also added post-call `setAudioModeAsync` reset in `app/call/[conversationId].tsx` + settle delay before recording.
+
+### Drive Mode (DONE, device build needed to verify — mic/speech/calls)
+- `src/lib/driveMode.ts` (global on/off store, not persisted), `DriveModeToggle` (pill above SOS on chats+profile, auto-dims, reveals on touch), `DriveModeController` (global, in `_layout.tsx`).
+- When ON: single continuous `expo-speech-recognition` session (paused on active-call routes). Commands: **answer/pick up/accept** → route via `/incoming-call?autoAnswer=1` (or `answerInvite` for inviteId); **decline** → `declineCall`/`declineInvite` + `messages.send("I'm driving and will call you back.")`; **reject** → decline silently; **listen** → `getLatestIncomingMedia(voice)` + play; **watch** → `getLatestIncomingMedia(video)` + full-screen player. Backend fns confirmed live on Convex `aware-newt-456`.
+- Known limitation: answering a NEW call WHILE already in an active call isn't triggered on native (recognizer paused during active-call routes due to mic contention).
+

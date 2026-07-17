@@ -8,6 +8,7 @@ import Header from '../../src/components/Header';
 import Avatar from '../../src/components/Avatar';
 import FabStack from '../../src/components/FabStack';
 import SosButton from '../../src/components/SosButton';
+import DriveModeToggle from '../../src/components/DriveModeToggle';
 import { LoginApprovalBanner } from '../../src/components/LoginApprovalBanner';
 import { LiveLocationRequestBanner } from '../../src/components/LiveLocationRequestBanner';
 import { PhotoSaveRequestBanner } from '../../src/components/PhotoSaveRequestBanner';
@@ -796,6 +797,7 @@ export default function ChatsScreen() {
       />
 
       <SosButton onPress={() => router.push('/emergency' as any)} />
+      <DriveModeToggle />
       <FabStack
         onPencil={() => router.push('/(tabs)/contacts')}
         onBuilding={() => router.push('/community-create' as any)}
