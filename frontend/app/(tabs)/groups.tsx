@@ -12,7 +12,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { GestureHandlerRootView, Swipeable, RectButton } from 'react-native-gesture-handler';
 import DraggableFlatList, { ScaleDecorator, type RenderItemParams } from 'react-native-draggable-flatlist';
 import * as Haptics from 'expo-haptics';
 import { Feather, Ionicons } from '@expo/vector-icons';
@@ -223,6 +223,7 @@ export default function GroupsScreen() {
   const pinGroupM = useMutation((api as any).pinnedGroups?.pinGroup);
   const unpinGroupM = useMutation((api as any).pinnedGroups?.unpinGroup);
   const reorderPinnedM = useMutation((api as any).pinnedGroups?.reorderPinnedGroups);
+  const markReadM = useMutation((api as any).messages.markRead);
   const [reorderOpen, setReorderOpen] = useState(false);
   const [reorderList, setReorderList] = useState<any[]>([]);
   const [pinBusy, setPinBusy] = useState(false);
@@ -591,7 +592,7 @@ export default function GroupsScreen() {
           const isGroupsTab = tab === 'groups';
           const pinned = isGroupsTab && !!item.isPinned;
           const rowUnread = isGroupsTab && itemId ? Number(unreadCounts?.[itemId]) || 0 : 0;
-          return (
+          const rowEl = (
             <TouchableOpacity
               style={styles.row}
               onPress={() => openItem(item)}
@@ -640,6 +641,24 @@ export default function GroupsScreen() {
               </View>
             </TouchableOpacity>
           );
+          if (isGroupsTab && rowUnread > 0 && itemId) {
+            return (
+              <GroupSwipeRow
+                onMarkRead={async () => {
+                  try {
+                    await markReadM({ conversationId: itemId });
+                  } catch {}
+                  try {
+                    const { clearConversationNotifications } = require('../../src/push/notifeeMessageDisplay');
+                    await clearConversationNotifications(itemId);
+                  } catch {}
+                }}
+              >
+                {rowEl}
+              </GroupSwipeRow>
+            );
+          }
+          return rowEl;
         }}
         ListEmptyComponent={
           activeLoading ? (
@@ -773,8 +792,52 @@ export default function GroupsScreen() {
   );
 }
 
+// Left-swipe a group row to mark it read (WhatsApp-style). Only mounted for
+// unread groups, so the action is always meaningful.
+function GroupSwipeRow({ onMarkRead, children }: { onMarkRead: () => void; children: React.ReactNode }) {
+  const ref = useRef<Swipeable>(null);
+  const renderLeftActions = () => (
+    <RectButton
+      style={styles.swipeReadAction}
+      onPress={() => {
+        ref.current?.close();
+        onMarkRead();
+      }}
+    >
+      <Ionicons name="checkmark-circle-outline" size={22} color={Colors.white} />
+      <Text style={styles.swipeReadText}>Read</Text>
+    </RectButton>
+  );
+  return (
+    <Swipeable
+      ref={ref}
+      friction={2}
+      leftThreshold={48}
+      overshootLeft={false}
+      renderLeftActions={renderLeftActions}
+      onSwipeableOpen={(direction) => {
+        if (direction === 'left') {
+          ref.current?.close();
+          onMarkRead();
+        }
+      }}
+    >
+      {children}
+    </Swipeable>
+  );
+}
+
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
+  swipeReadAction: {
+    backgroundColor: Colors.success || '#22c55e',
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 92,
+    gap: 4,
+  },
+  swipeReadText: { color: Colors.white, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   rowNameLine: { flexDirection: 'row', alignItems: 'center' },
   pinIcon: { marginRight: 5, transform: [{ rotate: '45deg' }] },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
