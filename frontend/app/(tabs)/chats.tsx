@@ -12,6 +12,7 @@ import { LoginApprovalBanner } from '../../src/components/LoginApprovalBanner';
 import { LiveLocationRequestBanner } from '../../src/components/LiveLocationRequestBanner';
 import { PhotoSaveRequestBanner } from '../../src/components/PhotoSaveRequestBanner';
 import { api } from '../../src/convexApi';
+import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { readCacheMeta, writeCache } from '../../src/lib/offlineCache';
 import { loadAllChatDrafts, type DraftPreview } from '../../src/lib/chatDrafts';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -30,11 +31,14 @@ import { callHost } from '../../src/lib/call/callHost';
 import * as Haptics from 'expo-haptics';
 import UndoSnackbar from '../../src/components/UndoSnackbar';
 import { readStoredString, writeStoredString } from '../../src/lib/settingsStorage';
-import ConversationRow from '../../src/components/ConversationRow';
+import ConversationRow, { formatTypingLabel } from '../../src/components/ConversationRow';
 import ChatSwipeRow from '../../src/components/ChatSwipeRow';
 
 const CHAT_FILTER_KEY = 'chats_filter_v1';
 const WHATS_NEW_KEY = 'whatsnew_swipe_read_v1';
+// Single list-level typing query (needs backend typing.getTypingForConversations).
+// Off by default → each row uses its own subscription until the backend + flag are live.
+const BATCH_TYPING_ENABLED = process.env.EXPO_PUBLIC_BATCH_TYPING_ENABLED === 'true';
 const MARK_UNREAD_ENABLED = process.env.EXPO_PUBLIC_MARK_UNREAD_ENABLED === 'true';
 
 export default function ChatsScreen() {
@@ -421,6 +425,19 @@ export default function ChatsScreen() {
     [displayList, unreadCounts],
   );
 
+  // One list-level typing subscription for all visible rows (perf: avoids one
+  // Convex subscription per row). Returns { [conversationId]: [{ name }] }.
+  const visibleConvIds = useMemo(
+    () => (BATCH_TYPING_ENABLED ? filteredList.map((c: any) => String(c?._id)).filter(Boolean) : []),
+    [filteredList],
+  );
+  const { data: typingMap } = useSafeConvexQuery<Record<string, any[]>>(
+    (api as any).typing.getTypingForConversations,
+    { conversationIds: visibleConvIds },
+    {},
+    BATCH_TYPING_ENABLED && visibleConvIds.length > 0,
+  );
+
   const handleArchive = useCallback(
     async (conversationId: string) => {
       try {
@@ -711,6 +728,12 @@ export default function ChatsScreen() {
               contacts={contacts}
               draft={drafts[String(item._id)]}
               unreadCount={rowUnread}
+              typingFromParent={BATCH_TYPING_ENABLED}
+              typingLabel={
+                BATCH_TYPING_ENABLED
+                  ? formatTypingLabel((typingMap as any)?.[String(item._id)] || [], me?._id)
+                  : null
+              }
               onPress={() => router.push(`/chat/${item._id}` as any)}
             />
           </ChatSwipeRow>

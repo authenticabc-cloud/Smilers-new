@@ -47,6 +47,17 @@ export function peerIsOnline(item: any): boolean {
   return Date.now() - t <= 120000; // online if seen within 2 min
 }
 
+export function formatTypingLabel(rowTypingRaw: any[], currentUserId?: string): string | null {
+  const list = Array.isArray(rowTypingRaw) ? rowTypingRaw : [];
+  const others = list.filter((u: any) => {
+    const uid = u?.userId || u?._id || u?.id;
+    return !uid || !currentUserId || String(uid) !== String(currentUserId);
+  });
+  if (others.length === 0) return null;
+  const names = others.map((u: any) => u?.name || u?.userName || u?.displayName || 'Someone');
+  return names.length === 1 ? `${names[0]} is typing\u2026` : `${names.join(', ')} are typing\u2026`;
+}
+
 type Props = {
   item: any;
   currentUserId?: string;
@@ -54,6 +65,10 @@ type Props = {
   draft?: DraftPreview;
   unreadCount?: number;
   onPress: () => void;
+  /** When true, typing state comes from `typingLabel` (a single list-level
+   * query) instead of this row opening its own Convex subscription. */
+  typingFromParent?: boolean;
+  typingLabel?: string | null;
 };
 
 export default function ConversationRow({
@@ -63,6 +78,8 @@ export default function ConversationRow({
   draft,
   unreadCount = 0,
   onPress,
+  typingFromParent = false,
+  typingLabel: typingLabelProp = null,
 }: Props) {
   const deviceIndex = useDeviceContactIndex();
   const deviceName = getResolvedConversationDisplayName(
@@ -96,23 +113,18 @@ export default function ConversationRow({
     contactRecord?.user?.profilePicture ||
     contactRecord?.avatar ||
     contactRecord?.user?.avatar;
-  // Live "typing…" for this row (web contract: typing.getTypingUsers → [{ name }]).
+  // Live "typing…" for this row. When the parent supplies it via a single
+  // list-level query (typingFromParent), skip this row's own subscription.
   const { data: rowTypingRaw } = useSafeConvexQuery<any[]>(
     (api as any).typing.getTypingUsers,
     { conversationId: item?._id },
     [],
-    !!item?._id,
+    !!item?._id && !typingFromParent,
   );
-  const typingLabel = useMemo(() => {
-    const list = Array.isArray(rowTypingRaw) ? rowTypingRaw : [];
-    const others = list.filter((u: any) => {
-      const uid = u?.userId || u?._id || u?.id;
-      return !uid || !currentUserId || String(uid) !== String(currentUserId);
-    });
-    if (others.length === 0) return null;
-    const names = others.map((u: any) => u?.name || u?.userName || u?.displayName || 'Someone');
-    return names.length === 1 ? `${names[0]} is typing\u2026` : `${names.join(', ')} are typing\u2026`;
-  }, [rowTypingRaw, currentUserId]);
+  const typingLabel = useMemo(
+    () => (typingFromParent ? typingLabelProp : formatTypingLabel(rowTypingRaw as any[], currentUserId)),
+    [typingFromParent, typingLabelProp, rowTypingRaw, currentUserId],
+  );
   const hasUnread = unreadCount > 0;
   return (
     <TouchableOpacity onPress={onPress} style={styles.row} activeOpacity={0.7} testID={`conv-${item._id}`}>
