@@ -509,6 +509,8 @@ export default function RootLayout() {
               <Stack.Screen name="screen-share" />
               <Stack.Screen name="find-by-phone" />
               <Stack.Screen name="share-receiver" />
+              <Stack.Screen name="study/index" />
+              <Stack.Screen name="study/session" />
             </Stack>
             <VoiceCommandLauncher />
             <DriveModeController />

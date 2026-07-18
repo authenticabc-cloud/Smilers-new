@@ -79,7 +79,15 @@ export default function AiChatScreen() {
             Powered by Hercules
           </Text>
         </View>
-        <View style={styles.headerSpacer} />
+        <TouchableOpacity
+          onPress={() => router.push('/study' as any)}
+          hitSlop={12}
+          style={styles.studyBtn}
+          testID="ai-chat-study-button"
+        >
+          <Ionicons name="school" size={20} color={Colors.primary} />
+          <Text style={styles.studyBtnText}>Study</Text>
+        </TouchableOpacity>
       </View>
       <KeyboardAvoidingView
         style={styles.flexOne}
@@ -145,6 +153,8 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
+  studyBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  studyBtnText: { color: Colors.primary, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
     paddingHorizontal: Spacing.base,
     paddingVertical: Spacing.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,

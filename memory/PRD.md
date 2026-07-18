@@ -1174,3 +1174,13 @@ compiles; Sign-In renders. Native-only — verify on EAS device build.
 - When ON: single continuous `expo-speech-recognition` session (paused on active-call routes). Commands: **answer/pick up/accept** → route via `/incoming-call?autoAnswer=1` (or `answerInvite` for inviteId); **decline** → `declineCall`/`declineInvite` + `messages.send("I'm driving and will call you back.")`; **reject** → decline silently; **listen** → `getLatestIncomingMedia(voice)` + play; **watch** → `getLatestIncomingMedia(video)` + full-screen player. Backend fns confirmed live on Convex `aware-newt-456`.
 - Known limitation: answering a NEW call WHILE already in an active call isn't triggered on native (recognizer paused during active-call routes due to mic contention).
 
+
+## Smilers Study AI — Phase 1 (implemented, pending native QA)
+Premium-gated AI homework tutor. Backend = web/Convex (`api.study.*`); mobile builds the client.
+- Dashboard `app/study/index.tsx`: 6 subject cards (Scan Homework, Ask, Mathematics, Science, Language*, Revision* — *later phases). Premium gate via `usePremiumAccess`.
+- Session `app/study/session.tsx`: text + camera/gallery/PDF (images upload to Convex File Storage via `uploadFile`), 6 response modes (Hint/Guide/Explain/Check-work/Verify/Similar-practice), reactive reply via `getSession`, save-to-Diary via `setSessionSaved`.
+- `api.study.ai.ask` (action, gated: throws ConvexError code PREMIUM_REQUIRED), `api.study.sessions.*`.
+- LaTeX via KaTeX-in-WebView (`src/components/study/LatexView.tsx`); tolerant structured-answer renderer (`StudyAnswer.tsx`).
+- Entry point: "Study" button in `app/ai-chat.tsx` header → `/study`.
+- Next phases: Science polish, Language Coach (Convex `languageSpeech.transcribe`/`languageAi.speak`), Revision Studio (quiz/flashcards/planner), Study Rooms.
+- NOTE: getSession message field shapes rendered defensively (camelCase + snake_case) — reconcile against `native-study-ai-contract.json` once verified on a premium account.
