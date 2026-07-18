@@ -54,6 +54,7 @@ import { ControlBtn, RingingAvatar, AudioOutputMenu, BouncingDot, SmallControl }
 import { useRingtonePlayer } from '../../src/lib/ringtone/useRingtonePlayer';
 import { setPipParams, enterPip, isPipSupported, useIsInPip } from '../../src/lib/pip';
 import { callHost, useCallHost } from '../../src/lib/call/callHost';
+import { InterpreterLayer } from '../../src/components/interpreter/InterpreterLayer';
 import { setActiveCall } from '../../src/lib/call/activeCallRegistry';
 import { useSecondaryCall, SecondaryCallInfo } from '../../src/lib/call/useSecondaryCall';
 import { loadSelfViewPos, saveSelfViewPos } from '../../src/lib/call/selfViewPosition';
@@ -3117,6 +3118,29 @@ export function CallScreenInner() {
             <Text style={styles.heldBannerBtnText}>End 2nd</Text>
           </TouchableOpacity>
         </View>
+      ) : null}
+
+      {/* AI Voice Interpreter — banner + subtitles + AI menu. Shows once the
+          WebRTC peer connects (voice or video). callId = shared Convex call id
+          so both participants' subtitles sync. Hidden in screen-only mode. */}
+      {peerConnected && !isScreenOnly ? (
+        <InterpreterLayer
+          callId={callId || effectiveConversationId || null}
+          connected={peerConnected}
+          micMuted={muted}
+          topOffset={90}
+          bottomOffset={210}
+          onDuckRemote={(ducked) => {
+            try {
+              const rs = (sessionRef.current as any)?.remoteStream;
+              rs?.getAudioTracks?.().forEach((t: any) => {
+                t.enabled = !ducked;
+              });
+            } catch {
+              /* remote stream unavailable — Mode 4 degrades to layered audio */
+            }
+          }}
+        />
       ) : null}
 
       {/* On-screen debug overlay — bottom-right floating "activity" badge.

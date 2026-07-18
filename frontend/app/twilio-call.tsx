@@ -324,7 +324,6 @@ function TwilioCallScreenInner() {
 
   const [roster, setRoster] = useState<CallRosterEntry[]>([]);
   const [showRoster, setShowRoster] = useState(false);
-  const [showAiMenu, setShowAiMenu] = useState(false);
   const [showAddPicker, setShowAddPicker] = useState(false);
   const [addSearch, setAddSearch] = useState('');
   const [pendingAdd, setPendingAdd] = useState<any | null>(null);
@@ -1082,7 +1081,6 @@ function TwilioCallScreenInner() {
           active={host.screenShareState === 'on'}
         />
         <ControlBtn icon="user-plus" label="Add" onPress={openAddFlow} />
-        <ControlBtn icon="zap" label="AI" onPress={() => setShowAiMenu(true)} active={showAiMenu} />
         <Pressable onPress={handleHangup} style={[styles.controlBtn, styles.hangupBtn]}>
           <Feather name="phone-off" size={22} color="#fff" />
           <Text style={styles.hangupLabel}>End</Text>
@@ -1233,8 +1231,6 @@ function TwilioCallScreenInner() {
           topOffset={insets.top + 56}
           bottomOffset={insets.bottom + 150}
           onDuckRemote={handleDuckRemote}
-          aiMenuVisible={showAiMenu}
-          onAiMenuClose={() => setShowAiMenu(false)}
         />
       ) : null}
 

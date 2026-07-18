@@ -15,12 +15,14 @@ export function InterpreterBanner({
   listeningLanguage,
   onOpen,
   onToggle,
+  onOpenAi,
 }: {
   enabled: boolean;
   speakingLanguage: string;
   listeningLanguage: string;
   onOpen: () => void;
   onToggle: () => void;
+  onOpenAi: () => void;
 }) {
   return (
     <View style={styles.wrap} testID="interpreter-banner">
@@ -40,6 +42,9 @@ export function InterpreterBanner({
         </View>
         <Feather name="settings" size={13} color="#bbb" style={styles.gear} />
       </Pressable>
+      <Pressable onPress={onOpenAi} style={styles.aiBtn} hitSlop={6} testID="interpreter-ai">
+        <Feather name="zap" size={14} color={Colors.primary} />
+      </Pressable>
       <Pressable
         onPress={onToggle}
         style={[styles.toggle, enabled && styles.toggleOn]}
@@ -48,7 +53,7 @@ export function InterpreterBanner({
       >
         <Feather name="globe" size={13} color={enabled ? '#222' : '#fff'} />
         <Text style={[styles.toggleText, enabled && styles.toggleTextOn]}>
-          {enabled ? 'Translate ON' : 'Translate'}
+          {enabled ? 'ON' : 'Translate'}
         </Text>
       </Pressable>
     </View>
@@ -76,6 +81,14 @@ const styles = StyleSheet.create({
   seg: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
   segText: { color: '#fff', fontSize: 12, fontWeight: '600', flexShrink: 1 },
   gear: { marginLeft: 2 },
+  aiBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   toggle: {
     flexDirection: 'row',
     alignItems: 'center',

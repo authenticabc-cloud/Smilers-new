@@ -33,8 +33,6 @@ export function InterpreterLayer({
   topOffset,
   bottomOffset,
   onDuckRemote,
-  aiMenuVisible,
-  onAiMenuClose,
 }: {
   callId: string | null;
   connected: boolean;
@@ -42,10 +40,9 @@ export function InterpreterLayer({
   topOffset: number;
   bottomOffset: number;
   onDuckRemote: (ducked: boolean) => void;
-  aiMenuVisible: boolean;
-  onAiMenuClose: () => void;
 }) {
   const [showSettings, setShowSettings] = useState(false);
+  const [showAiMenu, setShowAiMenu] = useState(false);
   const interp = useCallInterpreter(callId);
   const addUtterance = useMutation(api.callInterpreter.addUtterance);
   const subtitles = useCallSubtitles(callId);
@@ -87,6 +84,7 @@ export function InterpreterLayer({
           listeningLanguage={interp.listeningLanguage}
           onOpen={() => setShowSettings(true)}
           onToggle={() => interp.save({ enabled: !interp.enabled })}
+          onOpenAi={() => setShowAiMenu(true)}
         />
       </View>
 
@@ -113,8 +111,8 @@ export function InterpreterLayer({
       />
 
       <CallAiMenu
-        visible={aiMenuVisible}
-        onClose={onAiMenuClose}
+        visible={showAiMenu}
+        onClose={() => setShowAiMenu(false)}
         subtitles={subtitles}
         listeningLanguage={interp.listeningLanguage}
         onOpenInterpreter={() => setShowSettings(true)}

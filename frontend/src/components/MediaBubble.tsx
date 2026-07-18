@@ -45,6 +45,7 @@ import { getCachedTranscription, type CachedTranscription, type TranscriptionSeg
 import { SharedContactBubble } from './chat/SharedContactBubble';
 import { getLanguageByCode } from '../lib/languages';
 import { getOrCreateVoiceTranslation, type VoiceTranslation } from '../lib/voiceTranslation';
+import { ensureVoicePlaybackMode } from '../lib/audio/voicePlaybackMode';
 // iter-218 — Safe Browsing gate for links
 import { useUrlSafety, isDangerousFile } from '../lib/safeBrowsing';
 // iter-125: full-screen photo viewer toolbar helpers
@@ -1531,11 +1532,12 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
   useEffect(() => {
     return () => {
       const player = playerRef.current;
-      if (CURRENT_SOUND === player) {
-        CURRENT_SOUND = null;
-        CURRENT_STOP = null;
-      }
       playerRef.current = null;
+      // Keep the ACTIVE sound playing across navigation / backgrounding.
+      // Its status listener stays attached and clears CURRENT_SOUND on finish.
+      if (player && CURRENT_SOUND === player) {
+        return;
+      }
       try {
         statusListenerRef.current?.remove?.();
       } catch {}
@@ -1633,6 +1635,7 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
         try {
           player.play();
         } catch {}
+        ensureVoicePlaybackMode();
         CURRENT_SOUND = player;
         CURRENT_STOP = () => setIsPlaying(false);
       }
@@ -1914,8 +1917,12 @@ function VoiceTranslationPill({ msg }: { msg: any }) {
   useEffect(() => {
     return () => {
       const p = playerRef.current;
-      releaseAsCurrent();
       playerRef.current = null;
+      // Keep the ACTIVE translation playing across navigation / backgrounding.
+      if (p && CURRENT_SOUND === p) {
+        return;
+      }
+      releaseAsCurrent();
       if (p) {
         try {
           p.pause();
@@ -1935,12 +1942,17 @@ function VoiceTranslationPill({ msg }: { msg: any }) {
         const p = createAudioPlayer({ uri } as AudioSource);
         try {
           p.volume = 1.0;
+          p.loop = false;
         } catch {}
         playerRef.current = p;
         p.addListener('playbackStatusUpdate', (status: any) => {
           setSpeaking(!!status?.playing);
           if (status?.didJustFinish) {
             setSpeaking(false);
+            // Play ONCE: pause before resetting so it doesn't loop.
+            try {
+              p.pause();
+            } catch {}
             try {
               p.seekTo(0);
             } catch {}
@@ -1975,6 +1987,7 @@ function VoiceTranslationPill({ msg }: { msg: any }) {
         try {
           if (typeof player.seekTo === 'function') player.seekTo(0);
         } catch {}
+        ensureVoicePlaybackMode();
         player.play();
         setSpeaking(true);
       }
