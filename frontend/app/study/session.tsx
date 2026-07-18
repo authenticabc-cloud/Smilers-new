@@ -30,6 +30,7 @@ import {
   useStudyAsk,
   useStudySession,
   useStudySessions,
+  useStudySpeak,
   type StudyMode,
 } from '../../src/lib/study/useStudyAi';
 
@@ -42,6 +43,27 @@ const MODES: { key: StudyMode; label: string }[] = [
   { key: 'similar_practice', label: 'Similar practice' },
 ];
 
+const STUDY_LANGS = ['English', 'Italian', 'French', 'Spanish', 'German', 'Portuguese', 'Arabic'];
+
+function answerToText(m: any): string {
+  const a = m?.answer || m?.reply || m || {};
+  if (typeof a === 'string') return a;
+  const parts: string[] = [];
+  if (a.summary) parts.push(String(a.summary));
+  const steps = a.steps || [];
+  if (Array.isArray(steps)) {
+    for (const s of steps) {
+      const t = s?.explanation || s?.text;
+      if (t) parts.push(String(t));
+    }
+  }
+  if (a.finalAnswer || a.final_answer) parts.push(String(a.finalAnswer || a.final_answer));
+  if (parts.length === 0 && (a.content || a.body || a.message)) {
+    parts.push(String(a.content || a.body || a.message));
+  }
+  return parts.join('. ');
+}
+
 export default function StudySession() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ sessionId?: string; subject?: string; mode?: string; capture?: string }>();
@@ -49,9 +71,12 @@ export default function StudySession() {
   const [text, setText] = useState('');
   const [images, setImages] = useState<{ uri: string; mime?: string }[]>([]);
   const [mode, setMode] = useState<StudyMode>((params.mode as StudyMode) || 'guided');
+  const [targetLang, setTargetLang] = useState('English');
   const subject = params.subject;
+  const isLanguage = subject === 'language';
 
   const { ask, uploadImages, asking, uploading } = useStudyAsk();
+  const { speak, stop, speakingId } = useStudySpeak();
   const { session } = useStudySession(sessionId);
   const { setSessionSaved } = useStudySessions();
   const scrollRef = useRef<ScrollView>(null);
@@ -112,9 +137,9 @@ export default function StudySession() {
         sessionId,
         text: text.trim() || undefined,
         imageStorageIds,
-        mode,
+        mode: isLanguage ? undefined : mode,
         subject,
-        language: 'English',
+        language: isLanguage ? targetLang : 'English',
       });
       const newId = res?.sessionId || res?._id || sessionId;
       if (newId && newId !== sessionId) setSessionId(String(newId));
@@ -131,7 +156,7 @@ export default function StudySession() {
         Alert.alert('Something went wrong', err?.data?.message || err?.message || 'Please try again.');
       }
     }
-  }, [asking, uploading, text, images, uploadImages, ask, sessionId, mode, subject]);
+  }, [asking, uploading, text, images, uploadImages, ask, sessionId, mode, subject, isLanguage, targetLang]);
 
   const toggleSaved = useCallback(() => {
     if (!sessionId) return;
@@ -198,23 +223,35 @@ export default function StudySession() {
         ) : null}
       </ScrollView>
 
-      {/* Response mode chips */}
+      {/* Response mode chips (or target-language chips in Language Coach) */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.modeRow}
       >
-        {MODES.map((mo) => (
-          <TouchableOpacity
-            key={mo.key}
-            onPress={() => setMode(mo.key)}
-            style={[styles.modeChip, mode === mo.key && styles.modeChipOn]}
-          >
-            <Text style={[styles.modeChipText, mode === mo.key && styles.modeChipTextOn]}>
-              {mo.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
+        {isLanguage
+          ? STUDY_LANGS.map((lang) => (
+              <TouchableOpacity
+                key={lang}
+                onPress={() => setTargetLang(lang)}
+                style={[styles.modeChip, targetLang === lang && styles.modeChipOn]}
+              >
+                <Text style={[styles.modeChipText, targetLang === lang && styles.modeChipTextOn]}>
+                  {lang}
+                </Text>
+              </TouchableOpacity>
+            ))
+          : MODES.map((mo) => (
+              <TouchableOpacity
+                key={mo.key}
+                onPress={() => setMode(mo.key)}
+                style={[styles.modeChip, mode === mo.key && styles.modeChipOn]}
+              >
+                <Text style={[styles.modeChipText, mode === mo.key && styles.modeChipTextOn]}>
+                  {mo.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
       </ScrollView>
 
       {images.length > 0 ? (

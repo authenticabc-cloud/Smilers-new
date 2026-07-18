@@ -7,8 +7,11 @@
  * `messages.generateUploadUrl` via uploadFile), then their storageIds are
  * passed to `ask`. The reply is rendered by subscribing to `getSession`.
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { Platform } from 'react-native';
 import { useAction, useConvex, useMutation } from 'convex/react';
+import { createAudioPlayer } from 'expo-audio';
+import * as FileSystem from 'expo-file-system/legacy';
 import { api } from '../../convexApi';
 import { useSafeConvexQuery } from '../../hooks/useSafeConvexQuery';
 import { useAuth } from '../../providers/AuthProvider';
@@ -120,4 +123,54 @@ export function useStudyAsk() {
     () => ({ ask, uploadImages, asking, uploading }),
     [ask, uploadImages, asking, uploading],
   );
+}
+
+/** Text-to-speech for Language Coach "read aloud" (Convex languageAi.speak).
+ *  Returns { audioBase64, mimeType }, played locally — nothing is stored. */
+export function useStudySpeak() {
+  const speakAction = useAction((api as any).study.languageAi.speak);
+  const [speakingId, setSpeakingId] = useState<string | null>(null);
+  const playerRef = useRef<any>(null);
+
+  const stop = useCallback(() => {
+    try {
+      playerRef.current?.remove?.();
+    } catch {}
+    playerRef.current = null;
+    setSpeakingId(null);
+  }, []);
+
+  const speak = useCallback(
+    async (id: string, text: string, language?: string) => {
+      const body = (text || '').trim();
+      if (!body) return;
+      stop();
+      setSpeakingId(id);
+      try {
+        const res: any = await speakAction({ text: body.slice(0, 3000), language } as any);
+        const audioBase64 = res?.audioBase64;
+        const mime = res?.mimeType || 'audio/mpeg';
+        if (!audioBase64 || Platform.OS === 'web') {
+          setSpeakingId(null);
+          return;
+        }
+        const ext = mime.includes('wav') ? 'wav' : 'mp3';
+        const path = `${FileSystem.cacheDirectory}study_tts_${Date.now()}.${ext}`;
+        await FileSystem.writeAsStringAsync(path, audioBase64, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        const p = createAudioPlayer({ uri: path });
+        playerRef.current = p;
+        p.addListener('playbackStatusUpdate', (st: any) => {
+          if (st?.didJustFinish) stop();
+        });
+        p.play();
+      } catch {
+        setSpeakingId(null);
+      }
+    },
+    [speakAction, stop],
+  );
+
+  return { speak, stop, speakingId };
 }
