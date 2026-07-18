@@ -124,6 +124,8 @@ export function MessageBubble({
   // are URLs in the text. Stores upgrade findings in state. Cancels on
   // unmount via the cancelled flag pattern.
   const [remoteFindings, setRemoteFindings] = useState<null | ReturnType<typeof scanMessage>>(null);
+  // Lets a recipient recover a rare false-positive scam flag without leaving chat.
+  const [revealed, setRevealed] = useState(false);
   useEffect(() => {
     if (msg.deletedAt) return;
     if (!securityScan) return;
@@ -166,10 +168,14 @@ export function MessageBubble({
   );
   const scamBlocked = scamVerdict.state === 'scam';
 
-  if (effectiveScan?.shouldHide || scamBlocked) {
+  // URL/file threats (Google Safe Browsing / dangerous extensions) are
+  // high-confidence and stay masked. Text scams are an LLM judgement call,
+  // so we let the recipient tap "Show anyway" to recover a false positive.
+  const urlOrFileBlocked = !!effectiveScan?.shouldHide;
+  if ((urlOrFileBlocked || scamBlocked) && !revealed) {
     const blockedTimeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const why = effectiveScan?.shouldHide
-      ? explainScanResult(effectiveScan)
+    const why = urlOrFileBlocked
+      ? explainScanResult(effectiveScan!)
       : scamVerdict.state === 'scam'
         ? (scamVerdict.reason || describeScamCategory(scamVerdict.category))
         : '';
@@ -191,6 +197,17 @@ export function MessageBubble({
             <Text style={styles.securityReasonText} numberOfLines={2}>
               {why}
             </Text>
+          ) : null}
+          {/* Only text-scam flags are recoverable — malware URLs/files stay hidden. */}
+          {!urlOrFileBlocked && scamBlocked ? (
+            <TouchableOpacity
+              onPress={() => setRevealed(true)}
+              style={styles.revealButton}
+              testID={`message-reveal-${msg._id}`}
+            >
+              <Feather name="eye" size={12} color={Colors.primary} />
+              <Text style={styles.revealText}>Show anyway</Text>
+            </TouchableOpacity>
           ) : null}
           <View style={styles.bubbleMeta}>
             <Text style={[styles.bubbleTime, styles.deletedTimeText]}>{blockedTimeStr}</Text>
@@ -421,6 +438,18 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     marginTop: 4,
     lineHeight: 16,
+  },
+  revealButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 8,
+    paddingVertical: 4,
+  },
+  revealText: {
+    fontSize: FontSize.xs,
+    color: Colors.primary,
+    fontWeight: FontWeight.semibold,
   },
   editedBadge: { fontStyle: 'italic', marginRight: 6, opacity: 0.85 },
   starIcon: { marginRight: 4 },
