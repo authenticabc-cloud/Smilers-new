@@ -130,8 +130,8 @@ function EmergencyScreenInner() {
     {},
     null,
   );
-  const { data: broadcastRemote } = useSafeConvexQuery<BroadcastSettings | null>(
-    (api as any).emergencyBroadcast.getSettings,
+  const { data: broadcastRemote } = useSafeConvexQuery<any>(
+    (api as any).emergencyAlerts.getBroadcastSettings,
     {},
     null,
   );
@@ -139,7 +139,7 @@ function EmergencyScreenInner() {
   const triggerAlert = useMutation((api as any).emergencyAlerts.triggerAlert);
   const resolveAlert = useMutation((api as any).emergencyAlerts.resolveAlert);
   const updatePanic = useMutation((api as any).panicMode.updateSettings);
-  const updateBroadcast = useMutation((api as any).emergencyBroadcast.updateSettings);
+  const updateBroadcast = useMutation((api as any).emergencyAlerts.updateBroadcastSettings);
 
   // ---------- Local mirror of settings (so sliders feel snappy) ----------
   const [panic, setPanic] = useState<PanicSettings>({
@@ -156,18 +156,20 @@ function EmergencyScreenInner() {
     if (!panicRemote) return;
     setPanic((p) => ({
       enabled: panicRemote.enabled ?? p.enabled,
-      triggerBpm: panicRemote.triggerBpm ?? p.triggerBpm,
+      // Backend returns `bpmThreshold` / `deviceName` (not triggerBpm / pairedDeviceName).
+      triggerBpm: (panicRemote as any).bpmThreshold ?? p.triggerBpm,
       sustainedSeconds: panicRemote.sustainedSeconds ?? p.sustainedSeconds,
       cooldownMinutes: panicRemote.cooldownMinutes ?? p.cooldownMinutes,
-      pairedDeviceName: panicRemote.pairedDeviceName ?? null,
-      pairedDeviceId: panicRemote.pairedDeviceId ?? null,
+      pairedDeviceName: (panicRemote as any).deviceName ?? p.pairedDeviceName ?? null,
+      pairedDeviceId: p.pairedDeviceId ?? null,
     }));
   }, [panicRemote]);
 
   useEffect(() => {
     if (!broadcastRemote) return;
     setBroadcast((b) => ({
-      enabled: broadcastRemote.enabled ?? b.enabled,
+      // Backend returns `broadcastEnabled` (not enabled).
+      enabled: broadcastRemote.broadcastEnabled ?? b.enabled,
       radiusKm: broadcastRemote.radiusKm ?? b.radiusKm,
     }));
   }, [broadcastRemote]);
@@ -232,15 +234,16 @@ function EmergencyScreenInner() {
       const next = { ...panic, ...patch };
       setPanic(next);
       try {
-        // Convex arg validators reject `null` for optional string fields
-        // (they accept `string | undefined`, not `null`). The native screen
-        // seeds pairedDevice* as null, so sending the merged object as-is
-        // threw ArgumentValidationError → the toggle silently reverted on the
-        // next server sync. Strip null/undefined so only real values are sent.
-        const payload: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(next)) {
-          if (v !== null && v !== undefined) payload[k] = v;
-        }
+        // Map local field names → the backend contract:
+        //   panicMode.updateSettings({ enabled(REQ), bpmThreshold?, sustainedSeconds?,
+        //   cooldownMinutes?, deviceName? }). `enabled` is required; tuning fields are
+        //   optional and omitted ones keep their existing value. We do NOT send
+        //   pairedDeviceId (not a backend field) — it's tracked locally only.
+        const payload: Record<string, unknown> = { enabled: !!next.enabled };
+        if (typeof next.triggerBpm === 'number') payload.bpmThreshold = next.triggerBpm;
+        if (typeof next.sustainedSeconds === 'number') payload.sustainedSeconds = next.sustainedSeconds;
+        if (typeof next.cooldownMinutes === 'number') payload.cooldownMinutes = next.cooldownMinutes;
+        if (next.pairedDeviceName) payload.deviceName = next.pairedDeviceName;
         await updatePanic(payload as any);
       } catch (e: any) {
         const message = String(e?.message || '');
@@ -257,10 +260,9 @@ function EmergencyScreenInner() {
       const next = { ...broadcast, ...patch };
       setBroadcast(next);
       try {
-        const payload: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(next)) {
-          if (v !== null && v !== undefined) payload[k] = v;
-        }
+        // Backend contract: emergencyAlerts.updateBroadcastSettings({ broadcastEnabled, radiusKm }).
+        const payload: Record<string, unknown> = { broadcastEnabled: !!next.enabled };
+        if (typeof next.radiusKm === 'number') payload.radiusKm = next.radiusKm;
         await updateBroadcast(payload as any);
       } catch (e: any) {
         const message = String(e?.message || '');

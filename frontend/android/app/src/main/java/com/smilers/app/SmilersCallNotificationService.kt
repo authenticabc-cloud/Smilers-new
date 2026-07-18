@@ -766,12 +766,55 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
         Log.d(TAG, "Cancelled incoming-call notification id=$notifId for callId=$callId")
     }
 
+    // #2 fix: resolve the display name the CALLEE saved for a phone number in
+    // their own device address book (ContactsContract.PhoneLookup). Requires
+    // READ_CONTACTS (already granted for the app). Returns null when the number
+    // is blank, permission is missing, or no contact matches — callers then
+    // fall back to the pushed account name.
+    private fun lookupContactNameByPhone(phone: String?): String? {
+        val number = phone?.trim().orEmpty()
+        if (number.isEmpty()) return null
+        try {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(
+                    applicationContext, android.Manifest.permission.READ_CONTACTS,
+                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                return null
+            }
+            val uri = android.net.Uri.withAppendedPath(
+                android.provider.ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
+                android.net.Uri.encode(number),
+            )
+            applicationContext.contentResolver.query(
+                uri,
+                arrayOf(android.provider.ContactsContract.PhoneLookup.DISPLAY_NAME),
+                null, null, null,
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val name = cursor.getString(0)?.trim()
+                    if (!name.isNullOrEmpty()) return name
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "lookupContactNameByPhone failed: ${e.message}")
+        }
+        return null
+    }
+
     private fun handleCallMessage(data: Map<String, String>) {
         val callId = data["callId"] ?: return
-        val callerName = listOf(
+        val pushedName = listOf(
             data["callerName"], data["callerDisplayName"],
             data["displayName"], data["senderName"],
         ).firstOrNull { !it.isNullOrBlank() } ?: "Smilers user"
+
+        // #2 fix: prefer the name THIS device (the callee) has saved for the caller
+        // in its own address book. The call push is data-only and carries the
+        // caller's E.164 number in data.callerPhone, so we look it up directly in
+        // ContactsContract — always fresh, no server round-trip. Falls back to the
+        // pushed account name when the caller isn't saved / has no number.
+        val deviceName = lookupContactNameByPhone(data["callerPhone"])
+        val callerName = deviceName ?: pushedName
 
         val isVideo = data["twilio_is_video"] == "1" || data["callType"] == "video"
         val room = data["twilio_room_name"] ?: ""
@@ -1051,7 +1094,8 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
         val convId = data["conversationId"] ?: ""
         val notifKey = callId.ifEmpty { convId }
         if (notifKey.isEmpty()) return
-        val callerName = listOf(data["callerName"], data["callerDisplayName"],
+        val callerName = lookupContactNameByPhone(data["callerPhone"])
+            ?: listOf(data["callerName"], data["callerDisplayName"],
             data["displayName"], data["senderName"]).firstOrNull { !it.isNullOrBlank() } ?: "Smilers user"
         // Use the FCM notification payload body/title when available — it contains the
         // full backend-formatted text ("You missed a voice call from X"). Firebase puts
