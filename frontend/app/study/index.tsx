@@ -28,6 +28,8 @@ interface CardDef {
   color: string;
   params: Record<string, string>;
   soon?: boolean;
+  free?: boolean;
+  route?: string;
 }
 
 const CARDS: CardDef[] = [
@@ -36,7 +38,8 @@ const CARDS: CardDef[] = [
   { key: 'math', title: 'Mathematics', subtitle: 'Solve & explain, step by step', icon: 'divide-circle', color: '#2563EB', params: { subject: 'mathematics' } },
   { key: 'science', title: 'Science Lab', subtitle: 'Biology, chemistry, physics', icon: 'thermometer', color: '#16A34A', params: { subject: 'science' } },
   { key: 'language', title: 'Language Coach', subtitle: 'Speak, write & practise', icon: 'globe', color: '#9333EA', params: { subject: 'language' } },
-  { key: 'revision', title: 'Revision Studio', subtitle: 'Quizzes, flashcards, plans', icon: 'layers', color: '#EA580C', params: {} },
+  { key: 'revision', title: 'Revision Studio', subtitle: 'Quizzes, flashcards, plans', icon: 'layers', color: '#EA580C', params: {}, route: '/study/revision' },
+  { key: 'rooms', title: 'Study Rooms', subtitle: 'Study together, share quizzes', icon: 'users', color: '#0EA5E9', params: {}, route: '/study/rooms', free: true },
 ];
 
 export default function StudyDashboard() {
@@ -49,7 +52,8 @@ export default function StudyDashboard() {
       Alert.alert('Coming soon', `${card.title} is on the way. Try Scan Homework or Ask a Question for now.`);
       return;
     }
-    if (!premium.hasAccess && !premium.isLoading) {
+    // Study Rooms is free to join/create (only AI quiz generation is Premium).
+    if (!card.free && !premium.hasAccess && !premium.isLoading) {
       Alert.alert(
         'Study AI is Premium',
         'Unlock the AI tutor — scan homework, solve step by step and practise. Upgrade in your profile to continue.',
@@ -57,7 +61,7 @@ export default function StudyDashboard() {
       );
       return;
     }
-    router.push({ pathname: card.key === 'revision' ? '/study/revision' : '/study/session', params: card.params } as any);
+    router.push({ pathname: card.route || '/study/session', params: card.params } as any);
   };
 
   const recent = (sessions || []).slice(0, 6);

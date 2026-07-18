@@ -1198,3 +1198,12 @@ Fully Convex-backed (`native-study-ai-revision-contract`). Client bindings in `s
 - Notes/plans `app/study/note/[noteId].tsx`: renders `kind:'summary'|'study_plan'` (day-by-day plan or sectioned summary), defensive field shapes.
 - Ungated: `api.study.revision.{listQuizzes,getQuiz,listDecks,getDeck,listNotes,getNote,set*Saved,delete*}`; folders `api.study.folders.*`; progress `api.study.progress.{getProgress,getRecentActivity,logLessonStudied}`.
 - New material starts `isSaved=false`. LaTeX (`promptLatex`/`finalAnswerLatex`) renders via LatexView without `$`.
+
+## Smilers Study AI — Phase 4: Study Rooms (implemented, native QA pending)
+Standalone social layer (NOT tied to Smilers group chat; AI never reads chat messages). Convex-backed (`native-study-ai-social-contract`). Client bindings in `src/lib/study/useRooms.ts`. Entry: "Study Rooms" card on the Study dashboard (FREE — not premium-gated; only AI quiz generation is Premium).
+- Rooms list `app/study/rooms/index.tsx`: my rooms, Create room, Join by 6-char uppercase code (`previewRoomByCode` → confirm → `joinRoom`).
+- Room detail `app/study/rooms/[roomId].tsx`: join-code card (tap to copy), tabs Quizzes/Decks/Members. `getRoom` returns null for non-members → "not a member" state. Admins see a settings gear.
+- Group quizzes: `api.study.rooms.{listRoomQuizzes,getRoomQuiz,shareQuizToRoom,submitRoomQuizAttempt,deleteRoomQuiz}` + `api.study.roomsAi.generateRoomQuiz` (ONLY premium-gated call; `useRoomContent=true` while AI-access off → FORBIDDEN handled). Quiz runner `rooms/quiz/[roomQuizId].tsx` with Quiz + Leaderboard tabs (server-graded, best attempt per member).
+- Collaborative decks: `api.study.rooms.{listRoomDecks,getRoomDeck,createRoomDeck,addRoomCard,deleteRoomCard,deleteRoomDeck}`. `rooms/deck/[roomDeckId].tsx`: any member adds cards; flip-through Study mode.
+- Admin settings `rooms/settings/[roomId].tsx`: rename/describe (`updateRoom`), "Let Study AI use this room's shared material" toggle (`aiCanReadRoomContent`, off by default), regenerate join code, member management (`setMemberRole`/`removeMember`), delete room (owner) / leave room.
+- Limits: 100 members/room, 500 cards/deck, 20 questions/quiz.
