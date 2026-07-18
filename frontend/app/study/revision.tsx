@@ -4,7 +4,7 @@
  * A "Create" sheet builds new material from pasted text (+ subject/topic).
  * New items start unsaved; the streak header comes from study.progress.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -24,7 +24,7 @@ import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { Colors } from '../../src/theme';
 import { usePremiumAccess } from '../../src/hooks/usePremiumAccess';
-import { isPremiumRequiredError } from '../../src/lib/study/useStudyAi';
+import { isPremiumRequiredError, useStudySessions } from '../../src/lib/study/useStudyAi';
 import {
   useDecks,
   useNotes,
@@ -240,11 +240,20 @@ function CreateSheet({
 }) {
   const insets = useSafeAreaInsets();
   const { run, generating } = useRevisionGenerate();
+  const { sessions } = useStudySessions();
   const kinds = KIND_OPTIONS[tab];
   const [kind, setKind] = useState(kinds[0].key);
   const [subject, setSubject] = useState('');
   const [topic, setTopic] = useState('');
   const [sourceText, setSourceText] = useState('');
+  const [sourceSessionId, setSourceSessionId] = useState<string | null>(null);
+
+  // Recent lessons the learner can build straight from (saved ones first).
+  const lessons = useMemo(() => {
+    const list = [...(sessions || [])];
+    list.sort((a: any, b: any) => (b?.isSaved ? 1 : 0) - (a?.isSaved ? 1 : 0));
+    return list.slice(0, 12);
+  }, [sessions]);
 
   // Keep the selected kind valid when the active tab changes.
   useEffect(() => setKind(KIND_OPTIONS[tab][0].key), [tab]);
@@ -258,12 +267,13 @@ function CreateSheet({
       ]);
       return;
     }
-    if (!sourceText.trim() && !topic.trim() && !subject.trim()) {
-      Alert.alert('Add a topic or notes', 'Type a topic, or paste some notes to build from.');
+    if (!sourceSessionId && !sourceText.trim() && !topic.trim() && !subject.trim()) {
+      Alert.alert('Pick a lesson or add a topic', 'Choose a saved lesson, type a topic, or paste some notes to build from.');
       return;
     }
     try {
       const res: any = await run(kind, {
+        sourceSessionId: sourceSessionId || undefined,
         sourceText: sourceText.trim() || undefined,
         subject: subject.trim() || undefined,
         topic: topic.trim() || undefined,
@@ -272,6 +282,7 @@ function CreateSheet({
       setSourceText('');
       setTopic('');
       setSubject('');
+      setSourceSessionId(null);
       const id = res?.quizId || res?.deckId || res?.noteId;
       if (!id) return;
       if (kind === 'quiz') router.push({ pathname: '/study/quiz/[quizId]', params: { quizId: String(id) } } as any);
@@ -288,7 +299,7 @@ function CreateSheet({
         Alert.alert('Could not generate', err?.data?.message || err?.message || 'Please try again.');
       }
     }
-  }, [premiumBlocked, sourceText, topic, subject, run, kind, onClose]);
+  }, [premiumBlocked, sourceSessionId, sourceText, topic, subject, run, kind, onClose]);
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -315,9 +326,34 @@ function CreateSheet({
             </View>
           ) : null}
 
+          {lessons.length > 0 ? (
+            <View style={styles.lessonBlock}>
+              <Text style={styles.lessonLabel}>Build from a saved lesson</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.lessonRow}>
+                {lessons.map((s: any) => {
+                  const sel = sourceSessionId === String(s._id);
+                  return (
+                    <TouchableOpacity
+                      key={String(s._id)}
+                      style={[styles.lessonChip, sel && styles.lessonChipOn]}
+                      onPress={() => setSourceSessionId(sel ? null : String(s._id))}
+                    >
+                      {s.isSaved ? (
+                        <Feather name="bookmark" size={11} color={sel ? '#fff' : Colors.primary} />
+                      ) : null}
+                      <Text style={[styles.lessonChipText, sel && styles.lessonChipTextOn]} numberOfLines={1}>
+                        {s.title || s.subject || 'Lesson'}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          ) : null}
+
           <TextInput
             style={styles.field}
-            placeholder="Topic (e.g. Photosynthesis)"
+            placeholder={sourceSessionId ? 'Topic (optional — using lesson)' : 'Topic (e.g. Photosynthesis)'}
             placeholderTextColor={Colors.textMuted}
             value={topic}
             onChangeText={setTopic}
@@ -474,6 +510,30 @@ const styles = StyleSheet.create({
   kindChipOn: { backgroundColor: Colors.primary },
   kindText: { color: Colors.textSecondary, fontSize: 13, fontWeight: '700' },
   kindTextOn: { color: '#fff' },
+  lessonBlock: { gap: 6 },
+  lessonLabel: {
+    color: Colors.textSecondary,
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  lessonRow: { gap: 8, paddingRight: 8 },
+  lessonChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    maxWidth: 180,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 14,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  lessonChipOn: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  lessonChipText: { color: Colors.textPrimary, fontSize: 13, fontWeight: '600' },
+  lessonChipTextOn: { color: '#fff' },
   field: {
     backgroundColor: Colors.surface,
     borderRadius: 12,
