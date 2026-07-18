@@ -69,6 +69,8 @@ export default function StudyRooms() {
         ) : (
           rooms.map((r: any) => {
             const role = pick(r, 'role', 'myRole');
+            const activeToday =
+              pick(r, 'membersStudiedToday', 'activeTodayCount', 'activeToday', 'studiedTodayCount');
             return (
               <TouchableOpacity
                 key={String(r._id)}
@@ -85,6 +87,14 @@ export default function StudyRooms() {
                     {`${pick(r, 'memberCount', 'membersCount') ?? (r.members?.length ?? 0)} members`}
                     {role && role !== 'member' ? ` · ${role}` : ''}
                   </Text>
+                  {typeof activeToday === 'number' && activeToday > 0 ? (
+                    <View style={styles.activityPill}>
+                      <View style={styles.activityDot} />
+                      <Text style={styles.activityText}>
+                        {`${activeToday} ${activeToday === 1 ? 'member' : 'members'} studied today`}
+                      </Text>
+                    </View>
+                  ) : null}
                 </View>
                 <Feather name="chevron-right" size={20} color={Colors.textMuted} />
               </TouchableOpacity>
@@ -330,6 +340,19 @@ const styles = StyleSheet.create({
   },
   roomName: { color: Colors.textPrimary, fontSize: 15, fontWeight: '700' },
   roomSub: { color: Colors.textSecondary, fontSize: 12, marginTop: 2 },
+  activityPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    marginTop: 6,
+    backgroundColor: 'rgba(34,197,94,0.12)',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  activityDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: Colors.success },
+  activityText: { color: '#15803D', fontSize: 11, fontWeight: '700' },
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)' },
   sheetWrap: { flex: 1, justifyContent: 'flex-end' },
   sheet: {
