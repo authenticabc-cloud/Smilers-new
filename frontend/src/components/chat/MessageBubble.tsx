@@ -8,6 +8,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { scanMessage, explainScanResult, extractUrls, enrichScanWithRemoteAPI } from '../../lib/securityScanner';
+import { useTextScamScan, describeScamCategory } from '../../lib/textScamScan';
 import { Colors, FontSize, FontWeight, Radius, Shadow } from '../../theme';
 
 export function ActionRow({
@@ -157,9 +158,21 @@ export function MessageBubble({
     return securityScan;
   }, [securityScan, remoteFindings]);
 
-  if (effectiveScan?.shouldHide) {
+  // AI Safety Shield (text scams): only scan INCOMING, non-deleted, non-URL-blocked
+  // messages. Conservative LLM classifier flags fake-prize/phishing/investment cons.
+  const scamVerdict = useTextScamScan(
+    typeof msg.text === 'string' ? msg.text : '',
+    !isMine && !msg.deletedAt && effectiveScan?.severity !== 'block',
+  );
+  const scamBlocked = scamVerdict.state === 'scam';
+
+  if (effectiveScan?.shouldHide || scamBlocked) {
     const blockedTimeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const why = explainScanResult(effectiveScan);
+    const why = effectiveScan?.shouldHide
+      ? explainScanResult(effectiveScan)
+      : scamVerdict.state === 'scam'
+        ? (scamVerdict.reason || describeScamCategory(scamVerdict.category))
+        : '';
     return (
       <View style={[styles.bubbleRow, isMine ? styles.bubbleRowMine : styles.bubbleRowOther]}>
         <View

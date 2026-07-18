@@ -3002,6 +3002,126 @@ async def safe_browsing_check(payload: SafeBrowsingCheckRequest, request: Reques
     return SafeBrowsingCheckResponse(matches=cached + new_matches)
 
 
+# ============================================================================
+# AI Safety Shield — text-based scam / phishing / fake-investment detection.
+#
+# The URL/file layer (Safe Browsing + heuristics) only catches malicious
+# links. This LLM classifier catches TEXT cons that carry no link at all:
+# fake prize/lottery wins, crypto & investment fraud, account-phishing
+# ("your account is suspended, verify now"), impersonation, and
+# advance-fee / "send money" scams.
+#
+# Verdict is CONSERVATIVE by design (user pref, iter): only clear scams
+# are flagged so ordinary chat between friends is never removed. The
+# mobile client masks the bubble locally when `is_scam` is true — no
+# Convex mutation, the original message is preserved server-side.
+# ============================================================================
+
+_SCAN_TEXT_CACHE: dict[str, "ScanTextResponse"] = {}
+_SCAN_TEXT_CACHE_MAX = 1000
+
+
+class ScanTextRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=4000)
+
+
+class ScanTextResponse(BaseModel):
+    is_scam: bool = False
+    category: str = "safe"  # scam | phishing | investment_fraud | safe
+    reason: str = ""
+
+
+_SCAN_TEXT_SYSTEM = (
+    "You are a conservative fraud-detection classifier for a personal messaging app. "
+    "Decide ONLY whether an incoming chat message is a CLEAR scam that should be hidden "
+    "from the recipient for their safety. Be very conservative: normal conversation, "
+    "jokes, opinions, business talk, links to legitimate sites, and money talk between "
+    "friends are NOT scams. Flag a message ONLY when it clearly matches one of these: "
+    "(1) fake prize/lottery/gift-card winnings requiring action or fees; "
+    "(2) crypto or investment fraud promising guaranteed/high returns, 'double your money', signals groups; "
+    "(3) account-phishing pretending to be a bank/service telling the user to verify/unlock/confirm credentials or a code; "
+    "(4) advance-fee / 'send money' / wire-transfer cons, romance-scam money requests, impersonation of officials. "
+    "When unsure, respond safe. "
+    "Respond with ONLY a compact JSON object, no markdown, of the form: "
+    '{"is_scam": <true|false>, "category": "<scam|phishing|investment_fraud|safe>", "reason": "<short user-facing reason, max 100 chars>"}'
+)
+
+
+@api_router.post("/scan-text", response_model=ScanTextResponse)
+async def scan_text(payload: ScanTextRequest, request: Request) -> ScanTextResponse:
+    """Classify a chat message as a clear scam/phishing/investment-fraud (or safe)."""
+    _ok, _retry = await _rate_limit_ok_async("scan_text", _client_ip_of(request), 90, 60)
+    if not _ok:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many safety checks; please slow down.",
+            headers={"Retry-After": str(_retry)},
+        )
+
+    text = (payload.text or "").strip()
+    # Too short to be a meaningful scam — skip the LLM call entirely.
+    if len(text) < 12:
+        return ScanTextResponse(is_scam=False, category="safe", reason="")
+
+    cache_key = text[:4000]
+    cached = _SCAN_TEXT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    api_key = os.getenv("EMERGENT_LLM_KEY")
+    if not api_key:
+        # Fail open — never block delivery when the key is missing.
+        return ScanTextResponse(is_scam=False, category="safe", reason="")
+
+    try:
+        chat = LlmChat(
+            api_key=api_key,
+            session_id=f"smilers-scan-{uuid.uuid4()}",
+            system_message=_SCAN_TEXT_SYSTEM,
+        ).with_model("gemini", "gemini-2.5-flash")
+        raw = (await chat.send_message(UserMessage(text=text[:4000]))).strip()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"scan-text: LLM failed: {e}")
+        return ScanTextResponse(is_scam=False, category="safe", reason="")
+
+    result = _parse_scan_text_verdict(raw)
+    # Bounded LRU-ish cache.
+    if len(_SCAN_TEXT_CACHE) >= _SCAN_TEXT_CACHE_MAX:
+        try:
+            _SCAN_TEXT_CACHE.pop(next(iter(_SCAN_TEXT_CACHE)))
+        except StopIteration:
+            pass
+    _SCAN_TEXT_CACHE[cache_key] = result
+    return result
+
+
+def _parse_scan_text_verdict(raw: str) -> ScanTextResponse:
+    """Parse the model's JSON verdict, tolerating markdown fences / stray text."""
+    import json as _json
+    import re as _re
+
+    if not raw:
+        return ScanTextResponse()
+    cleaned = raw.strip()
+    # Strip ```json ... ``` fences if present.
+    fence = _re.search(r"\{.*\}", cleaned, _re.DOTALL)
+    if fence:
+        cleaned = fence.group(0)
+    try:
+        data = _json.loads(cleaned)
+    except Exception:  # noqa: BLE001
+        return ScanTextResponse()
+    is_scam = bool(data.get("is_scam"))
+    category = str(data.get("category") or ("scam" if is_scam else "safe")).strip().lower()
+    if category not in {"scam", "phishing", "investment_fraud", "safe"}:
+        category = "scam" if is_scam else "safe"
+    reason = str(data.get("reason") or "").strip()[:100]
+    if not is_scam:
+        category = "safe"
+        reason = ""
+    return ScanTextResponse(is_scam=is_scam, category=category, reason=reason)
+
+
 # ── App version / update banner (Play Store + App Store) ──────────────────
 # The mobile client calls GET /api/app-version on launch and, if its bundled
 # version is older than `latestVersion`, shows a dismissible "Update available"
