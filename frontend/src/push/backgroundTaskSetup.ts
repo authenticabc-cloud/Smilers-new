@@ -329,12 +329,25 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
   backgroundNotificationKeys.add(notificationKey);
   trimBackgroundNotificationCache();
 
-  const title = toNonEmptyString(payload.title) || 'New message';
-  const body = getDisplayNameFromPayload(payload) || 'Open Smilers to view the message';
+  let title = toNonEmptyString(payload.title) || 'New message';
+  let body = getDisplayNameFromPayload(payload) || 'Open Smilers to view the message';
 
-  // iter-260: bundle message notifications per-conversation (WhatsApp-style)
-  // via notifee. Runs in the headless (killed-app) context too. Falls back to
-  // the expo path below when notifee is unavailable.
+  // Prefer the DEVICE-CONTACT name (cached from the chat list) over the
+  // sender's Google/account name for 1:1 conversations.
+  try {
+    const groupConvId = toNonEmptyString(payload.conversationId);
+    if (groupConvId) {
+      const { getCachedConversationName } = require('./notificationNameCache');
+      const cachedName = await getCachedConversationName(groupConvId);
+      if (cachedName) {
+        const accountName = getDisplayNameFromPayload(payload);
+        if (!payload.title || title === accountName || title === 'New message') title = cachedName;
+        if (accountName && body === accountName) body = cachedName;
+      }
+    }
+  } catch {
+    /* no override — keep account name */
+  }
   const groupConversationId = toNonEmptyString(payload.conversationId);
   if (Platform.OS === 'android' && groupConversationId) {
     try {

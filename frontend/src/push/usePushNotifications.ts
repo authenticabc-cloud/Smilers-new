@@ -404,9 +404,27 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
   backgroundNotificationKeys.add(notificationKey);
   trimBackgroundNotificationCache();
 
-  const title = toNonEmptyString(payload.title) || 'New message';
-  const body =
+  let title = toNonEmptyString(payload.title) || 'New message';
+  let body =
     getDisplayNameFromPayload(payload) || 'Open Smilers to view the message';
+
+  // Prefer the DEVICE-CONTACT name (cached from the chat list) over the
+  // sender's Google/account name for 1:1 conversations.
+  try {
+    const convId = toNonEmptyString(payload.conversationId);
+    if (convId) {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { getCachedConversationName } = require('./notificationNameCache');
+      const cachedName = await getCachedConversationName(convId);
+      if (cachedName) {
+        const accountName = getDisplayNameFromPayload(payload);
+        if (!payload.title || title === accountName || title === 'New message') title = cachedName;
+        if (accountName && body === accountName) body = cachedName;
+      }
+    }
+  } catch {
+    /* no override — keep account name */
+  }
 
   // iter-260: bundle message notifications per-conversation (WhatsApp-style)
   // via notifee, which supports Android notification groups. Falls back to the

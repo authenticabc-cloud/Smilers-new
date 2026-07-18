@@ -298,7 +298,20 @@ export async function presentIncomingCallNotifeeWake(payload: IncomingCallPayloa
     // getDisplayedNotifications failed — proceed and display anyway.
   }
 
-  const callerName = payload.callerName?.trim() || 'Smilers user';
+  let callerName = payload.callerName?.trim() || 'Smilers user';
+  // Prefer the DEVICE-CONTACT name (cached from the chat list) over the
+  // caller's Google/account name for 1:1 conversations.
+  try {
+    const convId = (payload.conversationId || '').trim();
+    if (convId) {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { getCachedConversationName } = require('./notificationNameCache');
+      const cachedName = await getCachedConversationName(convId);
+      if (cachedName) callerName = cachedName;
+    }
+  } catch {
+    /* keep account name */
+  }
   const isVideo = payload.isVideo === true || payload.callType === 'video';
   const callType = isVideo ? 'video' : 'voice';
   const data: Record<string, string> = {

@@ -4,7 +4,7 @@
  * Resolves the display name (device contact > saved contact > Smilers name),
  * the avatar, live "typing…" state, and unread emphasis (bold name, red pill).
  */
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Avatar from './Avatar';
 import { useSafeConvexQuery } from '../hooks/useSafeConvexQuery';
@@ -14,6 +14,7 @@ import {
   getResolvedConversationDisplayName,
 } from '../lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../lib/deviceContactIndex';
+import { cacheConversationName } from '../push/notificationNameCache';
 import { type DraftPreview } from '../lib/chatDrafts';
 import { api } from '../convexApi';
 import { Colors, FontSize, FontWeight, Spacing } from '../theme';
@@ -91,6 +92,18 @@ export default function ConversationRow({
   );
   const savedContactName = deviceName || findSavedContactDisplayName(contacts, item, currentUserId);
   const name = savedContactName || getConversationDisplayName(item, currentUserId, 'Smilers user');
+
+  // Persist the resolved 1:1 name so background push notifications can show
+  // the DEVICE-CONTACT name instead of the sender's Google/account name.
+  const isGroupConversation =
+    item?.isGroup ||
+    item?.type === 'group' ||
+    (Array.isArray(item?.participants) && item.participants.length > 2);
+  useEffect(() => {
+    if (!isGroupConversation && item?._id && name) {
+      cacheConversationName(String(item._id), name);
+    }
+  }, [isGroupConversation, item?._id, name]);
   const otherUserPhoto =
     item?.avatar ||
     item?.avatarUrl ||
