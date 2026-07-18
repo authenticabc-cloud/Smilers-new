@@ -208,9 +208,29 @@ export default function StudySession() {
               </View>
             );
           }
+          const bubbleId = String(m._id || `ai-${i}`);
+          const isSpeaking = speakingId === bubbleId;
           return (
             <View key={m._id || i} style={styles.aiBubble}>
               <StudyAnswer answer={m.answer || m.reply || m} />
+              {isLanguage ? (
+                <TouchableOpacity
+                  style={styles.readAloudBtn}
+                  onPress={() =>
+                    isSpeaking ? stop() : speak(bubbleId, answerToText(m), targetLang)
+                  }
+                  hitSlop={8}
+                >
+                  <Feather
+                    name={isSpeaking ? 'square' : 'volume-2'}
+                    size={16}
+                    color={Colors.primary}
+                  />
+                  <Text style={styles.readAloudText}>
+                    {isSpeaking ? 'Stop' : 'Read aloud'}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
           );
         })}
@@ -227,6 +247,7 @@ export default function StudySession() {
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        style={styles.modeScroll}
         contentContainerStyle={styles.modeRow}
       >
         {isLanguage
@@ -346,6 +367,7 @@ const styles = StyleSheet.create({
   thinking: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
   thinkingText: { color: Colors.textSecondary, fontSize: 14 },
   modeRow: { paddingHorizontal: 12, paddingVertical: 8, gap: 8 },
+  modeScroll: { flexGrow: 0, maxHeight: 52 },
   modeChip: {
     paddingHorizontal: 12,
     paddingVertical: 7,
@@ -356,6 +378,18 @@ const styles = StyleSheet.create({
   modeChipOn: { backgroundColor: Colors.primary },
   modeChipText: { color: Colors.textSecondary, fontSize: 13, fontWeight: '600' },
   modeChipTextOn: { color: '#fff' },
+  readAloudBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+    backgroundColor: 'rgba(37,99,235,0.08)',
+  },
+  readAloudText: { color: Colors.primary, fontSize: 13, fontWeight: '600' },
   thumbs: { maxHeight: 76, paddingHorizontal: 12 },
   thumbWrap: { marginRight: 8, marginBottom: 8 },
   thumb: { width: 60, height: 60, borderRadius: 10 },
