@@ -36,7 +36,7 @@ const CARDS: CardDef[] = [
   { key: 'math', title: 'Mathematics', subtitle: 'Solve & explain, step by step', icon: 'divide-circle', color: '#2563EB', params: { subject: 'mathematics' } },
   { key: 'science', title: 'Science Lab', subtitle: 'Biology, chemistry, physics', icon: 'thermometer', color: '#16A34A', params: { subject: 'science' } },
   { key: 'language', title: 'Language Coach', subtitle: 'Speak, write & practise', icon: 'globe', color: '#9333EA', params: { subject: 'language' } },
-  { key: 'revision', title: 'Revision Studio', subtitle: 'Quizzes, flashcards, plans', icon: 'layers', color: '#EA580C', params: { subject: 'revision' }, soon: true },
+  { key: 'revision', title: 'Revision Studio', subtitle: 'Quizzes, flashcards, plans', icon: 'layers', color: '#EA580C', params: {} },
 ];
 
 export default function StudyDashboard() {
@@ -57,7 +57,7 @@ export default function StudyDashboard() {
       );
       return;
     }
-    router.push({ pathname: '/study/session', params: card.params } as any);
+    router.push({ pathname: card.key === 'revision' ? '/study/revision' : '/study/session', params: card.params } as any);
   };
 
   const recent = (sessions || []).slice(0, 6);

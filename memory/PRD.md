@@ -1182,5 +1182,19 @@ Premium-gated AI homework tutor. Backend = web/Convex (`api.study.*`); mobile bu
 - `api.study.ai.ask` (action, gated: throws ConvexError code PREMIUM_REQUIRED), `api.study.sessions.*`.
 - LaTeX via KaTeX-in-WebView (`src/components/study/LatexView.tsx`); tolerant structured-answer renderer (`StudyAnswer.tsx`).
 - Entry point: "Study" button in `app/ai-chat.tsx` header → `/study`.
-- Next phases: Science polish, Language Coach (Convex `languageSpeech.transcribe`/`languageAi.speak`), Revision Studio (quiz/flashcards/planner), Study Rooms.
+- Next phases: Study Rooms (group integrations).
 - NOTE: getSession message field shapes rendered defensively (camelCase + snake_case) — reconcile against `native-study-ai-contract.json` once verified on a premium account.
+
+## Smilers Study AI — Phase 2: Language Coach (implemented, native QA pending)
+- `app/study/session.tsx` with `subject=language`: target-language chips (English/Italian/French/Spanish/German/Portuguese/Arabic) replace response-mode chips; `ask` receives `language` instead of `mode`.
+- "Read aloud" button on each AI answer bubble → `api.study.languageAi.speak({ text, language })` returns `{ audioBase64, mimeType }`, played locally via expo-audio (`useStudySpeak`). Audio needs a native build to verify.
+
+## Smilers Study AI — Phase 3: Revision Studio (implemented, native QA pending)
+Fully Convex-backed (`native-study-ai-revision-contract`). Client bindings in `src/lib/study/useRevision.ts`.
+- Hub `app/study/revision.tsx`: streak/saved stats header, tabs (Quizzes/Flashcards/Notes), Create sheet (Premium-gated generation from topic/subject/pasted notes).
+- Generation actions (gated): `api.study.revisionAi.{generateQuiz→{quizId}, generateFlashcards→{deckId}, generateSummary→{noteId}, generateStudyPlan→{noteId}}` (accept `sourceSessionId?`/`sourceText?`/`subject?`/`topic?`).
+- Quiz runner `app/study/quiz/[quizId].tsx`: server-side grading only (`submitQuizAttempt({quizId, answers:[{number,given}]})` → render `graded[]`), MCQ + free-text, save/delete via `setQuizSaved`/`deleteQuiz`.
+- Flashcards `app/study/deck/[deckId].tsx`: Leitner flip/review (`getDueCards`, `reviewFlashcard({cardId, rating:'again'|'good'|'easy'})`), boxes 0..5 intervals [0,1,2,4,7,15]d.
+- Notes/plans `app/study/note/[noteId].tsx`: renders `kind:'summary'|'study_plan'` (day-by-day plan or sectioned summary), defensive field shapes.
+- Ungated: `api.study.revision.{listQuizzes,getQuiz,listDecks,getDeck,listNotes,getNote,set*Saved,delete*}`; folders `api.study.folders.*`; progress `api.study.progress.{getProgress,getRecentActivity,logLessonStudied}`.
+- New material starts `isSaved=false`. LaTeX (`promptLatex`/`finalAnswerLatex`) renders via LatexView without `$`.
