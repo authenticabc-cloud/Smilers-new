@@ -43,6 +43,7 @@ import ConferenceHUD from '../../src/components/ConferenceHUD';
 import ScreenShareOverlay from '../../src/components/ScreenShareOverlay';
 import ScreenShareSwitchControls from '../../src/components/ScreenShareSwitchControls';
 import { findSavedContactDisplayName, getConversationDisplayName, getDisplayInitials, getDisplayNameFromUser } from '../../src/lib/displayName';
+import { useDeviceContactIndex, resolveDeviceContactNameFromUser } from '../../src/lib/deviceContactIndex';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { notifyEventPush } from '../../src/lib/notifyPush';
 import { useConversationOtherUser } from '../../src/hooks/useConversationOtherUser';
@@ -1829,10 +1830,21 @@ export function CallScreenInner() {
   const waitingCallerName = useMemo(() => {
     const rec = waitingCall;
     if (!rec) return '';
+    // Prefer the callee's saved device-contact name over the caller's account name.
+    const deviceName = resolveDeviceContactNameFromUser(deviceIndex, {
+      ...(rec?.caller || {}),
+      otherUserPhone:
+        rec?.caller?.phone || rec?.caller?.phoneNumber || rec?.callerPhone || '',
+    });
     return String(
-      rec?.callerName || rec?.caller?.displayName || rec?.caller?.name || rec?.caller?.fullName || '',
+      deviceName ||
+        rec?.callerName ||
+        rec?.caller?.displayName ||
+        rec?.caller?.name ||
+        rec?.caller?.fullName ||
+        '',
     ).trim();
-  }, [waitingCall]);
+  }, [waitingCall, deviceIndex]);
   const waitingIsVideo = useMemo(() => {
     const rec = waitingCall;
     if (!rec) return false;
@@ -2451,6 +2463,7 @@ export function CallScreenInner() {
     () => findSavedContactDisplayName(contacts, conversation, me?._id ? String(me._id) : undefined),
     [contacts, conversation, me?._id],
   );
+  const deviceIndex = useDeviceContactIndex();
   const otherName = useMemo(
     () => {
       const routeName = typeof routeDisplayName === 'string' ? routeDisplayName.trim() : '';
@@ -2473,9 +2486,18 @@ export function CallScreenInner() {
         ''
       );
 
+      // The name the CALLEE saved for this caller in their own phone address
+      // book MUST win over the caller's push-supplied account name — otherwise
+      // the callee sees the caller's Google/account name instead of "Mum".
+      const deviceName = resolveDeviceContactNameFromUser(deviceIndex, {
+        ...hydratedOther,
+        otherUserPhone: phone,
+      });
+
       return (
-        candidate ||
+        deviceName ||
         savedContactName ||
+        candidate ||
         fromOtherUser ||
         convexDerived ||
         phone ||
@@ -2483,7 +2505,7 @@ export function CallScreenInner() {
         'Unknown'
       );
     },
-    [conversation, fetchedOtherUser, me?._id, routeDisplayName, savedContactName],
+    [conversation, fetchedOtherUser, me?._id, routeDisplayName, savedContactName, deviceIndex],
   );
 
   const durationLabel = useMemo(() => {

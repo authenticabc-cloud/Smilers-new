@@ -44,6 +44,57 @@ import React, {
 import { Platform } from 'react-native';
 import * as Contacts from 'expo-contacts';
 import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js';
+import { useConvex } from 'convex/react';
+import { api } from '../convexApi';
+
+/**
+ * Upload the user's device-contact names to the backend so the SERVER can
+ * render the correct per-recipient name on MESSAGE push notifications (which
+ * are server-built notification-type FCM, so the app can't rewrite them in the
+ * background). Mirrors the web app's contact sync. Calls do NOT need this —
+ * call pushes are data-only and resolved locally by phone.
+ *
+ * `saveDeviceContacts` dedupes server-side and matches by email then phone
+ * (last 10 digits), so raw device numbers are fine. Throttled to once/24h.
+ */
+const CONTACTS_SYNC_AT_KEY = 'smilers_contacts_synced_at_v1';
+const CONTACTS_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+async function maybeSyncDeviceContactsToBackend(
+  convex: any,
+  pairs: { name: string; phone: string }[],
+): Promise<void> {
+  if (!convex || pairs.length === 0) return;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+    const lastRaw = await AsyncStorage.getItem(CONTACTS_SYNC_AT_KEY);
+    const last = lastRaw ? Number(lastRaw) : 0;
+    if (last && Date.now() - last < CONTACTS_SYNC_INTERVAL_MS) return;
+
+    // Dedupe by name+phone and cap the payload.
+    const seen = new Set<string>();
+    const contacts: { name: string; phone: string }[] = [];
+    for (const p of pairs) {
+      if (!p.name || !p.phone) continue;
+      const key = `${p.name}|${p.phone}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      contacts.push({ name: p.name, phone: p.phone });
+      if (contacts.length >= 3000) break;
+    }
+    if (contacts.length === 0) return;
+
+    const BATCH = 300;
+    for (let i = 0; i < contacts.length; i += BATCH) {
+      const batch = contacts.slice(i, i + BATCH);
+      await convex.mutation((api as any).syncedContacts.saveDeviceContacts, { contacts: batch });
+    }
+    await AsyncStorage.setItem(CONTACTS_SYNC_AT_KEY, String(Date.now()));
+  } catch {
+    /* best effort — never block contact resolution on a sync failure */
+  }
+}
 
 /**
  * Read the ENTIRE device address book in small pages.
@@ -161,6 +212,7 @@ export function DeviceContactProvider({
 }) {
   const [index, setIndex] = useState<DeviceContactIndex>(EMPTY_INDEX);
   const inflightRef = useRef(false);
+  const convex = useConvex();
 
   const defaultCountry: CountryCode | null = useMemo(() => {
     const raw = (myDefaultCountry || '').toString().toUpperCase().trim();
@@ -194,6 +246,7 @@ export function DeviceContactProvider({
         ]);
         const byE164 = new Map<string, string>();
         const byDigits = new Map<string, string>();
+        const pairsForSync: { name: string; phone: string }[] = [];
         for (const raw of (data as any[]) || []) {
           // Resolve the contact's display name. Skip "null" placeholder
           // entries (an Android quirk for SIM-only rows).
@@ -207,6 +260,9 @@ export function DeviceContactProvider({
           for (const phoneEntry of phones) {
             const phoneStr: string = typeof phoneEntry?.number === 'string' ? phoneEntry.number : '';
             if (!phoneStr) continue;
+            // Collect raw name+phone for the backend sync (server matches by
+            // last-10 digits, so unnormalised numbers are fine).
+            pairsForSync.push({ name: rawName, phone: phoneStr });
             const e164 = toE164(phoneStr, defaultCountry);
             if (e164 && !byE164.has(e164)) {
               byE164.set(e164, rawName);
@@ -245,6 +301,7 @@ export function DeviceContactProvider({
         // can resolve a sender's phone → device-contact name (group + DM
         // notifications). See push/deviceNameResolver.ts.
         try {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
           const AsyncStorage = require('@react-native-async-storage/async-storage').default;
           await AsyncStorage.setItem(
             'smilers_device_contact_index_v1',
@@ -257,13 +314,16 @@ export function DeviceContactProvider({
         } catch {
           /* best effort — resolution falls back to the account name */
         }
+        // Upload device-contact names so message notifications show the right
+        // per-recipient name (server-rendered). Throttled + best-effort.
+        void maybeSyncDeviceContactsToBackend(convex, pairsForSync);
       } catch {
         /* swallow — keep whatever we had */
       } finally {
         inflightRef.current = false;
       }
     },
-    [defaultCountry],
+    [defaultCountry, convex],
   );
 
   // Silent first-load: only if permission was previously granted. Never
