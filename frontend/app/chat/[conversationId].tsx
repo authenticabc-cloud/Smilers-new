@@ -81,6 +81,7 @@ import { notifyEventPush, previewForMessageType } from '../../src/lib/notifyPush
 import { reportConvexUserIdForPush } from '../../src/push/useEmergentPush';
 import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName, getResolvedDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
+import { cacheUserName } from '../../src/push/notificationNameCache';
 import { getLanguageByCode } from '../../src/lib/languages';
 import {
   applyDraftFormatting,
@@ -495,6 +496,17 @@ export default function ChatScreen() {
     },
     [contacts, deviceContactIndex, groupMemberById],
   );
+
+  // Persist each group member's resolved (device-contact-first) name by
+  // userId so background push handlers can show the saved name for a group
+  // message's sender when the push carries `senderId`.
+  useEffect(() => {
+    if (groupMemberById.size === 0) return;
+    groupMemberById.forEach((_member, uid) => {
+      const resolved = resolveSenderName(uid);
+      if (resolved && resolved !== 'Member') cacheUserName(uid, resolved);
+    });
+  }, [groupMemberById, resolveSenderName]);
 
   const refetchMessages = useCallback(async () => {}, []);
   const { data: conversationsForForward } = useSafeConvexQuery<any[]>(

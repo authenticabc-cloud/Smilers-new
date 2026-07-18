@@ -129,6 +129,8 @@ type NotificationPayload = {
   callerDisplayName?: string;
   senderName?: string;
   senderPhone?: string;
+  senderId?: string;
+  senderUserId?: string;
   title?: string;
   body?: string;
   sound?: string;
@@ -426,12 +428,25 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
       // 1:1 conversation — the peer is both the title and the sender line.
       if (!payload.title || title === accountName || title === 'New message') title = convDeviceName;
       if (accountName && body === accountName) body = convDeviceName;
-    } else if (senderPhone) {
-      // Group (or uncached DM) — resolve the SENDER's device name for the
-      // sender line only; keep the group name as the notification title.
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const senderDeviceName =
-        await require('./deviceNameResolver').resolveDeviceNameByPhone(senderPhone);
+    } else {
+      // Group (or uncached DM) — resolve the SENDER's device name from their
+      // phone OR Smilers userId; use it for the sender line only, keeping the
+      // group name as the notification title.
+      let senderDeviceName = '';
+      if (senderPhone) {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        senderDeviceName = await require('./deviceNameResolver').resolveDeviceNameByPhone(senderPhone);
+      }
+      if (!senderDeviceName) {
+        const senderId =
+          toNonEmptyString((payload as any).senderId) ||
+          toNonEmptyString((payload as any).senderUserId) ||
+          toNonEmptyString((payload as any).fromUserId);
+        if (senderId) {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          senderDeviceName = await require('./notificationNameCache').getCachedUserName(senderId);
+        }
+      }
       if (senderDeviceName) {
         if (accountName && body === accountName) body = senderDeviceName;
         if (title === accountName) title = senderDeviceName;

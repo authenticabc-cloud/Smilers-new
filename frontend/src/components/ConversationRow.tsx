@@ -14,7 +14,7 @@ import {
   getResolvedConversationDisplayName,
 } from '../lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../lib/deviceContactIndex';
-import { cacheConversationName } from '../push/notificationNameCache';
+import { cacheConversationName, cacheUserName } from '../push/notificationNameCache';
 import { type DraftPreview } from '../lib/chatDrafts';
 import { api } from '../convexApi';
 import { Colors, FontSize, FontWeight, Spacing } from '../theme';
@@ -102,6 +102,8 @@ export default function ConversationRow({
   useEffect(() => {
     if (!isGroupConversation && item?._id && name) {
       cacheConversationName(String(item._id), name);
+      const otherUserId = item?.otherUserId || item?.otherParticipant?._id || item?.otherUser?._id;
+      if (otherUserId) cacheUserName(String(otherUserId), name);
     }
   }, [isGroupConversation, item?._id, name]);
   const otherUserPhoto =

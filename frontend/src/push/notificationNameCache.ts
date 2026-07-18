@@ -21,11 +21,16 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const STORAGE_KEY = 'smilers_convo_name_cache_v1';
+const USER_STORAGE_KEY = 'smilers_user_name_cache_v1';
 const MAX_ENTRIES = 500;
 
 let mem: Record<string, string> | null = null;
 let loaded = false;
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+let userMem: Record<string, string> | null = null;
+let userLoaded = false;
+let userFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function ensureLoaded(): Promise<void> {
   if (loaded) return;
@@ -78,4 +83,58 @@ export async function getCachedConversationName(
   if (!id) return '';
   await ensureLoaded();
   return (mem && mem[id]) || '';
+}
+
+// ── userId → name (group message senders + DM partners) ──────────────────
+
+async function ensureUserLoaded(): Promise<void> {
+  if (userLoaded) return;
+  try {
+    const raw = await AsyncStorage.getItem(USER_STORAGE_KEY);
+    userMem = raw ? JSON.parse(raw) : {};
+  } catch {
+    userMem = {};
+  }
+  userLoaded = true;
+}
+
+function scheduleUserFlush(): void {
+  if (userFlushTimer) return;
+  userFlushTimer = setTimeout(async () => {
+    userFlushTimer = null;
+    try {
+      const entries = Object.entries(userMem || {});
+      const trimmed = entries.length > MAX_ENTRIES ? entries.slice(-MAX_ENTRIES) : entries;
+      await AsyncStorage.setItem(USER_STORAGE_KEY, JSON.stringify(Object.fromEntries(trimmed)));
+    } catch {
+      /* best effort */
+    }
+  }, 900);
+}
+
+/** Persist the resolved display name for a Smilers user id (used to resolve a
+ *  GROUP message's sender when the push carries `senderId`). */
+export function cacheUserName(
+  userId: string | null | undefined,
+  name: string | null | undefined,
+): void {
+  const id = (userId || '').trim();
+  const value = (name || '').trim();
+  if (!id || !value) return;
+  ensureUserLoaded().then(() => {
+    if (!userMem) userMem = {};
+    if (userMem[id] === value) return;
+    userMem[id] = value;
+    scheduleUserFlush();
+  });
+}
+
+/** Look up a cached user name by Smilers user id. '' on miss. */
+export async function getCachedUserName(
+  userId: string | null | undefined,
+): Promise<string> {
+  const id = (userId || '').trim();
+  if (!id) return '';
+  await ensureUserLoaded();
+  return (userMem && userMem[id]) || '';
 }
