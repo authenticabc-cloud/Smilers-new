@@ -520,6 +520,16 @@ export function registerNotifeeCallEventHandlers(): void {
   try {
     native.notifee.onBackgroundEvent(async ({ type, detail }: any) => {
       try {
+        // Voice-note / translation playback Stop action (media foreground service).
+        if (detail?.pressAction?.id === 'stop-playback') {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            require('../lib/audio/playbackNotification').handlePlaybackBackgroundAction(
+              'stop-playback',
+            );
+          } catch {}
+          return;
+        }
         await handleCallEvent(native, type, detail);
       } catch (errorValue: any) {
         safeRecord(`bg-event-failed: ${errorValue?.message || errorValue}`);

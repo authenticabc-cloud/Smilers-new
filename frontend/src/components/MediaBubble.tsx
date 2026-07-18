@@ -46,6 +46,11 @@ import { SharedContactBubble } from './chat/SharedContactBubble';
 import { getLanguageByCode } from '../lib/languages';
 import { getOrCreateVoiceTranslation, type VoiceTranslation } from '../lib/voiceTranslation';
 import { ensureVoicePlaybackMode } from '../lib/audio/voicePlaybackMode';
+import {
+  startPlaybackNotification,
+  stopPlaybackNotification,
+  setPlaybackStopHandler,
+} from '../lib/audio/playbackNotification';
 // iter-218 — Safe Browsing gate for links
 import { useUrlSafety, isDangerousFile } from '../lib/safeBrowsing';
 // iter-125: full-screen photo viewer toolbar helpers
@@ -1601,6 +1606,7 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
           CURRENT_SOUND = null;
           CURRENT_STOP = null;
         }
+        stopPlaybackNotification();
       }
     });
     statusListenerRef.current = listener;
@@ -1619,6 +1625,7 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
         try {
           player.pause();
         } catch {}
+        stopPlaybackNotification();
       } else {
         // If we reached the end, rewind before playing again.
         try {
@@ -1638,6 +1645,13 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
         ensureVoicePlaybackMode();
         CURRENT_SOUND = player;
         CURRENT_STOP = () => setIsPlaying(false);
+        startPlaybackNotification('Voice message');
+        setPlaybackStopHandler(() => {
+          try {
+            player.pause();
+          } catch {}
+          setIsPlaying(false);
+        });
       }
     } catch {}
   };
@@ -1960,6 +1974,7 @@ function VoiceTranslationPill({ msg }: { msg: any }) {
               CURRENT_SOUND = null;
               CURRENT_STOP = null;
             }
+            stopPlaybackNotification();
           }
         });
       }
@@ -1968,6 +1983,7 @@ function VoiceTranslationPill({ msg }: { msg: any }) {
         player.pause();
         setSpeaking(false);
         releaseAsCurrent();
+        stopPlaybackNotification();
       } else {
         // Stop whatever else is currently playing (a voice note or another
         // translation) so only one sound plays at a time.
@@ -1990,6 +2006,13 @@ function VoiceTranslationPill({ msg }: { msg: any }) {
         ensureVoicePlaybackMode();
         player.play();
         setSpeaking(true);
+        startPlaybackNotification(`Translated message · ${targetName}`);
+        setPlaybackStopHandler(() => {
+          try {
+            player.pause();
+          } catch {}
+          setSpeaking(false);
+        });
       }
     } catch {
       /* ignore playback errors */
