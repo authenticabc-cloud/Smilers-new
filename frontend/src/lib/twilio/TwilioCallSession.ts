@@ -41,6 +41,8 @@ export interface TwilioVideoRef {
   toggleSoundSetup: (speaker: boolean) => void;
   setBluetoothHeadsetConnected?: (enabled: boolean) => Promise<boolean>;
   toggleScreenSharing?: (enabled: boolean) => void;
+  /** Mute/unmute ALL incoming remote audio (SDK v3.5+). */
+  setRemoteAudioEnabled?: (enabled: boolean) => Promise<boolean>;
   publishLocalAudio: () => void;
   unpublishLocalAudio: () => void;
   /** Send a string over the local data track (used for in-call signaling). */
@@ -234,6 +236,21 @@ export class TwilioCallSession {
       this.ref?.flipCamera();
       this.log('flip-camera');
     } catch {}
+  }
+
+  /**
+   * Mute/unmute ALL incoming remote audio. Used by the AI Voice Interpreter
+   * to DUCK the original speaker's voice (Mode 4) while the locally-played
+   * translated voice speaks, then restore it. No-ops gracefully on SDK
+   * builds that don't expose the method (older Twilio RN SDKs).
+   */
+  async setRemoteAudioEnabled(enabled: boolean): Promise<void> {
+    try {
+      await this.ref?.setRemoteAudioEnabled?.(enabled);
+      this.log('remote-audio', `enabled=${enabled}`);
+    } catch (e: any) {
+      this.log('remote-audio-failed', e?.message || String(e));
+    }
   }
 
   /** Route audio to loudspeaker (true) or earpiece/default (false). */

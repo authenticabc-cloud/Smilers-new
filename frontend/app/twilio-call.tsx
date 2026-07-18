@@ -845,17 +845,13 @@ function TwilioCallScreenInner() {
 
   const handleFlip = () => host.session?.flipCamera();
 
-  // AI Voice Interpreter — best-effort duck of the ORIGINAL remote audio
-  // while a translated voice plays locally (Mode 4). The Twilio wrapper may
-  // not expose remote-audio control on every build; when it doesn't, this
-  // no-ops and Mode 4 gracefully degrades to Mode-5-style layered audio.
+  // AI Voice Interpreter — duck the ORIGINAL remote audio while a translated
+  // voice plays locally (Mode 4). Uses the Twilio SDK's setRemoteAudioEnabled
+  // (v3.5+); on older builds the session wrapper no-ops and Mode 4 gracefully
+  // degrades to Mode-5-style layered audio.
   const handleDuckRemote = useCallback(
     (ducked: boolean) => {
-      try {
-        (host.session as any)?.setRemoteAudioEnabled?.(!ducked);
-      } catch {
-        /* remote-audio control unavailable — degrade to layered audio */
-      }
+      host.session?.setRemoteAudioEnabled(!ducked);
     },
     [host.session],
   );
