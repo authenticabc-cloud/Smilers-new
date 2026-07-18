@@ -1119,6 +1119,122 @@ async def text_to_speech(payload: TTSRequest, request: Request) -> TTSResponse:
         raise HTTPException(status_code=502, detail=f"Speech synthesis failed: {exc}") from exc
 
 
+# ---------------------------------------------------------------------------
+# Tap AI — in-call assistant. Operates on the call TRANSCRIPT (built from the
+# interpreter subtitles on the client) to summarise, take notes, extract
+# action points, or pull out a calendar event. Powered by the Emergent LLM
+# key (Gemini), same pattern as /translate.
+# ---------------------------------------------------------------------------
+
+
+class CallAiRequest(BaseModel):
+    transcript: str = Field(..., min_length=1, max_length=20000)
+    task: str = Field(..., description="summary | notes | action_points | calendar")
+    target_language: str = Field(default="English")
+    now_iso: Optional[str] = Field(default=None, description="Client local time for relative dates.")
+
+
+class CallAiResponse(BaseModel):
+    task: str
+    text: str = ""
+    event: Optional[dict] = None
+
+
+_CALL_AI_TASKS = {"summary", "notes", "action_points", "calendar"}
+
+
+@api_router.post("/call-ai", response_model=CallAiResponse)
+async def call_ai(payload: CallAiRequest, request: Request) -> CallAiResponse:
+    _ok, _retry = await _rate_limit_ok_async("call_ai", _client_ip_of(request), 30, 60)
+    if not _ok:
+        raise HTTPException(status_code=429, detail="Too many AI requests; please slow down.", headers={"Retry-After": str(_retry)})
+
+    task = (payload.task or "").strip().lower()
+    if task not in _CALL_AI_TASKS:
+        raise HTTPException(status_code=400, detail="Unknown task.")
+    transcript = (payload.transcript or "").strip()
+    if not transcript:
+        raise HTTPException(status_code=400, detail="Empty transcript.")
+
+    api_key = os.getenv("EMERGENT_LLM_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="Missing EMERGENT_LLM_KEY")
+
+    lang = (payload.target_language or "English").strip() or "English"
+    now_iso = (payload.now_iso or "").strip() or datetime.now(timezone.utc).isoformat()
+
+    if task == "summary":
+        system_message = (
+            f"You summarize call transcripts. Write a concise summary in {lang}, 3-6 short bullet points, "
+            "capturing the key topics and decisions. Return only the summary, no preamble."
+        )
+        prompt = f"Transcript:\n{transcript}"
+    elif task == "notes":
+        system_message = (
+            f"You take clean meeting notes from a call transcript. Write in {lang} with short sections/bullets "
+            "(topics discussed, decisions, open questions). Return only the notes."
+        )
+        prompt = f"Transcript:\n{transcript}"
+    elif task == "action_points":
+        system_message = (
+            f"You extract clear action items from a call transcript. Write in {lang} as a numbered list of "
+            "actionable tasks, each starting with a verb and naming the owner if mentioned. If there are none, "
+            "say so briefly. Return only the list."
+        )
+        prompt = f"Transcript:\n{transcript}"
+    else:  # calendar
+        system_message = (
+            "You extract a single calendar event from a call transcript if one is clearly discussed "
+            "(a meeting, appointment, call-back, or deadline with a time). "
+            f"The user's current local time is {now_iso}; resolve relative dates like 'tomorrow at 5' against it. "
+            f"Write the title and notes in {lang}. "
+            "Respond with ONLY compact JSON, no markdown, of the form: "
+            '{"found": <true|false>, "title": "<short title>", "start": "<ISO 8601 with timezone offset>", '
+            '"end": "<ISO 8601 with timezone offset>", "notes": "<short notes>"}. '
+            "If no event is clearly discussed, return {\"found\": false}."
+        )
+        prompt = f"Transcript:\n{transcript}"
+
+    try:
+        chat = LlmChat(
+            api_key=api_key,
+            session_id=f"smilers-callai-{uuid.uuid4()}",
+            system_message=system_message,
+        ).with_model("gemini", "gemini-2.5-flash")
+        raw = (await chat.send_message(UserMessage(text=prompt))).strip()
+    except Exception as exc:
+        logger.exception("call-ai failed")
+        raise HTTPException(status_code=502, detail=f"AI request failed: {exc}") from exc
+
+    if task != "calendar":
+        return CallAiResponse(task=task, text=raw)
+
+    # Parse calendar JSON defensively.
+    import json as _json
+    import re as _re
+
+    event: Optional[dict] = None
+    text = raw
+    fence = _re.search(r"\{.*\}", raw, _re.DOTALL)
+    if fence:
+        try:
+            data = _json.loads(fence.group(0))
+            if data.get("found") and data.get("start"):
+                event = {
+                    "title": str(data.get("title") or "Follow-up").strip()[:200],
+                    "start": str(data.get("start") or "").strip(),
+                    "end": str(data.get("end") or "").strip(),
+                    "notes": str(data.get("notes") or "").strip()[:1000],
+                }
+                text = event["title"]
+            else:
+                text = ""
+        except Exception:  # noqa: BLE001
+            event = None
+            text = ""
+    return CallAiResponse(task=task, text=text, event=event)
+
+
 @api_router.post("/status", response_model=StatusCheck)
 async def create_status_check(input: StatusCheckCreate):
     status_dict = input.dict()

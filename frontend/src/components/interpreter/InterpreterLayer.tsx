@@ -24,6 +24,7 @@ import {
 import { InterpreterBanner } from './InterpreterBanner';
 import { InterpreterSettingsSheet } from './InterpreterSettingsSheet';
 import { SubtitlesOverlay } from './SubtitlesOverlay';
+import { CallAiMenu } from './CallAiMenu';
 
 export function InterpreterLayer({
   callId,
@@ -32,6 +33,8 @@ export function InterpreterLayer({
   topOffset,
   bottomOffset,
   onDuckRemote,
+  aiMenuVisible,
+  onAiMenuClose,
 }: {
   callId: string | null;
   connected: boolean;
@@ -39,6 +42,8 @@ export function InterpreterLayer({
   topOffset: number;
   bottomOffset: number;
   onDuckRemote: (ducked: boolean) => void;
+  aiMenuVisible: boolean;
+  onAiMenuClose: () => void;
 }) {
   const [showSettings, setShowSettings] = useState(false);
   const interp = useCallInterpreter(callId);
@@ -105,6 +110,14 @@ export function InterpreterLayer({
         prefs={interp.prefs}
         onSave={interp.save}
         onPrefs={interp.updatePrefs}
+      />
+
+      <CallAiMenu
+        visible={aiMenuVisible}
+        onClose={onAiMenuClose}
+        subtitles={subtitles}
+        listeningLanguage={interp.listeningLanguage}
+        onOpenInterpreter={() => setShowSettings(true)}
       />
     </>
   );

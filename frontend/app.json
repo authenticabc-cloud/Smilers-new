@@ -23,6 +23,8 @@
         "NSPhotoLibraryAddUsageDescription": "Save photos and videos from chats to your gallery",
         "NSBluetoothAlwaysUsageDescription": "Pair panic buttons and wearables for emergency alerts",
         "NSBluetoothPeripheralUsageDescription": "Pair panic buttons and wearables for emergency alerts",
+        "NSCalendarsUsageDescription": "Add follow-ups from your calls to your calendar",
+        "NSCalendarsWriteOnlyAccessUsageDescription": "Add follow-ups from your calls to your calendar",
         "UIBackgroundModes": [
           "audio",
           "bluetooth-central",
@@ -154,7 +156,9 @@
         "BLUETOOTH_SCAN",
         "BLUETOOTH_ADVERTISE",
         "USE_FULL_SCREEN_INTENT",
-        "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
+        "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+        "READ_CALENDAR",
+        "WRITE_CALENDAR"
       ]
     },
     "web": {
@@ -169,6 +173,12 @@
       "./plugins/withNotifeeLocalMaven.js",
       "./plugins/withNativeCallService.js",
       "./plugins/withPodfileResourceBundleSigning.js",
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "Add follow-ups from your calls to your calendar"
+        }
+      ],
       [
         "expo-splash-screen",
         {
