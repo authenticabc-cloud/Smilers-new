@@ -18,7 +18,6 @@ const NOTIFICATION_ID = 'voice-playback';
 
 let notifee: any = null;
 let AndroidImportance: any = null;
-let AndroidForegroundServiceType: any = null;
 let registered = false;
 let serviceRunning = false;
 let stopHandler: (() => void) | null = null;
@@ -27,11 +26,10 @@ function load(): boolean {
   if (Platform.OS !== 'android') return false;
   if (notifee) return true;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require('@notifee/react-native');
     notifee = mod.default;
     AndroidImportance = mod.AndroidImportance;
-    AndroidForegroundServiceType = mod.AndroidForegroundServiceType;
     return !!notifee;
   } catch {
     return false;
@@ -80,16 +78,21 @@ export async function startPlaybackNotification(title: string): Promise<void> {
       name: 'Audio playback',
       importance: AndroidImportance?.LOW ?? 2,
     });
+    // CRASH FIX (voice-note play): we intentionally do NOT use
+    // `asForegroundService` here. Notifee's bundled service declares only
+    // `foregroundServiceType="shortService"`, so starting it as a
+    // `mediaPlayback` foreground service throws an uncatchable native
+    // `MissingForegroundServiceTypeException` on Android 14+ — crashing the
+    // app the instant the user taps play. A plain ONGOING notification gives
+    // the same media UI (with a Stop action) and never triggers that crash.
+    // Short voice notes don't need a guaranteed-alive foreground service;
+    // expo-audio's background mode already keeps brief playback going.
     await notifee.displayNotification({
       id: NOTIFICATION_ID,
       title: 'Playing audio',
       body: title || 'Voice message',
       android: {
         channelId: CHANNEL_ID,
-        asForegroundService: true,
-        foregroundServiceTypes: AndroidForegroundServiceType
-          ? [AndroidForegroundServiceType.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK]
-          : undefined,
         ongoing: true,
         onlyAlertOnce: true,
         color: '#E4B53B',
@@ -107,6 +110,8 @@ export async function startPlaybackNotification(title: string): Promise<void> {
 export async function stopPlaybackNotification(): Promise<void> {
   if (!notifee || !serviceRunning) return;
   serviceRunning = false;
+  // No foreground service is started anymore, but call stopForegroundService
+  // defensively in case an older session left one running.
   try {
     await notifee.stopForegroundService();
   } catch {

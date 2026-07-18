@@ -181,52 +181,37 @@ function EmergencyScreenInner() {
   }, [alerts]);
 
   // ---------- Handlers ----------
-  const onTriggerSOS = useCallback(() => {
-    Alert.alert(
-      'Trigger SOS?',
-      `${trusteeCount} trustee${trusteeCount === 1 ? '' : 's'} will be notified${
-        broadcast.enabled ? ` + nearby Smilers users within ${broadcast.radiusKm}km` : ''
-      }.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'TRIGGER',
-          style: 'destructive',
-          onPress: async () => {
-            setBusy(true);
-            try {
-              // iter-137: canonical contract → triggerAlert needs
-              // { latitude, longitude }. Capture coords here. We fall
-              // back to (0,0) only if the user explicitly refuses
-              // permission — server still broadcasts to trustees in
-              // that case, just without geo-aware nearby fan-out.
-              let latitude = 0;
-              let longitude = 0;
-              try {
-                const perm = await Location.requestForegroundPermissionsAsync();
-                if (perm.granted) {
-                  const position = await Location.getCurrentPositionAsync({
-                    accuracy: Location.Accuracy.Balanced,
-                  });
-                  latitude = position.coords.latitude;
-                  longitude = position.coords.longitude;
-                }
-              } catch {
-                /* swallow — geolocation is best-effort for SOS */
-              }
-              await triggerAlert({ latitude, longitude });
-              await Promise.all([refetchActive(), refetchAlerts()]);
-              Alert.alert('SOS sent', 'Your trustees have been notified.');
-            } catch (e: any) {
-              Alert.alert('Failed to send SOS', e?.message || 'Please try again.');
-            } finally {
-              setBusy(false);
-            }
-          },
-        },
-      ],
-    );
-  }, [broadcast.enabled, broadcast.radiusKm, refetchActive, refetchAlerts, triggerAlert, trusteeCount]);
+  // Tapping SOS triggers immediately — no confirmation popup (user request).
+  const onTriggerSOS = useCallback(async () => {
+    setBusy(true);
+    try {
+      // iter-137: canonical contract → triggerAlert needs
+      // { latitude, longitude }. Capture coords here. We fall back to
+      // (0,0) only if the user explicitly refuses permission — server
+      // still broadcasts to trustees, just without geo-aware fan-out.
+      let latitude = 0;
+      let longitude = 0;
+      try {
+        const perm = await Location.requestForegroundPermissionsAsync();
+        if (perm.granted) {
+          const position = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+          latitude = position.coords.latitude;
+          longitude = position.coords.longitude;
+        }
+      } catch {
+        /* swallow — geolocation is best-effort for SOS */
+      }
+      await triggerAlert({ latitude, longitude });
+      await Promise.all([refetchActive(), refetchAlerts()]);
+      Alert.alert('SOS sent', 'Your trustees have been notified.');
+    } catch (e: any) {
+      Alert.alert('Failed to send SOS', e?.message || 'Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  }, [refetchActive, refetchAlerts, triggerAlert]);
 
   const onResolveSOS = useCallback(async () => {
     if (!activeAlert?._id) return;
@@ -247,7 +232,16 @@ function EmergencyScreenInner() {
       const next = { ...panic, ...patch };
       setPanic(next);
       try {
-        await updatePanic(next);
+        // Convex arg validators reject `null` for optional string fields
+        // (they accept `string | undefined`, not `null`). The native screen
+        // seeds pairedDevice* as null, so sending the merged object as-is
+        // threw ArgumentValidationError → the toggle silently reverted on the
+        // next server sync. Strip null/undefined so only real values are sent.
+        const payload: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(next)) {
+          if (v !== null && v !== undefined) payload[k] = v;
+        }
+        await updatePanic(payload as any);
       } catch (e: any) {
         const message = String(e?.message || '');
         if (!message.includes('CouldNotFindFunction') && !message.includes('not found')) {
@@ -263,7 +257,11 @@ function EmergencyScreenInner() {
       const next = { ...broadcast, ...patch };
       setBroadcast(next);
       try {
-        await updateBroadcast(next);
+        const payload: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(next)) {
+          if (v !== null && v !== undefined) payload[k] = v;
+        }
+        await updateBroadcast(payload as any);
       } catch (e: any) {
         const message = String(e?.message || '');
         if (!message.includes('CouldNotFindFunction') && !message.includes('not found')) {

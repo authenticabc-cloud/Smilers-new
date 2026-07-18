@@ -286,7 +286,11 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
     taskObject;
   const payload = normalizeNotificationPayload(rawPayload);
   const type = toNonEmptyString(payload.type);
-  if (type !== 'call' && type !== 'message' && type !== 'call-declined') {
+  // Silent control signals must NEVER surface a banner. Everything else
+  // (call, message, and user-facing alerts like emergency/SOS/login-approval)
+  // is allowed through — previously this allowlist dropped ALL non-call/
+  // message types, which silently killed trustee EMERGENCY alerts on native.
+  if (type === 'call-cancelled') {
     return;
   }
 
@@ -406,6 +410,44 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
 
   backgroundNotificationKeys.add(notificationKey);
   trimBackgroundNotificationCache();
+
+  // EMERGENCY / generic alert path: any user-facing push that is NOT a plain
+  // chat message (e.g. trustee emergency alerts, SOS, login approvals,
+  // broadcasts) shows a straightforward high-priority banner — WITHOUT the
+  // message-specific contact-name rewrite or per-conversation grouping. This
+  // is what restores trustee emergency alerts on the native app.
+  if (type && type !== 'message') {
+    const alertChannel = 'alerts-v1';
+    if (Platform.OS === 'android') {
+      try {
+        await Notifications.setNotificationChannelAsync(alertChannel, {
+          name: 'Alerts',
+          importance: Notifications.AndroidImportance.MAX,
+          sound: 'default',
+          vibrationPattern: [0, 400, 200, 400],
+          lightColor: '#DC2626',
+          lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+          bypassDnd: true,
+          enableVibrate: true,
+          enableLights: true,
+          showBadge: true,
+        });
+      } catch {}
+    }
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: toNonEmptyString(payload.title) || 'Emergency alert',
+        body: toNonEmptyString(payload.body) || getDisplayNameFromPayload(payload) || 'Open Smilers for details',
+        data: payload,
+        sound: 'default',
+        priority: Notifications.AndroidNotificationPriority.MAX,
+        vibrate: [0, 400, 200, 400],
+        interruptionLevel: 'timeSensitive',
+      },
+      trigger: Platform.OS === 'android' ? { channelId: alertChannel } : null,
+    });
+    return;
+  }
 
   let title = toNonEmptyString(payload.title) || 'New message';
   let body =
