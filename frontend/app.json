@@ -172,6 +172,7 @@
       "./plugins/withCallWakeScreen.js",
       "./plugins/withWebRTCScreenshare.js",
       "./plugins/withNotifeeLocalMaven.js",
+      "./plugins/withNotifeeForegroundServiceType.js",
       "./plugins/withNativeCallService.js",
       "./plugins/withPodfileResourceBundleSigning.js",
       [

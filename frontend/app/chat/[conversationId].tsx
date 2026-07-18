@@ -2507,50 +2507,64 @@ export default function ChatScreen() {
       const result = await pickDocument({
         type: '*/*',
         copyToCacheDirectory: true,
-        multiple: false,
+        multiple: true,
       });
       if (result.canceled) return;
 
-      const file = result.assets?.[0];
-      if (!file) return;
-
-      // iter-164 security: block obviously dangerous attachments (e.g., .exe,
-      // .apk, .bat) at the SEND boundary so a malicious upload never reaches
-      // the recipient. Mirrors the auto-delete-on-receive behaviour below.
-      const preSendScan = scanMessageDeep({ fileName: file.name, mimeType: file.mimeType || undefined });
-      if (preSendScan.shouldAutoDelete) {
-        const reason = preSendScan.findings[0]?.reason || 'This file type may run code on the recipient\u2019s device.';
-        Alert.alert('Blocked: risky file', reason);
-        return;
-      }
-
-      // iter-164 data-friendly: refuse oversized uploads before burning
-      // bandwidth + cellular data. assertUploadSize throws a user-friendly
-      // message we surface via Alert.
-      try {
-        assertUploadSize(file.size || 0, 'document');
-      } catch (sizeErr: any) {
-        Alert.alert('File too large', sizeErr?.message || 'Please choose a smaller file.');
-        return;
-      }
+      const files = Array.isArray(result.assets) ? result.assets : [];
+      if (files.length === 0) return;
 
       setUploading(true);
-      const mime = file.mimeType || 'application/octet-stream';
       const replyToMessageId = replyTo?._id;
-      const storageId = await uploadFile(convex, file.uri, mime);
-      const docHash = await computeFileHashFromUri(file.uri);
-      await sendMessage({
-        conversationId,
-        type: 'file',
-        storageId,
-        mimeType: mime,
-        fileName: file.name,
-        fileSize: file.size,
-        ...(docHash ? { fileHash: docHash } : {}),
-        ...(replyToMessageId ? { replyToId: replyToMessageId } : {}),
-      });
-      setReplyTo(null);
+      let sentAny = false;
+      const skipped: string[] = [];
+
+      for (const file of files) {
+        if (!file) continue;
+
+        // iter-164 security: block obviously dangerous attachments (e.g., .exe,
+        // .apk, .bat) at the SEND boundary so a malicious upload never reaches
+        // the recipient.
+        const preSendScan = scanMessageDeep({ fileName: file.name, mimeType: file.mimeType || undefined });
+        if (preSendScan.shouldAutoDelete) {
+          skipped.push(`${file.name} (risky file type)`);
+          continue;
+        }
+
+        // iter-164 data-friendly: refuse oversized uploads before burning bandwidth.
+        try {
+          assertUploadSize(file.size || 0, 'document');
+        } catch {
+          skipped.push(`${file.name} (too large)`);
+          continue;
+        }
+
+        const mime = file.mimeType || 'application/octet-stream';
+        const storageId = await uploadFile(convex, file.uri, mime);
+        const docHash = await computeFileHashFromUri(file.uri);
+        await sendMessage({
+          conversationId,
+          type: 'file',
+          storageId,
+          mimeType: mime,
+          fileName: file.name,
+          fileSize: file.size,
+          ...(docHash ? { fileHash: docHash } : {}),
+          // Only attach the reply to the FIRST file so a batch doesn't repeat it.
+          ...(!sentAny && replyToMessageId ? { replyToId: replyToMessageId } : {}),
+        });
+        sentAny = true;
+      }
+
+      if (sentAny) setReplyTo(null);
       await refetchMessages();
+
+      if (skipped.length > 0) {
+        Alert.alert(
+          'Some files were skipped',
+          skipped.join('\n'),
+        );
+      }
     } catch (errorValue: any) {
       Alert.alert('Failed to send file', errorValue?.message || 'Unknown error');
     } finally {

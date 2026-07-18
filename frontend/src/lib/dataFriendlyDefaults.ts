@@ -93,11 +93,13 @@ export const MAX_UPLOAD_BYTES = {
   image: 8 * 1024 * 1024,        //  8 MB
   video: 25 * 1024 * 1024,       // 25 MB
   audio: 10 * 1024 * 1024,       // 10 MB
-  // iter-195: raised again 100 MB → 250 MB now that uploads STREAM from
-  // disk (FileSystem.uploadAsync) instead of loading the whole file into
-  // RAM. The user's own APK builds are ~185 MB. Convex storage accepts
-  // files well beyond this via signed upload URLs.
-  document: 250 * 1024 * 1024,   // 250 MB
+  // iter-195: raised 100 MB → 250 MB once uploads STREAM from disk
+  // (FileSystem.uploadAsync) instead of loading the whole file into RAM.
+  // User request: allow very large files (bigger than Telegram's 2 GB free
+  // tier). Convex storage accepts large files via signed upload URLs and the
+  // stream-from-disk path keeps memory flat, so we lift the document cap to
+  // 2 GB. (Very large uploads still depend on a stable connection.)
+  document: 2 * 1024 * 1024 * 1024, // 2 GB
 } as const;
 
 /**

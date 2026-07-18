@@ -65,6 +65,7 @@ type IncomingCallPayload = {
   callerName?: string;
   callerId?: string;
   callerIdentity?: string;
+  callerPhone?: string;
   callType?: 'voice' | 'video' | 'audio';
   conversationId?: string;
   twilioRoom?: string;
@@ -299,8 +300,11 @@ export async function presentIncomingCallNotifeeWake(payload: IncomingCallPayloa
   }
 
   let callerName = payload.callerName?.trim() || 'Smilers user';
-  // Prefer the DEVICE-CONTACT name (cached from the chat list) over the
-  // caller's Google/account name for 1:1 conversations.
+  // Prefer the DEVICE-CONTACT name over the caller's Google/account name.
+  // 1) Fast path: the chat-list cache (populated while the app was open).
+  // 2) Robust fallback: resolve directly from the device address book by the
+  //    caller's phone number — works even after a cold/killed start when the
+  //    in-memory cache is empty (requires the push to carry `callerPhone`).
   try {
     const convId = (payload.conversationId || '').trim();
     if (convId) {
@@ -311,6 +315,19 @@ export async function presentIncomingCallNotifeeWake(payload: IncomingCallPayloa
     }
   } catch {
     /* keep account name */
+  }
+  try {
+    const callerPhone = (payload.callerPhone || '').trim();
+    // Only override with the address-book name when we still have the
+    // account-name default (the cache hit above already wins if present).
+    if (callerPhone && (!callerName || callerName === payload.callerName?.trim() || callerName === 'Smilers user')) {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { resolveDeviceNameByPhone } = require('./deviceNameResolver');
+      const deviceName = await resolveDeviceNameByPhone(callerPhone);
+      if (deviceName) callerName = deviceName;
+    }
+  } catch {
+    /* keep resolved/account name */
   }
   const isVideo = payload.isVideo === true || payload.callType === 'video';
   const callType = isVideo ? 'video' : 'voice';

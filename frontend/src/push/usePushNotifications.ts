@@ -1293,6 +1293,11 @@ export function usePushNotifications() {
                 'Smilers user',
               callType: isVideo ? 'video' : 'voice',
               conversationId: conversationId || '',
+              callerPhone:
+                toNonEmptyString(payload.callerPhone) ||
+                toNonEmptyString(payload.senderPhone) ||
+                toNonEmptyString(payload.phone) ||
+                '',
               twilioRoom: toNonEmptyString(payload.twilio_room_name) || '',
               actionUrl: toNonEmptyString(payload.action_url) || '',
               isVideo,

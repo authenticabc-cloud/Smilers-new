@@ -217,6 +217,11 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
     const twilioRoom = toNonEmptyString(payload.twilio_room_name) || '';
     const callerIdentity = toNonEmptyString(payload.twilio_caller_identity) || '';
     const actionUrl = toNonEmptyString(payload.action_url) || '';
+    const callerPhone =
+      toNonEmptyString(payload.callerPhone) ||
+      toNonEmptyString(payload.senderPhone) ||
+      toNonEmptyString(payload.phone) ||
+      '';
 
     let notifeeOk = false;
     try {
@@ -227,6 +232,7 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
         callerId,
         callerName,
         callerIdentity,
+        callerPhone,
         callType,
         conversationId,
         twilioRoom,
