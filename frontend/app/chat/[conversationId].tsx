@@ -113,7 +113,7 @@ import { useConversationE2EE } from '../../src/hooks/useConversationE2EE';
 import { useViewerSuspension } from '../../src/hooks/useViewerSuspension';
 import { decryptText } from '../../src/lib/e2eeCrypto';
 import { triggerTranscription } from '../../src/lib/triggerTranscription';
-import { markLocallyRead } from '../../src/lib/localReadState';
+import { markLocallyRead, noteReadBaseline, unreadMinusBaseline } from '../../src/lib/localReadState';
 import { VOICE_RECORDING_OPTIONS } from '../../src/lib/audioRecording';
 import ScheduleMessageSheet, { ScheduleSelection } from '../../src/components/ScheduleMessageSheet';
 import CameraCapture from '../../src/components/CameraCapture';
@@ -541,8 +541,12 @@ export default function ChatScreen() {
       // Instantly drop the launcher badge to the total unread of OTHER chats,
       // since this conversation is now being read (don't wait for the list).
       if (unreadCounts) {
+        // This conversation is being read now — record its already-read
+        // baseline so it stays cleared everywhere.
+        noteReadBaseline(conversationId, Number((unreadCounts as any)[conversationId]) || 0);
         const others = Object.entries(unreadCounts).reduce(
-          (sum, [id, c]) => (id === conversationId ? sum : sum + (Number(c) > 0 ? Number(c) : 0)),
+          (sum, [id, c]) =>
+            id === conversationId ? sum : sum + unreadMinusBaseline(id, Number(c) || 0),
           0,
         );
         void mod.setAppBadgeCount(others);

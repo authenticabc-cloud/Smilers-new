@@ -26,7 +26,7 @@ import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useReactiveSafeConvexQuery } from '../../src/hooks/useReactiveSafeConvexQuery';
 import { readStoredString, writeStoredString } from '../../src/lib/settingsStorage';
 import { useLocalReadMap } from '../../src/hooks/useLocalReadMap';
-import { conversationLastActivityMs, isLocallyRead, markLocallyRead, clearLocalRead } from '../../src/lib/localReadState';
+import { conversationLastActivityMs, isLocallyRead, markLocallyRead, clearLocalRead, effectiveUnread, noteReadBaseline } from '../../src/lib/localReadState';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 
 const MAX_PINNED_GROUPS = 20;
@@ -127,10 +127,24 @@ export default function GroupsScreen() {
       if (!id) return 0;
       const backend = Number(unreadCounts?.[id]) || 0;
       if (backend <= 0) return 0;
-      return isLocallyRead(localRead, id, conversationLastActivityMs(item)) ? 0 : backend;
+      return effectiveUnread(localRead, id, conversationLastActivityMs(item), backend);
     },
     [unreadCounts, localRead],
   );
+
+  // Track the already-read baseline for each read group (see localReadState).
+  useEffect(() => {
+    if (!unreadCounts) return;
+    for (const item of list as any[]) {
+      const id = getListItemId(item);
+      if (!id) continue;
+      const backend = Number(unreadCounts[id]) || 0;
+      if (isLocallyRead(localRead, id, conversationLastActivityMs(item))) {
+        noteReadBaseline(id, backend);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unreadCounts, localRead]);
 
   const list = useMemo(() => {
     const isGroups = tab === 'groups';

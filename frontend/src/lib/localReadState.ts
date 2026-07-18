@@ -17,10 +17,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const KEY = 'smilers_local_read_v1';
+const BASELINE_KEY = 'smilers_local_read_baseline_v1';
 
 let map: Record<string, number> = {};
+let baselineMap: Record<string, number> = {};
 let loaded = false;
 const listeners = new Set<() => void>();
+let baselineFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
 export async function loadLocalRead(): Promise<Record<string, number>> {
   if (loaded) return map;
@@ -32,6 +35,15 @@ export async function loadLocalRead(): Promise<Record<string, number>> {
     }
   } catch {
     /* ignore corrupt/locked storage — start empty */
+  }
+  try {
+    const rawB = await AsyncStorage.getItem(BASELINE_KEY);
+    if (rawB) {
+      const parsedB = JSON.parse(rawB);
+      if (parsedB && typeof parsedB === 'object') baselineMap = parsedB as Record<string, number>;
+    }
+  } catch {
+    /* ignore */
   }
   loaded = true;
   return map;
@@ -69,6 +81,7 @@ export function clearLocalRead(conversationId: string): void {
   const next = { ...map };
   delete next[conversationId];
   map = next;
+  clearReadBaseline(conversationId);
   notify();
   AsyncStorage.setItem(KEY, JSON.stringify(map)).catch(() => {});
 }
@@ -106,4 +119,68 @@ export function isLocallyRead(
   const readAt = readMap?.[conversationId];
   if (!readAt) return false;
   return (lastActivityMs || 0) <= readAt;
+}
+
+// ── Baseline "already-read" count ────────────────────────────────────────
+// The backend `getUnreadCounts` does NOT reliably clear after markRead on some
+// accounts, so once a NEWER message arrives the raw count would resurrect the
+// whole already-read bulk as unread. We snapshot the backend count WHILE a
+// conversation is locally-read (the "already-read watermark"); when a new
+// message flips it back to unread, the true new-message count is
+// `max(0, backend - baseline)`. Tracking the watermark continuously also
+// handles accounts where the backend DOES clear (baseline follows it down).
+
+function scheduleBaselineFlush(): void {
+  if (baselineFlushTimer) return;
+  baselineFlushTimer = setTimeout(() => {
+    baselineFlushTimer = null;
+    AsyncStorage.setItem(BASELINE_KEY, JSON.stringify(baselineMap)).catch(() => {});
+  }, 800);
+}
+
+/** Record the already-read backend count for a conversation that is currently
+ *  locally-read. Call this whenever the row is in the read state. */
+export function noteReadBaseline(conversationId: string, backendCount: number): void {
+  if (!conversationId) return;
+  const c = Number(backendCount) || 0;
+  if (baselineMap[conversationId] === c) return;
+  baselineMap = { ...baselineMap, [conversationId]: c };
+  scheduleBaselineFlush();
+}
+
+/** Clear the baseline (used when a local-read is undone). */
+export function clearReadBaseline(conversationId: string): void {
+  if (!conversationId || !(conversationId in baselineMap)) return;
+  const next = { ...baselineMap };
+  delete next[conversationId];
+  baselineMap = next;
+  scheduleBaselineFlush();
+}
+
+/**
+ * Effective unread count for a conversation row:
+ *   - locally-read (no newer activity) → 0
+ *   - otherwise → new messages since the last read = max(0, backend - baseline)
+ */
+export function effectiveUnread(
+  readMap: Record<string, number>,
+  conversationId: string,
+  lastActivityMs: number,
+  backendCount: number,
+): number {
+  const b = Number(backendCount) || 0;
+  if (isLocallyRead(readMap, conversationId, lastActivityMs)) return 0;
+  const baseline = baselineMap[conversationId] || 0;
+  // Stale backend (never cleared) keeps climbing → subtract the already-read
+  // baseline. If the backend dropped BELOW the baseline it has reset/cleared
+  // on its own → trust it directly (avoids under-counting to 0).
+  return b >= baseline ? b - baseline : b;
+}
+
+/** Baseline-only unread for contexts without the last-activity timestamp
+ *  (e.g. the app-badge total computed from inside an open chat). */
+export function unreadMinusBaseline(conversationId: string, backendCount: number): number {
+  const b = Number(backendCount) || 0;
+  const baseline = baselineMap[conversationId] || 0;
+  return b >= baseline ? b - baseline : b;
 }

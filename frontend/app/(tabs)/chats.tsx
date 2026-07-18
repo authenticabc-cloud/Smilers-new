@@ -35,7 +35,7 @@ import { readStoredString, writeStoredString } from '../../src/lib/settingsStora
 import ConversationRow, { formatTypingLabel } from '../../src/components/ConversationRow';
 import ChatSwipeRow from '../../src/components/ChatSwipeRow';
 import { useLocalReadMap } from '../../src/hooks/useLocalReadMap';
-import { conversationLastActivityMs, isLocallyRead, markLocallyRead, clearLocalRead } from '../../src/lib/localReadState';
+import { conversationLastActivityMs, isLocallyRead, markLocallyRead, clearLocalRead, effectiveUnread, noteReadBaseline } from '../../src/lib/localReadState';
 
 const CHAT_FILTER_KEY = 'chats_filter_v1';
 const WHATS_NEW_KEY = 'whatsnew_swipe_read_v1';
@@ -133,10 +133,28 @@ export default function ChatsScreen() {
       const id = String(item?._id || '');
       const backend = Number(unreadCounts?.[id]) || 0;
       if (backend <= 0) return 0;
-      return isLocallyRead(localRead, id, conversationLastActivityMs(item)) ? 0 : backend;
+      // Subtract the already-read baseline so a NEW message only surfaces the
+      // genuinely-new count (not the stale bulk the backend never cleared).
+      return effectiveUnread(localRead, id, conversationLastActivityMs(item), backend);
     },
     [unreadCounts, localRead],
   );
+
+  // Track the "already-read" baseline for every conversation currently in the
+  // read state, so when a new message arrives we can show only the new count.
+  useEffect(() => {
+    if (!unreadCounts) return;
+    for (const item of orderedList as any[]) {
+      const id = String(item?._id || '');
+      if (!id) continue;
+      const backend = Number(unreadCounts[id]) || 0;
+      if (isLocallyRead(localRead, id, conversationLastActivityMs(item))) {
+        noteReadBaseline(id, backend);
+      }
+    }
+    // orderedList is intentionally omitted; unreadCounts/localRead drive updates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unreadCounts, localRead]);
   const [markingAllRead, setMarkingAllRead] = useState(false);
   const [undoReadId, setUndoReadId] = useState<string | null>(null);
   const [whatsNewVisible, setWhatsNewVisible] = useState(false);

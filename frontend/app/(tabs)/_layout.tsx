@@ -7,7 +7,7 @@ import { useAuth } from '../../src/providers/AuthProvider';
 import { api } from '../../src/convexApi';
 import { PHONE_VERIFIED_INSTALL_KEY, readStoredString } from '../../src/lib/settingsStorage';
 import { useLocalReadMap } from '../../src/hooks/useLocalReadMap';
-import { conversationLastActivityMs, isLocallyRead } from '../../src/lib/localReadState';
+import { conversationLastActivityMs, effectiveUnread } from '../../src/lib/localReadState';
 import { callDebug } from '../../src/lib/callDebugLog';
 import { Colors, FontSize, FontWeight } from '../../src/theme';
 
@@ -58,8 +58,10 @@ export default function TabsLayout() {
   let groupsUnread = 0;
   let chatsUnread = 0;
   for (const [id, c] of Object.entries(unreadCounts || {})) {
-    let n = Number(c) > 0 ? Number(c) : 0;
-    if (n > 0 && isLocallyRead(localRead, String(id), activityById[String(id)] || 0)) n = 0;
+    const backend = Number(c) > 0 ? Number(c) : 0;
+    // Subtract the already-read baseline so newly-arrived messages surface only
+    // the genuinely-new count (not the stale bulk the backend never cleared).
+    const n = effectiveUnread(localRead, String(id), activityById[String(id)] || 0, backend);
     if (groupIdSet.has(String(id))) groupsUnread += n;
     else chatsUnread += n;
   }
