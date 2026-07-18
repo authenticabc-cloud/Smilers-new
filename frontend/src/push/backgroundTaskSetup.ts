@@ -73,6 +73,7 @@ type NotificationPayload = {
   callerName?: string;
   callerDisplayName?: string;
   senderName?: string;
+  senderPhone?: string;
   title?: string;
   body?: string;
   sound?: string;
@@ -332,17 +333,30 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
   let title = toNonEmptyString(payload.title) || 'New message';
   let body = getDisplayNameFromPayload(payload) || 'Open Smilers to view the message';
 
-  // Prefer the DEVICE-CONTACT name (cached from the chat list) over the
-  // sender's Google/account name for 1:1 conversations.
+  // Prefer the DEVICE-CONTACT name over the sender's Google/account name.
   try {
-    const groupConvId = toNonEmptyString(payload.conversationId);
-    if (groupConvId) {
-      const { getCachedConversationName } = require('./notificationNameCache');
-      const cachedName = await getCachedConversationName(groupConvId);
-      if (cachedName) {
-        const accountName = getDisplayNameFromPayload(payload);
-        if (!payload.title || title === accountName || title === 'New message') title = cachedName;
-        if (accountName && body === accountName) body = cachedName;
+    const accountName = getDisplayNameFromPayload(payload);
+    const convId = toNonEmptyString(payload.conversationId);
+    const senderPhone =
+      toNonEmptyString(payload.senderPhone) ||
+      toNonEmptyString((payload as any).senderE164) ||
+      toNonEmptyString((payload as any).fromPhone);
+
+    const convDeviceName = convId
+      ? await require('./notificationNameCache').getCachedConversationName(convId)
+      : '';
+    if (convDeviceName) {
+      // 1:1 conversation — the peer is both the title and the sender line.
+      if (!payload.title || title === accountName || title === 'New message') title = convDeviceName;
+      if (accountName && body === accountName) body = convDeviceName;
+    } else if (senderPhone) {
+      // Group (or uncached DM) — resolve the SENDER's device name for the
+      // sender line only; keep the group name as the notification title.
+      const senderDeviceName =
+        await require('./deviceNameResolver').resolveDeviceNameByPhone(senderPhone);
+      if (senderDeviceName) {
+        if (accountName && body === accountName) body = senderDeviceName;
+        if (title === accountName) title = senderDeviceName;
       }
     }
   } catch {

@@ -241,6 +241,22 @@ export function DeviceContactProvider({
           lastRefreshedAt: Date.now(),
           isReady: true,
         });
+        // Persist a background-readable snapshot so headless push handlers
+        // can resolve a sender's phone → device-contact name (group + DM
+        // notifications). See push/deviceNameResolver.ts.
+        try {
+          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+          await AsyncStorage.setItem(
+            'smilers_device_contact_index_v1',
+            JSON.stringify({
+              e164: Array.from(byE164.entries()),
+              digits: Array.from(byDigits.entries()),
+              country: defaultCountry || null,
+            }),
+          );
+        } catch {
+          /* best effort — resolution falls back to the account name */
+        }
       } catch {
         /* swallow — keep whatever we had */
       } finally {
