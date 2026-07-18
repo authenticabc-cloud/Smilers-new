@@ -65,6 +65,7 @@ import { registerActiveCall, clearActiveCall } from '../src/lib/callControl';
 import { setPipParams, enterPip, useIsInPip, isPipSupported } from '../src/lib/pip';
 import { InCallAudio } from '../src/lib/webrtc/inCallManager';
 import CallErrorBoundary from '../src/components/CallErrorBoundary';
+import { InterpreterLayer } from '../src/components/interpreter/InterpreterLayer';
 import { Colors, FontWeight } from '../src/theme';
 
 type AudioOutputRoute = 'earpiece' | 'speaker' | 'bluetooth';
@@ -844,6 +845,22 @@ function TwilioCallScreenInner() {
 
   const handleFlip = () => host.session?.flipCamera();
 
+  // AI Voice Interpreter — best-effort duck of the ORIGINAL remote audio
+  // while a translated voice plays locally (Mode 4). The Twilio wrapper may
+  // not expose remote-audio control on every build; when it doesn't, this
+  // no-ops and Mode 4 gracefully degrades to Mode-5-style layered audio.
+  const handleDuckRemote = useCallback(
+    (ducked: boolean) => {
+      try {
+        (host.session as any)?.setRemoteAudioEnabled?.(!ducked);
+      } catch {
+        /* remote-audio control unavailable — degrade to layered audio */
+      }
+    },
+    [host.session],
+  );
+  const callConnected = host.state === 'connected' || host.state === 'reconnecting';
+
   const selectAudioRoute = (route: AudioOutputRoute) => {
     setAudioOutput(route);
     setShowAudioPicker(false);
@@ -1206,6 +1223,20 @@ function TwilioCallScreenInner() {
           </View>
         </View>
       </Modal>
+
+      {/* AI Voice Interpreter — banner + live subtitles + settings. Runs
+          on-device STT (speaking) and translated-voice playback (listening).
+          Hidden in PiP. */}
+      {!inPip ? (
+        <InterpreterLayer
+          callId={roomName}
+          connected={callConnected}
+          micMuted={muted}
+          topOffset={insets.top + 56}
+          bottomOffset={insets.bottom + 150}
+          onDuckRemote={handleDuckRemote}
+        />
+      ) : null}
 
       {/* iter-233 — Participant roster (privacy-aware numbers). */}
       <Modal
