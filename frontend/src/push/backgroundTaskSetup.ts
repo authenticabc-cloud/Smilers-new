@@ -328,12 +328,19 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
     return;
   }
 
-  // MESSAGE path — always schedule a local notification on the messages channel.
-  // The FCM notification payload (if present) is auto-displayed by the OS on the legacy
-  // calls channel (calls-v4-smilers_never_cry), which is suppressed to IMPORTANCE_NONE
-  // and therefore invisible to the user. We must always post our own local notification.
-  // The stable identifier on scheduleNotificationAsync below prevents duplicates when the
-  // background task fires from both handleIntent and onMessageReceived for the same FCM.
+  // MESSAGE path.
+  // The backend now sends message pushes as notification-type FCM (a `notification`
+  // block with the server-rendered, per-recipient device-contact title). Android
+  // auto-displays those reliably even when the app is killed/Doze. When that
+  // notification block is present the OS ALREADY showed the message, so scheduling
+  // our own local banner here produced a SECOND, duplicate notification — and in the
+  // headless JS context the name lookup often falls back to the sender's Google/
+  // account name, which is exactly the "two notifications, one with the Google name"
+  // bug the user reported. Suppress the local banner whenever the FCM already carried
+  // a title/body; only genuinely data-only message pushes fall through below.
+  if (!shouldScheduleLocalNotification(taskObject)) {
+    return;
+  }
 
   backgroundNotificationKeys.add(notificationKey);
   trimBackgroundNotificationCache();

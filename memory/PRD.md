@@ -1207,3 +1207,14 @@ Standalone social layer (NOT tied to Smilers group chat; AI never reads chat mes
 - Collaborative decks: `api.study.rooms.{listRoomDecks,getRoomDeck,createRoomDeck,addRoomCard,deleteRoomCard,deleteRoomDeck}`. `rooms/deck/[roomDeckId].tsx`: any member adds cards; flip-through Study mode.
 - Admin settings `rooms/settings/[roomId].tsx`: rename/describe (`updateRoom`), "Let Study AI use this room's shared material" toggle (`aiCanReadRoomContent`, off by default), regenerate join code, member management (`setMemberRole`/`removeMember`), delete room (owner) / leave room.
 - Limits: 100 members/room, 500 cards/deck, 20 questions/quiz.
+
+## Push: duplicate message notification fix (iter-fork, native QA pending)
+- Root cause: backend now sends message pushes as notification-type FCM (visible, server-rendered per-recipient device-contact title). Android auto-displays it, but the JS background task (`src/push/backgroundTaskSetup.ts` `presentBackgroundLocalNotification`) ALSO scheduled its own local banner — which in the headless context fell back to the sender's Google/account name. Result: two notifications per message.
+- Fix: in the MESSAGE path of `backgroundTaskSetup.ts`, re-added the `shouldScheduleLocalNotification(taskObject)` guard so the JS local banner is suppressed whenever the FCM already carried a title/body (notification block). Only genuinely data-only message pushes fall through to schedule locally. Needs native APK verification.
+- Calls: `data.callerPhone` (E.164) is confirmed sent by backend when the caller has a phone; native Kotlin `lookupContactNameByPhone` resolves the device-contact name. Google-name fallback only when caller has no stored phone.
+
+## Emergency Alert VIEWER screen (iter-fork, native QA + Convex publish pending)
+- Route: `app/emergency/[alertId].tsx` (registered in `app/_layout.tsx`). Emergency push `action_url = "/emergency/<alertId>"` deep-links here.
+- Reactive Convex queries (via `useSafeConvexQuery`): `api.emergencyAlerts.getAlertForViewer({alertId})`, `api.emergencyRecordings.getRecordingsForAlert({alertId})`, `api.emergencyCaptures.getCapturesForAlert({alertId})`.
+- UI: alerter card (avatar/name/status active|resolved/quick-call), LIVE MAP (Leaflet+OpenStreetMap in react-native-webview; marker repositions via injectJavaScript on lat/lng change; "Open in Maps" fallback), audio recordings list (expo-audio per-item player), camera captures grid (expo-video VideoView for video, Image for photo). Graceful "Alert unavailable" state when null/unauthorized.
+- BLOCKER: `getAlertForViewer` + `updateAlertLocation` are built on the user's Convex backend but NOT published yet — user must click Publish. Full functionality (map/audio/video/deep-link) is native-build only.

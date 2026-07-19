@@ -482,6 +482,7 @@ export default function RootLayout() {
               <Stack.Screen name="ads/review" />
               <Stack.Screen name="settings" />
               <Stack.Screen name="emergency" />
+              <Stack.Screen name="emergency/[alertId]" />
               <Stack.Screen name="ai-chat" />
               <Stack.Screen name="blocked" />
               <Stack.Screen name="notifications" />
