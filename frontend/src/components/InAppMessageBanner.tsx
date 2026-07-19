@@ -34,7 +34,7 @@ import { usePathname, useRouter } from 'expo-router';
 
 import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
-import { getResolvedConversationDisplayName, getDisplayInitials } from '../lib/displayName';
+import { getResolvedConversationDisplayName, getConversationDisplayName, getDisplayInitials, normalizeDisplayText } from '../lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../lib/deviceContactIndex';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../theme';
 
@@ -153,13 +153,35 @@ export default function InAppMessageBanner() {
     }
 
     if (newest) {
-      const title = getResolvedConversationDisplayName(
-        newest,
-        currentUserId,
-        deviceIndex,
-        lookupDeviceContactName,
-        'New message',
-      );
+      const isGroup =
+        newest?.isGroup === true ||
+        newest?.type === 'group' ||
+        (Array.isArray(newest?.participants) && newest.participants.length > 2);
+
+      let title: string;
+      if (isGroup) {
+        const groupName = getConversationDisplayName(newest, currentUserId, 'Group');
+        // Sender name isn't guaranteed on the conversation row — read it
+        // defensively from any of the fields the backend may expose. When
+        // present we show "Sender in Group"; otherwise just the group name.
+        const sender = normalizeDisplayText(
+          newest?.lastMessageSenderName ??
+            newest?.lastSenderName ??
+            newest?.lastMessageSender?.name ??
+            newest?.lastMessageAuthorName ??
+            newest?.lastMessageSenderDisplayName,
+        );
+        title = sender ? `${sender} in ${groupName}` : groupName;
+      } else {
+        title = getResolvedConversationDisplayName(
+          newest,
+          currentUserId,
+          deviceIndex,
+          lookupDeviceContactName,
+          'New message',
+        );
+      }
+
       const avatar =
         newest?.avatar ||
         newest?.avatarUrl ||

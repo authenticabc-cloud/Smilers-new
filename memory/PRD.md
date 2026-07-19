@@ -1244,3 +1244,6 @@ Standalone social layer (NOT tied to Smilers group chat; AI never reads chat mes
 
 ## In-app banner — unread badge + haptic (iter-fork)
 - `InAppMessageBanner.tsx`: added a red unread-count pill on the avatar corner, sourced live from `api.messages.getUnreadCounts` (shows 99+ cap); and a light `expo-haptics` impact when the banner slides in, so it lands together with the message tone (both are driven by the same reactive listConversations update). Frontend-only → needs new APK to test on device.
+
+## In-app banner — group message titles (iter-fork)
+- `InAppMessageBanner.tsx`: group conversations now titled "Sender in GroupName" when a sender field is available on the conversation row (read defensively: lastMessageSenderName/lastSenderName/lastMessageSender.name/lastMessageAuthorName/lastMessageSenderDisplayName), else falls back to just the group name. Group detection: isGroup || type==='group' || participants>2. 1:1 unchanged (device-contact name). NOTE: listConversations does not currently expose a last-message sender name in frontend-accessed fields, so the "Sender in ..." prefix only appears if the backend includes one — otherwise group name shows.
