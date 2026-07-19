@@ -2292,6 +2292,18 @@ async def send_push(
                 # directly via handleIntent and handles the UI (dismiss ring, show
                 # missed-call, etc.).
                 is_silent_control = routing.get("type") in ("call-cancelled", "call-declined")
+                # MESSAGE pushes are now ALSO sent data-only. Previously they carried
+                # a `notification` block, so Android auto-displayed the SERVER title
+                # (the sender's Google/account name) the instant the FCM arrived —
+                # AND the app's background JS task rendered a SECOND notification with
+                # the recipient's saved DEVICE-CONTACT name. Result: two notifications
+                # per message, one with the wrong (Google) name. Sending data-only
+                # means the OS displays nothing; only the app's background task renders
+                # the notification, using the correct device-contact name — exactly the
+                # same reliable high-priority data-only path calls already use. Other
+                # user-facing pushes (emergency/login-approval/broadcast) are NOT typed
+                # "message", so they keep their notification block and stay OS-displayed.
+                is_message_push = routing.get("type") == "message"
 
                 # iter-199: collapse Convex-trigger + caller-device call
                 # pushes into ONE ring per recipient (25 s window).
@@ -2355,7 +2367,10 @@ async def send_push(
                         # carry a notification block so they display normally.
                         # NOTE: apps force-stopped from Settings can't run JS, so
                         # those won't ring — an accepted Android platform limit.
-                        android_data_only=is_call_push or is_silent_control,
+                        # MESSAGES are now data-only too (is_message_push) so the OS
+                        # never auto-displays the server's Google-name notification;
+                        # the app renders the single, device-contact-named one.
+                        android_data_only=is_call_push or is_silent_control or is_message_push,
                     )
                     for t, ch in zip(tokens, resolved_channels)
                 ]

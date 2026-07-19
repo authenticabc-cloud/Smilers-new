@@ -1225,3 +1225,12 @@ Standalone social layer (NOT tied to Smilers group chat; AI never reads chat mes
   2. AUDIO — rolling ~30s clips via `useAudioRecorder(VOICE_RECORDING_OPTIONS)` → `uploadFile(..., api.emergencyRecordings.generateUploadUrl)` → `api.emergencyRecordings.saveRecording({alertId,storageId,durationSeconds})`.
 - Graceful degradation: all calls try/catch; mic-denied keeps location broadcasting (never dead-ends SOS); `updateAlertLocation` failures swallowed (unpublished-safe). Foreground-only MVP; loop stops on resolve/unmount. Mic + location permissions already declared in app.json.
 - Camera photo/video auto-capture NOT included (needs a mounted camera view / native module) — future.
+
+## Duplicate message notification — SERVER-SIDE FIX (iter-fork)
+- Root cause (confirmed w/ Emergent Support): message pushes carried a `notification` block, so Android auto-displayed the SERVER title (sender's Google/account name) the instant the FCM arrived, WHILE the app's background JS task rendered a SECOND notification using the recipient's saved DEVICE-CONTACT name → two notifications per message.
+- Fix (backend relay `/app/backend/server.py`, in `send_push`): message pushes are now sent DATA-ONLY (`is_message_push = routing.get("type")=="message"` added to `android_data_only`). The OS no longer auto-displays anything; only the app's background task renders the single, device-contact-named notification — same reliable high-priority data-only path calls use. Emergency/login-approval/broadcast are NOT typed "message" so they keep their notification block (stay OS-displayed).
+- iOS unaffected: APNSConfig always sets aps.alert regardless of android_data_only.
+- DEPLOYMENT: this is SERVER-SIDE only — the existing APK already renders the device-name notification, so NO new APK is needed. User must RE-PUBLISH the backend to deploy.
+- Minor tradeoffs: (1) no OS heads-up banner for messages while app is in FOREGROUND (bg task returns early when active); (2) force-stopped apps won't render (accepted Android limit, same as calls).
+- Also reverted my earlier `backgroundTaskSetup.ts` message-path guard (it's a no-op now since data-only means no OS dup to guard against; JS always renders once).
+- Call wake-screen: user confirms screen now wakes; minor delivery inconsistency accepted for now.
