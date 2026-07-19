@@ -1241,3 +1241,6 @@ Standalone social layer (NOT tied to Smilers group chat; AI never reads chat mes
 - Skips: web, backgrounded app, first snapshot, own messages, and the currently-open chat. Shows the same DEVICE-CONTACT name as the chats list via `getResolvedConversationDisplayName` + device contact index.
 - Interactions: tap → opens `/chat/<id>`; swipe up or tap × → dismiss; auto-dismiss after 4s.
 - Frontend-only → REQUIRES a new APK build to test on device (unlike the data-only dedup fix which is server-side).
+
+## In-app banner — unread badge + haptic (iter-fork)
+- `InAppMessageBanner.tsx`: added a red unread-count pill on the avatar corner, sourced live from `api.messages.getUnreadCounts` (shows 99+ cap); and a light `expo-haptics` impact when the banner slides in, so it lands together with the message tone (both are driven by the same reactive listConversations update). Frontend-only → needs new APK to test on device.

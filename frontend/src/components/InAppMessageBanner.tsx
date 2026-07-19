@@ -28,6 +28,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { useQuery } from 'convex/react';
 import { usePathname, useRouter } from 'expo-router';
 
@@ -54,6 +55,10 @@ export default function InAppMessageBanner() {
     api.conversations.listConversations,
     isAuthenticated ? {} : ('skip' as any),
   );
+  const unreadCounts = useQuery(
+    (api as any).messages.getUnreadCounts,
+    isAuthenticated ? {} : ('skip' as any),
+  ) as Record<string, number> | undefined;
   const deviceIndex = useDeviceContactIndex();
   const pathname = usePathname();
   const router = useRouter();
@@ -176,6 +181,9 @@ export default function InAppMessageBanner() {
     if (!banner) return;
     translateY.setValue(HIDDEN_Y);
     Animated.spring(translateY, { toValue: 0, useNativeDriver: true, bounciness: 6 }).start();
+    if (Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    }
     clearTimer();
     dismissTimer.current = setTimeout(dismiss, AUTO_DISMISS_MS);
     return clearTimer;
@@ -183,6 +191,8 @@ export default function InAppMessageBanner() {
   }, [banner]);
 
   if (!banner) return null;
+
+  const unread = Number(unreadCounts?.[banner.conversationId]) || 0;
 
   return (
     <Animated.View
@@ -196,13 +206,20 @@ export default function InAppMessageBanner() {
         style={styles.card}
         testID="in-app-message-banner"
       >
-        {banner.avatar ? (
-          <Image source={{ uri: banner.avatar }} style={styles.avatar} />
-        ) : (
-          <View style={[styles.avatar, styles.avatarFallback]}>
-            <Text style={styles.avatarInitial}>{getDisplayInitials(banner.title, 1)}</Text>
-          </View>
-        )}
+        <View>
+          {banner.avatar ? (
+            <Image source={{ uri: banner.avatar }} style={styles.avatar} />
+          ) : (
+            <View style={[styles.avatar, styles.avatarFallback]}>
+              <Text style={styles.avatarInitial}>{getDisplayInitials(banner.title, 1)}</Text>
+            </View>
+          )}
+          {unread > 0 ? (
+            <View style={styles.badge} testID="in-app-message-banner-badge">
+              <Text style={styles.badgeText}>{unread > 99 ? '99+' : unread}</Text>
+            </View>
+          ) : null}
+        </View>
         <View style={styles.textCol}>
           <Text style={styles.title} numberOfLines={1}>
             {banner.title}
@@ -246,6 +263,21 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
   },
   avatarInitial: { color: Colors.white, fontSize: FontSize.base, fontWeight: FontWeight.bold },
+  badge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: Colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: Colors.surface,
+  },
+  badgeText: { color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold },
   textCol: { flex: 1 },
   title: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   body: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 1 },
