@@ -1218,3 +1218,10 @@ Standalone social layer (NOT tied to Smilers group chat; AI never reads chat mes
 - Reactive Convex queries (via `useSafeConvexQuery`): `api.emergencyAlerts.getAlertForViewer({alertId})`, `api.emergencyRecordings.getRecordingsForAlert({alertId})`, `api.emergencyCaptures.getCapturesForAlert({alertId})`.
 - UI: alerter card (avatar/name/status active|resolved/quick-call), LIVE MAP (Leaflet+OpenStreetMap in react-native-webview; marker repositions via injectJavaScript on lat/lng change; "Open in Maps" fallback), audio recordings list (expo-audio per-item player), camera captures grid (expo-video VideoView for video, Image for photo). Graceful "Alert unavailable" state when null/unauthorized.
 - BLOCKER: `getAlertForViewer` + `updateAlertLocation` are built on the user's Convex backend but NOT published yet — user must click Publish. Full functionality (map/audio/video/deep-link) is native-build only.
+
+## Emergency alerter auto-broadcast (iter-fork, native QA + Convex publish pending)
+- New hook `src/lib/emergency/useEmergencyBroadcaster.ts`, wired into `app/emergency.tsx` (called with `activeAlert`). While the user has an ACTIVE (non-resolved) alert, the device auto-broadcasts:
+  1. LIVE LOCATION — `Location.watchPositionAsync` (High accuracy, ~12s throttle) → `api.emergencyAlerts.updateAlertLocation({latitude,longitude})`; viewer map pin glides live.
+  2. AUDIO — rolling ~30s clips via `useAudioRecorder(VOICE_RECORDING_OPTIONS)` → `uploadFile(..., api.emergencyRecordings.generateUploadUrl)` → `api.emergencyRecordings.saveRecording({alertId,storageId,durationSeconds})`.
+- Graceful degradation: all calls try/catch; mic-denied keeps location broadcasting (never dead-ends SOS); `updateAlertLocation` failures swallowed (unpublished-safe). Foreground-only MVP; loop stops on resolve/unmount. Mic + location permissions already declared in app.json.
+- Camera photo/video auto-capture NOT included (needs a mounted camera view / native module) — future.

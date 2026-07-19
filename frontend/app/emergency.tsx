@@ -50,6 +50,7 @@ import {
 
 import { api } from '../src/convexApi';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+import { useEmergencyBroadcaster } from '../src/lib/emergency/useEmergencyBroadcaster';
 import PremiumGate from '../src/components/PremiumGate';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/theme';
 
@@ -135,6 +136,10 @@ function EmergencyScreenInner() {
     {},
     null,
   );
+
+  // While an alert is active, auto-broadcast live location + 30s audio chunks
+  // from this device so trustees/nearby viewers see a live picture.
+  useEmergencyBroadcaster(activeAlert);
 
   const triggerAlert = useMutation((api as any).emergencyAlerts.triggerAlert);
   const resolveAlert = useMutation((api as any).emergencyAlerts.resolveAlert);
