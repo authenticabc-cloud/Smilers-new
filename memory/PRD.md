@@ -1234,3 +1234,10 @@ Standalone social layer (NOT tied to Smilers group chat; AI never reads chat mes
 - Minor tradeoffs: (1) no OS heads-up banner for messages while app is in FOREGROUND (bg task returns early when active); (2) force-stopped apps won't render (accepted Android limit, same as calls).
 - Also reverted my earlier `backgroundTaskSetup.ts` message-path guard (it's a no-op now since data-only means no OS dup to guard against; JS always renders once).
 - Call wake-screen: user confirms screen now wakes; minor delivery inconsistency accepted for now.
+
+## In-app foreground message banner (iter-fork)
+- New component `src/components/InAppMessageBanner.tsx`, mounted in `app/_layout.tsx` after UpdateBanner (overlay, zIndex 9999, inside Auth/Convex/DeviceContact providers).
+- Shows a heads-up banner sliding from the top when a NEW message arrives while the app is FOREGROUND (replaces the OS heads-up that's gone now that messages are data-only). Driven by the Convex `listConversations` realtime subscription (deduped with the sound hook's query).
+- Skips: web, backgrounded app, first snapshot, own messages, and the currently-open chat. Shows the same DEVICE-CONTACT name as the chats list via `getResolvedConversationDisplayName` + device contact index.
+- Interactions: tap → opens `/chat/<id>`; swipe up or tap × → dismiss; auto-dismiss after 4s.
+- Frontend-only → REQUIRES a new APK build to test on device (unlike the data-only dedup fix which is server-side).

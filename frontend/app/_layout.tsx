@@ -28,6 +28,7 @@ import CallHost from '../src/components/call/CallHost';
 import CallReturnBanner from '../src/components/call/CallReturnBanner';
 import ResumeLastRoute from '../src/components/ResumeLastRoute';
 import UpdateBanner from '../src/components/UpdateBanner';import { recordTouchActivity } from '../src/lib/touchActivity';
+import InAppMessageBanner from '../src/components/InAppMessageBanner';
 import { applyInterFontPatch } from '../src/lib/fontPatch';
 import { loadNoiseCancellationPref } from '../src/lib/webrtc/audioConstraints';
 import {
@@ -519,6 +520,7 @@ export default function RootLayout() {
             <CallHost />
             <CallReturnBanner />
             <UpdateBanner />
+            <InAppMessageBanner />
               </View>
             </AppLockGate>
             </DeviceContactBridge>
