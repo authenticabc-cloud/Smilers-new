@@ -23,9 +23,16 @@
 const { withAndroidManifest, AndroidConfig } = require('@expo/config-plugins');
 
 const SERVICE_NAME = 'app.notifee.core.ForegroundService';
-// mediaPlayback is what our playback service requests; keep it as the single
-// declared type (Android disallows combining shortService with other types).
-const FGS_TYPE = 'mediaPlayback';
+// Declared types the notifee foreground service is allowed to run as:
+//  - mediaPlayback: voice-note / translated-audio playback
+//  - microphone + location: emergency SOS capture (keeps live audio + GPS
+//    broadcasting when the app is backgrounded or the screen is locked).
+// Android allows combining these with `|` (only `shortService` may not be
+// combined). A runtime foreground service must request a SUBSET of the types
+// declared here, otherwise Android 14+ throws the uncatchable
+// MissingForegroundServiceTypeException — so this list must cover every type
+// any runtime FGS requests.
+const FGS_TYPE = 'mediaPlayback|microphone|location';
 
 module.exports = function withNotifeeForegroundServiceType(config) {
   return withAndroidManifest(config, (mod) => {

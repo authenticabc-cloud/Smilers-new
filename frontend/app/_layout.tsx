@@ -29,6 +29,7 @@ import CallReturnBanner from '../src/components/call/CallReturnBanner';
 import ResumeLastRoute from '../src/components/ResumeLastRoute';
 import UpdateBanner from '../src/components/UpdateBanner';import { recordTouchActivity } from '../src/lib/touchActivity';
 import InAppMessageBanner from '../src/components/InAppMessageBanner';
+import EmergencyCaptureService from '../src/components/EmergencyCaptureService';
 import { applyInterFontPatch } from '../src/lib/fontPatch';
 import { loadNoiseCancellationPref } from '../src/lib/webrtc/audioConstraints';
 import {
@@ -451,6 +452,7 @@ export default function RootLayout() {
             <ShareIntentRouter />
             <ResumeLastRoute />
             <CallWakeBootstrap />
+            <EmergencyCaptureService />
             <StatusBar style="light" backgroundColor={Colors.headerBg} />
             <AppLockGate>
               <View
