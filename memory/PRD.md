@@ -1263,3 +1263,6 @@ Standalone social layer (NOT tied to Smilers group chat; AI never reads chat mes
 - The ongoing "Emergency active" foreground-service notification now has a "Stop sharing" action (pressAction id `emergency-stop`), with alertId carried in the notification data.
 - `emergencyForegroundService.ts`: added `stopEmergencySharing(alertId?)` — resolves the alert server-side via an authed ConvexHttpClient (anyApi.emergencyAlerts.resolveAlert, token from SecureStore 'smilers_id_token') then tears down the FGS. Works headlessly (no React).
 - Wired into the central notifee handlers in `notifeeCallWake.ts` (both onBackgroundEvent and onForegroundEvent) alongside the existing stop-playback routing. Resolving flips getActiveAlert→null → EmergencyCaptureService.shouldRun false → capture + FGS stop reactively (double-stop is guarded). Needs new APK.
+
+## Emergency "Sharing live" persistent banner (iter-fork)
+- NEW `src/components/EmergencyActiveBanner.tsx`, mounted globally in app/_layout.tsx. Slim red top strip with a pulsing dot + "Sharing live · tap to view" shown whenever the current user has an active alert (getActiveAlert). Tap → /emergency. Hidden on web, when no active alert, and while already on the emergency screen. Frontend-only → needs new APK to see on device.

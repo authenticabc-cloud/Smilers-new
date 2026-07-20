@@ -30,6 +30,7 @@ import ResumeLastRoute from '../src/components/ResumeLastRoute';
 import UpdateBanner from '../src/components/UpdateBanner';import { recordTouchActivity } from '../src/lib/touchActivity';
 import InAppMessageBanner from '../src/components/InAppMessageBanner';
 import EmergencyCaptureService from '../src/components/EmergencyCaptureService';
+import EmergencyActiveBanner from '../src/components/EmergencyActiveBanner';
 import { applyInterFontPatch } from '../src/lib/fontPatch';
 import { loadNoiseCancellationPref } from '../src/lib/webrtc/audioConstraints';
 import {
@@ -523,6 +524,7 @@ export default function RootLayout() {
             <CallReturnBanner />
             <UpdateBanner />
             <InAppMessageBanner />
+            <EmergencyActiveBanner />
               </View>
             </AppLockGate>
             </DeviceContactBridge>
