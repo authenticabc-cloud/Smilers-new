@@ -34,6 +34,7 @@ import * as WebBrowser from 'expo-web-browser';
 import * as ExpoLinking from 'expo-linking';
 import { api } from '../src/convexApi';
 import { usePremiumAccess } from '../src/hooks/usePremiumAccess';
+import { PREMIUM_PURCHASES_DISABLED_IOS } from '../src/lib/premium/iapCompliance';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
 interface PlanOption {
@@ -328,7 +329,7 @@ export default function PremiumPage() {
           </View>
         </View>
 
-        {!status.hasAccess || status.reason === 'trial' ? (
+        {!PREMIUM_PURCHASES_DISABLED_IOS && (!status.hasAccess || status.reason === 'trial') ? (
           <>
             <Text style={styles.sectionLabel}>CHOOSE A PLAN</Text>
             <View style={styles.plansList}>
@@ -422,8 +423,21 @@ export default function PremiumPage() {
           </>
         ) : null}
 
+        {/* iOS App Store compliance: premium purchases are unavailable in the
+            iOS app (Apple In-App Purchase not yet integrated). Show a neutral,
+            non-actionable note instead of any purchase button. */}
+        {PREMIUM_PURCHASES_DISABLED_IOS && !status.hasAccess ? (
+          <View style={styles.iosNoteCard} testID="premium-ios-note">
+            <MaterialCommunityIcons name="information-outline" size={20} color={Colors.textSecondary} />
+            <Text style={styles.iosNoteText}>
+              Premium purchases aren&apos;t available in the iOS app right now. If you already
+              have Premium, it stays active here.
+            </Text>
+          </View>
+        ) : null}
+
         {/* iter-340: quick access to the user's mobile-money request status. */}
-        {latestMoneyReq ? (
+        {!PREMIUM_PURCHASES_DISABLED_IOS && latestMoneyReq ? (
           <TouchableOpacity
             style={styles.myMoneyRow}
             onPress={() => router.push('/mobile-money' as any)}
@@ -477,25 +491,26 @@ export default function PremiumPage() {
           />
         </View>
 
-        {/* Redeem code block — always visible. If Premium is already active,
-            handleRedeem short-circuits with a friendly "nothing to redeem" note
-            instead of calling the backend (which rejects a re-redeem). */}
-        <TouchableOpacity
-          style={styles.redeemHeader}
-          onPress={() => setShowRedeem((v) => !v)}
-          activeOpacity={0.85}
-          testID="premium-redeem-toggle"
-        >
-          <Feather name="gift" size={20} color={Colors.primary} />
-          <Text style={styles.redeemHeaderText}>Have a code? Redeem here</Text>
-          <Feather
-            name={showRedeem ? 'chevron-up' : 'chevron-down'}
-            size={20}
-            color={Colors.textSecondary}
-          />
-        </TouchableOpacity>
+        {/* Redeem code block — hidden on iOS (App Store compliance: no
+            alternative-purchase/redemption entry points). Android/web keep it. */}
+        {!PREMIUM_PURCHASES_DISABLED_IOS ? (
+          <TouchableOpacity
+            style={styles.redeemHeader}
+            onPress={() => setShowRedeem((v) => !v)}
+            activeOpacity={0.85}
+            testID="premium-redeem-toggle"
+          >
+            <Feather name="gift" size={20} color={Colors.primary} />
+            <Text style={styles.redeemHeaderText}>Have a code? Redeem here</Text>
+            <Feather
+              name={showRedeem ? 'chevron-up' : 'chevron-down'}
+              size={20}
+              color={Colors.textSecondary}
+            />
+          </TouchableOpacity>
+        ) : null}
 
-        {showRedeem ? (
+        {!PREMIUM_PURCHASES_DISABLED_IOS && showRedeem ? (
           <View style={styles.redeemForm}>
             <TextInput
               style={styles.redeemInput}
@@ -601,6 +616,21 @@ const styles = StyleSheet.create({
   statusCardExpired: { backgroundColor: '#F3F4F6', borderColor: '#D1D5DB' },
   statusText: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
   statusSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
+
+  // iOS compliance note
+  iosNoteCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    backgroundColor: Colors.surface,
+    borderColor: '#EBE5D5',
+    marginTop: Spacing.lg,
+  },
+  iosNoteText: { flex: 1, fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20 },
 
   // Section labels
   sectionLabel: {

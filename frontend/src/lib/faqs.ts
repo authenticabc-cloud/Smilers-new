@@ -1,8 +1,12 @@
+import { Platform } from 'react-native';
+
 export interface FaqItem {
   q: string;
   a: string;
   category: string;
 }
+
+const IOS_PREMIUM_PURCHASE_DISABLED = Platform.OS === 'ios';
 
 export const FAQ_CATEGORIES = [
   'Getting started',
@@ -110,12 +114,16 @@ export const FAQS: FaqItem[] = [
   {
     category: 'Premium & payments',
     q: 'What is Smilers Premium and what does it cost?',
-    a: 'Premium unlocks the full Smilers experience. Plans are Monthly (€3), 6 Months (€15), and Yearly (€24). Open the Premium screen to compare plans and subscribe.',
+    a: IOS_PREMIUM_PURCHASE_DISABLED
+      ? 'Premium unlocks the full Smilers experience, including Emergency features, Voice Tasks, Chat Once, and Face Verification. If you already have Premium, it stays active on this device.'
+      : 'Premium unlocks the full Smilers experience. Plans are Monthly (€3), 6 Months (€15), and Yearly (€24). Open the Premium screen to compare plans and subscribe.',
   },
   {
     category: 'Premium & payments',
     q: 'How do I pay for Premium with Mobile Money?',
-    a: 'On the Premium screen, pick a plan and tap “Pay with Mobile Money”. Choose your country, optionally add the phone number you’ll pay from, and send the request. An admin messages you the mobile money number to pay. Once they confirm your payment, your Premium plan is activated automatically.',
+    a: IOS_PREMIUM_PURCHASE_DISABLED
+      ? 'Premium purchases aren’t available in the iOS app right now. If you already have Premium, it stays active on this device.'
+      : 'On the Premium screen, pick a plan and tap “Pay with Mobile Money”. Choose your country, optionally add the phone number you’ll pay from, and send the request. An admin messages you the mobile money number to pay. Once they confirm your payment, your Premium plan is activated automatically.',
   },
   {
     category: 'Premium & payments',
@@ -130,7 +138,9 @@ export const FAQS: FaqItem[] = [
   {
     category: 'Premium & payments',
     q: 'Where can I track my Mobile Money requests?',
-    a: 'For Premium, open the Premium screen and tap “Your requests”. For ad clicks, open Ads → My Ads and check the “Mobile Money top-ups” card, which shows each request as Pending, Credited, or Declined.',
+    a: IOS_PREMIUM_PURCHASE_DISABLED
+      ? 'For ad clicks, open Ads → My Ads and check the “Mobile Money top-ups” card, which shows each request as Pending, Credited, or Declined.'
+      : 'For Premium, open the Premium screen and tap “Your requests”. For ad clicks, open Ads → My Ads and check the “Mobile Money top-ups” card, which shows each request as Pending, Credited, or Declined.',
   },
   {
     category: 'Premium & payments',
@@ -145,7 +155,9 @@ export const FAQS: FaqItem[] = [
   {
     category: 'Premium & payments',
     q: 'Can I still pay by card instead of Mobile Money?',
-    a: 'Yes. Card checkout is still available for both Premium and buying ad clicks — just use the main Pay button instead of “Pay with Mobile Money”.',
+    a: IOS_PREMIUM_PURCHASE_DISABLED
+      ? 'Card checkout is available for buying ad clicks. Premium purchases aren’t available in the iOS app right now.'
+      : 'Yes. Card checkout is still available for both Premium and buying ad clicks — just use the main Pay button instead of “Pay with Mobile Money”.',
   },
 
   // Earnings & ads

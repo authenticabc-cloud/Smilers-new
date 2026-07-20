@@ -27,6 +27,7 @@ import {
 } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { usePremiumAccess } from '../hooks/usePremiumAccess';
+import { PREMIUM_PURCHASES_DISABLED_IOS } from '../lib/premium/iapCompliance';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../theme';
 
 interface PremiumGateProps {
@@ -109,9 +110,11 @@ export default function PremiumGate({ children, featureName }: PremiumGateProps)
           {featureName || 'This feature'} is a Premium feature
         </Text>
         <Text style={styles.upgradeBody}>
-          {status.reason === 'expired'
-            ? 'Your trial or subscription has expired. Subscribe or redeem a license code to unlock all Premium features.'
-            : 'Get access to all Premium features with a single subscription. Cancel any time.'}
+          {PREMIUM_PURCHASES_DISABLED_IOS
+            ? 'This is a Premium feature. Premium purchases aren\u2019t available in the iOS app right now — if you already have Premium, it stays active here.'
+            : status.reason === 'expired'
+              ? 'Your trial or subscription has expired. Subscribe or redeem a license code to unlock all Premium features.'
+              : 'Get access to all Premium features with a single subscription. Cancel any time.'}
         </Text>
 
         <View style={styles.bulletList}>
@@ -125,24 +128,28 @@ export default function PremiumGate({ children, featureName }: PremiumGateProps)
           ))}
         </View>
 
-        <TouchableOpacity
-          style={styles.upgradeCta}
-          onPress={() => router.push('/premium' as any)}
-          activeOpacity={0.85}
-          testID="premium-gate-view-plans"
-        >
-          <MaterialCommunityIcons name="crown" size={20} color="#3D2A00" />
-          <Text style={styles.upgradeCtaText}>View Plans</Text>
-        </TouchableOpacity>
+        {!PREMIUM_PURCHASES_DISABLED_IOS ? (
+          <>
+            <TouchableOpacity
+              style={styles.upgradeCta}
+              onPress={() => router.push('/premium' as any)}
+              activeOpacity={0.85}
+              testID="premium-gate-view-plans"
+            >
+              <MaterialCommunityIcons name="crown" size={20} color="#3D2A00" />
+              <Text style={styles.upgradeCtaText}>View Plans</Text>
+            </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.upgradeSecondary}
-          onPress={() => router.push('/premium?redeem=1' as any)}
-          activeOpacity={0.85}
-        >
-          <Feather name="gift" size={16} color={Colors.textSecondary} />
-          <Text style={styles.upgradeSecondaryText}>Have a code? Redeem here</Text>
-        </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.upgradeSecondary}
+              onPress={() => router.push('/premium?redeem=1' as any)}
+              activeOpacity={0.85}
+            >
+              <Feather name="gift" size={16} color={Colors.textSecondary} />
+              <Text style={styles.upgradeSecondaryText}>Have a code? Redeem here</Text>
+            </TouchableOpacity>
+          </>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -161,9 +168,11 @@ function TrialEndingBanner({
       <Text style={styles.trialBannerText}>
         Trial ends in {daysRemaining} day{daysRemaining === 1 ? '' : 's'}
       </Text>
-      <TouchableOpacity style={styles.trialBannerCta} onPress={onView} activeOpacity={0.85}>
-        <Text style={styles.trialBannerCtaText}>View plans</Text>
-      </TouchableOpacity>
+      {!PREMIUM_PURCHASES_DISABLED_IOS ? (
+        <TouchableOpacity style={styles.trialBannerCta} onPress={onView} activeOpacity={0.85}>
+          <Text style={styles.trialBannerCtaText}>View plans</Text>
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }

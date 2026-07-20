@@ -33,6 +33,7 @@ import {
   formatLocalAmount,
 } from '../src/lib/mobileMoney';
 import { friendlyConvexError } from '../src/lib/friendlyError';
+import { PREMIUM_PURCHASES_DISABLED_IOS } from '../src/lib/premium/iapCompliance';
 
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, { bg: string; fg: string; label: string }> = {
@@ -50,6 +51,29 @@ function StatusPill({ status }: { status: string }) {
 }
 
 export default function MobileMoneyScreen() {
+  // iOS App Store compliance: Mobile Money is a premium-purchase path, which is
+  // not permitted for in-app digital goods on iOS. Show a neutral notice instead
+  // (Platform.OS is constant for the app's lifetime, so this early return keeps
+  // hook order consistent per platform). Android/web render the full flow.
+  if (PREMIUM_PURCHASES_DISABLED_IOS) {
+    return (
+      <View style={styles.iosBlockRoot} testID="mobile-money-ios-blocked">
+        <SafeAreaView edges={['top']} style={styles.iosBlockHeader}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={10} style={styles.iosBlockBack}>
+            <Ionicons name="arrow-back" size={22} color={Colors.white} />
+          </TouchableOpacity>
+          <Text style={styles.iosBlockHeaderTitle}>Premium</Text>
+        </SafeAreaView>
+        <View style={styles.iosBlockBody}>
+          <Ionicons name="information-circle-outline" size={40} color={Colors.textSecondary} />
+          <Text style={styles.iosBlockText}>
+            Premium purchases aren&apos;t available in the iOS app right now. If you already have
+            Premium, it stays active here.
+          </Text>
+        </View>
+      </View>
+    );
+  }
   const params = useLocalSearchParams<{ variantId?: string; planLabel?: string; eur?: string }>();
   const planKeys = Object.keys(PREMIUM_PLANS);
   const [variantId, setVariantId] = useState<string>(
@@ -244,6 +268,20 @@ export default function MobileMoneyScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   flexOne: { flex: 1 },
+  iosBlockRoot: { flex: 1, backgroundColor: Colors.background },
+  iosBlockHeader: {
+    backgroundColor: Colors.headerBg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    minHeight: 80,
+  },
+  iosBlockBack: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  iosBlockHeaderTitle: { fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white },
+  iosBlockBody: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 16 },
+  iosBlockText: { fontSize: FontSize.base, color: Colors.textSecondary, textAlign: 'center', lineHeight: 22 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
