@@ -2079,23 +2079,29 @@ async def _prune_dead_token(token_doc: dict, error_message: str | None) -> bool:
         return False
 
 
-async def _recent_call_push_to_user(token_user_id: str) -> bool:
+async def _recent_call_push_to_user(token_user_id: str, call_key: str = "") -> bool:
     """
     iter-199: SEMANTIC call-push dedupe. Incoming-call pushes can originate
     from BOTH the Convex trigger (recipient keyed by OIDC sub) and the
     caller's device (recipient keyed by Convex id) — different idempotency
     keys and different action_urls, so the generic dedupe can't catch the
-    pair. Collapse them here: at most ONE call push per recipient (token
-    owner) per 8 seconds.
+    pair. Collapse them here.
 
-    iter-A6b: window reduced from 25s → 8s. The original 25s window was
-    suppressing legitimate caller retries (e.g. callee rejected, caller
-    tapped again) — the user's phone would never ring on the second
-    attempt. 8s is enough to catch the dual-trigger duplicate (Convex +
-    caller device fire within ~1s of each other) while letting genuine
-    user-initiated retries through.
+    iter-A6b: window reduced from 25s → 8s.
+
+    fork-fix (call inconsistency): the dedupe is now keyed by (user, CALL) —
+    `callpush:<user>:<callId>` — instead of just the user. The old per-user
+    key meant ANY second call push to a user within 8 s was dropped, so:
+      • a legitimate re-call after a quick hang-up never rang, and
+      • a DIFFERENT caller ringing the same user within 8 s was silently
+        suppressed.
+    Both surfaced as "the callee's phone just doesn't ring" with no obvious
+    reason. Keying by callId still collapses the Convex + caller-device
+    duplicate for the SAME call (they share the room/call id) while letting
+    every genuinely distinct call through. Falls back to the per-user key only
+    when no call identifier is available.
     """
-    key = f"callpush:{token_user_id}"
+    key = f"callpush:{token_user_id}:{call_key}" if call_key else f"callpush:{token_user_id}"
     now = datetime.now(timezone.utc)
     try:
         existing = await db.push_dedupe.find_one({"k": key})
@@ -2332,12 +2338,21 @@ async def send_push(
                 # iter-199: collapse Convex-trigger + caller-device call
                 # pushes into ONE ring per recipient (25 s window).
                 if is_call_push:
+                    _call_dedup_key = str(
+                        data.get("callId")
+                        or data.get("twilio_room_name")
+                        or data.get("conversationId")
+                        or idempotency_key
+                        or ""
+                    )
                     kept_tokens = []
                     for t in tokens:
-                        if await _recent_call_push_to_user(str(t.get("user_id") or "")):
+                        if await _recent_call_push_to_user(
+                            str(t.get("user_id") or ""), _call_dedup_key
+                        ):
                             logger.info(
                                 f"send_push: call-push dedupe — skipping token for "
-                                f"user={t.get('user_id')} (already rang <25s ago)"
+                                f"user={t.get('user_id')} call={_call_dedup_key} (already rang <8s ago)"
                             )
                             continue
                         kept_tokens.append(t)

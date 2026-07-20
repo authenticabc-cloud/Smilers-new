@@ -9,10 +9,10 @@
  *   • AUDIO clips    → api.emergencyRecordings.saveRecording   (mic)
  *   • VIDEO clips    → api.emergencyCaptures.saveCapture        (camera + mic)
  *
- * A notifee FOREGROUND SERVICE (microphone|location types) keeps the JS process
- * alive, so AUDIO + LOCATION keep broadcasting even when the app is backgrounded
- * or the screen is locked. VIDEO only runs while the app is FOREGROUNDED — the
- * Android camera cannot be accessed in the background (an OS restriction).
+ * NOTE: capture runs only while the app is FOREGROUNDED. We intentionally do
+ * NOT run an Android foreground service — starting a typed (microphone/location)
+ * FGS on Android 14+ can throw an uncatchable native exception that crashed the
+ * alerter's app on SOS trigger. Background capture is deferred to a native fix.
  *
  * Audio and video share the microphone, so they are SEQUENCED (video clip →
  * audio clip → repeat), never simultaneous. Everything degrades gracefully: a
@@ -30,10 +30,6 @@ import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
 import { uploadFile } from '../lib/uploadFile';
 import { VOICE_RECORDING_OPTIONS } from '../lib/audioRecording';
-import {
-  startEmergencyForegroundService,
-  stopEmergencyForegroundService,
-} from '../lib/emergency/emergencyForegroundService';
 
 const VIDEO_CLIP_SEC = 12;
 const AUDIO_CLIP_MS = 10_000;
@@ -98,8 +94,17 @@ export default function EmergencyCaptureService() {
     return () => sub.remove();
   }, []);
 
-  // On active alert: request permissions and start the foreground service with
-  // whatever types are granted (never with an undeclared/ungranted type).
+  // On active alert: request the permissions the capture loops need. We do NOT
+  // start an Android foreground service here anymore.
+  //
+  // WHY REMOVED: starting a typed (microphone|location) foreground service on
+  // Android 14+ can throw the UNCATCHABLE MissingForegroundServiceType /
+  // ForegroundServiceStartNotAllowed / SecurityException natively (even when we
+  // guard by granted permission), crashing the alerter's app the moment an SOS
+  // fires. Since that crash was more harmful than the lost background capture,
+  // we drop the FGS entirely: audio + location + video now capture only while
+  // the app is FOREGROUNDED (the app no longer crashes on trigger). Background
+  // capture would require a native build fix and is deferred.
   useEffect(() => {
     if (!shouldRun) return;
     let cancelled = false;
@@ -112,10 +117,9 @@ export default function EmergencyCaptureService() {
       if (cancelled) return;
       setLocGranted(loc);
 
-      let mic = !!micPerm?.granted;
-      if (!mic) {
+      if (!micPerm?.granted) {
         try {
-          mic = !!(await requestMicPerm())?.granted;
+          await requestMicPerm();
         } catch {}
       }
       if (!camPerm?.granted) {
@@ -123,12 +127,9 @@ export default function EmergencyCaptureService() {
           await requestCamPerm();
         } catch {}
       }
-      if (cancelled) return;
-      await startEmergencyForegroundService({ mic, location: loc, alertId });
     })();
     return () => {
       cancelled = true;
-      void stopEmergencyForegroundService();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldRun]);

@@ -92,9 +92,26 @@ export type GroupedMessageInput = {
 };
 
 /**
- * Display a message notification that bundles with others from the same
- * conversation. Returns true on success, false if notifee is unavailable
- * (caller should then fall back to expo-notifications).
+ * Display a message notification for a conversation. Uses ONE stable
+ * notification per conversation (id = `msg-conv-<conversationId>`) that is
+ * UPDATED in place as new messages arrive — never a child + separate summary.
+ *
+ * WHY (duplicate-notification root cause): the previous implementation posted a
+ * per-message "child" notification PLUS a "group summary" notification. Android
+ * renders a group summary as its OWN standalone notification whenever the group
+ * doesn't have enough children to collapse (and the child/summary counting
+ * raced across the killed-app headless JS contexts that each FCM spins up),
+ * which is exactly the "message notification rendered twice" the user kept
+ * seeing. A single stable-id notification per conversation makes duplicates
+ * structurally impossible: re-posting the same id UPDATES the existing entry.
+ *
+ * Accumulated message lines are persisted in the notification's own `data`
+ * (`linesJson`), so even a fresh headless process can read the currently
+ * displayed notification, append the new line, and re-post — WhatsApp-style
+ * "N new messages" with a preview of the latest lines.
+ *
+ * Returns true on success, false if notifee is unavailable (caller should then
+ * fall back to expo-notifications).
  */
 export async function displayGroupedMessageNotification(
   input: GroupedMessageInput,
@@ -108,114 +125,66 @@ export async function displayGroupedMessageNotification(
   try {
     await ensureChannel(native);
 
-    const groupId = `msg-grp-${conversationId}`;
-    const childId =
-      input.childId || `msg-${conversationId}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
-    const summaryId = `msg-summary-${conversationId}`;
+    const notificationId = `msg-conv-${conversationId}`;
     const routeData = { ...data, type: 'message', conversationId };
 
-    // 1) The individual message (child of the group). Children carry the
-    //    sound/vibration; the summary stays silent to avoid double alerts.
+    // Pull the currently-displayed notification for this conversation (if any)
+    // so we can append to its accumulated lines. Persisting the lines in the
+    // notification's own data means this works across the separate headless JS
+    // processes each FCM push may run in (in-memory state would be lost).
+    let priorLines: string[] = [];
+    let convName = title;
+    try {
+      const displayed = await native.notifee.getDisplayedNotifications();
+      const existing = (Array.isArray(displayed) ? displayed : []).find(
+        (d: any) => d?.id === notificationId || d?.notification?.id === notificationId,
+      );
+      const existingData = existing?.notification?.data || existing?.data;
+      if (existingData?.linesJson) {
+        const parsed = JSON.parse(String(existingData.linesJson));
+        if (Array.isArray(parsed)) priorLines = parsed.map((s) => String(s)).filter(Boolean);
+      }
+      const existingTitle = existing?.notification?.title;
+      if (typeof existingTitle === 'string' && existingTitle.trim()) {
+        convName = existingTitle.trim();
+      }
+    } catch {
+      /* no prior notification — start fresh */
+    }
+
+    // Append this message and cap the visible history at 6 lines (matches the
+    // OS default). Guard against the SAME FCM being processed twice (a killed
+    // app can wake for both onMessageReceived and handleIntent) by skipping an
+    // exact-duplicate consecutive line.
+    const nextLines = [...priorLines];
+    if (nextLines[nextLines.length - 1] !== body) {
+      nextLines.push(body);
+    }
+    const lines = nextLines.slice(-6);
+    const msgCount = nextLines.length;
+
+    const summaryBody = msgCount >= 2 ? `${msgCount} new messages` : body;
+
     await native.notifee.displayNotification({
-      id: childId,
-      title,
-      body,
-      data: routeData,
+      id: notificationId,
+      title: convName,
+      body: summaryBody,
+      data: { ...routeData, linesJson: JSON.stringify(lines), msgCount: String(msgCount) },
       android: {
         channelId: MESSAGE_CHANNEL_ID,
-        groupId,
         importance: native.AndroidImportance.HIGH,
         visibility: native.AndroidVisibility.PRIVATE,
         pressAction: { id: 'default', launchActivity: 'default' },
         sound: MESSAGE_SOUND,
+        // Only alert (sound/vibrate) for the FIRST message in a burst so an
+        // in-place update for message 2..N doesn't re-buzz repeatedly.
+        onlyAlertOnce: msgCount > 1,
         autoCancel: true,
         showTimestamp: true,
-        style: { type: native.AndroidStyle.BIGTEXT, text: body },
-      },
-    });
-
-    // 2) The group summary (shown when collapsed). We build an InboxStyle
-    //    summary from the conversation's currently-displayed messages so it
-    //    reads "N new messages" with a preview of the latest lines (WhatsApp
-    //    style). onlyAlertOnce + CHILDREN alert behavior keep it silent.
-    //
-    // CRITICAL (duplicate-notification fix): a group summary must ONLY be
-    // posted once the conversation has 2+ visible children. Posting a summary
-    // alongside a SINGLE child makes Android render TWO separate notifications
-    // (the child AND the summary), which is exactly the "duplicate message
-    // notification" the user reported. So we count the currently-displayed
-    // children for this group and only post/refresh the summary when there are
-    // at least two; for the first (single) message we skip the summary entirely
-    // and cancel any stale one left over from a previous burst.
-    let lines: string[] = [body];
-    let convName = title;
-    let childCount = 1; // the child we just posted
-    try {
-      const displayed = await native.notifee.getDisplayedNotifications();
-      const children = (Array.isArray(displayed) ? displayed : []).filter((d: any) => {
-        const n = d?.notification;
-        const gid = n?.android?.groupId;
-        const isSummary = n?.android?.groupSummary === true || d?.id === summaryId;
-        return gid === groupId && !isSummary;
-      });
-      // getDisplayedNotifications may not yet include the just-posted child
-      // (async race), so take the max of what we see and our own child.
-      const seenIds = new Set(children.map((d: any) => d?.id).filter(Boolean));
-      childCount = Math.max(children.length, seenIds.has(childId) ? children.length : children.length + 1, 1);
-      const collected = children
-        .map((d: any) => {
-          const n = d?.notification;
-          const text = typeof n?.body === 'string' ? n.body : '';
-          return text.trim();
-        })
-        .filter((t: string) => t.length > 0);
-      if (collected.length > 0) {
-        // Keep the most recent lines (cap at 6, like the OS does).
-        lines = collected.slice(-6);
-      }
-      // Prefer the sender/conversation title from an existing child if present.
-      const withTitle = children.find(
-        (d: any) => typeof d?.notification?.title === 'string' && d.notification.title.trim(),
-      );
-      if (withTitle) convName = withTitle.notification.title.trim();
-    } catch {
-      // getDisplayedNotifications unavailable — assume a single child so we do
-      // NOT post a duplicate-causing summary.
-      childCount = 1;
-    }
-
-    if (childCount < 2) {
-      // Single message → no summary (prevents the child+summary duplicate).
-      // Clear any leftover summary from an earlier burst that has since been
-      // read/cleared down to one child.
-      await native.notifee.cancelNotification(summaryId).catch(() => {});
-      await incrementAppBadgeCount();
-      return true;
-    }
-
-    const summaryBody = `${childCount} new messages`;
-
-    await native.notifee.displayNotification({
-      id: summaryId,
-      title: convName,
-      body: summaryBody,
-      data: routeData,
-      android: {
-        channelId: MESSAGE_CHANNEL_ID,
-        groupId,
-        groupSummary: true,
-        groupAlertBehavior: native.AndroidGroupAlertBehavior.CHILDREN,
-        importance: native.AndroidImportance.HIGH,
-        visibility: native.AndroidVisibility.PRIVATE,
-        pressAction: { id: 'default', launchActivity: 'default' },
-        onlyAlertOnce: true,
-        autoCancel: true,
-        style: {
-          type: native.AndroidStyle.INBOX,
-          lines,
-          title: convName,
-          summary: `${childCount} new messages`,
-        },
+        style:
+          msgCount >= 2
+            ? { type: native.AndroidStyle.INBOX, lines, title: convName, summary: summaryBody }
+            : { type: native.AndroidStyle.BIGTEXT, text: body },
       },
     });
 
@@ -255,7 +224,8 @@ export async function clearConversationNotifications(conversationId: string): Pr
           d?.id ? native.notifee.cancelNotification(d.id).catch(() => {}) : Promise.resolve(),
         ),
       );
-      // Belt-and-braces: cancel the well-known summary id even if it wasn't listed.
+      // Belt-and-braces: cancel the well-known ids even if not listed.
+      await native.notifee.cancelNotification(`msg-conv-${conversationId}`).catch(() => {});
       await native.notifee.cancelNotification(`msg-summary-${conversationId}`).catch(() => {});
     } catch {
       /* best effort */
