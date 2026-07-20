@@ -26,6 +26,7 @@ let AndroidImportance: any = null;
 let AndroidForegroundServiceType: any = null;
 let registered = false;
 let running = false;
+let currentAlertId: string | null = null;
 
 function load(): boolean {
   if (Platform.OS !== 'android') return false;
@@ -63,8 +64,10 @@ function ensureRegistered(): void {
 export async function startEmergencyForegroundService(opts: {
   mic: boolean;
   location: boolean;
+  alertId?: string;
 }): Promise<boolean> {
   if (!load()) return false;
+  currentAlertId = opts.alertId ?? currentAlertId;
   if (running) return true;
 
   const types: any[] = [];
@@ -88,6 +91,7 @@ export async function startEmergencyForegroundService(opts: {
       id: NOTIFICATION_ID,
       title: 'Emergency active',
       body: 'Sharing your live location and audio with your trustees',
+      data: { type: 'emergency-fgs', alertId: currentAlertId || '' },
       android: {
         channelId: CHANNEL_ID,
         asForegroundService: true,
@@ -97,6 +101,12 @@ export async function startEmergencyForegroundService(opts: {
         colorized: true,
         color: '#EF4444',
         pressAction: { id: 'default', launchActivity: 'default' },
+        actions: [
+          {
+            title: 'Stop sharing',
+            pressAction: { id: 'emergency-stop' },
+          },
+        ],
       },
     });
     running = true;
@@ -120,4 +130,38 @@ export async function stopEmergencyForegroundService(): Promise<void> {
   } catch {
     /* ignore */
   }
+}
+
+/**
+ * "Stop sharing" action from the ongoing emergency notification. Resolves the
+ * active alert server-side (so the viewer flips to "Resolved" and capture
+ * stops) and tears down the foreground service — all WITHOUT reopening the app.
+ * Works from both the notifee background and foreground event handlers.
+ */
+export async function stopEmergencySharing(alertId?: string): Promise<void> {
+  const targetAlertId = alertId || currentAlertId || '';
+  // Resolve the alert via an authed HTTP client (no React hooks in the handler).
+  if (targetAlertId) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const SecureStore = require('expo-secure-store');
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { ConvexHttpClient } = require('convex/browser');
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { anyApi } = require('convex/server');
+      const convexUrl = process.env.EXPO_PUBLIC_CONVEX_URL;
+      if (convexUrl) {
+        const client = new ConvexHttpClient(convexUrl);
+        const token = await SecureStore.getItemAsync('smilers_id_token');
+        if (token) {
+          client.setAuth(token);
+          await client.mutation(anyApi.emergencyAlerts.resolveAlert, { alertId: targetAlertId });
+        }
+      }
+    } catch (e: any) {
+      console.warn('[emergency] stopEmergencySharing resolveAlert failed:', e?.message || e);
+    }
+  }
+  currentAlertId = null;
+  await stopEmergencyForegroundService();
 }

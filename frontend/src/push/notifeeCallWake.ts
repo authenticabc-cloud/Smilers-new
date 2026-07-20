@@ -560,12 +560,31 @@ export function registerNotifeeCallEventHandlers(): void {
           } catch {}
           return;
         }
+        // Emergency "Stop sharing" action (emergency foreground service).
+        if (detail?.pressAction?.id === 'emergency-stop') {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            await require('../lib/emergency/emergencyForegroundService').stopEmergencySharing(
+              detail?.notification?.data?.alertId,
+            );
+          } catch {}
+          return;
+        }
         await handleCallEvent(native, type, detail);
       } catch (errorValue: any) {
         safeRecord(`bg-event-failed: ${errorValue?.message || errorValue}`);
       }
     });
     native.notifee.onForegroundEvent(({ type, detail }: any) => {
+      if (detail?.pressAction?.id === 'emergency-stop') {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          require('../lib/emergency/emergencyForegroundService')
+            .stopEmergencySharing(detail?.notification?.data?.alertId)
+            .catch(() => {});
+        } catch {}
+        return;
+      }
       handleCallEvent(native, type, detail).catch((errorValue: any) =>
         safeRecord(`fg-event-failed: ${errorValue?.message || errorValue}`),
       );

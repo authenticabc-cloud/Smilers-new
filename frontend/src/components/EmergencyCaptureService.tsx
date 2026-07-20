@@ -124,7 +124,7 @@ export default function EmergencyCaptureService() {
         } catch {}
       }
       if (cancelled) return;
-      await startEmergencyForegroundService({ mic, location: loc });
+      await startEmergencyForegroundService({ mic, location: loc, alertId });
     })();
     return () => {
       cancelled = true;

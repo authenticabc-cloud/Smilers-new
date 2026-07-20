@@ -1258,3 +1258,8 @@ Standalone social layer (NOT tied to Smilers group chat; AI never reads chat mes
 - Config plugin `plugins/withNotifeeForegroundServiceType.js`: FGS_TYPE changed 'mediaPlayback' -> 'mediaPlayback|microphone|location' so the emergency FGS types are declared in the merged manifest.
 - VIDEO is FOREGROUND-ONLY (Android blocks background camera): the hidden CameraView only mounts when appActive; on background the loop skips video, keeps audio+location. camera-ready reset on background.
 - Requires a NEW APK (native manifest/plugin + camera/FGS). Cannot validate in Expo Go/preview. Graceful degradation on any denied permission.
+
+## Emergency "Stop sharing" notification action (iter-fork)
+- The ongoing "Emergency active" foreground-service notification now has a "Stop sharing" action (pressAction id `emergency-stop`), with alertId carried in the notification data.
+- `emergencyForegroundService.ts`: added `stopEmergencySharing(alertId?)` — resolves the alert server-side via an authed ConvexHttpClient (anyApi.emergencyAlerts.resolveAlert, token from SecureStore 'smilers_id_token') then tears down the FGS. Works headlessly (no React).
+- Wired into the central notifee handlers in `notifeeCallWake.ts` (both onBackgroundEvent and onForegroundEvent) alongside the existing stop-playback routing. Resolving flips getActiveAlert→null → EmergencyCaptureService.shouldRun false → capture + FGS stop reactively (double-stop is guarded). Needs new APK.
