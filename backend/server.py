@@ -3368,6 +3368,14 @@ async def health_readiness():
         "integrations": integrations,
         "rate_limit_store": rate_store,
         "version": APP_VERSION_CONFIG.get("latestVersion"),
+        # Push-pipeline build marker — lets us verify (by curling this deployed
+        # /api/health) that the message data-only + Emergent-relay-skip fixes are
+        # actually live on the relay the app talks to. Bump `build` on each fix.
+        "push_pipeline": {
+            "build": "iter-fork-msg-dataonly-v2",
+            "message_data_only": True,
+            "message_skips_emergent_relay_for_native": True,
+        },
         "startedAt": _SERVER_STARTED_AT.isoformat(),
         "uptimeSeconds": uptime_seconds,
     }

@@ -1278,3 +1278,9 @@ Standalone social layer (NOT tied to Smilers group chat; AI never reads chat mes
 - Instrumented backgroundTaskSetup.ts message path: recordDiagnostic tag 'MSG-PUSH' logs `hasNotifBlock` (=!shouldScheduleLocalNotification) + title + resolved name + key for every incoming message FCM. hasNotifBlock=true ⇒ deployed relay STILL sending notification-type (data-only fix not live on the relay the APK actually uses) ⇒ likely MOBILE_BACKEND_URL points to a backend NOT running this server.py, OR backend not redeployed. hasNotifBlock=false ⇒ data-only live; duplicate source is elsewhere.
 - Frontend change → needs NEW APK. User then: send a duplicating message → Settings → Diagnostic Logs → copy MSG-PUSH rows → paste to support.
 - OPEN QUESTION for user: does Convex MOBILE_BACKEND_URL point to THIS Emergent app backend's deployed URL? If not, none of the server.py relay fixes reach the APK.
+
+## DEPLOYMENT PROOF — deployed relay is STALE (iter-fork)
+- Added a `push_pipeline` marker to GET /api/health {build:'iter-fork-msg-dataonly-v2', message_data_only, message_skips_emergent_relay_for_native}.
+- curl https://app-migration-75.emergent.host/api/health (the confirmed MOBILE_BACKEND_URL) → NO push_pipeline field, version 2.2.17 → DEPLOYED BACKEND HAS OLD CODE. None of the message-notif fixes are live. This is why duplicates persist despite "always publishing".
+- Local /api/health returns push_pipeline correctly (fix present & correct).
+- ACTION: user must RE-PUBLISH so backend redeploys. VERIFY by curling deployed /api/health for push_pipeline.build. If it still doesn't appear after publish → Publish isn't redeploying the backend → route to support_agent (platform/deploy issue). No APK needed for the duplicate fix.
