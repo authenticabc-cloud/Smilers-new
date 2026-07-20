@@ -16,6 +16,7 @@ import { Platform } from 'react-native';
 import * as TaskManager from 'expo-task-manager';
 import * as Notifications from 'expo-notifications';
 import { registerNotifeeCallEventHandlers } from './notifeeCallWake';
+import { recordDiagnostic } from '../lib/diagnostics';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -334,6 +335,19 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
   // and therefore invisible to the user. We must always post our own local notification.
   // The stable identifier on scheduleNotificationAsync below prevents duplicates when the
   // background task fires from both handleIntent and onMessageReceived for the same FCM.
+
+  // DIAGNOSTIC (Diagnostic Logs screen → tag MSG-PUSH): records whether the
+  // incoming message FCM still carried a NOTIFICATION BLOCK. If hasNotifBlock=true
+  // the deployed relay is still sending message pushes as notification-type (the OS
+  // auto-displays a 2nd "Smilers"/server-title banner) → the relay wasn't redeployed
+  // with the data-only fix. hasNotifBlock=false means data-only (single app banner).
+  try {
+    recordDiagnostic({
+      tag: 'MSG-PUSH',
+      source: 'bg-task',
+      message: `type=${type} hasNotifBlock=${!shouldScheduleLocalNotification(taskObject)} title="${(toNonEmptyString(payload.title) || '').slice(0, 40)}" name="${(getDisplayNameFromPayload(payload) || '').slice(0, 40)}" key=${notificationKey}`,
+    });
+  } catch {}
 
   backgroundNotificationKeys.add(notificationKey);
   trimBackgroundNotificationCache();

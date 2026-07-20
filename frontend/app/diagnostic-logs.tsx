@@ -103,6 +103,7 @@ function colorForTag(tag: string): string {
   if (tag === 'CALL') return '#ff9800';
   if (tag === 'HB' || tag === 'BOOT') return '#9c88ff';
   if (tag === 'HEALTH') return '#4dd0e1';
+  if (tag === 'MSG-PUSH') return '#26c6da';
   if (tag === 'CONSOLE') return '#bdbdbd';
   return '#90a4ae';
 }

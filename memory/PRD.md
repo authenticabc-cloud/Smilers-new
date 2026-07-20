@@ -1272,3 +1272,9 @@ Standalone social layer (NOT tied to Smilers group chat; AI never reads chat mes
 - The "Smilers"(default-label) copy = the Emergent relay (/api/v1/push/trigger) notification-block push firing next to the FCM v1 data-only push the app renders as the contact name ("ABC Albania").
 - Prior skip used success_count>0, so a STALE-token FCM failure (0 successes) still let the relay leak the duplicate. NOW gated on stats.token_count>0 (any native recipient with registered FCM tokens) → relay skipped regardless of delivery success. Web-only recipients (token_count 0) still get the relay.
 - ALL fixes are in the Emergent/FastAPI backend (server.py). REQUIRES BACKEND RE-PUBLISH/DEPLOY to take effect — repeated "still duplicates" strongly implies the deployed relay was not refreshed.
+
+## Diagnostic tool restored + MSG-PUSH instrumentation (iter-fork)
+- Re-added 'Diagnostic Logs' row to app/settings.tsx (route /diagnostic-logs; was hidden since iter-176 for Play Store). Screen already had Copy/Share.
+- Instrumented backgroundTaskSetup.ts message path: recordDiagnostic tag 'MSG-PUSH' logs `hasNotifBlock` (=!shouldScheduleLocalNotification) + title + resolved name + key for every incoming message FCM. hasNotifBlock=true ⇒ deployed relay STILL sending notification-type (data-only fix not live on the relay the APK actually uses) ⇒ likely MOBILE_BACKEND_URL points to a backend NOT running this server.py, OR backend not redeployed. hasNotifBlock=false ⇒ data-only live; duplicate source is elsewhere.
+- Frontend change → needs NEW APK. User then: send a duplicating message → Settings → Diagnostic Logs → copy MSG-PUSH rows → paste to support.
+- OPEN QUESTION for user: does Convex MOBILE_BACKEND_URL point to THIS Emergent app backend's deployed URL? If not, none of the server.py relay fixes reach the APK.
