@@ -271,6 +271,9 @@ export default function EmergencyCaptureService() {
 }
 
 const styles = StyleSheet.create({
-  hidden: { position: 'absolute', top: -20, left: -20, width: 1, height: 1, opacity: 0 },
-  cam: { width: 1, height: 1 },
+  // Off-screen (not zero-sized/opacity-0): several Android devices refuse to
+  // start recording when the CameraView preview is 1x1 or has opacity 0, so we
+  // render it at a real size and push it fully off-screen instead.
+  hidden: { position: 'absolute', top: -1000, left: -1000, width: 160, height: 220 },
+  cam: { width: 160, height: 220 },
 });

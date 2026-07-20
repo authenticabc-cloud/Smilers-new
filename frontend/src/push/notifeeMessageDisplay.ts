@@ -138,8 +138,18 @@ export async function displayGroupedMessageNotification(
     //    summary from the conversation's currently-displayed messages so it
     //    reads "N new messages" with a preview of the latest lines (WhatsApp
     //    style). onlyAlertOnce + CHILDREN alert behavior keep it silent.
+    //
+    // CRITICAL (duplicate-notification fix): a group summary must ONLY be
+    // posted once the conversation has 2+ visible children. Posting a summary
+    // alongside a SINGLE child makes Android render TWO separate notifications
+    // (the child AND the summary), which is exactly the "duplicate message
+    // notification" the user reported. So we count the currently-displayed
+    // children for this group and only post/refresh the summary when there are
+    // at least two; for the first (single) message we skip the summary entirely
+    // and cancel any stale one left over from a previous burst.
     let lines: string[] = [body];
     let convName = title;
+    let childCount = 1; // the child we just posted
     try {
       const displayed = await native.notifee.getDisplayedNotifications();
       const children = (Array.isArray(displayed) ? displayed : []).filter((d: any) => {
@@ -148,6 +158,10 @@ export async function displayGroupedMessageNotification(
         const isSummary = n?.android?.groupSummary === true || d?.id === summaryId;
         return gid === groupId && !isSummary;
       });
+      // getDisplayedNotifications may not yet include the just-posted child
+      // (async race), so take the max of what we see and our own child.
+      const seenIds = new Set(children.map((d: any) => d?.id).filter(Boolean));
+      childCount = Math.max(children.length, seenIds.has(childId) ? children.length : children.length + 1, 1);
       const collected = children
         .map((d: any) => {
           const n = d?.notification;
@@ -165,11 +179,21 @@ export async function displayGroupedMessageNotification(
       );
       if (withTitle) convName = withTitle.notification.title.trim();
     } catch {
-      // getDisplayedNotifications unavailable — fall back to the single line.
+      // getDisplayedNotifications unavailable — assume a single child so we do
+      // NOT post a duplicate-causing summary.
+      childCount = 1;
     }
-    const count = lines.length;
-    const summaryBody =
-      count > 1 ? `${count} new messages` : lines[0] || 'New messages';
+
+    if (childCount < 2) {
+      // Single message → no summary (prevents the child+summary duplicate).
+      // Clear any leftover summary from an earlier burst that has since been
+      // read/cleared down to one child.
+      await native.notifee.cancelNotification(summaryId).catch(() => {});
+      await incrementAppBadgeCount();
+      return true;
+    }
+
+    const summaryBody = `${childCount} new messages`;
 
     await native.notifee.displayNotification({
       id: summaryId,
@@ -190,7 +214,7 @@ export async function displayGroupedMessageNotification(
           type: native.AndroidStyle.INBOX,
           lines,
           title: convName,
-          summary: count > 1 ? `${count} new messages` : undefined,
+          summary: `${childCount} new messages`,
         },
       },
     });
