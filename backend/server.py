@@ -2202,6 +2202,29 @@ async def send_push(
                 }
             )
             tokens = await cursor.to_list(length=500)
+            # Dedupe by device_token string: the same physical device can have
+            # MULTIPLE push_tokens rows (repeated APK installs, or one row keyed
+            # by user_id/OIDC-sub and another by convex_user_id that share the
+            # SAME token). Sending to a duplicate token delivers the identical
+            # FCM twice → two identical notifications on the device. This is the
+            # message-duplicate that survived the data-only + relay-skip fixes.
+            # Keep the first row per unique device_token.
+            _seen_tokens: set[str] = set()
+            _deduped_tokens = []
+            for _t in tokens:
+                _tok = str(_t.get("device_token") or "")
+                if not _tok or _tok in _seen_tokens:
+                    continue
+                _seen_tokens.add(_tok)
+                _deduped_tokens.append(_t)
+            if len(_deduped_tokens) != len(tokens):
+                logger.info(
+                    "send_push: deduped device tokens %d -> %d (same device had "
+                    "multiple push_tokens rows)",
+                    len(tokens),
+                    len(_deduped_tokens),
+                )
+            tokens = _deduped_tokens
             stats["token_count"] = len(tokens)
             # iter-342: per-recipient token-mapping diagnostic. Pinpoints WHY a
             # push (esp. a call-declined to the caller) delivered to nobody:
