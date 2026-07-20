@@ -2405,20 +2405,22 @@ async def send_push(
     # FCM v1 data-only ring. Calls are delivered exclusively via FCM v1 above.
     if is_call_push_global:
         return stats
-    # iter-fork: MESSAGES also skip the Emergent relay WHEN FCM v1 already
-    # delivered. The relay sends a plain notification banner titled with the
-    # SERVER-provided name (the sender's Google/account name). That appeared as
-    # a SECOND notification next to the FCM v1 data-only push the app renders
-    # with the recipient's saved DEVICE-CONTACT name — the exact "two
-    # notifications, one Google name / one saved name" duplicate the user
-    # reported. When FCM delivered, the relay banner is a wrong-named duplicate,
-    # so suppress it. If FCM reached NO token (no token / error), fall through
-    # to the relay as a best-effort fallback so the recipient still gets one.
-    if is_message_push_global and stats.get("success_count", 0) > 0:
+    # iter-fork: MESSAGES also skip the Emergent relay for any NATIVE recipient
+    # (one that has registered FCM tokens). The relay delivers a notification-
+    # block push that Android auto-displays with the app's default label
+    # ("Smilers") / the server-provided sender name — appearing as a SECOND
+    # notification next to the FCM v1 DATA-ONLY push that the app itself renders
+    # with the recipient's saved DEVICE-CONTACT name ("ABC Albania"). Same body,
+    # two titles = the duplicate the user reported. We gate on token_count (not
+    # success_count) so that even a STALE-token delivery failure can't let the
+    # relay leak a duplicate banner — the app builds the single notification from
+    # the data push. Web-only recipients (no FCM tokens) still fall through to
+    # the relay so they aren't left without any notification.
+    if is_message_push_global and stats.get("token_count", 0) > 0:
         logger.info(
-            "send_push: message delivered via FCM v1 "
-            f"({stats['success_count']} token(s)) — skipping Emergent relay to "
-            "avoid a duplicate (Google-name) banner"
+            "send_push: native message recipient "
+            f"(token_count={stats['token_count']}, success={stats.get('success_count', 0)}) "
+            "— skipping Emergent relay to avoid a duplicate banner"
         )
         return stats
     payload: dict = {"recipients": recipients, "data": data}

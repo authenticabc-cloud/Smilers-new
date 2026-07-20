@@ -1266,3 +1266,9 @@ Standalone social layer (NOT tied to Smilers group chat; AI never reads chat mes
 
 ## Emergency "Sharing live" persistent banner (iter-fork)
 - NEW `src/components/EmergencyActiveBanner.tsx`, mounted globally in app/_layout.tsx. Slim red top strip with a pulsing dot + "Sharing live · tap to view" shown whenever the current user has an active alert (getActiveAlert). Tap → /emergency. Hidden on web, when no active alert, and while already on the emergency screen. Frontend-only → needs new APK to see on device.
+
+## Duplicate notif — relay skip hardened (iter-fork)
+- Confirmed native app has NO service worker/web push (only LaTeX + auth WebViews) — on device both notifications arrive via FCM.
+- The "Smilers"(default-label) copy = the Emergent relay (/api/v1/push/trigger) notification-block push firing next to the FCM v1 data-only push the app renders as the contact name ("ABC Albania").
+- Prior skip used success_count>0, so a STALE-token FCM failure (0 successes) still let the relay leak the duplicate. NOW gated on stats.token_count>0 (any native recipient with registered FCM tokens) → relay skipped regardless of delivery success. Web-only recipients (token_count 0) still get the relay.
+- ALL fixes are in the Emergent/FastAPI backend (server.py). REQUIRES BACKEND RE-PUBLISH/DEPLOY to take effect — repeated "still duplicates" strongly implies the deployed relay was not refreshed.
