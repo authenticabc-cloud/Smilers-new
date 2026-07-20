@@ -2164,6 +2164,7 @@ async def send_push(
         _call_probe_channel = _resolve_android_channel({**data, "title": title}, None)
         _call_probe_routing["type"] = "call" if _call_probe_channel.startswith("calls") else "message"
     is_call_push_global = _call_probe_routing.get("type") == "call"
+    is_message_push_global = _call_probe_routing.get("type") == "message"
 
     # iter-262: one-line classification log so production push routing is
     # debuggable (esp. the "killed app plays the message tone for calls" bug —
@@ -2403,6 +2404,22 @@ async def send_push(
     # was showing callees a notification with no Answer/Decline and masking the
     # FCM v1 data-only ring. Calls are delivered exclusively via FCM v1 above.
     if is_call_push_global:
+        return stats
+    # iter-fork: MESSAGES also skip the Emergent relay WHEN FCM v1 already
+    # delivered. The relay sends a plain notification banner titled with the
+    # SERVER-provided name (the sender's Google/account name). That appeared as
+    # a SECOND notification next to the FCM v1 data-only push the app renders
+    # with the recipient's saved DEVICE-CONTACT name — the exact "two
+    # notifications, one Google name / one saved name" duplicate the user
+    # reported. When FCM delivered, the relay banner is a wrong-named duplicate,
+    # so suppress it. If FCM reached NO token (no token / error), fall through
+    # to the relay as a best-effort fallback so the recipient still gets one.
+    if is_message_push_global and stats.get("success_count", 0) > 0:
+        logger.info(
+            "send_push: message delivered via FCM v1 "
+            f"({stats['success_count']} token(s)) — skipping Emergent relay to "
+            "avoid a duplicate (Google-name) banner"
+        )
         return stats
     payload: dict = {"recipients": recipients, "data": data}
     if idempotency_key:
