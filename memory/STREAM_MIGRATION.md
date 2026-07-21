@@ -22,17 +22,38 @@ Stream call keyed to `conversationId` with `ring:false, notify:false`.
   ring:true call is ever created.)
 - Web bundle smoke-tested OK. NEXT: user builds APK, confirms Ashwini's calls fully back.
 
-### Phase 2 — Stream media under the answered call (NOT STARTED, after Phase 1 confirmed)
-Playbook obtained (integration_expert): use `client.call('default', conversationId)`,
-`getOrCreate({ data:{ members:[caller,callee], ring:false, notify:false } })` then
-`call.join()` on BOTH sides. Custom UI via StreamCall + useCallStateHooks +
-ParticipantView (keep existing call-screen chrome). Token via existing /api/stream/token.
-Wire into app/call/[conversationId].tsx (answer deep-link target) replacing the
-WebRTC/Convex-signaling media layer. NOTE: DO NOT use @react-native-firebase or
-`expo prebuild` (per project constraints) — those playbook steps don't apply; our
-FCM doorbell already exists.
+### Phase 2 — Stream media under the answered call (IN PROGRESS)
+Approach chosen with user: 🅱 new Stream 1:1 screen; carry over interpreter,
+call-waiting, screen-share, PIP as best possible. Since the whole thing is
+native-only and the production call screen is ~3400 lines, we FIRST validate the
+Stream connection core in isolation (like Phase 1), then integrate.
 
-### Phase 3 — Message notification duplicate + wrong tone (needs device logs)
+Phase 2a — ISOLATED Stream connection test screen  ✅ DONE (code), ⏳ user APK test
+- src/components/stream/StreamTestCall.tsx — native Stream 1:1 test using the
+  playbook pattern: client.call('default', <roomCode>), getOrCreate({ring:false,
+  notify:false}), join(); custom UI via StreamCall + useCallStateHooks +
+  ParticipantView; controls: mic/camera/flip/hangup + timer + remote-left end.
+- Component-level platform split (StreamTestCallEntry.tsx / .web.tsx) keeps the
+  Stream SDK out of the web bundle. Route: app/stream-call-test.tsx (no platform
+  ext, per expo-router). Web shows a "native only" notice.
+  NOTE: route-level .web.tsx split BROKE web bundling (expo-router needs a
+  no-platform fallback AND the native fallback pulled the SDK into web) — fixed
+  by splitting at the component level instead. Home renders OK now.
+- Entry point: Settings → Call Diagnostics → "Test Stream connection (1:1)".
+- NEXT (Phase 2b, after user confirms 2a connects on device): wire Stream media
+  into app/call/[conversationId].tsx for regular 1:1 (join call('default',
+  conversationId), ring:false), keeping Convex lifecycle (initiate/answer/end/
+  decline/reachability/ringback), and re-add PIP/screen-share/interpreter/
+  call-waiting. Both caller & callee already land on /call/<conversationId>.
+
+### Phase 3 — Message notification duplicate + wrong tone (PENDING, bundle w/ 2b)
+Investigated: message bg render path = presentBackgroundLocalNotification
+(backgroundTaskSetup.ts) → notifee grouped (notifeeMessageDisplay) else expo
+channel 'messages-v4-message_notification' sound 'message_notification'.
+Suspects: (1) Android channel immutability — if the channel id was first created
+without/with a different sound, the custom tone never applies (need a NEW channel
+id). (2) duplicate = notifee grouped AND expo/FCM auto-display both firing, or
+foreground+background both rendering. NEEDS device logcat to confirm before fix.
 
 ---
 ## (Original) Option A plan below — superseded by the hybrid pivot above

@@ -196,6 +196,16 @@ export default function CallDiagnosticsScreen() {
 
       <CallReadinessPanel />
 
+      <TouchableOpacity
+        onPress={() => router.push('/stream-call-test' as any)}
+        style={styles.streamTestBtn}
+        testID="open-stream-call-test"
+      >
+        <Ionicons name="cellular" size={16} color={Colors.white} />
+        <Text style={styles.streamTestBtnText}>Test Stream connection (1:1)</Text>
+      </TouchableOpacity>
+
+
       {health ? (
         <View
           style={[
@@ -350,6 +360,19 @@ const styles = StyleSheet.create({
   headerTitle: { flex: 1, fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   iconBtn: { padding: 6 },
+  streamTestBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: Colors.primary,
+  },
+  streamTestBtnText: { color: Colors.white, fontWeight: '700', fontSize: 15 },
+
   healthCard: {
     marginHorizontal: Spacing.base,
     marginTop: Spacing.sm,
