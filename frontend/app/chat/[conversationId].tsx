@@ -129,7 +129,6 @@ import { DisappearingSheet, DISAPPEARING_OPTIONS } from '../../src/components/ch
 import { ForwardPickerSheet } from '../../src/components/chat/ForwardPickerSheet';
 import { TemplatePickerSheet } from '../../src/components/chat/TemplatePickerSheet';
 import { startCall } from '../../src/lib/twilio/startCall';
-import { startStreamCall } from '../../src/lib/stream/streamCallActions';
 
 const EMPTY_MESSAGES_PAGE = { page: [] as any[] };
 const EMPTY_FORWARD_CONVERSATIONS: any[] = [];
@@ -3891,15 +3890,9 @@ export default function ChatScreen() {
             <>
           <TouchableOpacity
             testID="call-btn"
-            onPress={async () => {
+            onPress={() => {
               const callee = callCalleeId ? String(callCalleeId) : '';
               const callerName = String((me as any)?.name || (me as any)?.displayName || '');
-              if (Platform.OS !== 'web' && callee) {
-                try {
-                  const id = await startStreamCall(callee, { video: false, callerName });
-                  if (id) return;
-                } catch {}
-              }
               startCall({
                 router,
                 callerIdentity: String(me?._id || ''),
@@ -3916,15 +3909,9 @@ export default function ChatScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             testID="video-btn"
-            onPress={async () => {
+            onPress={() => {
               const callee = callCalleeId ? String(callCalleeId) : '';
               const callerName = String((me as any)?.name || (me as any)?.displayName || '');
-              if (Platform.OS !== 'web' && callee) {
-                try {
-                  const id = await startStreamCall(callee, { video: true, callerName });
-                  if (id) return;
-                } catch {}
-              }
               startCall({
                 router,
                 callerIdentity: String(me?._id || ''),

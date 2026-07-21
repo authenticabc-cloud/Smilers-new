@@ -1,4 +1,41 @@
-# Stream Video Migration (Option A) — Tracking Doc
+# Stream Video Migration — Tracking Doc
+
+## ⚠️ PIVOT (2026-07-21): Option B — HYBRID (user-approved)
+User feedback after the Phase-1b APK test: Stream's `ring:true` outgoing calls
+BYPASSED Ashwini's native incoming-call experience (full-screen wake-up screen,
+custom ringtone, Answer/Decline via SmilersCallNotificationService) — calls rang
+with the plain message tone and no wake-up screen. Ashwini's native code is fully
+intact, it was just no longer being triggered.
+
+Decision → **HYBRID**: keep Ashwini's FCM "doorbell" (ringing/wake-up/ringtone/
+Answer-Decline + message notifications) UNCHANGED, and use Stream ONLY for the
+media/connection layer (the actual reliability fix). Both parties join the SAME
+Stream call keyed to `conversationId` with `ring:false, notify:false`.
+
+### Phase 1 — Restore Ashwini's doorbell + disable Stream ringing  ✅ DONE (code), ⏳ user APK test
+- chat/[conversationId].tsx: removed the `startStreamCall` (ring:true) short-circuit
+  on the voice + video buttons → calls go through legacy `startCall` again
+  (→ /api/calls/ring → SmilersCallNotificationService). Removed streamCallActions import.
+- src/components/stream/RingingOverlay.tsx: now a PASSTHROUGH — no setStreamPushConfig,
+  no registerStreamDevice, no RingingCallContent/CallContent overlay. Stream sends NO
+  ringing push and shows NO UI. (Stale device reg from prev build is harmless since no
+  ring:true call is ever created.)
+- Web bundle smoke-tested OK. NEXT: user builds APK, confirms Ashwini's calls fully back.
+
+### Phase 2 — Stream media under the answered call (NOT STARTED, after Phase 1 confirmed)
+Playbook obtained (integration_expert): use `client.call('default', conversationId)`,
+`getOrCreate({ data:{ members:[caller,callee], ring:false, notify:false } })` then
+`call.join()` on BOTH sides. Custom UI via StreamCall + useCallStateHooks +
+ParticipantView (keep existing call-screen chrome). Token via existing /api/stream/token.
+Wire into app/call/[conversationId].tsx (answer deep-link target) replacing the
+WebRTC/Convex-signaling media layer. NOTE: DO NOT use @react-native-firebase or
+`expo prebuild` (per project constraints) — those playbook steps don't apply; our
+FCM doorbell already exists.
+
+### Phase 3 — Message notification duplicate + wrong tone (needs device logs)
+
+---
+## (Original) Option A plan below — superseded by the hybrid pivot above
 
 Goal: replace the custom WebRTC + Convex-signaling + FCM call stack with GetStream
 Video for WhatsApp-grade native ringing (CallKit iOS / ConnectionService Android),
