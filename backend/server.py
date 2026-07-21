@@ -1705,6 +1705,7 @@ async def fcm_send_v1(
     android_channel_id: str = "default",
     ttl_seconds: int | None = None,
     android_data_only: bool = False,
+    include_ios_alert: bool = True,
 ) -> tuple[bool, str | None]:
     """
     Send a push notification directly via Firebase Cloud Messaging v1 API
@@ -1763,13 +1764,24 @@ async def fcm_send_v1(
             apns=fcm_messaging.APNSConfig(
                 payload=fcm_messaging.APNSPayload(
                     aps=fcm_messaging.Aps(
-                        alert=fcm_messaging.ApsAlert(title=title, body=message),
-                        sound="default",
+                        # iOS message-duplicate fix: when this push is data-only
+                        # (messages / silent controls), OMIT the APNS `alert` so
+                        # iOS does NOT auto-display a system banner on top of the
+                        # notification the app renders itself. Keeping
+                        # content_available=True still wakes the app in the
+                        # background to render its single notification. Calls keep
+                        # the alert (no CallKit yet → the alert IS the ring UI).
+                        alert=(
+                            fcm_messaging.ApsAlert(title=title, body=message)
+                            if include_ios_alert
+                            else None
+                        ),
+                        sound=("default" if include_ios_alert else None),
                         badge=1,
                         content_available=True,
                     ),
                 ),
-                headers={"apns-priority": "10"},
+                headers={"apns-priority": "10" if include_ios_alert else "5"},
             ),
         )
         # firebase_admin.messaging.send is synchronous → run in thread
@@ -2006,6 +2018,7 @@ _DEAD_TOKEN_MARKERS = ("UnregisteredError", "Requested entity was not found", "N
 async def _is_duplicate_push(
     idempotency_key: str | None,
     content_hash: str | None,
+    is_call: bool = False,
 ) -> bool:
     """
     iter-198: cross-trigger dedupe. Pushes can now originate from TWO
@@ -2018,6 +2031,17 @@ async def _is_duplicate_push(
       catching double-triggers even when the two sources use different
       keys.
     Records are written with a `ts` used by a TTL index (best-effort).
+
+    fork-fix (call inconsistency — the root cause of "calls are time-bound"):
+    when `is_call` is True we use a VERY SHORT 6-second window for BOTH the key
+    and the content hash. Two legitimate consecutive calls between the same two
+    people are CONTENT-IDENTICAL (same caller name, "Incoming call", same
+    /call/<conv> action_url) and often reuse a stable idempotency key, so the
+    old 60s/600s windows silently suppressed the 2nd, 3rd … call as a
+    "duplicate" — the callee never rang until the window expired ("after some
+    minutes"). A 6s window still collapses the near-simultaneous Convex+device
+    dual-trigger of ONE call attempt (they fire within ~1s) while letting every
+    genuinely distinct call attempt through immediately.
     """
     now = datetime.now(timezone.utc)
     try:
@@ -2036,7 +2060,10 @@ async def _is_duplicate_push(
             if ts.tzinfo is None:
                 ts = ts.replace(tzinfo=timezone.utc)
             age = (now - ts).total_seconds()
-            window = 600 if str(doc.get("k", "")).startswith("key:") else 60
+            if is_call:
+                window = 6
+            else:
+                window = 600 if str(doc.get("k", "")).startswith("key:") else 60
             if age < window:
                 return True
         for k in keys:
@@ -2410,6 +2437,11 @@ async def send_push(
                         # never auto-displays the server's Google-name notification;
                         # the app renders the single, device-contact-named one.
                         android_data_only=is_call_push or is_silent_control or is_message_push,
+                        # iOS: suppress the OS banner for data-only message and
+                        # silent-control pushes (app renders its own single
+                        # notification). Calls + emergency/login alerts keep the
+                        # APNS alert so they still surface on iOS.
+                        include_ios_alert=not (is_message_push or is_silent_control),
                     )
                     for t, ch in zip(tokens, resolved_channels)
                 ]
@@ -2544,8 +2576,12 @@ async def send_push_internal(
 
     # iter-198: cross-trigger dedupe — the sender's device may have already
     # fired this exact push via /api/notify-event.
+    _internal_is_call = str(data.get("type") or "").startswith("call") or str(
+        data.get("type") or ""
+    ) in ("missed-call",)
     if await _is_duplicate_push(
-        body.idempotency_key, _push_content_hash(body.recipients, data)
+        body.idempotency_key, _push_content_hash(body.recipients, data),
+        is_call=_internal_is_call,
     ):
         logger.info(
             f"send-push-internal: DUPLICATE suppressed title={body.title!r} "
@@ -2760,7 +2796,8 @@ async def notify_event(body: NotifyEventBody):
             data["conversationId"] = conv
 
     if await _is_duplicate_push(
-        body.idempotency_key, _push_content_hash(recipients, data)
+        body.idempotency_key, _push_content_hash(recipients, data),
+        is_call=event in ("call", "missed-call", "call-cancelled", "call-declined"),
     ):
         logger.info(f"notify-event: DUPLICATE suppressed title={title!r} key={body.idempotency_key!r}")
         return {"status": "duplicate"}
@@ -3410,9 +3447,11 @@ async def health_readiness():
         # /api/health) that the message data-only + Emergent-relay-skip fixes are
         # actually live on the relay the app talks to. Bump `build` on each fix.
         "push_pipeline": {
-            "build": "iter-fork-msg-dataonly-v2",
+            "build": "iter-fork-call-dedupe-6s+ios-msg-noalert-v3",
             "message_data_only": True,
             "message_skips_emergent_relay_for_native": True,
+            "call_dedupe_window_seconds": 6,
+            "ios_message_apns_alert_suppressed": True,
         },
         "startedAt": _SERVER_STARTED_AT.isoformat(),
         "uptimeSeconds": uptime_seconds,
