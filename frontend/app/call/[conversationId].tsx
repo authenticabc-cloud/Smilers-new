@@ -541,6 +541,77 @@ export function CallScreenInner() {
     flushScreenSignalQueueRef.current = flushScreenSignalQueue;
   }, [flushScreenSignalQueue]);
 
+  // Regular (1:1) call signaling flusher — drains `regularSignalQueueRef` IN
+  // ORDER (offer must land before its ICE candidates), retrying the head every
+  // 2.5s for up to 2 minutes. The backend `signaling.send` Server-Errors until
+  // the callee ACCEPTS the call, so this is what guarantees the offer/ICE
+  // actually reach the callee the moment they answer — the fix for calls that
+  // "connect" but never exchange media.
+  const flushRegularSignalQueue = useCallback(async () => {
+    if (regularSignalFlushActiveRef.current) return;
+    regularSignalFlushActiveRef.current = true;
+    const RETRY_MS = 2500;
+    const DEADLINE_MS = 120000;
+    try {
+      while (regularSignalQueueRef.current.length > 0) {
+        const { sig } = regularSignalQueueRef.current[0];
+        try {
+          await sendSignal(sig as any);
+          regularSignalQueueRef.current.shift();
+          if (regularSignalFirstFailAtRef.current) {
+            callDebug.push(
+              'SIG',
+              `→ ${sig?.type} delivered (callee accepted) — flushing ${regularSignalQueueRef.current.length} queued signal(s)`,
+            );
+            regularSignalFirstFailAtRef.current = null;
+          }
+        } catch (errorValue: any) {
+          const message = String(errorValue?.message || '');
+          const isValidation =
+            message.includes('ArgumentValidationError') ||
+            message.includes('Validator error') ||
+            message.toLowerCase().includes('union') ||
+            message.toLowerCase().includes('literal');
+          // Literal-name compat: some deployments validate 'iceCandidate'
+          // instead of 'ice-candidate'. Try the alternate before backing off.
+          if (isValidation && sig?.type === 'ice-candidate') {
+            try {
+              await sendSignal({ ...sig, type: 'iceCandidate' } as any);
+              regularSignalQueueRef.current.shift();
+              callDebug.push('SIG', '→ iceCandidate (camel variant) ok');
+              continue;
+            } catch {
+              /* fall through to backoff */
+            }
+          }
+          if (!regularSignalFirstFailAtRef.current) {
+            regularSignalFirstFailAtRef.current = Date.now();
+            callDebug.push(
+              'SIG',
+              `→ ${sig?.type} rejected — queued, retrying every ${RETRY_MS / 1000}s until the callee accepts. Backend said: ${message.slice(0, 160)}`,
+            );
+          }
+          if (Date.now() - regularSignalFirstFailAtRef.current > DEADLINE_MS) {
+            callDebug.push(
+              'ERR',
+              `regular-call signaling gave up after ${DEADLINE_MS / 1000}s (${regularSignalQueueRef.current.length} undelivered). Last backend error: ${message.slice(0, 300)}`,
+            );
+            regularSignalQueueRef.current = [];
+            regularSignalFirstFailAtRef.current = null;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
+        }
+      }
+    } finally {
+      regularSignalFlushActiveRef.current = false;
+    }
+  }, [sendSignal]);
+  const flushRegularSignalQueueRef = useRef(flushRegularSignalQueue);
+  useEffect(() => {
+    flushRegularSignalQueueRef.current = flushRegularSignalQueue;
+  }, [flushRegularSignalQueue]);
+
   const [callId, setCallId] = useState<string | null>(null);
   // Optimistic feedback for the incoming-call Answer button so a tap always
   // registers visibly even before the answerCall mutation / status flip lands.
@@ -632,6 +703,16 @@ export function CallScreenInner() {
   const screenSignalQueueRef = useRef<Array<{ type: string; payload: any }>>([]);
   const screenSignalFlushActiveRef = useRef(false);
   const screenSignalFirstFailAtRef = useRef<number | null>(null);
+  // Regular (1:1) call signaling queue — mirrors the screen-share queue above.
+  // The backend `signaling.send` Server-Errors until the callee ACCEPTS the
+  // call (the call row only becomes signalable then), so a fire-and-forget
+  // send DROPPED the offer/ICE forever when they were produced before the
+  // callee answered → "answered call but no audio/video" / call never
+  // connects. We now keep them ORDERED (offer before ICE) and retry until they
+  // land or the call ends.
+  const regularSignalQueueRef = useRef<Array<{ sig: any }>>([]);
+  const regularSignalFlushActiveRef = useRef(false);
+  const regularSignalFirstFailAtRef = useRef<number | null>(null);
   const callStartedAtRef = useRef<number | null>(null);
   const incomingCallSeenRef = useRef(false);
   const incomingCallAnsweredRef = useRef(false);
@@ -1218,6 +1299,11 @@ export function CallScreenInner() {
         // Continue — getUserMedia will fail explicitly if permissions missing
       }
 
+      // Reset the regular-call signaling queue for this fresh session so
+      // stale/undelivered signals from a previous attempt can't leak in.
+      regularSignalQueueRef.current = [];
+      regularSignalFirstFailAtRef.current = null;
+
       const session = new CallSessionCtor({
         callType,
         isCaller: asCaller,
@@ -1251,39 +1337,13 @@ export function CallScreenInner() {
           }
 
           // ── REGULAR CALL PATH ──────────────────────────────────────────
-          // The backend's `signaling.send` validator uses a strict union.
-          // Different deployments may use the camelCase `'iceCandidate'` or
-          // the kebab `'ice-candidate'` literal — accept either by retrying
-          // with the alternative if the first attempt is rejected for
-          // type-validation reasons. This is what every "answered call but
-          // no audio/video" report comes down to in the wild.
-          const tryVariant = async (typeOverride?: string) => {
-            const payload = typeOverride ? { ...sig, type: typeOverride as any } : sig;
-            await sendSignal(payload as any);
-          };
-          try {
-            await tryVariant();
-          } catch (errorValue: any) {
-            const message = String(errorValue?.message || '');
-            // Only retry the alternate variant if the backend rejected the
-            // literal — most other failures are network-level, retrying is
-            // pointless.
-            const isValidationFailure =
-              message.includes('ArgumentValidationError') ||
-              message.includes('Validator error') ||
-              message.toLowerCase().includes('union') ||
-              message.toLowerCase().includes('literal');
-            if (isValidationFailure && sig.type === 'ice-candidate') {
-              try {
-                await tryVariant('iceCandidate');
-                return;
-              } catch (retryErr: any) {
-                console.warn('sendSignal retry (iceCandidate) failed:', retryErr?.message);
-                return;
-              }
-            }
-            console.warn('sendSignal failed:', message);
-          }
+          // Route through an ORDERED patient queue (offer before ICE). The
+          // backend `signaling.send` Server-Errors until the callee ACCEPTS,
+          // so a fire-and-forget send dropped the offer/ICE forever and the
+          // call never exchanged media. The flusher retries until they land.
+          regularSignalQueueRef.current.push({ sig });
+          void flushRegularSignalQueueRef.current();
+          return;
         },
         onLocalStream: (stream) => {
           try {
