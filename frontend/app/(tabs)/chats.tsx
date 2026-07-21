@@ -33,6 +33,12 @@ import * as Haptics from 'expo-haptics';
 import UndoSnackbar from '../../src/components/UndoSnackbar';
 import { readStoredString, writeStoredString } from '../../src/lib/settingsStorage';
 import ConversationRow, { formatTypingLabel } from '../../src/components/ConversationRow';
+import {
+  findSavedContactDisplayName,
+  getResolvedConversationDisplayName,
+} from '../../src/lib/displayName';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
+import { cacheConversationName, cacheUserName } from '../../src/push/notificationNameCache';
 import ChatSwipeRow from '../../src/components/ChatSwipeRow';
 import { useLocalReadMap } from '../../src/hooks/useLocalReadMap';
 import { conversationLastActivityMs, isLocallyRead, markLocallyRead, clearLocalRead, effectiveUnread, noteReadBaseline } from '../../src/lib/localReadState';
@@ -90,6 +96,41 @@ export default function ChatsScreen() {
   const me = useQuery(api.users.getCurrentUser, {});
   const contacts = useQuery(api.contacts.getContacts, {});
   const conversations = useQuery(api.conversations.listConversations);
+
+  // Proactively cache EVERY 1:1 conversation's DEVICE-CONTACT name (not just the
+  // rows currently rendered by the virtualized list) so background/killed message
+  // push notifications always show the same name the chat list shows — instead of
+  // the sender's Google/account name. Re-runs when the device contact index loads.
+  const deviceIndexForCache = useDeviceContactIndex();
+  useEffect(() => {
+    if (!Array.isArray(conversations) || !me?._id) return;
+    for (const item of conversations as any[]) {
+      const isGroup =
+        item?.isGroup ||
+        item?.type === 'group' ||
+        (Array.isArray(item?.participants) && item.participants.length > 2);
+      if (isGroup || !item?._id) continue;
+      const deviceName = getResolvedConversationDisplayName(
+        item,
+        me._id,
+        deviceIndexForCache,
+        lookupDeviceContactName,
+        '',
+      );
+      const savedContactName =
+        deviceName || findSavedContactDisplayName(contacts, item, me._id);
+      // Only cache a genuinely resolved (device/saved-contact) name — never the
+      // bare account/fallback name, which would be a no-op override anyway.
+      const name = savedContactName;
+      if (name) {
+        cacheConversationName(String(item._id), name);
+        const otherUserId =
+          item?.otherUserId || item?.otherParticipant?._id || item?.otherUser?._id;
+        if (otherUserId) cacheUserName(String(otherUserId), name);
+      }
+    }
+  }, [conversations, contacts, deviceIndexForCache, me?._id]);
+
   // Composer drafts per conversation — refreshed whenever the list regains
   // focus (e.g. returning from a chat where a draft was started/cleared) so the
   // "Draft:" preview stays in sync.

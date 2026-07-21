@@ -381,6 +381,13 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
     const convDeviceName = convId
       ? await require('./notificationNameCache').getCachedConversationName(convId)
       : '';
+    try {
+      recordDiagnostic({
+        tag: 'MSG-NAME',
+        source: 'bg-task',
+        message: `convId=${convId || '(none)'} cachedConvName="${convDeviceName || '(miss)'}" senderPhone="${senderPhone || '(none)'}" account="${accountName || '(none)'}"`,
+      });
+    } catch {}
     if (convDeviceName) {
       // 1:1 conversation — the peer is both the title and the sender line.
       if (!payload.title || title === accountName || title === 'New message') title = convDeviceName;

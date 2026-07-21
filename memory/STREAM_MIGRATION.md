@@ -46,14 +46,27 @@ Phase 2a — ISOLATED Stream connection test screen  ✅ DONE (code), ⏳ user A
   decline/reachability/ringback), and re-add PIP/screen-share/interpreter/
   call-waiting. Both caller & callee already land on /call/<conversationId>.
 
-### Phase 3 — Message notification duplicate + wrong tone (PENDING, bundle w/ 2b)
-Investigated: message bg render path = presentBackgroundLocalNotification
-(backgroundTaskSetup.ts) → notifee grouped (notifeeMessageDisplay) else expo
-channel 'messages-v4-message_notification' sound 'message_notification'.
-Suspects: (1) Android channel immutability — if the channel id was first created
-without/with a different sound, the custom tone never applies (need a NEW channel
-id). (2) duplicate = notifee grouped AND expo/FCM auto-display both firing, or
-foreground+background both rendering. NEEDS device logcat to confirm before fix.
+### Phase 3 — Message notifications
+UPDATE (user finding): the "duplicate" was NOT a native bug — the WEB app (open
+in a browser) AND the native app both rendered a notification. Web showed the
+device-contact name; native showed the Google/account name. Deactivating web
+notifications leaves ONE native notification, but with the wrong (account) name.
+
+Phase 3a — device-contact name in native msg notifications  ✅ DONE (code), ⏳ user APK test
+- ROOT CAUSE: ConversationRow caches the device-contact name ONLY for rows the
+  virtualized list actually rendered → off-screen / brand-new conversations were
+  never cached, so the headless push fell back to the account name.
+- FIX: app/(tabs)/chats.tsx now proactively caches EVERY 1:1 conversation's
+  device-contact name (getResolvedConversationDisplayName over the full
+  conversations array + device contact index), re-running when the index loads.
+- DIAGNOSTIC: backgroundTaskSetup.ts logs tag MSG-NAME (convId, cachedConvName,
+  senderPhone, account) so on-device Diagnostic Logs reveal any remaining miss.
+
+Phase 3b — custom message TONE (universal beep instead of Smilers tone) — PENDING
+Likely Android channel immutability: 'messages-v4-message_notification' may have
+been created earlier without the custom sound. If still wrong after 3a build,
+bump to a fresh channel id (…-v5-…). Awaiting user re-verification (with web
+notifications OFF).
 
 ---
 ## (Original) Option A plan below — superseded by the hybrid pivot above
