@@ -159,6 +159,20 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
     (taskObject.data as Record<string, unknown> | undefined) ||
     taskObject;
   const payload = normalizeNotificationPayload(rawPayload);
+
+  // Stream Video call pushes (native ringing). Cheap marker check first so we
+  // only lazy-load the Stream SDK for actual Stream pushes (never on web — this
+  // function already returned above for web). If handled, stop here so our
+  // message-notification path doesn't also fire.
+  try {
+    const sd = (rawPayload || {}) as Record<string, any>;
+    if (sd && (sd.sender === 'stream.video' || String(sd.type || '') === 'stream.video')) {
+      const { handleStreamCallPush } = await import('../lib/stream/streamPush');
+      const handled = await handleStreamCallPush(sd);
+      if (handled) return;
+    }
+  } catch {}
+
   const type = toNonEmptyString(payload.type);
   if (type !== 'call' && type !== 'message' && type !== 'call-declined') return;
 

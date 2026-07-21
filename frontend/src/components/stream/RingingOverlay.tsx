@@ -12,10 +12,12 @@ import {
   StreamCall,
   useCalls,
   RingingCallContent,
+  CallContent,
   CallingState,
   type StreamVideoClient,
   type Call,
 } from '@stream-io/video-react-native-sdk';
+import { StyleSheet, View } from 'react-native';
 import { createStreamVideoClient } from '../../lib/stream/streamClient';
 import { setStreamPushConfig, registerStreamDevice } from '../../lib/stream/streamPush';
 
@@ -23,18 +25,29 @@ import { setStreamPushConfig, registerStreamDevice } from '../../lib/stream/stre
 // again here defensively so a cold JS start still registers it).
 setStreamPushConfig();
 
-function RingingCalls() {
-  const calls = useCalls().filter(
-    (c: Call) =>
-      c.state.callingState === CallingState.RINGING ||
-      c.ringing === true,
+/**
+ * Renders the current Stream call full-screen: the native-style ringing UI
+ * while it's RINGING (incoming or outgoing), then the in-call UI once JOINED.
+ * Stream drives accept/reject/hangup via those components, so no custom call
+ * screen is needed for 1:1.
+ */
+function ActiveCall() {
+  const calls = useCalls() as Call[];
+  // Prefer a joined/active call; otherwise the first ringing one.
+  const joined = calls.find((c) => c.state.callingState === CallingState.JOINED);
+  const ringing = calls.find(
+    (c) => c.state.callingState === CallingState.RINGING || c.ringing === true,
   );
-  const call = calls[0];
+  const call = joined || ringing;
   if (!call) return null;
+
+  const isRinging =
+    !joined && (call.state.callingState === CallingState.RINGING || call.ringing === true);
+
   return (
-    <StreamCall call={call}>
-      <RingingCallContent />
-    </StreamCall>
+    <View style={styles.overlay} pointerEvents="box-none">
+      <StreamCall call={call}>{isRinging ? <RingingCallContent /> : <CallContent />}</StreamCall>
+    </View>
   );
 }
 
@@ -59,7 +72,11 @@ export default function StreamCallProvider({ children }: { children: React.React
   return (
     <StreamVideo client={client}>
       {children}
-      <RingingCalls />
+      <ActiveCall />
     </StreamVideo>
   );
 }
+
+const styles = StyleSheet.create({
+  overlay: { ...StyleSheet.absoluteFillObject, zIndex: 9999, elevation: 9999 },
+});
