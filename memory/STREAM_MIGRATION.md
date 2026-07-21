@@ -36,19 +36,21 @@ DONE (verified: app still builds + loads on web preview):
   RingingOverlay.web.tsx passthrough so web preview stays clean).
 
 REMAINING (build-only, needs device iterations):
-- Route OUTGOING 1:1 calls through Stream: client.call('default', id).getOrCreate({ring:true, data:{members}}).
-- Answer/decline + active-call screen (CallContent) navigation.
-- Wire handleStreamCallPush() into the existing FCM background handler
-  (backgroundTaskSetup.ts / SmilersCallNotificationService) so killed-app ring works.
-- ⚠️ CRITICAL — COMMITTED BARE NATIVE DIRS: the Stream config plugin only applies
-  on `expo prebuild`, which would CLOBBER the custom Kotlin (SmilersCallNotificationService).
-  So Stream's required native config (Android ConnectionService/permissions/services,
-  iOS CallKit/VoIP background modes) must be added MANUALLY to android/ + ios/, OR
-  reconcile prebuild with the custom native code. This is the biggest remaining task.
-- Dedup app.json webrtc plugins: `@config-plugins/react-native-webrtc` may now be
-  redundant/conflicting with the Stream plugin — verify during first build.
-- `expo export` (EAS Update) may need a patch for @stream-io/react-native-webrtc like
-  the old scripts/patch-rn-webrtc.js did for react-native-webrtc.
+- ✅ Outgoing 1:1 calls routed through Stream (chat voice+video buttons, native
+  only, legacy fallback) — DONE.
+- ✅ Ringing + in-call UI (RingingCallContent + CallContent) at root — DONE.
+- ✅ Incoming Stream push routed via FCM background handler (lazy, native) — DONE.
+- ✅ Android native permissions: added MANAGE_OWN_CALLS + READ_PHONE_STATE; the
+  rest (FOREGROUND_SERVICE_*, USE_FULL_SCREEN_INTENT, POST_NOTIFICATIONS,
+  BLUETOOTH_CONNECT) already present from the callkeep setup. minSdk=24 OK.
+  Stream's ConnectionService/receivers auto-merge from the AAR. — DONE.
+- ⏳ FIRST ANDROID BUILD: validate the WebRTC-fork swap compiles + autolinks in
+  the committed android/ project; watch for callkeep-vs-Stream ConnectionService
+  or manifest-merger conflicts; confirm Stream client connects (token) and an
+  outgoing call rings. Iterate from build errors.
+- ⏳ iOS (Phase 2): CallKit + APN VoIP provider + entitlements/Podfile.
+- ⏳ Group/conference/screen migration to Stream (Phase 3).
+- ⏳ `expo export` (EAS Update) may need a patch for @stream-io/react-native-webrtc.
 
 ## Phase 2 — iOS CallKit (needs APN VoIP provider in Stream dashboard)
 
