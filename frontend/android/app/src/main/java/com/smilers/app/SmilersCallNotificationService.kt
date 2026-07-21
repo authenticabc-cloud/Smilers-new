@@ -474,14 +474,31 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
         // super.handleIntent posts any FCM notification payload to the channel specified by
         // android_channel_id (calls-v4-smilers_never_cry). For call-declined FCMs we cancel
         // it immediately after so the user only sees our own properly-formatted notification.
-        // Message and other non-call FCMs must NOT have their auto-display cancelled —
-        // doing so would suppress the user-visible message notification entirely.
-        // fcmAutoTag is null for non-call FCMs so the 400ms cancel never fires for them.
-        val fcmAutoTag: String? = if (isCallRelatedFcm) {
+        //
+        // DUPLICATE-NOTIFICATION FIX (native): some MESSAGE pushes arrive with an FCM
+        // notification block (gcm.notification.title/body). super.handleIntent auto-displays
+        // that block (titled with the app label "Smilers" / server sender name) WHILE the
+        // Expo background task ALSO renders the app's own notifee notification built from the
+        // data payload with the recipient's saved DEVICE-CONTACT name. Same body, two titles →
+        // Android stops merging → the duplicate the user reported. We now cancel the OS
+        // auto-display for message pushes that carry a notification block too, exactly like the
+        // call path, so ONLY the app-rendered (contact-name) notification survives. The Expo
+        // background task still fires (via super.handleIntent) and renders it, so the user is
+        // never left without a notification.
+        val hasMsgNotifBlock = !isCallRelatedFcm && (
+            !intent.extras?.getString("gcm.notification.title").isNullOrEmpty() ||
+            !intent.extras?.getString("gcm.notification.body").isNullOrEmpty()
+        )
+        val fcmAutoTag: String? = if (isCallRelatedFcm || hasMsgNotifBlock) {
             val msgId = (intent.extras?.getString("google.message_id")
                 ?: intent.extras?.getString("gcm.message_id") ?: "").trim()
             if (msgId.isNotEmpty()) "FCM-Notification:$msgId" else null
         } else null
+        if (hasMsgNotifBlock) {
+            Log.d(TAG, "handleIntent: message push carries a notification block " +
+                "(title='${intent.extras?.getString("gcm.notification.title")}') — " +
+                "cancelling OS auto-display to avoid duplicate; app renders its own")
+        }
         super.handleIntent(intent)
         cancelLegacyAutoDisplay()
         if (fcmAutoTag != null) {
