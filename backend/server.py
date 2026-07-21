@@ -10,6 +10,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
+import jwt  # PyJWT — signs Stream Video access tokens (HS256) with the Stream secret
 from datetime import datetime, timezone, timedelta
 from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
 
@@ -101,6 +102,7 @@ async def health_check():
         "/api/safe-browsing/check",
         "/api/twilio/video-token",
         "/api/twilio/initiate-call",
+        "/api/stream/token",
     }
     present = set()
     try:
@@ -223,6 +225,82 @@ async def twilio_video_token(payload: TwilioTokenRequest):
         ttl_seconds=_TWILIO_TOKEN_TTL_SECONDS,
         region=_TWILIO_MEDIA_REGION,
         server_time=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+# ============================================================
+# Stream Video — reliable native ringing (CallKit / ConnectionService)
+# ============================================================
+# Migrates 1:1 voice/video calling off the custom WebRTC + Convex-signaling
+# stack (which relies on data-only FCM to wake a killed device and has no
+# native call UI) onto GetStream's Video SDK. Stream provides CallKit (iOS)
+# and full-screen ConnectionService ringing (Android) that fire even when the
+# app is killed — the WhatsApp-grade behaviour the custom stack can't reach.
+#
+# The API SECRET stays server-side and signs short-lived per-user JWTs here;
+# the client only ever receives the minted token. User id = the caller's
+# stable Convex user _id (matches how calls address members).
+_STREAM_API_KEY = os.environ.get("STREAM_API_KEY", "")
+_STREAM_API_SECRET = os.environ.get("STREAM_API_SECRET", "")
+_STREAM_TOKEN_TTL_SECONDS = 4 * 60 * 60  # 4h — SDK auto-refreshes via tokenProvider
+
+
+class StreamTokenRequest(BaseModel):
+    user_id: str = Field(..., min_length=1, max_length=120, description="Stable user id (Convex user _id)")
+    user_name: str | None = Field(default=None, max_length=120)
+
+
+class StreamTokenResponse(BaseModel):
+    token: str
+    api_key: str
+    user_id: str
+    ttl_seconds: int
+    server_time: str
+
+
+@api_router.post("/stream/token", response_model=StreamTokenResponse)
+async def stream_video_token(payload: StreamTokenRequest):
+    """
+    Mint a short-lived Stream Video JWT for `user_id`. Signed HS256 with the
+    Stream API SECRET (server-only). Mirrors the Twilio-token trust model: we
+    do not yet verify Smilers-side auth here (the mobile client's OIDC flow is
+    Convex-based) — harden with an auth dependency in a later phase.
+    """
+    if not (_STREAM_API_KEY and _STREAM_API_SECRET):
+        raise HTTPException(
+            status_code=503,
+            detail="Stream not configured: STREAM_API_KEY / STREAM_API_SECRET missing in backend env.",
+        )
+    # Stream user ids must match [a-zA-Z0-9@_-]. Convex ids already comply, but
+    # sanitise defensively so a stray char can't produce an unusable token.
+    safe_uid = re.sub(r"[^a-zA-Z0-9@_-]", "_", payload.user_id.strip())
+    if not safe_uid:
+        raise HTTPException(status_code=400, detail="Invalid user_id")
+    now = datetime.now(timezone.utc)
+    try:
+        token = jwt.encode(
+            {
+                "user_id": safe_uid,
+                "iat": int(now.timestamp()),
+                # small backdate to tolerate minor client/server clock skew
+                "nbf": int(now.timestamp()) - 5,
+                "exp": int(now.timestamp()) + _STREAM_TOKEN_TTL_SECONDS,
+            },
+            _STREAM_API_SECRET,
+            algorithm="HS256",
+        )
+        if isinstance(token, (bytes, bytearray)):
+            token = token.decode("utf-8")
+    except Exception as exc:
+        logger.exception("stream-token mint failed")
+        raise HTTPException(status_code=500, detail=f"Token mint failed: {exc}")
+
+    return StreamTokenResponse(
+        token=token,
+        api_key=_STREAM_API_KEY,
+        user_id=safe_uid,
+        ttl_seconds=_STREAM_TOKEN_TTL_SECONDS,
+        server_time=now.isoformat(),
     )
 
 
