@@ -27,6 +27,7 @@ import {
   type DiagnosticEvent,
 } from '../src/lib/diagnostics';
 import { useAuth, type SessionHealth, type StoredValueInfo } from '../src/providers/AuthProvider';
+import CallReadinessPanel from '../src/components/CallReadinessPanel';
 import { Colors, FontSize, FontWeight, Spacing, Radius } from '../src/theme';
 
 type FilterKey = 'calls' | 'push' | 'all';
@@ -192,6 +193,8 @@ export default function CallDiagnosticsScreen() {
           </TouchableOpacity>
         </View>
       </View>
+
+      <CallReadinessPanel />
 
       {health ? (
         <View

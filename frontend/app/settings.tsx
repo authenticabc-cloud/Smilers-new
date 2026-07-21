@@ -46,6 +46,7 @@ const ITEMS: Row[] = [
   // MSG-PUSH log rows show whether incoming message pushes still carry a
   // notification block (stale relay) — tap Copy and paste back to support.
   { key: 'diagnostic-logs', route: '/diagnostic-logs', title: 'Diagnostic Logs', sub: 'Push & crash logs — copy to share with support', icon: 'file-document-outline', lib: 'mc' },
+  { key: 'call-diagnostics', route: '/call-diagnostics', title: 'Call Diagnostics', sub: 'Check call readiness & why calls may not ring', icon: 'phone-check', lib: 'mc' },
   { key: 'call-recording', route: '/call-recording', title: 'Call Recording', sub: 'Auto-record voice & video calls with exceptions', icon: 'record-rec', lib: 'mc' },
   { key: 'call-audio', route: '/call-audio', title: 'Call Audio', sub: 'Noise cancellation for voice & video calls', icon: 'waveform', lib: 'mc' },
   { key: 'admin', route: '/admin', title: 'Admin Dashboard', sub: 'Manage users, reports, and app data', icon: 'crown-outline', lib: 'mc', adminOnly: true },
