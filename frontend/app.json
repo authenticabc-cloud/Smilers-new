@@ -296,7 +296,8 @@
       [
         "expo-pip",
         {}
-      ]
+      ],
+      "@stream-io/video-react-native-sdk"
     ],
     "experiments": {
       "typedRoutes": false

@@ -10,8 +10,6 @@
  * `POST /api/stream/token` (server-side, HS256 with the Stream secret).
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
-// @ts-expect-error — resolved after Phase 1b package install
-import { StreamVideoClient, type User } from '@stream-io/video-react-native-sdk';
 
 const API_KEY = process.env.EXPO_PUBLIC_STREAM_API_KEY || 'sf6v64y8z2q7';
 const BACKEND = (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/$/, '');
@@ -51,12 +49,17 @@ async function fetchStreamToken(userId: string): Promise<string> {
  * user isn't signed in yet. Uses getOrCreateInstance so the push headless
  * context and the React tree share ONE client.
  */
-export async function createStreamVideoClient(): Promise<StreamVideoClient | undefined> {
+export async function createStreamVideoClient(): Promise<any | undefined> {
   const userId = await AsyncStorage.getItem(STREAM_USER_ID_KEY);
   if (!userId) return undefined;
   const userName = (await AsyncStorage.getItem(STREAM_USER_NAME_KEY)) || undefined;
 
-  const user: User = { id: userId, name: userName };
+  // Lazy import so the SDK (native-only) is never bundled on web or pulled in
+  // by the web-safe identity helpers above.
+  // @ts-expect-error — resolved after Phase 1b package install
+  const { StreamVideoClient } = await import('@stream-io/video-react-native-sdk');
+
+  const user = { id: userId, name: userName };
   return StreamVideoClient.getOrCreateInstance({
     apiKey: API_KEY,
     user,

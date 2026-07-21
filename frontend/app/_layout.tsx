@@ -43,6 +43,8 @@ import {
 } from '../src/lib/diagnostics';
 import { Colors } from '../src/theme';
 import { DeviceContactProvider } from '../src/lib/deviceContactIndex';
+import StreamCallProvider from '../src/components/stream/RingingOverlay';
+import { cacheStreamIdentity } from '../src/lib/stream/streamClient';
 import { AppShareIntentProvider, useAppShareIntent } from '../src/lib/shareIntentContext';
 import { ReferralAttribution } from '../src/lib/referralAttribution';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
@@ -274,6 +276,17 @@ function DeviceContactBridge({ children }: { children: React.ReactNode }) {
     true,
   );
   const me: any = (meQuery as any)?.data;
+
+  // Cache the signed-in user's identity so the Stream Video client (and the
+  // headless push handler, which runs outside React) can bootstrap for native
+  // call ringing. Safe/no-op on web (StreamCallProvider is a passthrough there).
+  React.useEffect(() => {
+    const uid = me?._id ? String(me._id) : '';
+    if (!uid) return;
+    const name = me?.name || me?.displayName || me?.username || undefined;
+    void cacheStreamIdentity(uid, name);
+  }, [me?._id, me?.name, me?.displayName, me?.username]);
+
   const country: CountryCode | null = React.useMemo(() => {
     const phone = me?.phoneE164 || me?.phone || '';
     if (!phone) return null;
@@ -285,7 +298,11 @@ function DeviceContactBridge({ children }: { children: React.ReactNode }) {
     }
   }, [me?.phoneE164, me?.phone]);
 
-  return <DeviceContactProvider myDefaultCountry={country}>{children}</DeviceContactProvider>;
+  return (
+    <DeviceContactProvider myDefaultCountry={country}>
+      <StreamCallProvider>{children}</StreamCallProvider>
+    </DeviceContactProvider>
+  );
 }
 
 /**

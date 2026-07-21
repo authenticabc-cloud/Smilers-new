@@ -14,7 +14,7 @@ import { MeshPeer, MeshSignalType } from './MeshPeer';
 import { getVoiceAudioConstraints } from '../../webrtc/audioConstraints';
 
 type Any = any;
-type WebRTCModule = typeof import('react-native-webrtc');
+type WebRTCModule = typeof import('@stream-io/react-native-webrtc');
 
 export interface MeshControllerOptions {
   callId: string;
@@ -55,7 +55,7 @@ export class MeshController {
   }
 
   private async getWebRTC(): Promise<WebRTCModule> {
-    if (!this.webrtc) this.webrtc = await import('react-native-webrtc');
+    if (!this.webrtc) this.webrtc = await import('@stream-io/react-native-webrtc');
     return this.webrtc;
   }
 

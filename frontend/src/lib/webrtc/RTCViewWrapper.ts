@@ -7,7 +7,7 @@ let CachedRTCView: any = null;
 
 function getRTCView() {
   if (!CachedRTCView) {
-    CachedRTCView = require('react-native-webrtc').RTCView;
+    CachedRTCView = require('@stream-io/react-native-webrtc').RTCView;
   }
   return CachedRTCView;
 }

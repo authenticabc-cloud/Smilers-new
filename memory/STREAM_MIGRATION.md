@@ -21,21 +21,34 @@ reliable even when the app is killed.
 - `POST /api/stream/token` mints HS256 Stream JWT (4h TTL). Verified locally.
 - Added to health critical-routes list.
 
-## Phase 1b — Frontend 1:1 calling (Android) — NEXT (build-only, iterative)
-Destructive swap — do together, then iterate on device builds:
-1. `yarn remove react-native-webrtc` ; `npx expo install @stream-io/video-react-native-sdk
-   @stream-io/react-native-webrtc @config-plugins/react-native-webrtc react-native-svg
-   @react-native-community/netinfo expo-build-properties`
-2. app.json plugins: `@stream-io/video-react-native-sdk` (enableNonRingingPushNotifications:true),
-   `@config-plugins/react-native-webrtc`, `expo-build-properties`.
-3. New files:
-   - `src/lib/stream/streamClient.ts` — getOrCreateInstance, tokenProvider → /api/stream/token
-   - `src/lib/stream/streamPush.ts` — setPushConfig (isExpo:true, android provider name),
-     device token registration via expo-notifications getDevicePushTokenAsync + client.addDevice
-   - `src/components/stream/RingingOverlay.tsx` — useCalls() ringing → RingingCallContent
-4. Wire client + RingingOverlay at app root (`app/_layout.tsx`).
-5. Route OUTGOING 1:1 calls through Stream: `client.call('default', id).getOrCreate({ring:true,...})`.
-6. Answer/Decline via call.join() / call.leave({reject:true}).
+## Phase 1b — Frontend 1:1 calling (Android) — IN PROGRESS
+DONE (verified: app still builds + loads on web preview):
+- ✅ Destructive package swap: removed `react-native-webrtc`, installed
+  `@stream-io/react-native-webrtc@145` + `@stream-io/video-react-native-sdk@1.41`.
+  Swapped the 4 runtime import strings (CallSession.ts, RTCViewWrapper.ts,
+  mesh/MeshController.ts, mesh/MeshPeer.ts) to the fork — legacy call code keeps
+  working on the API-compatible fork.
+- ✅ Stream config plugin auto-added to app.json.
+- ✅ streamClient.ts SDK import made LAZY (dynamic) so web-safe helpers
+  (cacheStreamIdentity) don't bundle the SDK on web.
+- ✅ Root wiring in app/_layout.tsx (DeviceContactBridge): caches Stream identity
+  (me._id + name) on login; mounts <StreamCallProvider> (native-only via
+  RingingOverlay.web.tsx passthrough so web preview stays clean).
+
+REMAINING (build-only, needs device iterations):
+- Route OUTGOING 1:1 calls through Stream: client.call('default', id).getOrCreate({ring:true, data:{members}}).
+- Answer/decline + active-call screen (CallContent) navigation.
+- Wire handleStreamCallPush() into the existing FCM background handler
+  (backgroundTaskSetup.ts / SmilersCallNotificationService) so killed-app ring works.
+- ⚠️ CRITICAL — COMMITTED BARE NATIVE DIRS: the Stream config plugin only applies
+  on `expo prebuild`, which would CLOBBER the custom Kotlin (SmilersCallNotificationService).
+  So Stream's required native config (Android ConnectionService/permissions/services,
+  iOS CallKit/VoIP background modes) must be added MANUALLY to android/ + ios/, OR
+  reconcile prebuild with the custom native code. This is the biggest remaining task.
+- Dedup app.json webrtc plugins: `@config-plugins/react-native-webrtc` may now be
+  redundant/conflicting with the Stream plugin — verify during first build.
+- `expo export` (EAS Update) may need a patch for @stream-io/react-native-webrtc like
+  the old scripts/patch-rn-webrtc.js did for react-native-webrtc.
 
 ## Phase 2 — iOS CallKit (needs APN VoIP provider in Stream dashboard)
 
