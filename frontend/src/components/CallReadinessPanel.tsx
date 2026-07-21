@@ -92,6 +92,9 @@ export default function CallReadinessPanel() {
   const [backend, setBackend] = useState<
     { state: RowState; detail: string } | null
   >(null);
+  const [msgDataOnly, setMsgDataOnly] = useState<
+    { state: RowState; detail: string } | null
+  >(null);
 
   const checkNotif = useCallback(async () => {
     try {
@@ -132,8 +135,19 @@ export default function CallReadinessPanel() {
           detail: `Old backend (dedupe=${pp.call_dedupe_window_seconds ?? '?'}). Redeploy, then re-check.`,
         });
       }
+      // Message-duplicate check: messages MUST be data-only, otherwise Android
+      // shows the OS banner AND the app's own notification (= the duplicate).
+      if (pp.message_data_only === true) {
+        setMsgDataOnly({ state: 'ok', detail: 'Messages are data-only (single notification).' });
+      } else {
+        setMsgDataOnly({
+          state: 'warn',
+          detail: 'Messages NOT data-only — duplicates expected. Redeploy the backend.',
+        });
+      }
     } catch {
       setBackend({ state: 'warn', detail: 'Backend unreachable from this device.' });
+      setMsgDataOnly({ state: 'warn', detail: 'Backend unreachable from this device.' });
     }
   }, []);
 
@@ -175,6 +189,15 @@ export default function CallReadinessPanel() {
         actionLabel={backend?.state === 'warn' ? 'Re-check' : undefined}
         onAction={backend?.state === 'warn' ? checkBackend : undefined}
         testID="readiness-backend"
+      />
+
+      <Row
+        title="Message notifications"
+        detail={msgDataOnly?.detail || 'Checking…'}
+        state={msgDataOnly?.state || 'loading'}
+        actionLabel={msgDataOnly?.state === 'warn' ? 'Re-check' : undefined}
+        onAction={msgDataOnly?.state === 'warn' ? checkBackend : undefined}
+        testID="readiness-msg-dataonly"
       />
 
       <Row
