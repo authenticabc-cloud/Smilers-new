@@ -2416,6 +2416,11 @@ async def send_push(
                     "conversationId",
                     "displayName",
                     "backendUrl",
+                    # Group-message tone routing: the app picks the group
+                    # notification channel/sound when these are present.
+                    "channelId",
+                    "conversationType",
+                    "conversationName",
                 ):
                     _v = data.get(_k)
                     if _v is not None and _k not in fcm_data:

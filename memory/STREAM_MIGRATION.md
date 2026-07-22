@@ -56,6 +56,25 @@ Phase 3 message fixes ✅ DONE (code), ⏳ user APK test (same build)
   always uses the resolved contact name as title; grouped notif no longer reuses
   a stale account-name title. MSG-NAME diagnostic logs resolution.
 
+Phase 4 — Group-message distinct tone  ✅ DONE (code), ⏳ backend redeploy + APK test
+- Tone file: android/app/src/main/res/raw/group_notification.mp3 (user-provided).
+- notifeeMessageDisplay.ts: new GROUP_CHANNEL_ID 'groups-v4-group_notification'
+  (sound 'group_notification', importance HIGH). displayGroupedMessageNotification
+  detects group via data.conversationType==='group' || channelId startsWith
+  'groups-' and renders on the group channel/tone; 1:1 stays on messages-v5.
+- server.py: now forwards channelId / conversationType / conversationName in the
+  FCM data so the app can pick the group channel.
+- NOTE: iOS group tone NOT wired (Android per contract).
+
+### ⚠️ BLOCKER for ALL message-notification fixes (1:1 name+tone, group tone)
+The DEPLOYED backend (app-migration-75.emergent.host) is STALE and still sends a
+`notification` block for messages → Android renders it directly (server profile
+name + default tone), bypassing the app. Evidence: notification body showed the
+MESSAGE TEXT ("Buongiorno"), which the app-rendered path never does (shows sender
+name). FIX = user must REPUBLISH so server.py's data-only-message code (and the
+new group-field forwarding) deploy. Only then does the app render → correct
+contact name + Smilers tone + group tone. APK already has all frontend fixes.
+
 ### Phase 2 — Stream media under the answered call (SUPERSEDED by 2b above)
 Approach chosen with user: 🅱 new Stream 1:1 screen; carry over interpreter,
 call-waiting, screen-share, PIP as best possible. Since the whole thing is

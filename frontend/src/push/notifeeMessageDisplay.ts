@@ -26,6 +26,10 @@ import { Platform } from 'react-native';
 
 const MESSAGE_CHANNEL_ID = 'messages-v5-message_notification';
 const MESSAGE_SOUND = 'message_notification';
+// Group messages get their OWN channel + tone so users can tell 1:1 vs group
+// apart by sound alone (contract: groups-v4-group_notification / group_notification.mp3).
+const GROUP_CHANNEL_ID = 'groups-v4-group_notification';
+const GROUP_SOUND = 'group_notification';
 
 type NativeCache = {
   notifee: any;
@@ -36,7 +40,7 @@ type NativeCache = {
 };
 
 let nativeCache: NativeCache | null | undefined;
-let channelReady = false;
+const channelsReady = new Set<string>();
 
 function loadNative(): NativeCache | null {
   if (Platform.OS !== 'android') return null;
@@ -61,14 +65,19 @@ function loadNative(): NativeCache | null {
   return nativeCache;
 }
 
-async function ensureChannel(native: NativeCache): Promise<void> {
-  if (channelReady) return;
+async function ensureChannel(
+  native: NativeCache,
+  channelId: string,
+  sound: string,
+  name: string,
+): Promise<void> {
+  if (channelsReady.has(channelId)) return;
   try {
     await native.notifee.createChannel({
-      id: MESSAGE_CHANNEL_ID,
-      name: 'Messages',
+      id: channelId,
+      name,
       importance: native.AndroidImportance.HIGH,
-      sound: MESSAGE_SOUND,
+      sound,
       vibration: true,
       vibrationPattern: [250, 250],
       lightColor: '#E4B53B',
@@ -78,7 +87,7 @@ async function ensureChannel(native: NativeCache): Promise<void> {
   } catch {
     // Android channels are persistent; a throw usually means it already exists.
   }
-  channelReady = true;
+  channelsReady.add(channelId);
 }
 
 export type GroupedMessageInput = {
@@ -122,8 +131,15 @@ export async function displayGroupedMessageNotification(
   const { title, body, conversationId, data } = input;
   if (!conversationId) return false;
 
+  // Group vs 1:1 → pick the matching channel + tone.
+  const isGroup =
+    data?.conversationType === 'group' ||
+    String(data?.channelId || '').startsWith('groups-');
+  const channelId = isGroup ? GROUP_CHANNEL_ID : MESSAGE_CHANNEL_ID;
+  const channelSound = isGroup ? GROUP_SOUND : MESSAGE_SOUND;
+
   try {
-    await ensureChannel(native);
+    await ensureChannel(native, channelId, channelSound, isGroup ? 'Group messages' : 'Messages');
 
     const notificationId = `msg-conv-${conversationId}`;
     const routeData = { ...data, type: 'message', conversationId };
@@ -178,11 +194,11 @@ export async function displayGroupedMessageNotification(
       body: summaryBody,
       data: { ...routeData, linesJson: JSON.stringify(lines), msgCount: String(msgCount) },
       android: {
-        channelId: MESSAGE_CHANNEL_ID,
+        channelId: channelId,
         importance: native.AndroidImportance.HIGH,
         visibility: native.AndroidVisibility.PRIVATE,
         pressAction: { id: 'default', launchActivity: 'default' },
-        sound: MESSAGE_SOUND,
+        sound: channelSound,
         // Only alert (sound/vibrate) for the FIRST message in a burst so an
         // in-place update for message 2..N doesn't re-buzz repeatedly.
         onlyAlertOnce: msgCount > 1,
