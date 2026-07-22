@@ -1411,6 +1411,8 @@ async def transcribe_media(payload: TranscriptionRequest, request: Request) -> T
     # Route Asante Twi (Akan) to Gemini — Whisper handles it poorly. All other
     # languages stay on Whisper (also yields caption timestamps for video).
     if _hint_is_akan_twi(payload.language_hint):
+        if not ASANTE_TWI_AUDIO_ENABLED:
+            return _twi_disabled_transcription()
         return await _run_gemini_transcription(content, suffix)
     return await _run_whisper(content, suffix, payload.language_hint, api_key)
 
@@ -1451,6 +1453,8 @@ async def transcribe_uploaded_media(
             break
 
     if _hint_is_akan_twi(language_hint):
+        if not ASANTE_TWI_AUDIO_ENABLED:
+            return _twi_disabled_transcription()
         return await _run_gemini_transcription(content, suffix)
     return await _run_whisper(content, suffix, language_hint, api_key)
 
@@ -1461,6 +1465,19 @@ async def transcribe_uploaded_media(
 # correct Twi orthography. We route Twi/Akan audio to Gemini and keep Whisper as
 # the default for every other language (it also gives caption timestamps for video).
 _AKAN_TWI_TOKENS = ("ak", "tw", "twi", "akan", "asante", "asanti", "fante", "fanti")
+
+# TEMPORARILY DEACTIVATED (user request, Jun 2026): Asante Twi (Akan) AUDIO
+# transcription + translation is turned off until a more reliable Twi speech
+# engine is sourced. When a voice/video note's source language is Twi we now
+# SKIP transcription (return an empty transcript) instead of routing to Gemini,
+# so no unreliable Twi text/translation is produced. TEXT translation for Twi is
+# unaffected. To REACTIVATE: flip this flag back to True — the Gemini Twi path
+# below is left fully intact.
+ASANTE_TWI_AUDIO_ENABLED = False
+
+
+def _twi_disabled_transcription() -> "TranscriptionResponse":
+    return TranscriptionResponse(text="", language="ak", segments=[])
 
 
 def _hint_is_akan_twi(language_hint: str | None) -> bool:
