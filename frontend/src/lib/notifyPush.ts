@@ -48,6 +48,14 @@ export interface NotifyPushOpts {
   callType?: 'voice' | 'video' | null;
   /** Caller display name for the incoming-call screen deep link. */
   displayName?: string | null;
+  /** Sender's phone (E.164) → lets the RECEIVER resolve the device-contact
+   *  name for message notifications (esp. group messages, where the cached
+   *  conversation name is the group, not the sender). */
+  senderPhone?: string | null;
+  /** Sender's Convex user id → fallback device-name resolution. */
+  senderId?: string | null;
+  /** 'group' | 'direct' → receiver picks the group vs 1:1 message tone. */
+  conversationType?: 'group' | 'direct' | null;
   /** Convex message/call id — lets the backend dedupe against Convex triggers. */
   idempotencyKey?: string | null;
 }
@@ -105,6 +113,9 @@ export function notifyEventPush(opts: NotifyPushOpts): void {
         call_id: opts.callId || null,
         call_type: opts.callType || null,
         display_name: opts.displayName || null,
+        sender_phone: opts.senderPhone || null,
+        sender_id: opts.senderId || null,
+        conversation_type: opts.conversationType || null,
         idempotency_key: opts.idempotencyKey || null,
       }),
       signal: controller.signal,

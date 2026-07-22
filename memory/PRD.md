@@ -1,5 +1,14 @@
 # Smilers Mobile App — PRD
 
+## iter-347 (Jun 2026): Message-notification device-name fix (senderPhone through sender-side push) + group tone
+**Evidence:** user's sender-device log showed our own `notifyPush event=message` path firing (Convex triggers absent), for both a 1:1 (`jd7be0…`) and a group (`…zzjm`). Message pushes are already data-only (action_url `/chat/` → type message), so 1:1 names resolve via the cached conversation name — but GROUP messages had no way to resolve the SENDER's device-contact name (cache holds the group name, and `senderPhone`/`senderId` were never sent) → they showed the sender's Google/account name.
+**Fix (all in our code — no Convex dependency):**
+- `src/lib/notifyPush.ts`: `NotifyPushOpts` + `/api/notify-event` body now carry `sender_phone`, `sender_id`, `conversation_type`.
+- `app/chat/[conversationId].tsx`: `pushNotifyCtxRef` now captures the sender's phone (`me.phoneE164/phone`), Convex id, and group/direct type; `sendMessage` forwards them to `notifyEventPush`.
+- `backend/server.py`: `NotifyEventBody` accepts the 3 new fields; the MESSAGE branch now sets explicit `type:'message'`, `conversationId`, `senderPhone`, `senderId`, `conversationType`, and for groups `channelId:'groups-v4-group_notification'` (distinct group tone). Added `senderId` to the FCM data whitelist. Verified `/api/notify-event` accepts the fields (202) and server parses clean.
+- Receiver already resolves `senderPhone` → device-contact name via the healthy device index (1787 entries), so group + 1:1 message notifications now show the saved contact name and groups get their own tone. ⚠️ Requires REBUILD + republish of the backend to validate on device.
+
+
 ## iter-346 (Jun 2026): Stream call connect latency (pre-warm) + visible NC toggle + clear-format confirmed
 **Context (user device test on build 2.3.21):** bold/color OK; long "Calling…/Connecting…" spin (seconds before ring, ~1 min to connect after answer); couldn't see call layers/NC; message notifs still Google-name + default tone (but the exported diagnostic session had NO MSG-PUSH/MSG-NAME lines — it was a call-only session, so item 3 is still unconfirmed).
 **Fixes:**

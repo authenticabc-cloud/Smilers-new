@@ -2421,6 +2421,7 @@ async def send_push(
                     # for the incoming-call + message notifications.
                     "callerPhone",
                     "senderPhone",
+                    "senderId",
                     "isConference",
                     "conversationId",
                     "displayName",
@@ -2810,6 +2811,9 @@ class NotifyEventBody(BaseModel):
     call_id: str | None = None
     call_type: str | None = None  # "voice" | "video"
     display_name: str | None = None
+    sender_phone: str | None = None  # E.164 → receiver device-contact name resolution
+    sender_id: str | None = None  # Convex user id → fallback name resolution
+    conversation_type: str | None = None  # "group" | "direct" → group vs 1:1 tone
     idempotency_key: str | None = None
 
 
@@ -2886,6 +2890,28 @@ async def notify_event(body: NotifyEventBody):
             data["callId"] = str(body.call_id)
         if conv:
             data["conversationId"] = conv
+    else:
+        # MESSAGE. Set explicit type + conversationId (so the relay classifies
+        # it as a data-only message → the app renders it with the DEVICE-CONTACT
+        # name + custom message channel). Thread senderPhone/senderId so the
+        # receiver can resolve the sender's saved name for GROUP messages (where
+        # the cached conversation name is the group, not the sender).
+        data["type"] = "message"
+        if conv:
+            data["conversationId"] = conv
+        sender_phone = (body.sender_phone or "").strip()[:32]
+        if sender_phone:
+            data["senderPhone"] = sender_phone
+        sender_id = (body.sender_id or "").strip()[:64]
+        if sender_id:
+            data["senderId"] = sender_id
+        conv_type = (body.conversation_type or "").strip().lower()
+        if conv_type in ("group", "direct"):
+            data["conversationType"] = conv_type
+            # Group messages get their own tone channel so they're
+            # distinguishable from 1:1 messages by sound alone.
+            if conv_type == "group":
+                data["channelId"] = "groups-v4-group_notification"
 
     if await _is_duplicate_push(
         body.idempotency_key, _push_content_hash(recipients, data),

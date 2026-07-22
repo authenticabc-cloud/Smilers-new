@@ -662,7 +662,13 @@ export default function ChatScreen() {
   // recipients get exactly ONE notification even if Convex triggers return.
   // Context (recipients + sender name) is kept in a ref because the
   // hydrated conversation is computed much later in this component.
-  const pushNotifyCtxRef = useRef<{ recipients: string[]; senderName: string } | null>(null);
+  const pushNotifyCtxRef = useRef<{
+    recipients: string[];
+    senderName: string;
+    senderPhone: string;
+    senderId: string;
+    conversationType: 'group' | 'direct';
+  } | null>(null);
   const sendMessage = useCallback(
     async (args: any) => {
       const result = await sendMessageRaw(args);
@@ -675,6 +681,9 @@ export default function ChatScreen() {
             title: ctx.senderName,
             message: previewForMessageType(args?.type, typeof args?.text === 'string' ? args.text : null),
             conversationId: String(args?.conversationId || conversationId || ''),
+            senderPhone: ctx.senderPhone || null,
+            senderId: ctx.senderId || null,
+            conversationType: ctx.conversationType,
             idempotencyKey: result != null ? String(result) : null,
           });
         }
@@ -3594,7 +3603,16 @@ export default function ChatScreen() {
       });
     });
     const senderName = String(me?.name || me?.displayName || 'New message');
-    pushNotifyCtxRef.current = { recipients: Array.from(ids).slice(0, 20), senderName };
+    const conv2: any = hydratedConversation || {};
+    const convType: 'group' | 'direct' = conv2?.type === 'group' || conv2?.isGroup === true ? 'group' : 'direct';
+    const senderPhone = String(me?.phoneE164 || me?.phone || '').trim();
+    pushNotifyCtxRef.current = {
+      recipients: Array.from(ids).slice(0, 20),
+      senderName,
+      senderPhone,
+      senderId: meId || '',
+      conversationType: convType,
+    };
     // iter-200: guarantee the backend learns my Convex id → enables
     // recipient matching for client-triggered pushes (see useEmergentPush).
     reportConvexUserIdForPush(meId);
