@@ -44,7 +44,7 @@ import {
 import { Colors } from '../src/theme';
 import { DeviceContactProvider } from '../src/lib/deviceContactIndex';
 import StreamCallProvider from '../src/components/stream/RingingOverlay';
-import { cacheStreamIdentity } from '../src/lib/stream/streamClient';
+import { cacheStreamIdentity, createStreamVideoClient } from '../src/lib/stream/streamClient';
 import { AppShareIntentProvider, useAppShareIntent } from '../src/lib/shareIntentContext';
 import { ReferralAttribution } from '../src/lib/referralAttribution';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
@@ -284,7 +284,16 @@ function DeviceContactBridge({ children }: { children: React.ReactNode }) {
     const uid = me?._id ? String(me._id) : '';
     if (!uid) return;
     const name = me?.name || me?.displayName || me?.username || undefined;
-    void cacheStreamIdentity(uid, name);
+    void cacheStreamIdentity(uid, name).then(() => {
+      // Pre-warm the Stream client (connect the user + open the websocket) as
+      // soon as we're signed in, so the FIRST call doesn't pay the cold
+      // connect + token-fetch cost on the critical path (was causing a long
+      // "Calling…/Connecting…" spin before media flowed). Singleton — the call
+      // screen reuses this same connected instance. Native-only.
+      if (Platform.OS !== 'web') {
+        void createStreamVideoClient().catch(() => {});
+      }
+    });
   }, [me?._id, me?.name, me?.displayName, me?.username]);
 
   const country: CountryCode | null = React.useMemo(() => {

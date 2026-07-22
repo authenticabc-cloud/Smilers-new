@@ -1,5 +1,15 @@
 # Smilers Mobile App — PRD
 
+## iter-346 (Jun 2026): Stream call connect latency (pre-warm) + visible NC toggle + clear-format confirmed
+**Context (user device test on build 2.3.21):** bold/color OK; long "Calling…/Connecting…" spin (seconds before ring, ~1 min to connect after answer); couldn't see call layers/NC; message notifs still Google-name + default tone (but the exported diagnostic session had NO MSG-PUSH/MSG-NAME lines — it was a call-only session, so item 3 is still unconfirmed).
+**Fixes:**
+- **Call latency (P0, item 4):** the Stream client was created COLD at call time. (a) `app/_layout.tsx` now PRE-WARMS `createStreamVideoClient()` (connectUser + WS + token) as soon as the user is signed in (native only), so the first call skips the cold connect. (b) `StreamCallInner` join reduced from `getOrCreate()` + `join()` (two sequential round-trips) to a single `join({ create: true, ring: false, notify: false })`. Singleton client is reused. Should cut both the pre-ring spin and the post-answer connect time substantially.
+- **Visible noise/echo control (item 2):** added a visible NC toggle button (sparkles icon) to the in-call controls, shown only when `deviceSupportsAdvancedAudioProcessing && isSupported`; still auto-enables on join. Confirms Krisp NC is active on a real build.
+- **Clear-format (item 1):** confirmed working alongside bold/color.
+**Item 3 (message name/tone) — still OPEN, root-cause hypothesis:** device contact index is healthy (1787 e164 entries, matches working). Backend classifies a push as a message (→ data-only, JS renders with device name + custom channel) ONLY when it carries `type:'message'` OR `action_url:'/chat/<id>'`. If Convex message pushes carry NEITHER, the relay sends a NOTIFICATION BLOCK on the default `messages-v4` channel → OS renders the sender's Google/account title + default tone (exactly the symptom). Need the actual message push payload to confirm — asked user to receive a message while BACKGROUNDED, then Settings → Diagnostic Logs → copy the `MSG-PUSH` (hasNotifBlock=?) and `MSG-NAME` lines. Fix is then either Convex adding `type:'message'`/`action_url` (web team) or a targeted relay reclassification (only if safe vs emergency/login/broadcast pushes). No blind backend change made.
+⚠️ All native — requires the user's next build to validate.
+
+
 ## iter-345 (Jun 2026): Formatting "clear" button + Stream Krisp noise/echo cancellation
 **1) Clear-formatting (enhancement):** new `clearInlineFormat(text, selection)` in `chatRichText.ts` strips all rich-text tags from the selected range (or whole message when nothing is selected). Added a `format-clear` (eraser) button to the floating selection bubble in `app/chat/[conversationId].tsx`. Verified via unit test (CLEAR-ALL + CLEAR-RANGE); lint clean.
 **2) Noise + echo cancellation (Stream Krisp):** per the Stream RN noise-cancellation playbook —

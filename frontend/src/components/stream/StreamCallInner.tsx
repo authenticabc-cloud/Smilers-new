@@ -89,6 +89,19 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, onHangup }: CallUIPro
   const [seconds, setSeconds] = useState(0);
   const wasConnectedRef = useRef(false);
 
+  // Noise / echo cancellation state (Krisp). Only surfaced when the device
+  // supports advanced audio processing (native build only).
+  const nc = useNoiseCancellation?.() as any;
+  const ncSupported = !!(nc?.deviceSupportsAdvancedAudioProcessing && nc?.isSupported);
+  const ncEnabled = !!nc?.isEnabled;
+  const toggleNc = useCallback(() => {
+    if (!nc?.setEnabled) return;
+    try {
+      const r = nc.setEnabled(!nc.isEnabled);
+      if (r && typeof r.catch === 'function') r.catch(() => {});
+    } catch {}
+  }, [nc]);
+
   const remote = remoteParticipants[0];
   const connected = callingState === CallingState.JOINED && !!remote;
 
@@ -208,6 +221,15 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, onHangup }: CallUIPro
           <TouchableOpacity style={[styles.ctrl, !micOn && styles.ctrlOff]} onPress={toggleMic}>
             <Ionicons name={micOn ? 'mic' : 'mic-off'} size={26} color={Colors.white} />
           </TouchableOpacity>
+          {ncSupported ? (
+            <TouchableOpacity
+              style={[styles.ctrl, !ncEnabled && styles.ctrlOff]}
+              onPress={toggleNc}
+              testID="stream-nc-toggle"
+            >
+              <Ionicons name="sparkles" size={24} color={Colors.white} />
+            </TouchableOpacity>
+          ) : null}
           {isVideo ? (
             <TouchableOpacity style={[styles.ctrl, !camOn && styles.ctrlOff]} onPress={toggleCam}>
               <Ionicons name={camOn ? 'videocam' : 'videocam-off'} size={26} color={Colors.white} />
@@ -346,8 +368,10 @@ export default function StreamCallInner() {
         if (!c || !mounted) return;
         setClient(c);
         const streamCall = c.call('default', streamCallId);
-        await streamCall.getOrCreate({ ring: false, notify: false });
-        await streamCall.join();
+        // Single round-trip create-or-join (ring:false → Ashwini's doorbell owns
+        // ringing). Was getOrCreate() THEN join() = two sequential network hops,
+        // which added noticeable latency before media connected.
+        await streamCall.join({ create: true, ring: false, notify: false });
         joined = streamCall;
         if (mounted) setCall(streamCall);
       } catch {
