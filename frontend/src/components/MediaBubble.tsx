@@ -688,6 +688,8 @@ function RichMessageText({
       {segments.map((segment, index) => {
         const segStyle = [
           segment.bold ? styles.richTextBold : null,
+          segment.italic ? styles.richTextItalic : null,
+          segment.underline ? styles.richTextUnderline : null,
           segment.color ? { color: segment.color } : null,
         ];
         const phoneMatches = enablePhoneLinks ? findPhoneMatches(segment.text) : [];
@@ -2737,6 +2739,8 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   richTextBold: { fontWeight: FontWeight.bold },
+  richTextItalic: { fontStyle: 'italic' },
+  richTextUnderline: { textDecorationLine: 'underline' },
   // In-conversation search highlight (iter-220). Every occurrence of the
   // search term gets a yellow marker; the message the up/down navigator is
   // currently focused on uses the brighter `Active` variant + a bubble outline

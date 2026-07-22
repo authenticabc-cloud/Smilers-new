@@ -85,8 +85,13 @@ import { cacheUserName } from '../../src/push/notificationNameCache';
 import { getLanguageByCode } from '../../src/lib/languages';
 import {
   applyDraftFormatting,
+  applyInlineColor,
+  applyInlineFormat,
   DRAFT_TEXT_COLORS,
   DraftTextColorKey,
+  InlineFormatKind,
+  parseRichTextSegments,
+  PRESET_TEXT_COLORS,
   resolveDraftColor,
   stripRichTextTags,
 } from '../../src/lib/chatRichText';
@@ -295,6 +300,8 @@ export default function ChatScreen() {
   const [draftBold, setDraftBold] = useState(false);
   const [draftColor, setDraftColor] = useState<DraftTextColorKey | null>(null);
   const [showColorPicker, setShowColorPicker] = useState(false);
+  const [composerSelection, setComposerSelection] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
+  const [showInlineSwatches, setShowInlineSwatches] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [translatedMessageMap, setTranslatedMessageMap] = useState<Record<string, string>>({});
@@ -1730,11 +1737,19 @@ export default function ChatScreen() {
   const isConversationAvailable = !!effectiveConversation;
   const composerTextColor = resolveDraftColor(draftColor) || Colors.textPrimary;
   const showComposerFormatting = showComposerFormattingPinned || composerFocused || text.trim().length > 0 || showColorPicker;
+  const hasTextSelection = pendingImages.length === 0 && composerSelection.end > composerSelection.start;
+  // Live preview of the formatted message (only when rich-text tags exist).
+  const formattedPreviewSegments = useMemo(() => {
+    if (pendingImages.length > 0) return null;
+    if (!text || !/\[(b|i|u|color)/i.test(text)) return null;
+    return parseRichTextSegments(text);
+  }, [text, pendingImages.length]);
 
   const resetComposerFormatting = useCallback(() => {
     setDraftBold(false);
     setDraftColor(null);
     setShowColorPicker(false);
+    setShowInlineSwatches(false);
   }, []);
 
   const handleSend = async () => {
@@ -1884,6 +1899,28 @@ export default function ChatScreen() {
     composerSelectionRef.current = result.selection;
     setForcedSelection(result.selection);
     setActiveListKind(currentLineListKind(result.text, result.selection.start));
+    messageInputRef.current?.focus();
+  };
+
+  // iter-344: per-selection inline formatting. Wrap the highlighted range (or
+  // the whole message when nothing is selected) with the matching rich-text
+  // tag, then restore the selection so consecutive formats can be applied.
+  const applyInlineFormatToSelection = (kind: InlineFormatKind) => {
+    const result = applyInlineFormat(text, composerSelectionRef.current, kind);
+    setText(result.text);
+    composerSelectionRef.current = result.selection;
+    setForcedSelection(result.selection);
+    setComposerSelection(result.selection);
+    messageInputRef.current?.focus();
+  };
+
+  const applyInlineColorToSelection = (hex: string) => {
+    const result = applyInlineColor(text, composerSelectionRef.current, hex);
+    setText(result.text);
+    composerSelectionRef.current = result.selection;
+    setForcedSelection(result.selection);
+    setComposerSelection(result.selection);
+    setShowInlineSwatches(false);
     messageInputRef.current?.focus();
   };
 
@@ -4457,8 +4494,76 @@ export default function ChatScreen() {
             </View>
           ) : null}
 
+          {formattedPreviewSegments ? (
+            <View style={styles.formatPreviewWrap} testID="composer-format-preview">
+              <Text style={styles.formatPreviewLabel}>Preview</Text>
+              <Text style={styles.formatPreviewText}>
+                {formattedPreviewSegments.map((segment, index) => (
+                  <Text
+                    key={`fp-${index}`}
+                    style={[
+                      segment.bold ? styles.formatPreviewBold : null,
+                      segment.italic ? styles.formatPreviewItalic : null,
+                      segment.underline ? styles.formatPreviewUnderline : null,
+                      segment.color ? { color: segment.color } : null,
+                    ]}
+                  >
+                    {segment.text}
+                  </Text>
+                ))}
+              </Text>
+            </View>
+          ) : null}
+
           {showComposerFormatting ? (
             <View style={styles.composerToolsWrap} testID="composer-tools-wrap">
+              {showInlineSwatches ? (
+                <View style={styles.swatchGrid} testID="composer-inline-swatches">
+                  {PRESET_TEXT_COLORS.map((hex) => (
+                    <TouchableOpacity
+                      key={hex}
+                      style={[styles.swatchCell, { backgroundColor: hex }, hex === '#FFFFFF' ? styles.swatchCellLight : null]}
+                      onPress={() => applyInlineColorToSelection(hex)}
+                      testID={`composer-swatch-${hex}`}
+                    />
+                  ))}
+                </View>
+              ) : null}
+
+              <View style={styles.composerToolbarRow}>
+                <Text style={styles.inlineFormatHint} numberOfLines={1}>
+                  {hasTextSelection ? 'Format selection' : 'Format whole message'}
+                </Text>
+                <TouchableOpacity
+                  style={styles.composerToolBtn}
+                  onPress={() => applyInlineFormatToSelection('bold')}
+                  testID="composer-inline-bold"
+                >
+                  <Text style={styles.composerToolText}>B</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.composerToolBtn}
+                  onPress={() => applyInlineFormatToSelection('italic')}
+                  testID="composer-inline-italic"
+                >
+                  <Text style={[styles.composerToolText, styles.inlineItalicGlyph]}>I</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.composerToolBtn}
+                  onPress={() => applyInlineFormatToSelection('underline')}
+                  testID="composer-inline-underline"
+                >
+                  <Text style={[styles.composerToolText, styles.inlineUnderlineGlyph]}>U</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.composerToolBtn, showInlineSwatches ? styles.composerToolBtnActive : null]}
+                  onPress={() => setShowInlineSwatches((current) => !current)}
+                  testID="composer-inline-color-toggle"
+                >
+                  <Ionicons name="color-palette" size={20} color={showInlineSwatches ? Colors.primary : Colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+
               {showColorPicker ? (
                 <View style={styles.colorPickerWrap} testID="composer-color-picker">
                   {DRAFT_TEXT_COLORS.map((option) => {
@@ -4627,6 +4732,7 @@ export default function ChatScreen() {
                 onSelectionChange={(e) => {
                   const sel = e.nativeEvent.selection;
                   composerSelectionRef.current = sel;
+                  setComposerSelection(sel);
                   setActiveListKind(currentLineListKind(text, sel.start));
                   // Release the one-shot controlled selection once applied so
                   // the user can move the caret freely afterwards.

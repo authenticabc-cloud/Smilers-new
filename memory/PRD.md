@@ -1,5 +1,15 @@
 # Smilers Mobile App — PRD
 
+## iter-344 (Jun 2026): Per-selection inline chat text formatting (B / I / U / colour) + live preview
+**User request:** highlight part of a composer message and style just that part (bold/italic/underline/colour), with a live preview and a full colour picker; keep the existing global B/colour bar; grid-of-swatches picker; if nothing is selected, apply to the whole message.
+**Changes:**
+- `src/lib/chatRichText.ts` (rewritten): parser now supports `[i]`/`[u]` (italic/underline) and hex colours (`[color=#RRGGBB]`) alongside legacy `[b]`/named `[color=red]`. New `applyInlineFormat(text, selection, kind)` + `applyInlineColor(text, selection, hex)` wrap the selected range (or whole message when the selection is empty) and return the new caret selection. New `PRESET_TEXT_COLORS` swatch grid (20 hex). Segments now carry `italic`/`underline`. `stripRichTextTags` covers all tags. Backwards-compatible with old whole-message tags.
+- `src/components/MediaBubble.tsx`: `RichMessageText` applies `richTextItalic` (fontStyle) + `richTextUnderline` (textDecorationLine) per segment.
+- `app/chat/[conversationId].tsx`: composer tracks live `composerSelection` (state) via `onSelectionChange`; new inline-format row (B/I/U + palette toggle) that is selection-aware (falls back to whole message), a grid swatch picker (`showInlineSwatches`), and a live formatted **Preview** block above the input (only shown when the draft contains rich-text tags). Existing global B/colour/list bar kept intact per user.
+- `src/components/chat/chatScreenStyles.ts`: added preview + swatch-grid + inline-format styles.
+**Verified:** parser/helper unit test passed (nesting, hex + legacy named colour, strip, whole-message fallback); lint clean on all files; web bundle builds; app boots to Sign In. ⚠️ The composer UI itself is OIDC-gated → in-app visual/interaction verification pending the user's signed-in device.
+
+
 ## iter-343 (Jun 2026): CONSOLIDATION — pulled full GitHub `main` (incl. native android/) into this Emergent workspace
 Context: GitHub `authenticabc-cloud/Smilers-new@main` became the complete source of truth (my JS features + Ashwini's merged native call code). Emergent Mobile Agent has NO in-project "Pull from GitHub" (push-only), so to let the user keep developing WITH this agent (instead of a fresh imported project), I manually synced the workspace up to `main` via the branch tarball (`codeload.../main.tar.gz`).
 - Brought in: `frontend/android/` (69 files incl. 37 binaries — icons/ringtones/keystore/gradle-wrapper.jar, preserved via tarball extract), 2 missing config plugins (`withNativeCallService.js`, `withNotifeeLocalMaven.js`), `index.js` entry (imports `src/push/backgroundTaskSetup` then expo-router), and synced 24 differing/missing source files (`silent-decline.tsx`, convex/_generated/*, push handlers `backgroundTaskSetup/notifeeCallWake/useEmergentPush/useIncomingCallListener/usePushNotifications`, `call/[conversationId].tsx`, `chats.tsx`, `_layout.tsx`, `incoming-call.tsx`, `twilio-call.tsx`, libs, `app.json`, `package.json`).
