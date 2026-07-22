@@ -24,7 +24,7 @@
 
 import { Platform } from 'react-native';
 
-const MESSAGE_CHANNEL_ID = 'messages-v4-message_notification';
+const MESSAGE_CHANNEL_ID = 'messages-v5-message_notification';
 const MESSAGE_SOUND = 'message_notification';
 
 type NativeCache = {
@@ -145,7 +145,14 @@ export async function displayGroupedMessageNotification(
         if (Array.isArray(parsed)) priorLines = parsed.map((s) => String(s)).filter(Boolean);
       }
       const existingTitle = existing?.notification?.title;
-      if (typeof existingTitle === 'string' && existingTitle.trim()) {
+      // Only fall back to the previously-shown title when the freshly-resolved
+      // title is missing/generic — otherwise a stale (e.g. account-name) title
+      // from an earlier build would keep overriding the correct contact name.
+      if (
+        (!convName || convName === 'New message') &&
+        typeof existingTitle === 'string' &&
+        existingTitle.trim()
+      ) {
         convName = existingTitle.trim();
       }
     } catch {

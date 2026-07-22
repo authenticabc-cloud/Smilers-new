@@ -17,6 +17,7 @@ import { Animated, Dimensions, PanResponder, Platform, StyleSheet, View } from '
 import CallErrorBoundary from '../CallErrorBoundary';
 import { callHost, useCallHost } from '../../lib/call/callHost';
 import { CallScreenInner } from '../../../app/call/[conversationId]';
+import StreamCallInner from '../stream/StreamCallInnerEntry';
 
 const MINI_WIDTH = 124;
 const MINI_HEIGHT = 184;
@@ -84,6 +85,12 @@ export default function CallHost() {
 
   const isMini = mode === 'mini';
 
+  // Normal 1:1 calls run on the Stream-powered screen (reliable connection).
+  // Screen-share and conference calls stay on the legacy WebRTC screen.
+  const isScreenOnly = params?.screenOnly === '1' || params?.screenOnly === 'true';
+  const isConference = params?.conferenceMode === '1' || params?.conferenceMode === 'true';
+  const useStream = !isScreenOnly && !isConference;
+
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents={isMini ? 'box-none' : 'auto'} testID="call-host">
       <Animated.View
@@ -92,7 +99,7 @@ export default function CallHost() {
         testID={isMini ? 'mini-call-window' : 'call-host-full'}
       >
         <CallErrorBoundary onClose={() => callHost.end()}>
-          <CallScreenInner />
+          {useStream ? <StreamCallInner /> : <CallScreenInner />}
         </CallErrorBoundary>
       </Animated.View>
     </View>

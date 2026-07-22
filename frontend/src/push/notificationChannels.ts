@@ -82,7 +82,7 @@ export function getChannelIdsForPrefs(prefs?: RingtonePrefs | null): {
   const messageSound = resolveMessageChannelSound(prefs?.notificationSound) || 'silent';
   return {
     callChannelId: `calls-v4-${callSound}`,
-    messageChannelId: `messages-v4-${messageSound}`,
+    messageChannelId: `messages-v5-${messageSound}`,
   };
 }
 
@@ -178,7 +178,7 @@ export async function applyNotificationChannelPrefs(prefs?: RingtonePrefs | null
   const fallbacks: Array<[string, any]> = [
     ['calls-v4-smilers_never_cry', fallbackCallOpts],
     [LEGACY_CALLS_CHANNEL, fallbackCallOpts],
-    ['messages-v4-message_notification', fallbackMessageOpts],
+    ['messages-v5-message_notification', fallbackMessageOpts],
     [LEGACY_MESSAGES_CHANNEL, fallbackMessageOpts],
   ];
   for (const [channelId, opts] of fallbacks) {

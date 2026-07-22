@@ -389,9 +389,10 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
       });
     } catch {}
     if (convDeviceName) {
-      // 1:1 conversation — the peer is both the title and the sender line.
-      if (!payload.title || title === accountName || title === 'New message') title = convDeviceName;
-      if (accountName && body === accountName) body = convDeviceName;
+      // 1:1 conversation — the peer is definitively both the title and the
+      // sender line, so always prefer the resolved contact name.
+      title = convDeviceName;
+      if (!body || body === accountName || body === title) body = convDeviceName;
     } else {
       // Group (or uncached DM) — resolve the SENDER's device name from their
       // phone OR Smilers userId; use it for the sender line only, keeping the
@@ -434,7 +435,7 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
     }
   }
 
-  const messageChannel = 'messages-v4-message_notification';
+  const messageChannel = 'messages-v5-message_notification';
   if (Platform.OS === 'android') {
     try {
       await Notifications.setNotificationChannelAsync(messageChannel, {

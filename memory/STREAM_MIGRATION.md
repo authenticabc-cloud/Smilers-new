@@ -22,7 +22,32 @@ Stream call keyed to `conversationId` with `ring:false, notify:false`.
   ring:true call is ever created.)
 - Web bundle smoke-tested OK. NEXT: user builds APK, confirms Ashwini's calls fully back.
 
-### Phase 2 — Stream media under the answered call (IN PROGRESS)
+Phase 2b — Stream media UNDER normal 1:1 calls  ✅ DONE (code), ⏳ user APK test
+- NEW screen: src/components/stream/StreamCallInner.tsx (+ Entry/.web split).
+  Hybrid: Ashwini's FCM doorbell = ringing/wake-up/ringtone/Answer-Decline
+  (unchanged); Convex `calls` lifecycle = call state (initiateCall on caller,
+  answerCall on answer=1 callee, markCalleeRinging, endCall on hangup, and
+  auto-end when Convex status→ended/declined or the Stream peer leaves); Stream
+  = media (client.call('default', conversationId), getOrCreate ring:false
+  notify:false, join). Uses useReactiveSafeConvexQuery for getActiveCall.
+- GATE: src/components/call/CallHost.tsx now renders StreamCallInner for NORMAL
+  1:1 (when !screenOnly && !conferenceMode); screen-share / conference still use
+  legacy CallScreenInner. CallHost full/mini(PIP) wrapper applies to both.
+- UI: ParticipantView (proven in 2a) + controls mic/cam/flip/minimize/hangup +
+  timer + self-view. Styled dark to match a call context.
+- KNOWN FOLLOW-UPS (next pass, agreed "core first"): caller ringback tone,
+  in-call screen-share, interpreter overlay, call-waiting (2nd call). Audio route
+  now handled by Stream — verify on device.
+
+Phase 3 message fixes ✅ DONE (code), ⏳ user APK test (same build)
+- TONE: bumped message channel v4→v5 everywhere (notifeeMessageDisplay,
+  backgroundTaskSetup, usePushNotifications, notificationChannels) — Android
+  locks a channel's sound after creation, so a fresh id restores the Smilers tone.
+- NAME: chats.tsx proactively caches EVERY 1:1 device-contact name; 1:1 push
+  always uses the resolved contact name as title; grouped notif no longer reuses
+  a stale account-name title. MSG-NAME diagnostic logs resolution.
+
+### Phase 2 — Stream media under the answered call (SUPERSEDED by 2b above)
 Approach chosen with user: 🅱 new Stream 1:1 screen; carry over interpreter,
 call-waiting, screen-share, PIP as best possible. Since the whole thing is
 native-only and the production call screen is ~3400 lines, we FIRST validate the

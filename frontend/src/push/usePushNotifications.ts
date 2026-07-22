@@ -521,7 +521,7 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
 
   // iter-252: schedule on the VERSIONED message channel (custom Smilers tone),
   // not the legacy immutable `messages-v3` (stuck on the system default tone).
-  const messageChannel = 'messages-v4-message_notification';
+  const messageChannel = 'messages-v5-message_notification';
   if (Platform.OS === 'android') {
     try {
       await Notifications.setNotificationChannelAsync(messageChannel, {
