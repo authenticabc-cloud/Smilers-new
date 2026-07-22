@@ -27,6 +27,7 @@ export async function ringWebrtcCall(args: {
   calleeIdentities: string[];
   callerIdentity: string;
   callerDisplayName?: string;
+  callerPhone?: string;
   conversationId: string;
   isVideo: boolean;
 }): Promise<void> {
@@ -39,6 +40,10 @@ export async function ringWebrtcCall(args: {
         callee_identities: args.calleeIdentities,
         caller_identity: args.callerIdentity,
         caller_display_name: args.callerDisplayName,
+        // Caller's own phone (E.164) so the callee's native notification can
+        // resolve the name THEY saved for this number (device address book),
+        // instead of falling back to the caller's account/Google name.
+        caller_phone: args.callerPhone || '',
         conversation_id: args.conversationId,
         is_video: args.isVideo,
         call_id: args.conversationId,

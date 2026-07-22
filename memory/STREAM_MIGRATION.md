@@ -75,6 +75,25 @@ name). FIX = user must REPUBLISH so server.py's data-only-message code (and the
 new group-field forwarding) deploy. Only then does the app render → correct
 contact name + Smilers tone + group tone. APK already has all frontend fixes.
 
+### CALL-NAME + CALL-BUG FIXES (user feedback round 3) DONE(code), pending APK+redeploy
+Call bugs (regressions from Phase 2b StreamCallInner), all FIXED:
+- (b) end->re-initiate LOOP: callee re-created a call when activeCall cleared.
+  Guarded initiate with sawCallRef (a call ever existed -> never re-initiate) +
+  endedRef + locallyAccepted.
+- (a) timer-before-answer + (c) lingering audio: reused conversationId as the
+  Stream room for every call -> ghost participants. NOW uses a UNIQUE per-call
+  room id = Convex callId. Fresh room each call; caller shows Ringing until peer joins.
+
+Call NAME shows account name (ALSO messages) — ROOT CAUSE FOUND:
+- Native resolves via lookupContactNameByPhone(data["callerPhone"]) but the ring
+  push never carried callerPhone, AND send_push forwards only a WHITELIST of keys
+  (callerPhone/senderPhone were missing) -> lookup got null -> account fallback.
+- FIX: startCall/ringWebrtcCall send caller_phone (me.phoneE164||me.phone);
+  /calls/ring -> push_data["callerPhone"]; send_push whitelist now forwards
+  callerPhone + senderPhone. ("stale backend" theory was WRONG.)
+- MESSAGES: whitelist now forwards senderPhone if the Convex push includes it.
+  Still need RECEIVER-side diagnostic (MSG-PUSH/MSG-NAME) to confirm app-render.
+
 ### Phase 2 — Stream media under the answered call (SUPERSEDED by 2b above)
 Approach chosen with user: 🅱 new Stream 1:1 screen; carry over interpreter,
 call-waiting, screen-share, PIP as best possible. Since the whole thing is

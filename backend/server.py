@@ -540,6 +540,7 @@ class WebRtcRingRequest(BaseModel):
     callee_identities: List[str] = Field(default_factory=list)
     caller_identity: str = ""
     caller_display_name: str | None = None
+    caller_phone: str | None = None
     conversation_id: str = Field(..., min_length=1)
     is_video: bool = False
     call_id: str | None = None
@@ -572,6 +573,10 @@ async def webrtc_ring(payload: WebRtcRingRequest, request: Request):
         "callerId": payload.caller_identity,
         "callerName": display_name,
         "displayName": display_name,
+        # Caller's phone (E.164) → the callee's native notification resolves the
+        # name THEY saved for this number (ContactsContract), instead of the
+        # caller's account/Google name.
+        "callerPhone": (payload.caller_phone or "").strip(),
         "conversationId": payload.conversation_id,
         "twilio_is_video": "1" if payload.is_video else "0",
         "twilio_caller_identity": payload.caller_identity,
@@ -2412,6 +2417,10 @@ async def send_push(
                     "callerId",
                     "callerName",
                     "callType",
+                    # Sender/caller phone (E.164) → device-contact name resolution
+                    # for the incoming-call + message notifications.
+                    "callerPhone",
+                    "senderPhone",
                     "isConference",
                     "conversationId",
                     "displayName",

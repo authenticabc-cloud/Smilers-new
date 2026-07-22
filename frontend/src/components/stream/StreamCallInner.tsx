@@ -236,15 +236,20 @@ export default function StreamCallInner() {
   const [call, setCall] = useState<any>(null);
   const [didInitiate, setDidInitiate] = useState(false);
   const [locallyAccepted, setLocallyAccepted] = useState(false);
+  const [createdCallId, setCreatedCallId] = useState<string | null>(null);
   const initiatedRef = useRef(false);
   const answeredRef = useRef(false);
   const ringingMarkedRef = useRef(false);
   const endedRef = useRef(false);
+  const sawCallRef = useRef(false);
 
   const callerId = activeCall?.callerId || activeCall?.callerUserId || null;
   const isCaller = !!(me && callerId && callerId === me._id);
   const convStatus: string | undefined = activeCall?.status;
   const callId: string | undefined = activeCall?._id;
+  // Unique-per-call Stream room id (NOT the conversationId) so every call is a
+  // fresh room with no lingering "ghost" participants from a previous call.
+  const streamCallId: string | undefined = callId || createdCallId || undefined;
 
   // Role resolution. The foreground listener routes an in-app incoming call to
   // /call/<id> WITHOUT answer=1, so we must show Accept/Decline here (the old
@@ -258,17 +263,37 @@ export default function StreamCallInner() {
 
   // 1) Caller: create the Convex ringing record (the doorbell FCM is already
   //    fired by startCall). Only when not answering and there's no active call.
+  // Track that a call has existed so we NEVER (re)initiate after it ends — this
+  // is what caused the end→re-initiate loop between the two parties.
   useEffect(() => {
-    if (isAnswering || initiatedRef.current) return;
+    if (activeCall) sawCallRef.current = true;
+  }, [activeCall]);
+
+  useEffect(() => {
+    if (isAnswering || initiatedRef.current || endedRef.current) return;
+    if (locallyAccepted || sawCallRef.current) return; // callee, or a call already existed
     if (!me || !conversationId) return;
     if (activeCallLoading || activeCall) return; // wait for load; skip if a call exists
     initiatedRef.current = true;
     setDidInitiate(true);
-    void initiateCall({ conversationId, callType: isVideo ? 'video' : 'voice' }).catch(() => {
-      initiatedRef.current = false;
-      setDidInitiate(false);
-    });
-  }, [isAnswering, me, conversationId, activeCall, activeCallLoading, initiateCall, isVideo]);
+    initiateCall({ conversationId, callType: isVideo ? 'video' : 'voice' })
+      .then((id: any) => {
+        if (id) setCreatedCallId(String(id));
+      })
+      .catch(() => {
+        initiatedRef.current = false;
+        setDidInitiate(false);
+      });
+  }, [
+    isAnswering,
+    me,
+    conversationId,
+    activeCall,
+    activeCallLoading,
+    initiateCall,
+    isVideo,
+    locallyAccepted,
+  ]);
 
   // 2) Callee (answered from the notification): accept the Convex call.
   useEffect(() => {
@@ -287,9 +312,10 @@ export default function StreamCallInner() {
   }, [isCaller, callId, convStatus, markCalleeRinging]);
 
   // 4) Join the Stream call (media) — only once ACCEPTED (caller, notification
-  //    answer, or in-app Accept). ring:false → no Stream push.
+  //    answer, or in-app Accept) AND we have the unique per-call room id.
+  //    ring:false → no Stream push (Ashwini's doorbell owns ringing).
   useEffect(() => {
-    if (!conversationId || !accepted) return;
+    if (!streamCallId || !accepted) return;
     let mounted = true;
     let joined: any = null;
     (async () => {
@@ -297,7 +323,7 @@ export default function StreamCallInner() {
         const c = await createStreamVideoClient();
         if (!c || !mounted) return;
         setClient(c);
-        const streamCall = c.call('default', conversationId);
+        const streamCall = c.call('default', streamCallId);
         await streamCall.getOrCreate({ ring: false, notify: false });
         await streamCall.join();
         joined = streamCall;
@@ -312,7 +338,7 @@ export default function StreamCallInner() {
         joined?.leave();
       } catch {}
     };
-  }, [conversationId, accepted]);
+  }, [streamCallId, accepted]);
 
   const acceptIncoming = useCallback(() => {
     setLocallyAccepted(true);

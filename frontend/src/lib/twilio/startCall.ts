@@ -36,6 +36,8 @@ export interface StartCallArgs {
   callerIdentity: string;
   /** Caller's display name shown in the callee's incoming-call notification. */
   callerDisplayName?: string;
+  /** Caller's own phone (E.164) so the callee can resolve their saved contact name. */
+  callerPhone?: string;
   /** Callee user IDs. 1 for 1-on-1, multiple for group calls. */
   calleeIdentities: string[];
   /** Convex conversation _id — used for room naming + legacy route. */
@@ -78,6 +80,7 @@ export async function startCall(args: StartCallArgs): Promise<void> {
         calleeIdentities: args.calleeIdentities,
         callerIdentity: args.callerIdentity,
         callerDisplayName: args.callerDisplayName,
+        callerPhone: args.callerPhone,
         conversationId,
         isVideo,
       });
