@@ -32,6 +32,14 @@ export default function NotificationsScreen() {
   const pushDiagnostics = usePushDiagnostics();
   const notifications = (me?.notifications || {}) as Record<string, boolean | undefined>;
   const canEdit = !!me;
+  // Optimistic local overrides so a toggle doesn't visually snap back while the
+  // mutation is in flight (and so we can revert precisely if it fails).
+  const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+  const [saveError, setSaveError] = useState<string>('');
+  const isOn = useCallback(
+    (key: string) => (key in overrides ? overrides[key] : notifications[key] !== false),
+    [overrides, notifications],
+  );
   const [retrying, setRetrying] = useState(false);
   const [copied, setCopied] = useState(false);
   const [runningLocalTest, setRunningLocalTest] = useState(false);
@@ -58,6 +66,10 @@ export default function NotificationsScreen() {
       if (!me) {
         return;
       }
+      // Optimistic: reflect the choice immediately so the switch doesn't snap
+      // back while the mutation round-trips.
+      setOverrides((prev) => ({ ...prev, [key]: value }));
+      setSaveError('');
       try {
         const payload = { notifications: { ...notifications, [key]: value } };
         await safeMutation(
@@ -66,7 +78,24 @@ export default function NotificationsScreen() {
           payload,
         );
         await refetch();
+        // Clear the override once the server value reflects our change (or
+        // after a short settle) so we follow the source of truth again.
+        setOverrides((prev) => {
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
       } catch (errorValue: any) {
+        // Surface the real reason instead of silently reverting — this is the
+        // clue we need if the profile write is being rejected server-side.
+        const msg = errorValue?.data?.message || errorValue?.message || String(errorValue);
+        setSaveError(`Couldn't save "${key}": ${msg}`);
+        // Revert the optimistic override so the UI matches the server state.
+        setOverrides((prev) => {
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
         console.warn('Failed to update notification', errorValue);
       }
     },
@@ -322,6 +351,13 @@ export default function NotificationsScreen() {
           </Text>
         ) : null}
 
+        {saveError ? (
+          <View style={styles.saveErrorBox} testID="notifications-save-error">
+            <Ionicons name="warning" size={18} color="#8B5A00" style={{ marginRight: 8 }} />
+            <Text style={styles.saveErrorText}>{saveError}</Text>
+          </View>
+        ) : null}
+
         {/* iter-176: 'Push diagnostics' section hidden for production
             publish. Diagnostic data is still collected behind the scenes
             (registration retry, token preview, etc.) — only the user-
@@ -425,7 +461,7 @@ export default function NotificationsScreen() {
               </Text>
             </View>
             <Switch
-              value={notifications[item.key] !== false}
+              value={isOn(item.key)}
               onValueChange={(value) => toggle(item.key, value)}
               trackColor={{ true: Colors.primary, false: '#cccccc' }}
               disabled={!canEdit}
@@ -464,6 +500,17 @@ const styles = StyleSheet.create({
   headerSpacer: { width: 26 },
   note: { fontSize: FontSize.sm, color: Colors.textSecondary, marginBottom: Spacing.base, lineHeight: 18 },
   helper: { fontSize: FontSize.sm, color: Colors.textMuted, marginBottom: Spacing.base },
+  saveErrorBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#FFF4D6',
+    borderColor: '#E4B53B',
+    borderWidth: 1,
+    borderRadius: Radius.md,
+    padding: Spacing.sm,
+    marginBottom: Spacing.base,
+  },
+  saveErrorText: { flex: 1, fontSize: FontSize.sm, color: '#3D2A00', lineHeight: 18 },
   diagnosticsCard: {
     backgroundColor: Colors.surface,
     borderRadius: Radius.lg,

@@ -1,6 +1,9 @@
 # Smilers Mobile App — PRD
 
-## iter-352 (Jun 2026): Deactivate Asante Twi (Akan) AUDIO transcription/translation only
+## iter-353 (Jun 2026): Notification toggles snap back — optimistic UI + surface the real error
+User reported every toggle on the Notifications screen reverts to ON when switched off. `app/notifications.tsx`: the toggle wrote to Convex `api.users.updateProfile({ notifications })` then refetched, but silently swallowed any error and had no optimistic state, so a rejected/ignored write made the `Switch` snap back. Changes: (1) optimistic local `overrides` so the switch holds its chosen position during the round-trip; (2) on failure, revert precisely AND show a yellow inline error banner with the real server message (previously only `console.warn`). ROOT CAUSE is server-side: `updateProfile`/`getCurrentUser` are Convex functions in the SEPARATE web-app repo (this app uses `anyApi`), so the mobile app can't change whether the `notifications` field is accepted/persisted/returned — the new error banner will confirm whether the write is rejected (error shown) or silently dropped (snaps back with no error → server not storing/returning the field). Lint clean; bundle builds. Needs rebuild to observe the banner.
+
+
 User request: turn OFF Asante Twi voice/video transcription + translation (unreliable) until a better Twi speech engine is found; keep all other languages and keep Twi TEXT translation. `backend/server.py`: added `ASANTE_TWI_AUDIO_ENABLED = False` flag + `_twi_disabled_transcription()` helper. Both `/api/transcribe` and `/api/transcribe/upload` now, when the source language hint is Akan/Twi (`_hint_is_akan_twi`), return an EMPTY transcript instead of routing to the Gemini Twi path — so no unreliable Twi text/translation is produced and the voice note just sends as plain audio. The Gemini Twi code is left fully intact; flip the flag back to `True` to reactivate. Verified: `language_hint=ak` → `{"text":"","language":"ak","segments":[]}`; `language_hint=en` → still routes to Whisper. Backend-only change → user must REPUBLISH the backend (no app rebuild needed for this).
 
 
