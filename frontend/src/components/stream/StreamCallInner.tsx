@@ -229,10 +229,13 @@ export default function StreamCallInner() {
   const initiateCall = useMutation((api as any).calls.initiateCall);
   const answerCall = useMutation((api as any).calls.answerCall);
   const endCall = useMutation((api as any).calls.endCall);
+  const declineCall = useMutation((api as any).calls.declineCall);
   const markCalleeRinging = useMutation((api as any).calls.markCalleeRinging);
 
   const [client, setClient] = useState<any>(undefined);
   const [call, setCall] = useState<any>(null);
+  const [didInitiate, setDidInitiate] = useState(false);
+  const [locallyAccepted, setLocallyAccepted] = useState(false);
   const initiatedRef = useRef(false);
   const answeredRef = useRef(false);
   const ringingMarkedRef = useRef(false);
@@ -243,6 +246,16 @@ export default function StreamCallInner() {
   const convStatus: string | undefined = activeCall?.status;
   const callId: string | undefined = activeCall?._id;
 
+  // Role resolution. The foreground listener routes an in-app incoming call to
+  // /call/<id> WITHOUT answer=1, so we must show Accept/Decline here (the old
+  // screen did). A call answered from the notification arrives WITH answer=1
+  // (already accepted). The caller is whoever initiated / owns the record.
+  const iAmCaller = isCaller || didInitiate;
+  const accepted = iAmCaller || isAnswering || locallyAccepted;
+  const activeCallReady = !activeCallLoading && !!activeCall;
+  const isIncomingPending =
+    activeCallReady && !iAmCaller && !isAnswering && !locallyAccepted && convStatus === 'ringing';
+
   // 1) Caller: create the Convex ringing record (the doorbell FCM is already
   //    fired by startCall). Only when not answering and there's no active call.
   useEffect(() => {
@@ -250,8 +263,10 @@ export default function StreamCallInner() {
     if (!me || !conversationId) return;
     if (activeCallLoading || activeCall) return; // wait for load; skip if a call exists
     initiatedRef.current = true;
+    setDidInitiate(true);
     void initiateCall({ conversationId, callType: isVideo ? 'video' : 'voice' }).catch(() => {
       initiatedRef.current = false;
+      setDidInitiate(false);
     });
   }, [isAnswering, me, conversationId, activeCall, activeCallLoading, initiateCall, isVideo]);
 
@@ -271,9 +286,10 @@ export default function StreamCallInner() {
     void markCalleeRinging({ callId: String(callId) }).catch(() => {});
   }, [isCaller, callId, convStatus, markCalleeRinging]);
 
-  // 4) Join the Stream call (media). ring:false → no Stream push.
+  // 4) Join the Stream call (media) — only once ACCEPTED (caller, notification
+  //    answer, or in-app Accept). ring:false → no Stream push.
   useEffect(() => {
-    if (!conversationId) return;
+    if (!conversationId || !accepted) return;
     let mounted = true;
     let joined: any = null;
     (async () => {
@@ -296,7 +312,19 @@ export default function StreamCallInner() {
         joined?.leave();
       } catch {}
     };
-  }, [conversationId]);
+  }, [conversationId, accepted]);
+
+  const acceptIncoming = useCallback(() => {
+    setLocallyAccepted(true);
+    if (callId) void answerCall({ callId: String(callId) }).catch(() => {});
+  }, [callId, answerCall]);
+
+  const declineIncoming = useCallback(() => {
+    if (endedRef.current) return;
+    endedRef.current = true;
+    if (callId) void declineCall({ callId: String(callId) }).catch(() => {});
+    callHost.end();
+  }, [callId, declineCall]);
 
   const hangup = useCallback(() => {
     if (endedRef.current) return;
@@ -307,6 +335,41 @@ export default function StreamCallInner() {
     } catch {}
     callHost.end();
   }, [callId, call, endCall]);
+
+  if (isIncomingPending) {
+    return (
+      <View style={styles.loading}>
+        <View style={styles.avatarBig}>
+          <Ionicons name="person" size={64} color={Colors.white} />
+        </View>
+        <Text style={styles.incomingName} numberOfLines={1}>
+          {displayName}
+        </Text>
+        <Text style={styles.loadingText}>
+          {isVideo ? 'Incoming video call' : 'Incoming voice call'}
+        </Text>
+        <View style={styles.incomingRow}>
+          <View style={styles.incomingBtnWrap}>
+            <TouchableOpacity style={[styles.incomingBtn, styles.declineBtn]} onPress={declineIncoming}>
+              <Ionicons
+                name="call"
+                size={28}
+                color={Colors.white}
+                style={{ transform: [{ rotate: '135deg' }] }}
+              />
+            </TouchableOpacity>
+            <Text style={styles.incomingLabel}>Decline</Text>
+          </View>
+          <View style={styles.incomingBtnWrap}>
+            <TouchableOpacity style={[styles.incomingBtn, styles.acceptBtn]} onPress={acceptIncoming}>
+              <Ionicons name={isVideo ? 'videocam' : 'call'} size={28} color={Colors.white} />
+            </TouchableOpacity>
+            <Text style={styles.incomingLabel}>Accept</Text>
+          </View>
+        </View>
+      </View>
+    );
+  }
 
   if (!client || !call) {
     return (
@@ -347,6 +410,25 @@ const styles = StyleSheet.create({
   loading: { flex: 1, backgroundColor: '#0B0B0B', alignItems: 'center', justifyContent: 'center' },
   loadingText: { color: Colors.white, fontSize: 20, fontWeight: '600', marginTop: 20 },
   loadingName: { color: '#9CA3AF', fontSize: 16, marginTop: 6 },
+  incomingName: { color: Colors.white, fontSize: 24, fontWeight: '700', marginTop: 20 },
+  incomingRow: {
+    flexDirection: 'row',
+    gap: 64,
+    marginTop: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  incomingBtnWrap: { alignItems: 'center', gap: 10 },
+  incomingBtn: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  acceptBtn: { backgroundColor: '#22C55E' },
+  declineBtn: { backgroundColor: '#EF4444' },
+  incomingLabel: { color: '#D1D5DB', fontSize: 14 },
   loadingEnd: {
     marginTop: 40,
     width: 64,

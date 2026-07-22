@@ -38,6 +38,15 @@ Phase 2b — Stream media UNDER normal 1:1 calls  ✅ DONE (code), ⏳ user APK 
 - KNOWN FOLLOW-UPS (next pass, agreed "core first"): caller ringback tone,
   in-call screen-share, interpreter overlay, call-waiting (2nd call). Audio route
   now handled by Stream — verify on device.
+- FIX (user feedback #1): FOREGROUND incoming calls route to /call/<id> WITHOUT
+  answer=1 (useIncomingCallListener, Twilio-off path), so StreamCallInner now
+  shows in-app Accept/Decline and GATES the Stream join until accepted (was
+  auto-connecting). answer=1 (notification Answer) still auto-joins immediately.
+- OPEN (user feedback #2): after answering a KILLED-app call, connect takes a
+  while — largely RN cold-start + Stream client/token init + SFU connect. This is
+  the inherent tradeoff of ring:false + our own doorbell (vs Stream's native
+  CallKit pre-connect, which we avoid to keep Ashwini's UI). To investigate:
+  cache/warm Stream client, join({create:true}) single round-trip.
 
 Phase 3 message fixes ✅ DONE (code), ⏳ user APK test (same build)
 - TONE: bumped message channel v4→v5 everywhere (notifeeMessageDisplay,
