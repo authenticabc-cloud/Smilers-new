@@ -217,6 +217,17 @@ function ShareReceiverNative() {
     !!isAuthenticated,
   );
 
+  // iter-350: authoritative list of the viewer's GROUP conversations. The
+  // recent `listConversations` only surfaces groups with recent activity,
+  // so a dedicated Groups tab needs this complete list to let users share
+  // into any group they belong to.
+  const { data: groupsData } = useSafeConvexQuery<any[]>(
+    (api as any).conversations.listGroups,
+    {},
+    [],
+    !!isAuthenticated,
+  );
+
   // iter-190 ("contacts do not appear" fix): hydrate from the SAME offline
   // cache the Chats tab maintains (scope 'conversations', iter-160). On a
   // flaky connection / cold-start auth race the live queries silently
@@ -270,6 +281,7 @@ function ShareReceiverNative() {
     (!contacts || contacts.length === 0);
 
   const [search, setSearch] = useState('');
+  const [activeTab, setActiveTab] = useState<'chats' | 'groups'>('chats');
   const [selected, setSelected] = useState<Record<string, Recipient>>({});
   const [sending, setSending] = useState(false);
   // iter-196: live upload progress + cancellation (big APKs aren't a
@@ -378,11 +390,12 @@ function ShareReceiverNative() {
   const recipients: Recipient[] = useMemo(() => {
     const map = new Map<string, Recipient>();
 
-    // 1) Recent DMs + group conversations
+    // 1) Recent DMs (groups live in the dedicated Groups tab)
     if (Array.isArray(conversations)) {
       for (const conv of conversations) {
         if (!conv || !conv._id) continue;
-        const isGroup = !!conv.isGroup;
+        if (conv.isGroup) continue; // groups handled by groupRecipients
+        const isGroup = false;
         // Group: render with group icon + member-count subtitle, no peer.
         // Direct: render with peer name + avatar.
         const peer = conv.otherUser || conv.peer || {};
@@ -503,6 +516,66 @@ function ShareReceiverNative() {
 
     return list;
   }, [contacts, conversations, deviceIndex, frequentRank, myUserId, search]);
+
+  // iter-350: Groups tab list — every group the viewer belongs to (merges the
+  // authoritative `listGroups` with any group rows already in the recents so
+  // nothing is missed), filtered by the same search box.
+  const groupRecipients: Recipient[] = useMemo(() => {
+    const map = new Map<string, Recipient>();
+    const addGroup = (conv: any, lastActivity: number) => {
+      if (!conv || !conv._id) return;
+      const key = `conv:${conv._id}`;
+      if (map.has(key)) return;
+      const name = conv.title || conv.name || conv.groupName || 'Group chat';
+      map.set(key, {
+        key,
+        conversationId: String(conv._id),
+        isGroup: true,
+        memberCount:
+          typeof conv.memberCount === 'number'
+            ? conv.memberCount
+            : Array.isArray(conv.members)
+            ? conv.members.length
+            : undefined,
+        name,
+        avatarUrl: conv.groupAvatarUrl || conv.avatarUrl || null,
+        lastActivity,
+      });
+    };
+    if (Array.isArray(groupsData)) {
+      for (const g of groupsData) {
+        addGroup(
+          g,
+          typeof g?.lastMessageAt === 'number'
+            ? g.lastMessageAt
+            : typeof g?._creationTime === 'number'
+            ? g._creationTime
+            : 0,
+        );
+      }
+    }
+    // Merge any group conversations from the recents list (defensive).
+    if (Array.isArray(conversations)) {
+      for (const conv of conversations) {
+        if (conv?.isGroup) {
+          addGroup(
+            conv,
+            typeof conv.lastMessageAt === 'number' ? conv.lastMessageAt : 0,
+          );
+        }
+      }
+    }
+    let list = Array.from(map.values());
+    const q = search.trim().toLowerCase();
+    if (q.length > 0) list = list.filter((r) => r.name.toLowerCase().includes(q));
+    list.sort((a, b) => {
+      if ((b.lastActivity || 0) !== (a.lastActivity || 0)) {
+        return (b.lastActivity || 0) - (a.lastActivity || 0);
+      }
+      return a.name.localeCompare(b.name);
+    });
+    return list;
+  }, [groupsData, conversations, search]);
 
   const toggleSelected = useCallback((r: Recipient) => {
     setSelected((prev) => {
@@ -867,6 +940,26 @@ function ShareReceiverNative() {
         </Text>
       </View>
 
+      {/* iter-350: Chats / Groups tabs */}
+      <View style={styles.tabsRow}>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'chats' && styles.tabActive]}
+          onPress={() => setActiveTab('chats')}
+          testID="share-tab-chats"
+        >
+          <Text style={[styles.tabText, activeTab === 'chats' && styles.tabTextActive]}>Chats</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'groups' && styles.tabActive]}
+          onPress={() => setActiveTab('groups')}
+          testID="share-tab-groups"
+        >
+          <Text style={[styles.tabText, activeTab === 'groups' && styles.tabTextActive]}>
+            Groups{groupRecipients.length > 0 ? ` (${groupRecipients.length})` : ''}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
       {/* Search */}
       <View style={styles.searchRow}>
         <Feather name="search" size={16} color={Colors.textMuted} />
@@ -874,7 +967,7 @@ function ShareReceiverNative() {
           style={styles.searchInput}
           value={search}
           onChangeText={setSearch}
-          placeholder="Search chats and contacts"
+          placeholder={activeTab === 'groups' ? 'Search groups' : 'Search chats and contacts'}
           placeholderTextColor={Colors.textMuted}
           autoCorrect={false}
           testID="share-search"
@@ -882,7 +975,7 @@ function ShareReceiverNative() {
       </View>
 
       <FlatList
-        data={recipients}
+        data={activeTab === 'groups' ? groupRecipients : recipients}
         keyExtractor={(item) => item.key}
         renderItem={renderItem}
         contentContainerStyle={styles.listContent}
@@ -892,6 +985,15 @@ function ShareReceiverNative() {
             <View style={styles.empty} testID="share-directory-loading">
               <ActivityIndicator color={Colors.primary} />
               <Text style={styles.emptyBody}>Loading your chats and contacts…</Text>
+            </View>
+          ) : activeTab === 'groups' ? (
+            <View style={styles.empty}>
+              <Text style={styles.emptyTitle}>No groups</Text>
+              <Text style={styles.emptyBody}>
+                {search.trim().length > 0
+                  ? 'No group matches your search.'
+                  : 'You are not a member of any group yet.'}
+              </Text>
             </View>
           ) : (
             <View style={styles.empty}>
@@ -1012,6 +1114,28 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
   },
+  tabsRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginHorizontal: Spacing.base,
+    marginTop: Spacing.md,
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  tabActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  tabText: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textSecondary },
+  tabTextActive: { color: Colors.headerBg },
   searchInput: {
     flex: 1,
     fontSize: FontSize.base,

@@ -1,6 +1,9 @@
 # Smilers Mobile App — PRD
 
-## iter-349 (Jun 2026): Fix — call screen crashed with "Property 'useMemo' doesn't exist"
+## iter-350 (Jun 2026): Share sheet — Chats / Groups tabs
+`app/share-receiver.tsx`: added a **Chats | Groups** tab bar to the "Share to Smilers" screen so users can share files/text into groups too. Chats tab = Diary + recent DMs + contacts (frequently-shared pins) — groups now excluded here; Groups tab = every group the viewer belongs to via the authoritative `api.conversations.listGroups` (merged with any group rows from recents as a fallback), searchable, with member-count subtitles. Send/upload path is unchanged (groups already have a conversationId). Lint clean, web bundle builds. Native-only screen (real OS share intent) → verify on the next build.
+
+
 Regression from iter-348 call-waiting: `useMemo` was used in `StreamCallInner.tsx` (waitingCall) but missing from the React import, so every call immediately hit "Call ended unexpectedly / Property 'useMemo' doesn't exist". Added `useMemo` to the import. Lint clean, web bundle rebuilds. ⚠️ Needs a rebuild to confirm calls now proceed on device.
 
 
