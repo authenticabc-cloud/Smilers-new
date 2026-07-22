@@ -19,7 +19,7 @@
  * interpreter, call-waiting.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 // @ts-expect-error — native-only Stream SDK, resolved in the dev/prod build
@@ -34,6 +34,7 @@ import {
   useScreenShareButton,
   useAutoEnterPiPEffect,
   useIsInPiPMode,
+  enterPiPAndroid,
   CallingState,
 } from '@stream-io/video-react-native-sdk';
 import { useMutation, useQuery } from 'convex/react';
@@ -43,6 +44,8 @@ import { callHost, useCallHost } from '../../lib/call/callHost';
 import { useReactiveSafeConvexQuery } from '../../hooks/useReactiveSafeConvexQuery';
 import { InterpreterLayer } from '../interpreter/InterpreterLayer';
 import { InCallAudio } from '../../lib/webrtc/inCallManager';
+import { ControlBtn, AudioOutputMenu } from '../call/CallScreenComponents';
+import type { AudioOutputRoute } from '../call/callTypes';
 import * as Haptics from 'expo-haptics';
 import { Colors } from '../../theme';
 
@@ -51,6 +54,10 @@ function fmt(seconds: number) {
   const s = seconds % 60;
   return `${m}:${s < 10 ? '0' : ''}${s}`;
 }
+
+// Control-button backgrounds: translucent default, highlighted when "on".
+const CTRL_BG = 'rgba(255,255,255,0.16)';
+const CTRL_BG_ON = 'rgba(233,181,59,0.92)';
 
 /**
  * Auto-enable Stream's Krisp noise + echo cancellation on join when the device
@@ -101,13 +108,15 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup }: C
 
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(isVideo);
+  const [videoMode, setVideoMode] = useState(isVideo); // upgraded when voice→video
+  const [audioRoute, setAudioRoute] = useState<AudioOutputRoute>(isVideo ? 'speaker' : 'earpiece');
+  const [audioMenuVisible, setAudioMenuVisible] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const wasConnectedRef = useRef(false);
 
   // Noise / echo cancellation state (Krisp). Only surfaced when the device
   // supports advanced audio processing (native build only).
   const nc = useNoiseCancellation?.() as any;
-  const ncSupported = !!(nc?.deviceSupportsAdvancedAudioProcessing && nc?.isSupported);
   const ncEnabled = !!nc?.isEnabled;
   const toggleNc = useCallback(() => {
     if (!nc?.setEnabled) return;
@@ -119,6 +128,8 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup }: C
 
   const remote = remoteParticipants[0];
   const connected = callingState === CallingState.JOINED && !!remote;
+  const remoteHasVideo = !!(remote && ((remote as any).videoStream || (remote as any).publishedTracks?.includes?.(2)));
+  const showVideo = videoMode || remoteHasVideo;
 
   useEffect(() => {
     if (!call) return;
@@ -178,6 +189,50 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup }: C
     } catch {}
   }, [call]);
 
+  // Audio output routing. Stream RN does NOT manage audio routing itself, so we
+  // drive the native AudioManager via InCallAudio (same as the WebRTC screen).
+  const applyAudioRoute = useCallback((route: AudioOutputRoute) => {
+    setAudioRoute(route);
+    setAudioMenuVisible(false);
+    try {
+      if (route === 'speaker') InCallAudio.setSpeakerOn(true);
+      else if (route === 'bluetooth') InCallAudio.setBluetoothOn(videoMode ? 'video' : 'audio');
+      else InCallAudio.setEarpieceOn();
+    } catch {}
+  }, [videoMode]);
+
+  // Voice → Video upgrade mid-call: publish our camera; the peer sees our
+  // video track appear automatically (Stream SFU). Also bump audio to speaker.
+  const switchToVideo = useCallback(async () => {
+    if (!call) return;
+    try {
+      await call.camera.enable();
+      setCamOn(true);
+      setVideoMode(true);
+      applyAudioRoute('speaker');
+    } catch {}
+  }, [call, applyAudioRoute]);
+
+
+  const popOut = useCallback(() => {
+    if (Platform.OS !== 'android') {
+      callHost.minimize();
+      return;
+    }
+    try {
+      enterPiPAndroid();
+    } catch {
+      callHost.minimize();
+    }
+  }, []);
+
+  const handleAdd = useCallback(() => {
+    Alert.alert(
+      'Add people',
+      'Group & conference calling on the new calling system is the next milestone. For now you can start a group call from a group chat.',
+    );
+  }, []);
+
   // Screen share (Stream). Android uses the system MediaProjection dialog (the
   // foreground service is already wired via withWebRTCScreenshare); iOS uses
   // in-app capture (no broadcast-extension target needed). The ref is only
@@ -231,7 +286,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup }: C
             objectFit="contain"
             style={StyleSheet.absoluteFill as any}
           />
-        ) : isVideo && remote ? (
+        ) : showVideo && remote ? (
           <ParticipantView participant={remote} style={StyleSheet.absoluteFill as any} />
         ) : (
           <View style={styles.centerFill}>
@@ -253,7 +308,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup }: C
               {hasPublishedScreenShare ? 'You are sharing your screen' : `${peerName} is sharing their screen`}
             </Text>
           </View>
-        ) : isVideo && remote ? (
+        ) : showVideo && remote ? (
           <View style={styles.topBar} pointerEvents="none">
             <Text style={styles.topName} numberOfLines={1}>
               {peerName}
@@ -263,7 +318,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup }: C
         ) : null
       ) : null}
 
-      {!inPiP && isVideo && camOn && local ? (
+      {!inPiP && videoMode && camOn && local ? (
         <View style={styles.selfView}>
           <ParticipantView participant={local} style={StyleSheet.absoluteFill as any} />
         </View>
@@ -271,55 +326,125 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup }: C
 
       {!inPiP ? (
         <SafeAreaView edges={['bottom']} style={styles.controlsWrap}>
-        <View style={styles.controlsRow}>
-          <TouchableOpacity style={styles.ctrlSmall} onPress={() => callHost.minimize()}>
-            <Ionicons name="contract" size={22} color={Colors.white} />
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.ctrl, !micOn && styles.ctrlOff]} onPress={toggleMic}>
-            <Ionicons name={micOn ? 'mic' : 'mic-off'} size={26} color={Colors.white} />
-          </TouchableOpacity>
-          {ncSupported ? (
-            <TouchableOpacity
-              style={[styles.ctrl, !ncEnabled && styles.ctrlOff]}
-              onPress={toggleNc}
+          <View style={styles.controlsGrid}>
+            <ControlBtn
+              testID="stream-mute"
+              onPress={toggleMic}
+              backgroundColor={micOn ? CTRL_BG : CTRL_BG_ON}
+              icon={<Ionicons name={micOn ? 'mic' : 'mic-off'} size={24} color={Colors.white} />}
+              label={micOn ? 'Mute' : 'Unmute'}
+            />
+            <ControlBtn
               testID="stream-nc-toggle"
-            >
-              <Ionicons name="sparkles" size={24} color={Colors.white} />
-            </TouchableOpacity>
-          ) : null}
-          {isVideo ? (
-            <TouchableOpacity style={[styles.ctrl, !camOn && styles.ctrlOff]} onPress={toggleCam}>
-              <Ionicons name={camOn ? 'videocam' : 'videocam-off'} size={26} color={Colors.white} />
-            </TouchableOpacity>
-          ) : null}
-          {isVideo ? (
-            <TouchableOpacity style={styles.ctrl} onPress={flipCam}>
-              <Ionicons name="camera-reverse" size={26} color={Colors.white} />
-            </TouchableOpacity>
-          ) : null}
-          {toggleScreenShare ? (
-            <TouchableOpacity
-              style={[styles.ctrl, hasPublishedScreenShare && styles.ctrlOff]}
-              onPress={toggleScreenShare}
-              testID="stream-screenshare-toggle"
-            >
-              <Ionicons
-                name={hasPublishedScreenShare ? 'stop-circle' : 'tv-outline'}
-                size={24}
-                color={Colors.white}
+              onPress={toggleNc}
+              backgroundColor={ncEnabled ? CTRL_BG_ON : CTRL_BG}
+              icon={<Ionicons name="pulse" size={24} color={Colors.white} />}
+              label="Noise"
+            />
+            <ControlBtn
+              testID="stream-audio-route"
+              onPress={() => setAudioMenuVisible(true)}
+              backgroundColor={audioRoute !== 'earpiece' ? CTRL_BG_ON : CTRL_BG}
+              icon={
+                <Ionicons
+                  name={
+                    audioRoute === 'speaker'
+                      ? 'volume-high'
+                      : audioRoute === 'bluetooth'
+                        ? 'bluetooth'
+                        : 'phone-portrait-outline'
+                  }
+                  size={22}
+                  color={Colors.white}
+                />
+              }
+              label="Audio"
+            />
+            {toggleScreenShare ? (
+              <ControlBtn
+                testID="stream-screenshare-toggle"
+                onPress={toggleScreenShare}
+                backgroundColor={hasPublishedScreenShare ? CTRL_BG_ON : CTRL_BG}
+                icon={
+                  <Ionicons
+                    name={hasPublishedScreenShare ? 'stop-circle-outline' : 'tv-outline'}
+                    size={22}
+                    color={Colors.white}
+                  />
+                }
+                label="Screen"
               />
-            </TouchableOpacity>
-          ) : null}
-          <TouchableOpacity style={[styles.ctrl, styles.ctrlEnd]} onPress={onHangup}>
+            ) : null}
+            <ControlBtn
+              testID="stream-add"
+              onPress={handleAdd}
+              backgroundColor={CTRL_BG}
+              icon={<Ionicons name="person-add-outline" size={22} color={Colors.white} />}
+              label="Add"
+            />
+            {videoMode ? (
+              <>
+                <ControlBtn
+                  testID="stream-cam"
+                  onPress={toggleCam}
+                  backgroundColor={camOn ? CTRL_BG : CTRL_BG_ON}
+                  icon={<Ionicons name={camOn ? 'videocam' : 'videocam-off'} size={24} color={Colors.white} />}
+                  label={camOn ? 'Camera' : 'Cam off'}
+                />
+                <ControlBtn
+                  testID="stream-flip"
+                  onPress={flipCam}
+                  backgroundColor={CTRL_BG}
+                  icon={<Ionicons name="camera-reverse-outline" size={24} color={Colors.white} />}
+                  label="Flip"
+                />
+              </>
+            ) : (
+              <ControlBtn
+                testID="stream-switch-video"
+                onPress={switchToVideo}
+                backgroundColor={CTRL_BG}
+                icon={<Ionicons name="videocam-outline" size={24} color={Colors.white} />}
+                label="Video"
+              />
+            )}
+            <ControlBtn
+              testID="stream-minimize"
+              onPress={() => callHost.minimize()}
+              backgroundColor={CTRL_BG}
+              icon={<Ionicons name="contract-outline" size={22} color={Colors.white} />}
+              label="Minimize"
+            />
+            <ControlBtn
+              testID="stream-popout"
+              onPress={popOut}
+              backgroundColor={CTRL_BG}
+              icon={<Ionicons name="tablet-landscape-outline" size={22} color={Colors.white} />}
+              label="Pop out"
+            />
+          </View>
+          <TouchableOpacity style={styles.endBtn} onPress={onHangup} testID="stream-end">
             <Ionicons
               name="call"
-              size={26}
+              size={28}
               color={Colors.white}
               style={{ transform: [{ rotate: '135deg' }] }}
             />
           </TouchableOpacity>
+        </SafeAreaView>
+      ) : null}
+
+      {audioMenuVisible ? (
+        <View style={styles.audioMenuOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill as any}
+            activeOpacity={1}
+            onPress={() => setAudioMenuVisible(false)}
+          />
+          <View style={styles.audioMenuAnchor}>
+            <AudioOutputMenu value={audioRoute} onSelect={applyAudioRoute} />
+          </View>
         </View>
-      </SafeAreaView>
       ) : null}
 
       {/* AI Voice Interpreter — banner + live subtitles + language menu.
@@ -763,7 +888,36 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     backgroundColor: '#111',
   },
-  controlsWrap: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+  controlsWrap: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingBottom: 10 },
+  controlsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+    gap: 14,
+    paddingHorizontal: 12,
+    paddingTop: 8,
+  },
+  endBtn: {
+    alignSelf: 'center',
+    marginTop: 14,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#EF4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  audioMenuOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 60,
+  },
+  audioMenuAnchor: {
+    width: '82%',
+    maxWidth: 360,
+  },
   controlsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',

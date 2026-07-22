@@ -1,6 +1,15 @@
 # Smilers Mobile App — PRD
 
-## iter-350 (Jun 2026): Share sheet — Chats / Groups tabs
+## iter-351 (Jun 2026): Stream calling — kill the ~1-min drop + mirror ALL WebRTC-screen features
+User goal: reliable, feature-complete calling at scale. Committed to Stream (SFU/global edge = the scalable choice; P2P WebRTC can't scale). Work in `src/components/stream/StreamCallInner.tsx`:
+- **Fixed the ~1-minute drop (root cause):** the screen hung up whenever the Convex ring record flipped to `ended` — a ring-TTL (~60s) was killing CONNECTED calls. Now Convex `ended/declined` only ends the call DURING the ring phase; once media is connected the Stream session is authoritative. The "remote left" hangup is debounced 10s so a transient ICE reconnect (remote momentarily 0 participants) no longer drops the call.
+- **Mirrored the full WebRTC control set** into a labeled grid (reusing legacy `ControlBtn` + `AudioOutputMenu`): **Mute, Noise (NC toggle), Audio route** (earpiece/speaker/bluetooth via `InCallAudio` — Stream RN doesn't manage RN audio routing itself), **Screen** share, **Add** (shows "group calling is next milestone"), **Video** = voice→video upgrade mid-call (`call.camera.enable()`; peer sees our track via SFU) / camera+flip when already video, **Minimize** (mini window), **Pop out** (system PiP `enterPiPAndroid`), big red **End**. Plus the already-added Interpreter layer + Call-waiting banner.
+- Voice→video and peer-initiated video are both detected (`showVideo = videoMode || remoteHasVideo`).
+- Reliability levers already in place: Stream client PRE-WARM at sign-in (connectUser + WS) and single round-trip `join({create:true})` to cut the connect spin.
+- **Only "Add participant" (1:1→group/conference) is deferred** — it's the legacy mesh/conference system and is the roadmap's next milestone (migrate group/conference to Stream SDK).
+Lint clean; web bundle builds (2695 modules). ⚠️ Native-only — requires the user's rebuild to validate the drop fix + all controls.
+
+
 `app/share-receiver.tsx`: added a **Chats | Groups** tab bar to the "Share to Smilers" screen so users can share files/text into groups too. Chats tab = Diary + recent DMs + contacts (frequently-shared pins) — groups now excluded here; Groups tab = every group the viewer belongs to via the authoritative `api.conversations.listGroups` (merged with any group rows from recents as a fallback), searchable, with member-count subtitles. Send/upload path is unchanged (groups already have a conversationId). Lint clean, web bundle builds. Native-only screen (real OS share intent) → verify on the next build.
 
 
