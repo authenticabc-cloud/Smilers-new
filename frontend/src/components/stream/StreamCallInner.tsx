@@ -31,6 +31,9 @@ import {
   useCall,
   useCallStateHooks,
   useNoiseCancellation,
+  useScreenShareButton,
+  useAutoEnterPiPEffect,
+  useIsInPiPMode,
   CallingState,
 } from '@stream-io/video-react-native-sdk';
 import { useMutation, useQuery } from 'convex/react';
@@ -38,6 +41,9 @@ import { api } from '../../convexApi';
 import { createStreamVideoClient } from '../../lib/stream/streamClient';
 import { callHost, useCallHost } from '../../lib/call/callHost';
 import { useReactiveSafeConvexQuery } from '../../hooks/useReactiveSafeConvexQuery';
+import { InterpreterLayer } from '../interpreter/InterpreterLayer';
+import { InCallAudio } from '../../lib/webrtc/inCallManager';
+import * as Haptics from 'expo-haptics';
 import { Colors } from '../../theme';
 
 function fmt(seconds: number) {
@@ -71,18 +77,27 @@ type CallUIProps = {
   isCaller: boolean;
   peerName: string;
   convStatus: string | undefined;
+  callId: string | null;
   onHangup: () => void;
 };
 
 /** In-call UI (inside StreamCall context). */
-function CallUI({ isVideo, isCaller, peerName, convStatus, onHangup }: CallUIProps) {
+function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup }: CallUIProps) {
   const call = useCall();
   const { mode } = useCallHost();
   const isMini = mode === 'mini';
-  const { useCallCallingState, useRemoteParticipants, useLocalParticipant } = useCallStateHooks();
+  const { useCallCallingState, useRemoteParticipants, useLocalParticipant, useParticipants, useHasOngoingScreenShare } =
+    useCallStateHooks();
   const callingState = useCallCallingState();
   const remoteParticipants = useRemoteParticipants();
   const local = useLocalParticipant();
+  const participants = useParticipants();
+  const hasScreenShare = useHasOngoingScreenShare();
+
+  // System Picture-in-Picture (Android): auto-enter PiP when the user leaves
+  // the app mid-call; render a stripped-down layout while floating.
+  useAutoEnterPiPEffect(false);
+  const inPiP = useIsInPiPMode();
 
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(isVideo);
@@ -152,6 +167,21 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, onHangup }: CallUIPro
     } catch {}
   }, [call]);
 
+  // Screen share (Stream). Android uses the system MediaProjection dialog (the
+  // foreground service is already wired via withWebRTCScreenshare); iOS uses
+  // in-app capture (no broadcast-extension target needed). The ref is only
+  // required for iOS broadcast mode, so null is fine here.
+  const screenSharePickerRef = useRef<any>(null);
+  const { onPress: toggleScreenShare, hasPublishedScreenShare } = useScreenShareButton(
+    screenSharePickerRef,
+    undefined,
+    undefined,
+    () => {},
+    { type: 'inApp' },
+  ) as any;
+  // The participant currently sharing their screen (local or remote).
+  const sharer = (participants || []).find((p: any) => p?.screenShareStream);
+
   const statusLine = connected
     ? fmt(seconds)
     : isCaller
@@ -183,7 +213,14 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, onHangup }: CallUIPro
   return (
     <View style={styles.callRoot}>
       <View style={styles.remoteArea}>
-        {isVideo && remote ? (
+        {hasScreenShare && sharer ? (
+          <ParticipantView
+            participant={sharer}
+            trackType="screenShareTrack"
+            objectFit="contain"
+            style={StyleSheet.absoluteFill as any}
+          />
+        ) : isVideo && remote ? (
           <ParticipantView participant={remote} style={StyleSheet.absoluteFill as any} />
         ) : (
           <View style={styles.centerFill}>
@@ -198,22 +235,31 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, onHangup }: CallUIPro
         )}
       </View>
 
-      {isVideo && remote ? (
-        <View style={styles.topBar} pointerEvents="none">
-          <Text style={styles.topName} numberOfLines={1}>
-            {peerName}
-          </Text>
-          <Text style={styles.topStatus}>{statusLine}</Text>
-        </View>
+      {!inPiP ? (
+        hasScreenShare ? (
+          <View style={styles.topBar} pointerEvents="none">
+            <Text style={styles.topStatus}>
+              {hasPublishedScreenShare ? 'You are sharing your screen' : `${peerName} is sharing their screen`}
+            </Text>
+          </View>
+        ) : isVideo && remote ? (
+          <View style={styles.topBar} pointerEvents="none">
+            <Text style={styles.topName} numberOfLines={1}>
+              {peerName}
+            </Text>
+            <Text style={styles.topStatus}>{statusLine}</Text>
+          </View>
+        ) : null
       ) : null}
 
-      {isVideo && camOn && local ? (
+      {!inPiP && isVideo && camOn && local ? (
         <View style={styles.selfView}>
           <ParticipantView participant={local} style={StyleSheet.absoluteFill as any} />
         </View>
       ) : null}
 
-      <SafeAreaView edges={['bottom']} style={styles.controlsWrap}>
+      {!inPiP ? (
+        <SafeAreaView edges={['bottom']} style={styles.controlsWrap}>
         <View style={styles.controlsRow}>
           <TouchableOpacity style={styles.ctrlSmall} onPress={() => callHost.minimize()}>
             <Ionicons name="contract" size={22} color={Colors.white} />
@@ -240,6 +286,19 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, onHangup }: CallUIPro
               <Ionicons name="camera-reverse" size={26} color={Colors.white} />
             </TouchableOpacity>
           ) : null}
+          {toggleScreenShare ? (
+            <TouchableOpacity
+              style={[styles.ctrl, hasPublishedScreenShare && styles.ctrlOff]}
+              onPress={toggleScreenShare}
+              testID="stream-screenshare-toggle"
+            >
+              <Ionicons
+                name={hasPublishedScreenShare ? 'stop-circle' : 'tv-outline'}
+                size={24}
+                color={Colors.white}
+              />
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity style={[styles.ctrl, styles.ctrlEnd]} onPress={onHangup}>
             <Ionicons
               name="call"
@@ -250,6 +309,26 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, onHangup }: CallUIPro
           </TouchableOpacity>
         </View>
       </SafeAreaView>
+      ) : null}
+
+      {/* AI Voice Interpreter — banner + live subtitles + language menu.
+          callId = shared Convex call id so both sides' subtitles sync.
+          Ducking the remote is best-effort on Stream (degrades to layered
+          audio if per-participant volume isn't controllable). */}
+      {connected && !hasScreenShare && !inPiP ? (
+        <InterpreterLayer
+          callId={callId}
+          connected={connected}
+          micMuted={!micOn}
+          topOffset={90}
+          bottomOffset={150}
+          onDuckRemote={(ducked) => {
+            try {
+              (remote as any)?.setVolume?.(ducked ? 0 : 1);
+            } catch {}
+          }}
+        />
+      ) : null}
     </View>
   );
 }
@@ -408,6 +487,111 @@ export default function StreamCallInner() {
     callHost.end();
   }, [callId, call, endCall]);
 
+  // ── Call-waiting: surface a SECOND ringing call during an active call ──────
+  const connectedNow = !!client && !!call;
+  const incomingRaw = useQuery(
+    (api as any).calls.getIncomingCall,
+    connectedNow && canQuery ? {} : 'skip',
+  ) as any;
+  const [dismissedWaitingIds, setDismissedWaitingIds] = useState<string[]>([]);
+  const waitingCall = useMemo(() => {
+    const rec = incomingRaw;
+    if (!rec || !rec._id || rec.status !== 'ringing') return null;
+    const myId = me?._id ? String(me._id) : '';
+    const recCallerId = String(rec?.callerId || rec?.callerUserId || rec?.caller?._id || '');
+    if (myId && recCallerId && myId === recCallerId) return null; // my own outgoing
+    if (callId && String(rec._id) === String(callId)) return null; // the current call
+    if (conversationId && String(rec.conversationId) === String(conversationId)) return null;
+    const t = String(rec?.type || rec?.callType || '').toLowerCase();
+    if (['screen', 'screenshare', 'screen-share', 'screen_share', 'sharing'].includes(t)) return null;
+    if (rec?.isScreenShare || rec?.screenShareSessionId) return null;
+    if (dismissedWaitingIds.includes(String(rec._id))) return null;
+    return rec;
+  }, [incomingRaw, me, callId, conversationId, dismissedWaitingIds]);
+
+  const waitingName = String(
+    waitingCall?.callerName || waitingCall?.caller?.displayName || waitingCall?.caller?.name || 'Unknown',
+  ).trim();
+  const waitingIsVideo =
+    waitingCall?.isVideo === true || String(waitingCall?.type || waitingCall?.callType || '').toLowerCase() === 'video';
+
+  // WhatsApp-style alert (double-beep + double buzz) once per new waiting call.
+  const alertedWaitingIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const id = waitingCall?._id ? String(waitingCall._id) : null;
+    if (!id) {
+      alertedWaitingIdRef.current = null;
+      return;
+    }
+    if (alertedWaitingIdRef.current === id) return;
+    alertedWaitingIdRef.current = id;
+    try {
+      InCallAudio.playCallWaitingTone?.();
+    } catch {}
+    try {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+      setTimeout(() => {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+      }, 450);
+    } catch {}
+  }, [waitingCall]);
+
+  const declineWaiting = useCallback(() => {
+    const rec = waitingCall;
+    if (!rec?._id) return;
+    const id = String(rec._id);
+    setDismissedWaitingIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    void declineCall({ callId: id }).catch(() => {});
+  }, [waitingCall, declineCall]);
+
+  const acceptWaiting = useCallback(() => {
+    const rec = waitingCall;
+    if (!rec?.conversationId) return;
+    const targetConv = String(rec.conversationId);
+    // End the current call, then switch the call host to the incoming one
+    // (answer=1 auto-accepts once it mounts). Same behaviour as WhatsApp.
+    if (callId && !endedRef.current) {
+      endedRef.current = true;
+      void endCall({ callId: String(callId) }).catch(() => {});
+    }
+    try {
+      call?.leave();
+    } catch {}
+    setTimeout(() => {
+      callHost.start({
+        conversationId: targetConv,
+        type: waitingIsVideo ? 'video' : 'voice',
+        displayName: waitingName || 'Call',
+        answer: '1',
+      });
+    }, 200);
+  }, [waitingCall, waitingIsVideo, waitingName, callId, call, endCall]);
+
+  const waitingBanner =
+    waitingCall && connectedNow ? (
+      <View style={styles.waitingWrap} pointerEvents="box-none" testID="stream-call-waiting">
+        <View style={styles.waitingCard}>
+          <View style={styles.waitingHeader}>
+            <Ionicons name={waitingIsVideo ? 'videocam' : 'call'} size={18} color={Colors.white} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.waitingLabel}>Incoming {waitingIsVideo ? 'video' : 'voice'} call</Text>
+              <Text style={styles.waitingName} numberOfLines={1}>
+                {waitingName}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.waitingActions}>
+            <TouchableOpacity style={[styles.waitingBtn, styles.waitingDecline]} onPress={declineWaiting}>
+              <Text style={styles.waitingBtnText}>Decline</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.waitingBtn, styles.waitingAccept]} onPress={acceptWaiting}>
+              <Text style={styles.waitingBtnText}>End &amp; Accept</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    ) : null;
+
   if (isIncomingPending) {
     return (
       <View style={styles.loading}>
@@ -473,8 +657,10 @@ export default function StreamCallInner() {
             isCaller={isCaller}
             peerName={displayName}
             convStatus={convStatus}
+            callId={callId ? String(callId) : streamCallId ? String(streamCallId) : null}
             onHangup={hangup}
           />
+          {waitingBanner}
         </NoiseCancellationProvider>
       </StreamCall>
     </StreamVideo>
@@ -515,6 +701,31 @@ const styles = StyleSheet.create({
   },
 
   callRoot: { flex: 1, backgroundColor: '#000' },
+  waitingWrap: {
+    position: 'absolute',
+    top: 54,
+    left: 12,
+    right: 12,
+    alignItems: 'center',
+    zIndex: 50,
+  },
+  waitingCard: {
+    width: '100%',
+    maxWidth: 460,
+    backgroundColor: 'rgba(20,20,20,0.96)',
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  waitingHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  waitingLabel: { color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '600' },
+  waitingName: { color: Colors.white, fontSize: 17, fontWeight: '700', marginTop: 1 },
+  waitingActions: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  waitingBtn: { flex: 1, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  waitingAccept: { backgroundColor: '#22C55E' },
+  waitingDecline: { backgroundColor: '#EF4444' },
+  waitingBtnText: { color: Colors.white, fontSize: 15, fontWeight: '700' },
   remoteArea: { ...StyleSheet.absoluteFillObject },
   centerFill: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   avatarBig: {
@@ -544,10 +755,12 @@ const styles = StyleSheet.create({
   controlsWrap: { position: 'absolute', left: 0, right: 0, bottom: 0 },
   controlsRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'center',
     alignItems: 'center',
     gap: 16,
     paddingVertical: 28,
+    paddingHorizontal: 12,
   },
   ctrl: {
     width: 60,
