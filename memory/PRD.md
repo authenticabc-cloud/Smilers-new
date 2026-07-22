@@ -1,5 +1,17 @@
 # Smilers Mobile App — PRD
 
+## iter-345 (Jun 2026): Formatting "clear" button + Stream Krisp noise/echo cancellation
+**1) Clear-formatting (enhancement):** new `clearInlineFormat(text, selection)` in `chatRichText.ts` strips all rich-text tags from the selected range (or whole message when nothing is selected). Added a `format-clear` (eraser) button to the floating selection bubble in `app/chat/[conversationId].tsx`. Verified via unit test (CLEAR-ALL + CLEAR-RANGE); lint clean.
+**2) Noise + echo cancellation (Stream Krisp):** per the Stream RN noise-cancellation playbook —
+  - Installed `@stream-io/noise-cancellation-react-native@0.9.3` (autolinked; pulls `StreamVideoNoiseCancellation`).
+  - `app.json`: `@stream-io/video-react-native-sdk` plugin now `{ "addNoiseCancellation": true }`.
+  - Native processor registration (we NEVER prebuild, so edited committed native directly): `android/.../MainApplication.kt` → `NoiseCancellationReactNative.registerProcessor(applicationContext)` in `onCreate` (try/catch); `ios/Smilers/AppDelegate.swift` → `import stream_io_noise_cancellation_react_native` + `NoiseCancellationManager.sharedInstance.registerProcessor()` in `didFinishLaunchingWithOptions`.
+  - `src/components/stream/StreamCallInner.tsx`: wrapped the in-call tree in `<NoiseCancellationProvider>` + a `NoiseCancellationAutoEnable` component that calls `setEnabled(true)` when `deviceSupportsAdvancedAudioProcessing && isSupported` (works for voice + video; degrades silently on unsupported devices).
+  - ⚠️ Requires the user to REBUILD (native). If NC does not toggle, the Stream Dashboard call-type "default" noise-cancellation mode must be `available`/`auto-on` (not `disabled`). Web bundle builds; lint clean.
+**3) Message-notification google-name + universal-tone (OPEN — needs device diagnostics):** calls now resolve device-contact names because the NATIVE Kotlin call service does the contact lookup from `callerPhone`; messages are rendered by JS (`backgroundTaskSetup.presentBackgroundLocalNotification`) and depend on (a) the push carrying `senderPhone` and (b) the `smilers_device_contact_index_v1` AsyncStorage snapshot. Backend already sends messages DATA-ONLY on `messages-v5-message_notification`. Root cause not yet confirmed — requested the user export the built-in `MSG-PUSH` (hasNotifBlock) + `MSG-NAME` (senderPhone / cachedConvName / account) diagnostic logs to pinpoint whether Convex omits `senderPhone`, a notification block still arrives, or the channel sound isn't applied. No blind changes made (would risk regressing the working call path).
+**4) Background (not killed) incoming call not ringing until missed-call at end (OPEN):** user is deferring full verification until all call layers are built; acknowledged, not yet root-caused. Likely a Stream-vs-custom-FCM push interaction or OS Doze delivery of the data-only ring push to a backgrounded-alive process — to investigate with device logs after the next build.
+
+
 ## iter-344 (Jun 2026): Per-selection inline chat text formatting (B / I / U / colour) + live preview
 **User request:** highlight part of a composer message and style just that part (bold/italic/underline/colour), with a live preview and a full colour picker; keep the existing global B/colour bar; grid-of-swatches picker; if nothing is selected, apply to the whole message.
 **Changes:**

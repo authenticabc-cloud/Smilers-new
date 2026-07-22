@@ -98,6 +98,21 @@ export function applyInlineColor(
   return wrapRange(text, sel, `[color=${hex}]`, `[/color]`);
 }
 
+/** Strip all rich-text tags from the selected range (or whole message). */
+export function clearInlineFormat(
+  text: string,
+  selection: Selection | null | undefined
+): { text: string; selection: Selection } {
+  const sel = normalizeSelection(text, selection);
+  const before = text.slice(0, sel.start);
+  const mid = stripRichTextTags(text.slice(sel.start, sel.end));
+  const after = text.slice(sel.end);
+  return {
+    text: `${before}${mid}${after}`,
+    selection: { start: sel.start, end: sel.start + mid.length },
+  };
+}
+
 export function stripRichTextTags(text?: string) {
   return (text || '').replace(/\[\/?(b|i|u|color(=[^\]]*)?)\]/gi, '');
 }

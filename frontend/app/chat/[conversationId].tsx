@@ -87,6 +87,7 @@ import {
   applyDraftFormatting,
   applyInlineColor,
   applyInlineFormat,
+  clearInlineFormat,
   DRAFT_TEXT_COLORS,
   DraftTextColorKey,
   InlineFormatKind,
@@ -1916,6 +1917,16 @@ export default function ChatScreen() {
 
   const applyInlineColorToSelection = (hex: string) => {
     const result = applyInlineColor(text, composerSelectionRef.current, hex);
+    setText(result.text);
+    composerSelectionRef.current = result.selection;
+    setForcedSelection(result.selection);
+    setComposerSelection(result.selection);
+    setShowInlineSwatches(false);
+    messageInputRef.current?.focus();
+  };
+
+  const clearInlineFormatFromSelection = () => {
+    const result = clearInlineFormat(text, composerSelectionRef.current);
     setText(result.text);
     composerSelectionRef.current = result.selection;
     setForcedSelection(result.selection);
@@ -4659,6 +4670,14 @@ export default function ChatScreen() {
                   testID="format-bubble-color"
                 >
                   <Ionicons name="color-palette" size={18} color={Colors.white} />
+                </TouchableOpacity>
+                <View style={styles.formatBubbleDivider} />
+                <TouchableOpacity
+                  style={styles.formatBubbleBtn}
+                  onPress={clearInlineFormatFromSelection}
+                  testID="format-bubble-clear"
+                >
+                  <MaterialCommunityIcons name="format-clear" size={18} color={Colors.white} />
                 </TouchableOpacity>
               </View>
             </View>

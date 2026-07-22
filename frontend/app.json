@@ -297,7 +297,12 @@
         "expo-pip",
         {}
       ],
-      "@stream-io/video-react-native-sdk"
+      [
+        "@stream-io/video-react-native-sdk",
+        {
+          "addNoiseCancellation": true
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": false

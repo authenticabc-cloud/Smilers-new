@@ -42,6 +42,13 @@ class MainApplication : Application(), ReactApplication {
     // withWebRTCScreenshare: start the mediaProjection foreground
     // service so screen-share frames are not black on Android 14+.
     com.oney.WebRTCModule.WebRTCModuleOptions.getInstance().enableMediaProjectionService = true
+    // Stream Video noise / echo cancellation (Krisp) — must be registered
+    // before any call joins so the SDK can attach the audio processor.
+    try {
+      io.getstream.rn.noisecancellation.NoiseCancellationReactNative.registerProcessor(applicationContext)
+    } catch (e: Throwable) {
+      android.util.Log.w("Smilers", "NoiseCancellation register failed: ${e.message}")
+    }
     DefaultNewArchitectureEntryPoint.releaseLevel = try {
       ReleaseLevel.valueOf(BuildConfig.REACT_NATIVE_RELEASE_LEVEL.uppercase())
     } catch (e: IllegalArgumentException) {

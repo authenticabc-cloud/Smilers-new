@@ -27,8 +27,10 @@ import {
   StreamVideo,
   StreamCall,
   ParticipantView,
+  NoiseCancellationProvider,
   useCall,
   useCallStateHooks,
+  useNoiseCancellation,
   CallingState,
 } from '@stream-io/video-react-native-sdk';
 import { useMutation, useQuery } from 'convex/react';
@@ -42,6 +44,26 @@ function fmt(seconds: number) {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return `${m}:${s < 10 ? '0' : ''}${s}`;
+}
+
+/**
+ * Auto-enable Stream's Krisp noise + echo cancellation on join when the device
+ * supports advanced audio processing. Renders nothing. Native processors are
+ * registered in MainApplication.kt (Android) / AppDelegate.swift (iOS).
+ */
+function NoiseCancellationAutoEnable() {
+  const nc = useNoiseCancellation?.() as any;
+  useEffect(() => {
+    if (!nc) return;
+    const { isSupported, deviceSupportsAdvancedAudioProcessing, isEnabled, setEnabled } = nc;
+    if (deviceSupportsAdvancedAudioProcessing && isSupported && !isEnabled && setEnabled) {
+      try {
+        const r = setEnabled(true);
+        if (r && typeof r.catch === 'function') r.catch(() => {});
+      } catch {}
+    }
+  }, [nc]);
+  return null;
 }
 
 type CallUIProps = {
@@ -420,13 +442,16 @@ export default function StreamCallInner() {
   return (
     <StreamVideo client={client}>
       <StreamCall call={call}>
-        <CallUI
-          isVideo={isVideo}
-          isCaller={isCaller}
-          peerName={displayName}
-          convStatus={convStatus}
-          onHangup={hangup}
-        />
+        <NoiseCancellationProvider>
+          <NoiseCancellationAutoEnable />
+          <CallUI
+            isVideo={isVideo}
+            isCaller={isCaller}
+            peerName={displayName}
+            convStatus={convStatus}
+            onHangup={hangup}
+          />
+        </NoiseCancellationProvider>
       </StreamCall>
     </StreamVideo>
   );
