@@ -138,13 +138,24 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup }: C
     return () => clearInterval(t);
   }, [connected]);
 
-  // End when the peer leaves after having connected, or Convex says ended/declined.
+  // End when Convex says ended/declined — but ONLY during the ring phase.
+  // Once media is connected, the Stream session is authoritative; a ring
+  // TTL/timeout on the Convex record must NOT drop a live call (this was
+  // killing connected calls at ~60s).
   useEffect(() => {
-    if (wasConnectedRef.current && remoteParticipants.length === 0) onHangup();
-  }, [remoteParticipants.length, onHangup]);
-  useEffect(() => {
+    if (wasConnectedRef.current) return;
     if (convStatus === 'ended' || convStatus === 'declined') onHangup();
   }, [convStatus, onHangup]);
+
+  // End if the remote genuinely leaves AFTER connecting — debounced so a
+  // transient ICE reconnect (remote momentarily 0 participants) doesn't kill
+  // the call. Only hangs up if the remote stays gone for 10s.
+  useEffect(() => {
+    if (!wasConnectedRef.current) return;
+    if (remoteParticipants.length > 0) return;
+    const t = setTimeout(() => onHangup(), 10000);
+    return () => clearTimeout(t);
+  }, [remoteParticipants.length, onHangup]);
 
   const toggleMic = useCallback(async () => {
     if (!call) return;
