@@ -1,6 +1,9 @@
 # Smilers Mobile App — PRD
 
-## iter-348 (Jun 2026): Task 2 — extra call features layered onto the Stream 1:1 screen (a→d)
+## iter-349 (Jun 2026): Fix — call screen crashed with "Property 'useMemo' doesn't exist"
+Regression from iter-348 call-waiting: `useMemo` was used in `StreamCallInner.tsx` (waitingCall) but missing from the React import, so every call immediately hit "Call ended unexpectedly / Property 'useMemo' doesn't exist". Added `useMemo` to the import. Lint clean, web bundle rebuilds. ⚠️ Needs a rebuild to confirm calls now proceed on device.
+
+
 All in `src/components/stream/StreamCallInner.tsx` (native-only; validate on a real build):
 - **(a) Screen-share:** `useScreenShareButton(ref, …, { type: 'inApp' })` (Android uses the system MediaProjection dialog — FG service already wired via withWebRTCScreenshare; iOS in-app, no broadcast-extension target needed). Added a screen-share toggle button (tv/stop icon) to the controls row (now `flexWrap`), and full-screen rendering of the shared track via `<ParticipantView trackType="screenShareTrack" objectFit="contain">` using `useHasOngoingScreenShare()` + the sharing participant from `useParticipants()`. Top bar shows "You/<peer> are sharing".
 - **(b) Live interpreter:** reused the existing self-contained `<InterpreterLayer>` (Convex-backed banner + live subtitles + AI menu). Passed the shared Convex `callId` down to `CallUI` so both sides' subtitles sync; `micMuted` from mic state; `onDuckRemote` best-effort (`remote.setVolume`), degrades to layered audio. Hidden during screen-share and PiP.
