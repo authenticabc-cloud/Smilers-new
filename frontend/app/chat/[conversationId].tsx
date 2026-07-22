@@ -4626,6 +4626,44 @@ export default function ChatScreen() {
             </View>
           ) : null}
 
+          {hasTextSelection && !reviewUri && !isRecording ? (
+            <View style={styles.formatBubbleWrap} pointerEvents="box-none">
+              <View style={styles.formatBubble} testID="format-bubble">
+                <TouchableOpacity
+                  style={styles.formatBubbleBtn}
+                  onPress={() => applyInlineFormatToSelection('bold')}
+                  testID="format-bubble-bold"
+                >
+                  <Text style={styles.formatBubbleText}>B</Text>
+                </TouchableOpacity>
+                <View style={styles.formatBubbleDivider} />
+                <TouchableOpacity
+                  style={styles.formatBubbleBtn}
+                  onPress={() => applyInlineFormatToSelection('italic')}
+                  testID="format-bubble-italic"
+                >
+                  <Text style={[styles.formatBubbleText, styles.inlineItalicGlyph]}>I</Text>
+                </TouchableOpacity>
+                <View style={styles.formatBubbleDivider} />
+                <TouchableOpacity
+                  style={styles.formatBubbleBtn}
+                  onPress={() => applyInlineFormatToSelection('underline')}
+                  testID="format-bubble-underline"
+                >
+                  <Text style={[styles.formatBubbleText, styles.inlineUnderlineGlyph]}>U</Text>
+                </TouchableOpacity>
+                <View style={styles.formatBubbleDivider} />
+                <TouchableOpacity
+                  style={styles.formatBubbleBtn}
+                  onPress={() => setShowInlineSwatches((current) => !current)}
+                  testID="format-bubble-color"
+                >
+                  <Ionicons name="color-palette" size={18} color={Colors.white} />
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
+
           <View style={styles.inputBar}>
           {reviewUri ? (
             <View style={styles.recordingRow}>

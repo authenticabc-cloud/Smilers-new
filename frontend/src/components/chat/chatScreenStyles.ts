@@ -1,4 +1,4 @@
-import { StyleSheet } from 'react-native';
+import { Platform, StyleSheet } from 'react-native';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../theme';
 
 export const styles = StyleSheet.create({
@@ -519,6 +519,44 @@ export const styles = StyleSheet.create({
   },
   swatchCellLight: {
     borderColor: '#D4CCBC',
+  },
+  formatBubbleWrap: {
+    alignItems: 'center',
+    paddingBottom: 6,
+    paddingHorizontal: 12,
+  },
+  formatBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#2A2A2A',
+    borderRadius: 12,
+    paddingHorizontal: 4,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 6,
+      },
+      android: { elevation: 5 },
+      default: {},
+    }),
+  },
+  formatBubbleBtn: {
+    width: 42,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  formatBubbleText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: FontWeight.bold,
+  },
+  formatBubbleDivider: {
+    width: StyleSheet.hairlineWidth,
+    height: 20,
+    backgroundColor: 'rgba(255,255,255,0.25)',
   },
   composerDock: {
     backgroundColor: '#EFE3CF',
