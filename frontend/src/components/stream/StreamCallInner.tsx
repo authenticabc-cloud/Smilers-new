@@ -129,7 +129,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup }: C
   const remote = remoteParticipants[0];
   const connected = callingState === CallingState.JOINED && !!remote;
   const remoteHasVideo = !!(remote && ((remote as any).videoStream || (remote as any).publishedTracks?.includes?.(2)));
-  const showVideo = videoMode || remoteHasVideo;
+  const showVideo = (videoMode || remoteHasVideo) && !callVideoHidden;
 
   useEffect(() => {
     if (!call) return;
@@ -201,9 +201,10 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup }: C
     } catch {}
   }, [videoMode]);
 
-  // Voice → Video upgrade mid-call: publish our camera; the peer sees our
-  // video track appear automatically (Stream SFU). Also bump audio to speaker.
-  const switchToVideo = useCallback(async () => {
+  // Voice → Video upgrade mid-call. Per requirement (2b), the switch now
+  // REQUESTS the peer's consent via a Stream custom event; we only publish our
+  // camera once they accept. `doEnableVideo` performs the actual upgrade.
+  const doEnableVideo = useCallback(async () => {
     if (!call) return;
     try {
       await call.camera.enable();
@@ -212,6 +213,78 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup }: C
       applyAudioRoute('speaker');
     } catch {}
   }, [call, applyAudioRoute]);
+
+  const [awaitingVideoAccept, setAwaitingVideoAccept] = useState(false);
+  const [incomingVideoReqFrom, setIncomingVideoReqFrom] = useState<string | null>(null);
+  const [callVideoHidden, setCallVideoHidden] = useState(false); // feature 3 (shared)
+
+  const switchToVideo = useCallback(() => {
+    if (!call) return;
+    setAwaitingVideoAccept(true);
+    try {
+      void call.sendCustomEvent({ type: 'video-switch-request' }).catch(() => {});
+    } catch {}
+    // Safety: if no response in 20s, stop waiting.
+    setTimeout(() => setAwaitingVideoAccept(false), 20000);
+  }, [call]);
+
+  const acceptVideoSwitch = useCallback(() => {
+    setIncomingVideoReqFrom(null);
+    try {
+      void call?.sendCustomEvent({ type: 'video-switch-accept' }).catch(() => {});
+    } catch {}
+    void doEnableVideo();
+  }, [call, doEnableVideo]);
+
+  const declineVideoSwitch = useCallback(() => {
+    setIncomingVideoReqFrom(null);
+    try {
+      void call?.sendCustomEvent({ type: 'video-switch-decline' }).catch(() => {});
+    } catch {}
+  }, [call]);
+
+  // Feature 3: either party can hide/show the video for the call (audio keeps
+  // flowing). Shared via a custom event so both sides mirror the state.
+  const toggleCallVideo = useCallback(() => {
+    setCallVideoHidden((prev) => {
+      const next = !prev;
+      try {
+        void call?.sendCustomEvent({ type: 'video-hidden-toggle', hidden: next }).catch(() => {});
+      } catch {}
+      return next;
+    });
+  }, [call]);
+
+  // Receive peer signals.
+  useEffect(() => {
+    if (!call) return;
+    const myId = local?.userId;
+    const handler = (event: any) => {
+      if (event?.user?.id && myId && event.user.id === myId) return; // ignore own echo
+      const t = event?.custom?.type;
+      if (t === 'video-switch-request') {
+        setIncomingVideoReqFrom(event?.user?.name || peerName);
+      } else if (t === 'video-switch-accept') {
+        setAwaitingVideoAccept(false);
+        void doEnableVideo();
+      } else if (t === 'video-switch-decline') {
+        setAwaitingVideoAccept(false);
+        Alert.alert('Video call', `${peerName} declined to switch to video.`);
+      } else if (t === 'video-hidden-toggle') {
+        setCallVideoHidden(!!event?.custom?.hidden);
+      }
+    };
+    let unsub: any;
+    try {
+      unsub = call.on('custom', handler);
+    } catch {}
+    return () => {
+      try {
+        if (typeof unsub === 'function') unsub();
+        else call.off?.('custom', handler);
+      } catch {}
+    };
+  }, [call, local?.userId, peerName, doEnableVideo]);
 
 
   const popOut = useCallback(() => {
@@ -434,7 +507,43 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup }: C
         </SafeAreaView>
       ) : null}
 
-      {audioMenuVisible ? (
+      {/* Feature 3: shared hide/show-video pill (only meaningful when video is on) */}
+      {!inPiP && (videoMode || remoteHasVideo) ? (
+        <TouchableOpacity style={styles.videoPill} onPress={toggleCallVideo} testID="stream-hide-video">
+          <Ionicons name={callVideoHidden ? 'eye-off' : 'eye'} size={16} color={Colors.white} />
+          <Text style={styles.videoPillText}>{callVideoHidden ? 'Video off' : 'Turn off video'}</Text>
+        </TouchableOpacity>
+      ) : null}
+
+      {/* 2b: peer requested to switch to video — needs my consent */}
+      {!inPiP && incomingVideoReqFrom ? (
+        <View style={styles.waitingWrap} pointerEvents="box-none" testID="stream-video-request">
+          <View style={styles.waitingCard}>
+            <View style={styles.waitingHeader}>
+              <Ionicons name="videocam" size={18} color={Colors.white} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.waitingLabel}>Switch to video?</Text>
+                <Text style={styles.waitingName} numberOfLines={1}>
+                  {incomingVideoReqFrom} wants to turn on video
+                </Text>
+              </View>
+            </View>
+            <View style={styles.waitingActions}>
+              <TouchableOpacity style={[styles.waitingBtn, styles.waitingDecline]} onPress={declineVideoSwitch}>
+                <Text style={styles.waitingBtnText}>Decline</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.waitingBtn, styles.waitingAccept]} onPress={acceptVideoSwitch}>
+                <Text style={styles.waitingBtnText}>Accept</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      ) : awaitingVideoAccept ? (
+        <View style={styles.videoWaitBanner} pointerEvents="none" testID="stream-video-waiting">
+          <ActivityIndicator color={Colors.white} />
+          <Text style={styles.videoWaitText}>Waiting for {peerName} to accept video…</Text>
+        </View>
+      ) : null}
         <View style={styles.audioMenuOverlay}>
           <TouchableOpacity
             style={StyleSheet.absoluteFill as any}
@@ -501,6 +610,7 @@ export default function StreamCallInner() {
   const ringingMarkedRef = useRef(false);
   const endedRef = useRef(false);
   const sawCallRef = useRef(false);
+  const liveCallIdRef = useRef<string | null>(null);
 
   const callerId = activeCall?.callerId || activeCall?.callerUserId || null;
   const isCaller = !!(me && callerId && callerId === me._id);
@@ -508,7 +618,24 @@ export default function StreamCallInner() {
   const callId: string | undefined = activeCall?._id;
   // Unique-per-call Stream room id (NOT the conversationId) so every call is a
   // fresh room with no lingering "ghost" participants from a previous call.
-  const streamCallId: string | undefined = callId || createdCallId || undefined;
+  // PINNED once known: the Convex ring record has a ~60s TTL and disappears
+  // after it's answered/expires; without pinning, `callId` would flip to
+  // undefined mid-call and tear down the (live) Stream session — this was the
+  // real cause of calls dropping ~1 minute in. Reset when the conversation
+  // changes (e.g. accepting a call-waiting call).
+  const [pinnedRoom, setPinnedRoom] = useState<string | null>(null);
+  useEffect(() => {
+    setPinnedRoom(null);
+    liveCallIdRef.current = null;
+  }, [conversationId]);
+  useEffect(() => {
+    const rid = callId || createdCallId;
+    if (rid && !pinnedRoom) setPinnedRoom(String(rid));
+  }, [callId, createdCallId, pinnedRoom]);
+  useEffect(() => {
+    if (callId) liveCallIdRef.current = String(callId);
+  }, [callId]);
+  const streamCallId: string | undefined = pinnedRoom || callId || createdCallId || undefined;
 
   // Role resolution. The foreground listener routes an in-app incoming call to
   // /call/<id> WITHOUT answer=1, so we must show Accept/Decline here (the old
@@ -616,7 +743,8 @@ export default function StreamCallInner() {
   const hangup = useCallback(() => {
     if (endedRef.current) return;
     endedRef.current = true;
-    if (callId) void endCall({ callId: String(callId) }).catch(() => {});
+    const cid = liveCallIdRef.current || callId;
+    if (cid) void endCall({ callId: String(cid) }).catch(() => {});
     try {
       call?.leave();
     } catch {}
@@ -918,6 +1046,35 @@ const styles = StyleSheet.create({
     width: '82%',
     maxWidth: 360,
   },
+  videoPill: {
+    position: 'absolute',
+    top: 100,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    zIndex: 40,
+  },
+  videoPillText: { color: Colors.white, fontSize: 13, fontWeight: '600' },
+  videoWaitBanner: {
+    position: 'absolute',
+    top: 54,
+    left: 12,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(20,20,20,0.92)',
+    paddingVertical: 12,
+    borderRadius: 14,
+    zIndex: 50,
+  },
+  videoWaitText: { color: Colors.white, fontSize: 14, fontWeight: '600' },
   controlsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
