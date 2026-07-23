@@ -45,6 +45,8 @@ export function useIncomingCallListener() {
     isVideo: boolean;
   } | null>(null);
   const userAnsweredRef = useRef(false);
+  // Debounce timer for caller-cancel detection (see below).
+  const cancelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Detect caller-cancel: tracks ringing→gone transition and triggers an
   // immediate missed-call notification (instead of waiting 35s for the timeout).
@@ -52,6 +54,15 @@ export function useIncomingCallListener() {
   useEffect(() => {
     const prev = prevCallRef.current;
     if (incomingCall && incomingCall.status === 'ringing') {
+      // A ringing call is present — cancel any pending caller-cancel debounce.
+      // This is what recovers from a TRANSIENT reactive-query null while the app
+      // is backgrounded (Convex WS drop): the ring reappears within a second, so
+      // it must NOT be mistaken for a real caller-cancel (that false positive was
+      // silently killing every incoming ring + showing a bogus missed call).
+      if (cancelTimerRef.current) {
+        clearTimeout(cancelTimerRef.current);
+        cancelTimerRef.current = null;
+      }
       prevCallRef.current = {
         _id: String(incomingCall._id),
         callerName: String(
@@ -71,45 +82,72 @@ export function useIncomingCallListener() {
         incomingCall &&
         String(incomingCall._id) === prev._id &&
         incomingCall.status === 'ringing';
-      if (!stillSameCall && !userAnsweredRef.current) {
-        // Caller cancelled — dismiss the call UI and show missed call.
-        prevCallRef.current = null;
-        if (AppState.currentState !== 'active') {
-          // Background: trigger missed-call via Notifee (Kotlin owns the
-          // ring notification and will also cancel it via the backend FCM).
-          import('./notifeeCallWake')
-            .then(({ cancelRingAndShowMissedCall }) => {
-              cancelRingAndShowMissedCall({
-                callId: prev._id,
-                callerName: prev.callerName,
-                conversationId: prev.conversationId,
-                isVideo: prev.isVideo,
-              }).catch(() => {});
-            })
-            .catch(() => {});
-        } else {
-          // Foreground (in-app incoming-call screen visible): navigate home
-          // immediately so the user isn't stuck on the ringing screen after
-          // the caller hangs up. Also cancel the Kotlin ring notification
-          // in the shade + post missed-call via native module bridge.
-          try { router.replace('/' as any); } catch {}
-          try {
-            const mod = NativeModules.SmilersCallModule;
-            if (mod?.handleCallerCancelled) {
-              mod.handleCallerCancelled(
-                prev._id || '',
-                prev.conversationId || '',
-                prev.callerName || 'Smilers user',
-              ).catch(() => {});
-            }
-          } catch {}
-        }
-      } else if (!stillSameCall) {
+      if (stillSameCall) return;
+      if (userAnsweredRef.current) {
         // User answered — just clear the ref, no missed call.
         prevCallRef.current = null;
+        if (cancelTimerRef.current) {
+          clearTimeout(cancelTimerRef.current);
+          cancelTimerRef.current = null;
+        }
+        return;
+      }
+      // The call is no longer ringing. This is EITHER a genuine caller-cancel OR
+      // a transient null from the Convex reactive query (WebSocket drop while the
+      // app is backgrounded). Debounce: only declare "caller cancelled" if the
+      // call stays gone for ~5s. If a ringing call reappears in the meantime the
+      // timer is cleared above. RING_TIMEOUT is 35s, so a 5s delay is invisible.
+      if (!cancelTimerRef.current) {
+        const snapshot = prev;
+        cancelTimerRef.current = setTimeout(() => {
+          cancelTimerRef.current = null;
+          if (userAnsweredRef.current) return;
+          const cur = prevCallRef.current;
+          // A different ringing call took over → don't fire for the stale one.
+          if (cur && cur._id !== snapshot._id) return;
+          prevCallRef.current = null;
+          if (AppState.currentState !== 'active') {
+            // Background: trigger missed-call via Notifee (Kotlin owns the
+            // ring notification and will also cancel it via the backend FCM).
+            import('./notifeeCallWake')
+              .then(({ cancelRingAndShowMissedCall }) => {
+                cancelRingAndShowMissedCall({
+                  callId: snapshot._id,
+                  callerName: snapshot.callerName,
+                  conversationId: snapshot.conversationId,
+                  isVideo: snapshot.isVideo,
+                }).catch(() => {});
+              })
+              .catch(() => {});
+          } else {
+            // Foreground (in-app incoming-call screen visible): navigate home
+            // immediately so the user isn't stuck on the ringing screen after
+            // the caller hangs up. Also cancel the Kotlin ring notification
+            // in the shade + post missed-call via native module bridge.
+            try { router.replace('/' as any); } catch {}
+            try {
+              const mod = NativeModules.SmilersCallModule;
+              if (mod?.handleCallerCancelled) {
+                mod.handleCallerCancelled(
+                  snapshot._id || '',
+                  snapshot.conversationId || '',
+                  snapshot.callerName || 'Smilers user',
+                ).catch(() => {});
+              }
+            } catch {}
+          }
+        }, 5000);
       }
     }
-  }, [incomingCall]);
+  }, [incomingCall, router]);
+
+  // Clear the debounce timer on unmount.
+  useEffect(
+    () => () => {
+      if (cancelTimerRef.current) clearTimeout(cancelTimerRef.current);
+    },
+    [],
+  );
   // iter-342: reachability ack. As SOON as this device's reactive query sees
   // the incoming ringing call, tell the backend the call reached us so the
   // CALLER shows a definitive "Ringing…". This fires whenever JS is alive
