@@ -1,5 +1,14 @@
 # Smilers Mobile App — PRD
 
+## iter-361 (Jun 2026): Message-notification wiring — trust backend `data.title` (contact name)
+Backend agent confirmed message push is now DATA-ONLY (no `notification` block) so the OS no longer auto-displays an account-name banner; the native app must build the message notification itself from `data.title` (backend-resolved device-contact name).
+- **Verified the app is ALREADY largely compliant:** `src/push/backgroundTaskSetup.ts` → `presentBackgroundLocalNotification` builds the message notification from the data payload via `notifeeMessageDisplay.displayGroupedMessageNotification` (single stable-id notification per conversation, taps route to `/chat/<conversationId>` via the notifee handlers). The custom Kotlin FCM service forwards non-call/data-only messages to `super.handleIntent`, which triggers the expo-notifications background task that runs this builder in all app states. `getCachedConversationName` returns the DEVICE-contact name (not the account name).
+- **Refinement made:** the 1:1 title logic used to ALWAYS override `payload.title` with the local device-cache name. Now it TRUSTS the backend's resolved `data.title` when it's a real name, and only falls back to the local cache when `data.title` is missing/`'New message'`/equal to the account name — so a stale local cache can't override the good contact name, exactly per the backend's "use data.title" contract.
+- **No backend change needed** (confirmed by backend agent — nothing to publish).
+Lint: only pre-existing `require()` warnings (intentional headless lazy-loads), no errors. ⚠️ Requires a build that RECEIVES the data-only backend push to validate.
+NOTE/CONCERN: user reported the previous round's fixes (#3 callee name, #4 video toggle, reactions rename) "did not manifest" — strongly suggests the tested APK did not include the latest agent code. For agent changes to appear in a device build, the app must be REDEPLOYED/published FIRST, then a NEW build generated.
+
+
 ## iter-360 (Jun 2026): Fixed wrong Convex function name for reactions (`toggleReaction`→`addReaction`); interpreter now published
 User investigated their external Convex backend and confirmed: (a) the interpreter functions were BUILT BUT NEVER PUBLISHED — now published/live, so #5 translation should work once the user toggles the interpreter ON in-call with a non-`original` voice mode + two languages; (b) the app was calling function names that DON'T EXIST on the backend, which returns a generic "Server Error".
 - **FIXED (app-side):** `app/chat/[conversationId].tsx` called `api.messages.toggleReaction` — the real backend function is `messages:addReaction`. This is why message reactions returned a generic Convex "Server Error" for a long time (iter-320 tried varying the ARGS but never the NAME). Renamed the mutation + all call sites to `addReaction` (kept the conversationId + minimal-args retry fallback).

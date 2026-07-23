@@ -388,11 +388,23 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
         message: `convId=${convId || '(none)'} cachedConvName="${convDeviceName || '(miss)'}" senderPhone="${senderPhone || '(none)'}" account="${accountName || '(none)'}"`,
       });
     } catch {}
-    if (convDeviceName) {
+    // Backend now resolves the DEVICE-CONTACT name and puts it in `data.title`
+    // (data-only push — the OS no longer auto-displays an account-name banner).
+    // Trust that authoritative title; only fall back to the on-device cache when
+    // the backend title is missing/generic OR is just the sender's account name.
+    const backendTitleIsResolved =
+      !!toNonEmptyString(payload.title) &&
+      payload.title !== 'New message' &&
+      (!accountName || payload.title !== accountName);
+    if (convDeviceName && !backendTitleIsResolved) {
       // 1:1 conversation — the peer is definitively both the title and the
-      // sender line, so always prefer the resolved contact name.
+      // sender line, so use the locally-resolved contact name.
       title = convDeviceName;
       if (!body || body === accountName || body === title) body = convDeviceName;
+    } else if (convDeviceName) {
+      // Backend title is good — keep it, but still fix a body that is only the
+      // account name so the sender line matches the (contact-name) title.
+      if (!body || body === accountName) body = title;
     } else {
       // Group (or uncached DM) — resolve the SENDER's device name from their
       // phone OR Smilers userId; use it for the sender line only, keeping the
