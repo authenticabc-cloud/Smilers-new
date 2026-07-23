@@ -1,5 +1,13 @@
 # Smilers Mobile App — PRD
 
+## iter-360 (Jun 2026): Fixed wrong Convex function name for reactions (`toggleReaction`→`addReaction`); interpreter now published
+User investigated their external Convex backend and confirmed: (a) the interpreter functions were BUILT BUT NEVER PUBLISHED — now published/live, so #5 translation should work once the user toggles the interpreter ON in-call with a non-`original` voice mode + two languages; (b) the app was calling function names that DON'T EXIST on the backend, which returns a generic "Server Error".
+- **FIXED (app-side):** `app/chat/[conversationId].tsx` called `api.messages.toggleReaction` — the real backend function is `messages:addReaction`. This is why message reactions returned a generic Convex "Server Error" for a long time (iter-320 tried varying the ARGS but never the NAME). Renamed the mutation + all call sites to `addReaction` (kept the conversationId + minimal-args retry fallback).
+- **No change needed:** `updateProfile` — the app already correctly uses `api.users.updateProfile` (ringtones, photo-privacy, notifications). Its earlier "Server Error" was purely the unpublished-backend issue; now published → notification toggles / ringtone prefs should persist.
+- **No change needed (verified):** interpreter paths in the app (`callInterpreter.addUtterance/getForCall/getSubtitles/setForCall`, `callInterpreterAction.speakTranslation`) all match the published module names.
+Lint clean; app boots. ⚠️ Reaction fix needs the user's APK rebuild; interpreter + updateProfile should work on the CURRENT build now that the backend is published (no rebuild needed for those two).
+
+
 ## iter-359 (Jun 2026): Device-test round 2 — #3 callee name, #4 video toggle, #1/#2 telemetry, #5 external-Convex
 User rebuilt & tested. 5 items reported:
 - **#3 (FIXED) callee shows caller's Google/account name instead of device-contact name:** `StreamCallInner` used the launch-param `displayName` for the peer on BOTH sides; on the callee that param wasn't the device-contact name. Added `useDeviceContactIndex()` + `resolveDeviceContactNameFromUser()` — on the CALLEE only, query `api.users.getUserById(callerId)` and resolve the name THIS user saved for the caller in their address book; fall back to the param. Caller side unchanged (already correct). Passed as `resolvedPeerName` to `CallUI`.

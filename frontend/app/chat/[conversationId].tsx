@@ -798,7 +798,10 @@ export default function ChatScreen() {
     isAuthenticated ? {} : 'skip',
   ) as any[] | undefined;
   const respondToDeletionRequest = useMutation((api as any).messages.respondToDeletionRequest);
-  const toggleReaction = useMutation(api.messages.toggleReaction);
+  // Backend function is `messages:addReaction` (there is no `toggleReaction` —
+  // calling the wrong name is why reactions returned a generic Convex
+  // "Server Error" for so long, iter-320).
+  const addReaction = useMutation(api.messages.addReaction);
   const deleteMessage = useMutation(api.messages.deleteMessage);
   // iter-323 "Receive once" 🔂: reveal a hidden duplicate for this viewer.
   const allowReceiptMutation = useMutation(api.messages.allowReceipt);
@@ -3024,17 +3027,17 @@ export default function ChatScreen() {
   const reactToMessage = useCallback(
     async (messageId: string, emoji: string) => {
       try {
-        await toggleReaction({ messageId, emoji, conversationId } as any);
+        await addReaction({ messageId, emoji, conversationId } as any);
       } catch (e: any) {
         const msg = e?.message || String(e);
         if (/extra field|ArgumentValidationError|conversationId/i.test(msg)) {
-          await toggleReaction({ messageId, emoji } as any);
+          await addReaction({ messageId, emoji } as any);
         } else {
           throw e;
         }
       }
     },
-    [toggleReaction, conversationId]
+    [addReaction, conversationId]
   );
 
   const onPickReaction = useCallback(
