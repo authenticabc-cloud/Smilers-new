@@ -595,7 +595,7 @@ async def webrtc_ring(payload: WebRtcRingRequest, request: Request):
             stats = await send_push(
                 recipients=payload.callee_identities,
                 data=push_data,
-                idempotency_key=f"twilio-call:{payload.conversation_id}",
+                idempotency_key=f"twilio-call:{call_id}",
             )
             logger.info(
                 f"webrtc-ring pushed to {len(payload.callee_identities)} callees: "

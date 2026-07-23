@@ -30,8 +30,19 @@ export async function ringWebrtcCall(args: {
   callerPhone?: string;
   conversationId: string;
   isVideo: boolean;
+  /**
+   * Unique per-attempt call id. MUST be distinct for every call attempt so the
+   * backend + native dedupe (both keyed by callId) never swallow a genuine
+   * re-call to the same conversation. Falls back to a fresh random id when
+   * omitted. NOTE: this is intentionally NOT the conversationId — using the
+   * (stable) conversationId here is exactly what made every 2nd/3rd call to the
+   * same person get deduped as a "duplicate ring" and never ring.
+   */
+  callId?: string;
 }): Promise<void> {
   if (!BACKEND_URL || !args.conversationId || args.calleeIdentities.length === 0) return;
+  const callId =
+    args.callId || `call_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   try {
     await fetch(`${BACKEND_URL}/api/calls/ring`, {
       method: 'POST',
@@ -46,7 +57,7 @@ export async function ringWebrtcCall(args: {
         caller_phone: args.callerPhone || '',
         conversation_id: args.conversationId,
         is_video: args.isVideo,
-        call_id: args.conversationId,
+        call_id: callId,
         // The device-reachable public backend URL, injected into the ring FCM
         // so the callee's native CallActionReceiver knows where to POST the
         // `call-declined` event. (Backend can't reliably derive its own public
@@ -54,7 +65,7 @@ export async function ringWebrtcCall(args: {
         backend_url: BACKEND_URL,
       }),
     });
-    recordDiagnostic({ tag: 'CALL', source: 'ringWebrtcCall', message: `ok conv=${args.conversationId} video=${args.isVideo}` });
+    recordDiagnostic({ tag: 'CALL', source: 'ringWebrtcCall', message: `ok conv=${args.conversationId} callId=${callId} video=${args.isVideo}` });
   } catch (e: any) {
     recordDiagnostic({ tag: 'CALL', source: 'ringWebrtcCall', message: `fail ${e?.message || e}` });
   }
