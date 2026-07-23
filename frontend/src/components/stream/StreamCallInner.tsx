@@ -48,6 +48,7 @@ import { ControlBtn, AudioOutputMenu } from '../call/CallScreenComponents';
 import type { AudioOutputRoute } from '../call/callTypes';
 import * as Haptics from 'expo-haptics';
 import { Colors } from '../../theme';
+import { recordDiagnostic } from '../../lib/diagnostics';
 
 function fmt(seconds: number) {
   const m = Math.floor(seconds / 60);
@@ -86,10 +87,12 @@ type CallUIProps = {
   convStatus: string | undefined;
   callId: string | null;
   onHangup: () => void;
+  /** ms epoch when the call was accepted/initiated — for connect-latency telemetry. */
+  acceptedAt: number | null;
 };
 
 /** In-call UI (inside StreamCall context). */
-function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup }: CallUIProps) {
+function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acceptedAt }: CallUIProps) {
   const call = useCall();
   const { mode } = useCallHost();
   const isMini = mode === 'mini';
@@ -148,6 +151,20 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup }: C
     const t = setInterval(() => setSeconds((v) => v + 1), 1000);
     return () => clearInterval(t);
   }, [connected]);
+
+  // Connect-latency telemetry: record how long from accept/initiate until the
+  // remote participant is actually present and media is flowing. Fires once.
+  const connectedLoggedRef = useRef(false);
+  useEffect(() => {
+    if (!connected || connectedLoggedRef.current) return;
+    connectedLoggedRef.current = true;
+    const ms = acceptedAt ? Date.now() - acceptedAt : -1;
+    recordDiagnostic({
+      tag: 'CALL',
+      source: 'streamTiming',
+      message: `connected role=${isCaller ? 'caller' : 'callee'} video=${isVideo} t+connect=${ms}ms callId=${callId || '∅'}`,
+    });
+  }, [connected, acceptedAt, isCaller, isVideo, callId]);
 
   // End when Convex says ended/declined — but ONLY during the ring phase.
   // Once media is connected, the Stream session is authoritative; a ring
@@ -544,6 +561,8 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup }: C
           <Text style={styles.videoWaitText}>Waiting for {peerName} to accept video…</Text>
         </View>
       ) : null}
+
+      {audioMenuVisible ? (
         <View style={styles.audioMenuOverlay}>
           <TouchableOpacity
             style={StyleSheet.absoluteFill as any}
@@ -643,6 +662,16 @@ export default function StreamCallInner() {
   // (already accepted). The caller is whoever initiated / owns the record.
   const iAmCaller = isCaller || didInitiate;
   const accepted = iAmCaller || isAnswering || locallyAccepted;
+
+  // Connect-latency telemetry: T0 = the moment the call is accepted/initiated.
+  const [acceptedAt, setAcceptedAt] = useState<number | null>(null);
+  const acceptedAtRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (accepted && acceptedAtRef.current == null) {
+      acceptedAtRef.current = Date.now();
+      setAcceptedAt(acceptedAtRef.current);
+    }
+  }, [accepted]);
   const activeCallReady = !activeCallLoading && !!activeCall;
   const isIncomingPending =
     activeCallReady && !iAmCaller && !isAnswering && !locallyAccepted && convStatus === 'ringing';
@@ -706,17 +735,34 @@ export default function StreamCallInner() {
     let joined: any = null;
     (async () => {
       try {
+        const t0 = acceptedAtRef.current || Date.now();
         const c = await createStreamVideoClient();
         if (!c || !mounted) return;
         setClient(c);
+        recordDiagnostic({
+          tag: 'CALL',
+          source: 'streamTiming',
+          message: `client-ready t+${Date.now() - t0}ms callId=${streamCallId}`,
+        });
         const streamCall = c.call('default', streamCallId);
         // Single round-trip create-or-join (ring:false → Ashwini's doorbell owns
         // ringing). Was getOrCreate() THEN join() = two sequential network hops,
         // which added noticeable latency before media connected.
+        const tJoin = Date.now();
         await streamCall.join({ create: true, ring: false, notify: false });
+        recordDiagnostic({
+          tag: 'CALL',
+          source: 'streamTiming',
+          message: `join-done t+${Date.now() - t0}ms (join=${Date.now() - tJoin}ms) callId=${streamCallId}`,
+        });
         joined = streamCall;
         if (mounted) setCall(streamCall);
-      } catch {
+      } catch (e: any) {
+        recordDiagnostic({
+          tag: 'CALL',
+          source: 'streamTiming',
+          message: `join-fail callId=${streamCallId} err=${e?.message || e}`,
+        });
         /* join failure — screen shows Connecting…; user can hang up */
       }
     })();
@@ -923,6 +969,7 @@ export default function StreamCallInner() {
             convStatus={convStatus}
             callId={callId ? String(callId) : streamCallId ? String(streamCallId) : null}
             onHangup={hangup}
+            acceptedAt={acceptedAt}
           />
           {waitingBanner}
         </NoiseCancellationProvider>
