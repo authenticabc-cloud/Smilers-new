@@ -376,8 +376,13 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
             objectFit="contain"
             style={StyleSheet.absoluteFill as any}
           />
-        ) : showVideo && remote ? (
-          <ParticipantView participant={remote} style={StyleSheet.absoluteFill as any} />
+        ) : showVideo && remote && remoteHasVideo ? (
+          <ParticipantView
+            participant={remote}
+            style={StyleSheet.absoluteFill as any}
+            ParticipantLabel={null}
+            ParticipantVideoFallback={null}
+          />
         ) : (
           <View style={styles.centerFill}>
             <View style={styles.avatarBig}>
@@ -398,7 +403,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
               {hasPublishedScreenShare ? 'You are sharing your screen' : `${peerName} is sharing their screen`}
             </Text>
           </View>
-        ) : showVideo && remote ? (
+        ) : showVideo && remote && remoteHasVideo ? (
           <View style={styles.topBar} pointerEvents="none">
             <Text style={styles.topName} numberOfLines={1}>
               {peerName}
@@ -524,8 +529,8 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
         </SafeAreaView>
       ) : null}
 
-      {/* Feature 3: shared hide/show-video pill (only meaningful when video is on) */}
-      {!inPiP && (videoMode || remoteHasVideo) ? (
+      {/* Feature 3: shared hide/show-video pill (only meaningful when real video is present) */}
+      {!inPiP && (remoteHasVideo || (videoMode && camOn)) ? (
         <TouchableOpacity style={styles.videoPill} onPress={toggleCallVideo} testID="stream-hide-video">
           <Ionicons name={callVideoHidden ? 'eye-off' : 'eye'} size={16} color={Colors.white} />
           <Text style={styles.videoPillText}>{callVideoHidden ? 'Video off' : 'Turn off video'}</Text>

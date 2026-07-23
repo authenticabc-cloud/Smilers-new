@@ -729,15 +729,21 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
         if (convId.isNotEmpty()) cancelMissedCallTimeout(convId)
 
         // Mark this convId/callId as cancelled so any relay ring FCM that arrives late
-        // is rejected inside handleCallMessage instead of posting a new ring notification.
-        // The entry self-clears after 60 s (well past the 36 s ring-timeout window).
+        // (out-of-order FCM delivery) for the SAME call is rejected inside handleCallMessage
+        // instead of posting a new ring notification.
+        // NOTE: this window MUST stay short. It was 60s, which wrongly suppressed a
+        // GENUINELY NEW call to the same conversation for a full minute after the previous
+        // one ended (the "subsequent calls don't ring" bug). Out-of-order FCM delivery races
+        // resolve within a couple of seconds, so 8s covers the late-ring case while letting a
+        // legitimate re-call ring almost immediately. Each new call also carries a unique
+        // callId now, so cross-call collisions on callId no longer happen.
         synchronized(dedupLock) {
             if (convId.isNotEmpty()) cancelledConvIds.add(convId)
             if (callId.isNotEmpty() && callId != convId) cancelledConvIds.add(callId)
         }
         handler.postDelayed({
             synchronized(dedupLock) { cancelledConvIds.remove(convId); cancelledConvIds.remove(callId) }
-        }, 60_000L)
+        }, 8_000L)
 
         // 2. Dismiss the ring notification. Try by computed ID first, then scan by channel
         //    (the cancel FCM's callId may be the conversationId while the ring notification
