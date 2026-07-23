@@ -43,6 +43,10 @@ import { createStreamVideoClient } from '../../lib/stream/streamClient';
 import { callHost, useCallHost } from '../../lib/call/callHost';
 import { useReactiveSafeConvexQuery } from '../../hooks/useReactiveSafeConvexQuery';
 import { InterpreterLayer } from '../interpreter/InterpreterLayer';
+import {
+  useDeviceContactIndex,
+  resolveDeviceContactNameFromUser,
+} from '../../lib/deviceContactIndex';
 import { InCallAudio } from '../../lib/webrtc/inCallManager';
 import { ControlBtn, AudioOutputMenu } from '../call/CallScreenComponents';
 import type { AudioOutputRoute } from '../call/callTypes';
@@ -166,6 +170,26 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
     });
   }, [connected, acceptedAt, isCaller, isVideo, callId]);
 
+  // #1/#2 diagnostics: if we joined the Stream room but never see the remote
+  // (call spins forever / turns into a missed call even though it was answered),
+  // log ONCE at 12s with the room id + role so we can compare BOTH devices' logs
+  // and confirm whether caller & callee are actually in the SAME room.
+  const stallLoggedRef = useRef(false);
+  useEffect(() => {
+    if (connected || stallLoggedRef.current) return;
+    const t = setTimeout(() => {
+      if (connectedLoggedRef.current || stallLoggedRef.current) return;
+      stallLoggedRef.current = true;
+      recordDiagnostic({
+        tag: 'CALL',
+        source: 'streamTiming',
+        message: `STALL not-connected-after-12s role=${isCaller ? 'caller' : 'callee'} state=${callingState} remotes=${remoteParticipants?.length ?? 0} room=${callId || '∅'}`,
+      });
+    }, 12000);
+    return () => clearTimeout(t);
+  }, [connected, isCaller, callingState, remoteParticipants, callId]);
+
+
   // End when Convex says ended/declined — but ONLY during the ring phase.
   // Once media is connected, the Stream session is authoritative; a ring
   // TTL/timeout on the Convex record must NOT drop a live call (this was
@@ -260,17 +284,13 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
     } catch {}
   }, [call]);
 
-  // Feature 3: either party can hide/show the video for the call (audio keeps
-  // flowing). Shared via a custom event so both sides mirror the state.
+  // Feature 3: "Turn off video" hides the OTHER party's video ON THIS SCREEN
+  // only. My own outgoing video is unaffected (self-view stays visible). Local
+  // toggle — NOT shared — per product spec: A taps → A stops seeing B's video
+  // (A's video keeps going out) until A taps again. Nothing is sent to B.
   const toggleCallVideo = useCallback(() => {
-    setCallVideoHidden((prev) => {
-      const next = !prev;
-      try {
-        void call?.sendCustomEvent({ type: 'video-hidden-toggle', hidden: next }).catch(() => {});
-      } catch {}
-      return next;
-    });
-  }, [call]);
+    setCallVideoHidden((prev) => !prev);
+  }, []);
 
   // Receive peer signals.
   useEffect(() => {
@@ -287,8 +307,6 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
       } else if (t === 'video-switch-decline') {
         setAwaitingVideoAccept(false);
         Alert.alert('Video call', `${peerName} declined to switch to video.`);
-      } else if (t === 'video-hidden-toggle') {
-        setCallVideoHidden(!!event?.custom?.hidden);
       }
     };
     let unsub: any;
@@ -668,6 +686,27 @@ export default function StreamCallInner() {
   const iAmCaller = isCaller || didInitiate;
   const accepted = iAmCaller || isAnswering || locallyAccepted;
 
+  // #3: on the CALLEE side, the "peer" is the caller — show the name THIS user
+  // saved for them in their device address book (not the caller's Google/account
+  // display name). The caller side already gets the right name from the launch
+  // param (resolved at dial time), so only resolve here when we're the callee.
+  const contactIndex = useDeviceContactIndex();
+  const peerUserForName = useQuery(
+    (api as any).users.getUserById,
+    !iAmCaller && callerId ? ({ userId: callerId } as any) : 'skip',
+  ) as any;
+  const resolvedPeerName = useMemo(() => {
+    if (!iAmCaller) {
+      const fromContacts = resolveDeviceContactNameFromUser(
+        contactIndex,
+        peerUserForName || (activeCall as any)?.caller,
+      );
+      if (fromContacts) return fromContacts;
+    }
+    return displayName;
+  }, [iAmCaller, peerUserForName, activeCall, contactIndex, displayName]);
+
+
   // Connect-latency telemetry: T0 = the moment the call is accepted/initiated.
   const [acceptedAt, setAcceptedAt] = useState<number | null>(null);
   const acceptedAtRef = useRef<number | null>(null);
@@ -970,7 +1009,7 @@ export default function StreamCallInner() {
           <CallUI
             isVideo={isVideo}
             isCaller={isCaller}
-            peerName={displayName}
+            peerName={resolvedPeerName}
             convStatus={convStatus}
             callId={callId ? String(callId) : streamCallId ? String(streamCallId) : null}
             onHangup={hangup}
