@@ -53,6 +53,14 @@ export default function StatusScreen() {
   const pickAndUpload = useCallback(
     async (kind: 'image' | 'video') => {
       closeSheet();
+      // Wait for the RN Modal (the "add status" sheet) to FULLY dismiss before
+      // launching the native picker. On Android the Modal is a separate window;
+      // launching expo-image-picker while that window is still tearing down
+      // throws "Attempting to launch an unregistered ActivityResultLauncher"
+      // (the ActivityResultLauncher is bound to the Activity, not the Modal
+      // window that currently holds focus). A short delay past the fade
+      // animation lets the Activity regain focus so the launcher is valid.
+      await new Promise((resolve) => setTimeout(resolve, 450));
       try {
         const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (!permission.granted) {
