@@ -544,6 +544,7 @@ export default function RootLayout() {
               <Stack.Screen name="share-receiver" />
               <Stack.Screen name="study/index" />
               <Stack.Screen name="study/session" />
+              <Stack.Screen name="study/voice-typing" />
             </Stack>
             <VoiceCommandLauncher />
             <DriveModeController />

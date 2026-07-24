@@ -1,5 +1,15 @@
 # Smilers Mobile App — PRD
 
+## iter-372 (Jun 2026): New feature — Voice Typing (Study AI)
+Added a "Voice Typing" card in the Study AI grid **right after Study Rooms** (`app/study/index.tsx`, free), route `app/study/voice-typing.tsx` (registered in `_layout.tsx`). NATIVE-only (on-device speech recognition + TTS) → validate on the APK rebuild.
+- **Live word-by-word dictation** via `expo-speech-recognition@56.0.1` (installed; AndroidManifest already had RECORD_AUDIO + the `com.google.android.googlequicksearchbox` speech `<queries>`, iOS Info.plist already had NSMicrophone/NSSpeechRecognition usage strings — so no native edits needed; module autolinks at build time). `continuous:true, interimResults:true, addsPunctuation:true`, auto language-detection on Android (no forced `lang`).
+- **10s-pause flow:** a watchdog tracks last-speech time; after 10s of silence it stops dictation and a **device-TTS** prompt (`expo-speech`) asks "Finished or continue?" → **Finished** speaks "Copy to clipboard?" then either copies (`expo-clipboard`) + saves, or just saves; **Continue** puts the session ON HOLD (transcript kept) until the user taps Resume, and the 10s cycle repeats. Responses work via **buttons AND voice** (keyword match on a short one-shot recognition during each prompt).
+- **History:** every finalized note is persisted on-device (`src/lib/voiceTyping/historyStore.ts`, AsyncStorage `voice_typing_history_v1`) and is always copyable (per-note Copy + delete). User choices honored: both/live/device-TTS/auto-detect+notify-if-unavailable/persist.
+- **Reliable-language handling:** `error` event `language-not-supported` → in-screen notice "This language isn't available for voice typing"; also handles not-allowed/network. Permission flow follows the contextual contract (check → request → Open Settings on permanent denial).
+Lint clean; web bundle builds; the screen renders (shows "Needs a device build" on web since recognition is native-only).
+
+
+
 ## iter-371 (Jun 2026): App Lock interrupting calls + app-wide keyboard-covers-input fix
 Two pre-build bug fixes (both need the APK rebuild to validate — App Lock is native-call-only; keyboard-controller is a native module):
 - **#1 "Lock when leaving" interrupted calls:** `AppLockGate` already suppresses the re-lock while `callActivity.isActive()`, but with the new Stream architecture the `/call/[conversationId]` route is just a SHIM that immediately pops itself (`call-shim pop → back()` seen in logs) — so its `callActivity.enter()` disposer fired while the real call kept running in the root-level `CallHost`, dropping the guard. Fix: register `callActivity.enter()` inside **`CallHost.tsx`** (keyed on an active call, `!!params || mounted`), which stays mounted for the ENTIRE call for both Stream and legacy paths. `callActivity` is ref-counted so this composes safely.

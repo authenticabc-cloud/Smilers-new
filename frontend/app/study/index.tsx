@@ -40,6 +40,7 @@ const CARDS: CardDef[] = [
   { key: 'language', title: 'Language Coach', subtitle: 'Speak, write & practise', icon: 'globe', color: '#9333EA', params: { subject: 'language' } },
   { key: 'revision', title: 'Revision Studio', subtitle: 'Quizzes, flashcards, plans', icon: 'layers', color: '#EA580C', params: {}, route: '/study/revision' },
   { key: 'rooms', title: 'Study Rooms', subtitle: 'Study together, share quizzes', icon: 'users', color: '#0EA5E9', params: {}, route: '/study/rooms', free: true },
+  { key: 'voice', title: 'Voice Typing', subtitle: 'Type using your voice', icon: 'mic', color: '#DB2777', params: {}, route: '/study/voice-typing', free: true },
 ];
 
 export default function StudyDashboard() {
