@@ -86,16 +86,17 @@ function normalizeAutoLockMinutes(raw: any): number {
 }
 
 async function loadAppLockState(): Promise<AppLockState> {
-  const stored = await readStoredJson(APP_LOCK_SETTINGS_KEY, DEFAULT_APP_LOCK_SETTINGS);
-  const pin = await readStoredString(APP_LOCK_PIN_KEY);
-  const merged = { ...DEFAULT_APP_LOCK_SETTINGS, ...(stored || {}) };
+  // WhatsApp-style entry (per product decision): the App Lock (PIN/biometric)
+  // gate is disabled app-wide. Returning users tap and enter — no lock screen,
+  // no re-verification. We force `enabled=false`/`hasPin=false` here so the
+  // gate below never engages, regardless of any previously-stored setting.
   return {
     loaded: true,
-    hasPin: !!pin,
-    enabled: !!merged.enabled,
-    biometric: !!merged.biometric,
-    lockOnLeaving: !!merged.lockOnLeaving,
-    autoLockMinutes: normalizeAutoLockMinutes(merged.autoLockMinutes ?? merged.autoLock),
+    hasPin: false,
+    enabled: false,
+    biometric: false,
+    lockOnLeaving: false,
+    autoLockMinutes: normalizeAutoLockMinutes(15),
   };
 }
 

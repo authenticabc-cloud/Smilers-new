@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, AppState, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, AppState, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Redirect, Tabs, useRootNavigationState } from 'expo-router';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
@@ -85,6 +85,7 @@ export default function TabsLayout() {
   // still routes to the recovery screen — that's an actionable state, not a
   // spinner.
   const [everReady, setEverReady] = useState(false);
+  const [reauthFailed, setReauthFailed] = useState(false);
 
   // Real-time foreground incoming-call detection is now mounted globally in
   // app/_layout.tsx (PresenceHeartbeat) so it fires on every authenticated
@@ -185,10 +186,50 @@ export default function TabsLayout() {
   // then on the spinner gate is disabled so a background-refresh re-auth
   // can't yank the user back to "Opening Smilers…".
   useEffect(() => {
-    if (isAuthenticated && hasVerifiedInstall && me && !everReady) {
+    // WhatsApp-style entry: the instant we have a session + verified install,
+    // the app is "ready" — do NOT wait for the `me` query. This stops the
+    // "Opening Smilers…" spinner from ever gating a RETURNING user while Convex
+    // (re)authenticates its socket in the background. Screens tolerate a null
+    // `me` and fill in reactively when the query resolves.
+    if (isAuthenticated && hasVerifiedInstall && !everReady) {
       setEverReady(true);
     }
-  }, [isAuthenticated, hasVerifiedInstall, me, everReady]);
+  }, [isAuthenticated, hasVerifiedInstall, everReady]);
+
+  // WhatsApp-style session recovery: when the OIDC token can't be refreshed
+  // (`sessionExpired`), NEVER show a "Couldn't verify your session" wall.
+  // Instead keep the app on screen and silently re-run the Hercules session
+  // (prompt=none) in the BACKGROUND with a little backoff. Hercules keeps a
+  // session alive for 30 days of activity, so this almost always succeeds with
+  // zero user action; on success `sessionExpired` clears and Convex re-auths.
+  useEffect(() => {
+    if (!sessionExpired || !isAuthenticated) return;
+    let cancelled = false;
+    setReauthFailed(false);
+    (async () => {
+      for (let attempt = 0; attempt < 4 && !cancelled; attempt++) {
+        try {
+          const ok = await trySilentReauth();
+          if (ok || cancelled) return;
+        } catch {
+          /* keep retrying */
+        }
+        await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
+      }
+      // Silent renewal definitively failed (e.g. Hercules 30-day session truly
+      // expired). This is the ONLY case that needs the user — surface a friendly
+      // one-tap reconnect rather than trapping them on an empty screen.
+      if (!cancelled) setReauthFailed(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionExpired, isAuthenticated, trySilentReauth]);
+
+  // Clear the reconnect prompt as soon as the session recovers.
+  useEffect(() => {
+    if (!sessionExpired) setReauthFailed(false);
+  }, [sessionExpired]);
 
   // Safety timeout: if Convex me query hangs after auth/phone-verify, don't lock the user on "Opening Smilers" forever.
   useEffect(() => {
@@ -251,40 +292,22 @@ export default function TabsLayout() {
     return <Redirect href="/phone-verify" />;
   }
 
-  // iter-295: if the refresh token was TERMINALLY rejected (invalid_grant /
-  // "session not found"), the session can't be silently renewed — surface the
-  // recovery screen IMMEDIATELY rather than spinning on "Opening Smilers…".
-  // This must come BEFORE the meLoading spinner gate below, otherwise a brief
-  // me=undefined window (e.g. during a Convex reconnect after the token dies)
-  // would show the infinite spinner instead of the actionable recovery UI.
-  // iter-315: fire REGARDLESS of `me`/`everReady`. On an overnight WARM resume
-  // the component is never remounted, so `everReady` stays true and Convex may
-  // still return a STALE cached `me` — both of which previously bypassed every
-  // recovery gate and left the user on a logged-in-but-empty screen. When the
-  // refresh token is terminally dead there is nothing to render but recovery.
-  if (sessionExpired && isAuthenticated) {
-    return <AuthRecoveryOrSilent onSignIn={signOut} trySilentReauth={trySilentReauth} />;
+  // iter-362 (WhatsApp-style): the "Couldn't verify your session" wall is GONE.
+  // A terminally-unrefreshable token no longer dumps the user to a sign-in wall
+  // or an empty screen — the background silent-reauth effect above quietly
+  // renews the Hercules session while the app stays usable. If the token is
+  // truly absent (fresh install / real sign-out), `!isAuthenticated` above
+  // already redirected to the one-time sign-in.
+
+  // Last-resort reconnect: only after silent renewal has DEFINITIVELY failed and
+  // we still have no user (true 30-day Hercules expiry). One friendly tap re-runs
+  // the interactive sign-in — no scary "session couldn't be verified" wording.
+  if (reauthFailed && !me) {
+    return <ReconnectPrompt onReconnect={signOut} />;
   }
 
   if ((meLoading || syncingUser) && !meGateTimedOut && !everReady) {
     return <AuthGateLoading label="Opening Smilers…" />;
-  }
-
-  // iter-293 RESUME/AUTH RECOVERY: if the me-query gate has timed out and we
-  // STILL have no user despite being "authenticated", the session token was
-  // almost certainly rejected (the diagnostics show
-  // `getFreshIdToken: refresh FAILED → returning STALE id_token`). Previously
-  // this left the user on an infinite "Opening Smilers…" spinner that only a
-  // cache-clear could fix. Instead, surface an actionable recovery screen so
-  // the user can re-authenticate in-app without reinstalling.
-  if (meGateTimedOut && !me && !syncingUser && !everReady) {
-    return <AuthRecoveryOrSilent onSignIn={signOut} trySilentReauth={trySilentReauth} />;
-  }
-
-  // iter-295: surface recovery INSTANTLY (no 10s wait) when the refresh token
-  // was terminally rejected — the session can't be silently renewed.
-  if (sessionExpired && isAuthenticated && !me) {
-    return <AuthRecoveryOrSilent onSignIn={signOut} trySilentReauth={trySilentReauth} />;
   }
 
   // If the me query resolved to null (or hung past the gate) but the user has the
@@ -398,73 +421,35 @@ function AuthGateLoading({ label }) {
   );
 }
 
-// Attempts a silent (prompt=none) re-auth ONCE before showing the sign-in wall,
-// giving a WhatsApp-style "tap and you're back in" experience when the refresh
-// token died but the Hercules SSO browser session is still alive. On success the
-// AuthProvider clears sessionExpired and this unmounts; on failure it falls back
-// to the interactive recovery screen. Skipped on web (a popup would be blocked
-// without a user gesture — web users just tap "Sign in again").
-function AuthRecoveryOrSilent({
-  onSignIn,
-  trySilentReauth,
-}: {
-  onSignIn: () => Promise<void> | void;
-  trySilentReauth: () => Promise<boolean>;
-}) {
-  const [phase, setPhase] = React.useState<'trying' | 'wall'>(
-    Platform.OS === 'web' ? 'wall' : 'trying',
-  );
-  const attempted = React.useRef(false);
-  React.useEffect(() => {
-    if (phase !== 'trying' || attempted.current) return;
-    attempted.current = true;
-    let cancelled = false;
-    (async () => {
-      const ok = await trySilentReauth();
-      if (!cancelled && !ok) setPhase('wall');
-      // On success sessionExpired clears → parent stops rendering recovery.
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [phase, trySilentReauth]);
-
-  if (phase === 'trying') {
-    return <AuthGateLoading label="Reconnecting…" />;
-  }
-  return <AuthRecovery onSignIn={onSignIn} />;
-}
-
-// iter-293: shown when the session token was rejected and we couldn't load the
-// user — lets the user re-authenticate in-app instead of being stuck on an
-// infinite spinner that only a cache-clear could resolve.
-function AuthRecovery({ onSignIn }: { onSignIn: () => Promise<void> | void }) {
+// Friendly one-tap reconnect — shown ONLY when the Hercules session truly
+// expired (silent renewal exhausted). Re-runs the interactive sign-in.
+function ReconnectPrompt({ onReconnect }: { onReconnect: () => Promise<void> | void }) {
   const [busy, setBusy] = React.useState(false);
   const handle = async () => {
     if (busy) return;
     setBusy(true);
     try {
-      await onSignIn();
+      await onReconnect();
     } finally {
       setBusy(false);
     }
   };
   return (
-    <View style={styles.loadingWrap} testID="tabs-auth-recovery-screen">
-      <Text style={styles.recoveryTitle}>Couldn&apos;t verify your session</Text>
+    <View style={styles.loadingWrap} testID="tabs-reconnect-screen">
+      <Text style={styles.recoveryTitle}>Reconnect to Smilers</Text>
       <Text style={styles.recoveryBody}>
-        Your sign-in session expired or couldn&apos;t be refreshed. Please sign in again to continue.
+        You&apos;ve been away for a while. Tap below to pick up right where you left off.
       </Text>
       <TouchableOpacity
         style={[styles.recoveryBtn, busy && styles.recoveryBtnDisabled]}
         onPress={handle}
         disabled={busy}
-        testID="tabs-auth-recovery-signin"
+        testID="tabs-reconnect-btn"
       >
         {busy ? (
           <ActivityIndicator color={Colors.white} />
         ) : (
-          <Text style={styles.recoveryBtnText}>Sign in again</Text>
+          <Text style={styles.recoveryBtnText}>Reconnect</Text>
         )}
       </TouchableOpacity>
     </View>
