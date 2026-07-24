@@ -1,5 +1,16 @@
 # Smilers Mobile App — PRD
 
+## iter-370 (Jun 2026): Fixes from device logs — join latency, voice-camera, group tone, #9 diagnostics
+Diagnostic logs proved `call.join()` itself was taking **34–57s** (`join=57672ms` / `34444ms`; client-ready was <1.5s). Root cause = Stream's SDK retrying join **3× with exponential backoff** on a flaky edge. All NATIVE-only → validate on APK rebuild.
+- **Latency (New #1 + #3 delay):** rewrote the join in `StreamCallInner.tsx` to `join({ ..., maxJoinRetries: 1 })` wrapped in a **14s watchdog**; on timeout/fail it retries ONCE with a fresh call object (new edge often connects instantly). Worst case ~28s instead of 57s, and the End button is no longer starved by the 3-retry native storm. Added `attempt=` to the timing diagnostic.
+- **New #2 (voice call shows own video):** device state is now pre-set BEFORE `join()` — `microphone.enable()` + `camera.disable()` for voice (Stream's 'default' call type otherwise publishes video on join). Also helps #5 by enabling the camera pre-join for video calls.
+- **#8 (group tone still universal):** likely an immutable stale Android channel. Bumped the notifee group channel `groups-v4 → groups-v5-group_notification` (fresh channel with `group_notification` sound) in `notifeeMessageDisplay.ts` + backend `channelId`. Also made the expo-notifications FALLBACK path in `backgroundTaskSetup.ts` use the group channel/sound for group messages (previously hardcoded the message channel → message tone whenever the notifee grouped path wasn't taken).
+- **#9 (toggle doesn't suppress):** confirmed the active renderer is `backgroundTaskSetup.presentBackgroundLocalNotification` (the `usePushNotifications.ts` copy is dead/unused; native forwards messages to it via `super.handleIntent`). Suppression logic is correct and placed before both render paths; added explicit diagnostics (`pref messages=ON/OFF group=… `) so the next device log shows whether the toggle read fires. Foreground bails for non-call, so only background/killed messages are suppressible (expected).
+- **#2 resolved, #6/#7 resolved** (confirmed by user). **#4 interpreter** still blocked on the user's external Convex.
+Lint clean; backend loads; web boots.
+
+
+
 ## iter-369 (Jun 2026): Live in-call roster-change toasts
 `StreamCallInner.tsx` now surfaces transient toasts to EVERY participant when the call roster changes (NATIVE-only → validate on APK rebuild):
 - The 5s roster poll diffs successive snapshots (`prevRosterRef`): a new identity → "{name} joined the call"; a vanished identity → "{name} left the call". Because the diff is driven by the shared backend roster, all participants see the change without extra signalling.

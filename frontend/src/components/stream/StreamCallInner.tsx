@@ -1228,26 +1228,65 @@ export default function StreamCallInner() {
           source: 'streamTiming',
           message: `client-ready t+${Date.now() - t0}ms callId=${streamCallId}`,
         });
-        const streamCall = c.call('default', streamCallId);
-        // Single round-trip create-or-join (ring:false → Ashwini's doorbell owns
-        // ringing). Was getOrCreate() THEN join() = two sequential network hops,
-        // which added noticeable latency before media connected.
-        const tJoin = Date.now();
-        await streamCall.join({ create: true, ring: false, notify: false });
-        recordDiagnostic({
-          tag: 'CALL',
-          source: 'streamTiming',
-          message: `join-done t+${Date.now() - t0}ms (join=${Date.now() - tJoin}ms) callId=${streamCallId}`,
-        });
+
+        // Attempt a join with a watchdog. Stream retries join up to 3× with
+        // exponential backoff internally (≈35–60s of dead air on a flaky edge),
+        // and the End button feels frozen during it. We cap the SDK retries and
+        // race each attempt against a 14s watchdog, then retry ONCE with a fresh
+        // call object (a new attempt often lands on a healthy SFU edge instantly).
+        const joinOnce = async (attempt: number): Promise<any> => {
+          if (endedRef.current || !mounted) return null;
+          const streamCall = c.call('default', streamCallId);
+          // Pre-set device state BEFORE joining so a VOICE call never turns the
+          // camera on (Stream's default 'default' call type publishes video on
+          // join otherwise → New #2: "voice call shows my own video").
+          try {
+            await streamCall.microphone.enable();
+            if (isVideo) await streamCall.camera.enable();
+            else await streamCall.camera.disable();
+          } catch {}
+          const tJoin = Date.now();
+          const timeout = new Promise((_r, rej) =>
+            setTimeout(() => rej(new Error('join-watchdog-timeout')), 14000),
+          );
+          await Promise.race([
+            streamCall.join({ create: true, ring: false, notify: false, maxJoinRetries: 1 }),
+            timeout,
+          ]);
+          recordDiagnostic({
+            tag: 'CALL',
+            source: 'streamTiming',
+            message: `join-done t+${Date.now() - t0}ms (join=${Date.now() - tJoin}ms attempt=${attempt}) callId=${streamCallId}`,
+          });
+          return streamCall;
+        };
+
+        let streamCall: any = null;
+        try {
+          streamCall = await joinOnce(1);
+        } catch (firstErr: any) {
+          recordDiagnostic({
+            tag: 'CALL',
+            source: 'streamTiming',
+            message: `join-retry after=${firstErr?.message || firstErr} callId=${streamCallId}`,
+          });
+          if (mounted && !endedRef.current) streamCall = await joinOnce(2);
+        }
+        if (!streamCall || !mounted) {
+          try {
+            streamCall?.leave();
+          } catch {}
+          return;
+        }
         joined = streamCall;
-        if (mounted) setCall(streamCall);
+        setCall(streamCall);
       } catch (e: any) {
         recordDiagnostic({
           tag: 'CALL',
           source: 'streamTiming',
           message: `join-fail callId=${streamCallId} err=${e?.message || e}`,
         });
-        /* join failure — screen shows Connecting…; user can hang up */
+        /* both attempts failed — screen shows Connecting…; user can hang up */
       }
     })();
     return () => {
@@ -1256,7 +1295,7 @@ export default function StreamCallInner() {
         joined?.leave();
       } catch {}
     };
-  }, [streamCallId, accepted]);
+  }, [streamCallId, accepted, isVideo]);
 
   const acceptIncoming = useCallback(() => {
     setLocallyAccepted(true);

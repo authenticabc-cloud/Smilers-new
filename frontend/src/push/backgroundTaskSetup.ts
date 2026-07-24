@@ -366,21 +366,23 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
   backgroundNotificationKeys.add(notificationKey);
   trimBackgroundNotificationCache();
 
+  const isGroupMsg =
+    String((payload as any).conversationType || '').toLowerCase() === 'group' ||
+    String((payload as any).channelId || '').startsWith('groups-');
+
   // #9: honour the per-device Notifications toggles. If the user turned OFF
   // "Messages" (or "Group messages"), suppress the banner entirely. Calls are
   // never suppressed here (handled by their own path above).
   try {
     const { isNotificationTypeEnabled } = require('./notificationPrefs');
-    const isGroupMsg =
-      String((payload as any).conversationType || '').toLowerCase() === 'group' ||
-      String((payload as any).channelId || '').startsWith('groups-');
     const prefKey = isGroupMsg ? 'groups' : 'messages';
     const enabled = await isNotificationTypeEnabled(prefKey);
+    recordDiagnostic({ tag: 'MSG-PUSH', source: 'bg-task', message: `pref ${prefKey}=${enabled ? 'ON' : 'OFF'} group=${isGroupMsg} key=${notificationKey}` });
     if (!enabled) {
-      recordDiagnostic({ tag: 'MSG-PUSH', source: 'bg-task', message: `suppressed: ${prefKey} toggle OFF key=${notificationKey}` });
       return;
     }
-  } catch {
+  } catch (e: any) {
+    recordDiagnostic({ tag: 'MSG-PUSH', source: 'bg-task', message: `pref-check-error ${e?.message || e}` });
     /* on any error, fall through and show the notification */
   }
 
@@ -465,13 +467,16 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
     }
   }
 
-  const messageChannel = 'messages-v5-message_notification';
+  const messageChannel = isGroupMsg
+    ? 'groups-v5-group_notification'
+    : 'messages-v5-message_notification';
+  const messageSound = isGroupMsg ? 'group_notification' : 'message_notification';
   if (Platform.OS === 'android') {
     try {
       await Notifications.setNotificationChannelAsync(messageChannel, {
-        name: 'Messages',
+        name: isGroupMsg ? 'Group messages' : 'Messages',
         importance: Notifications.AndroidImportance.HIGH,
-        sound: 'message_notification',
+        sound: messageSound,
         vibrationPattern: [0, 250, 250, 250],
         lightColor: '#E4B53B',
         lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
@@ -489,7 +494,7 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
       title,
       body,
       data: payload,
-      sound: 'message_notification',
+      sound: messageSound,
       autoDismiss: true,
       priority: Notifications.AndroidNotificationPriority.HIGH,
       vibrate: [0, 250, 250, 250],

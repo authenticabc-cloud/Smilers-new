@@ -27,8 +27,8 @@ import { Platform } from 'react-native';
 const MESSAGE_CHANNEL_ID = 'messages-v5-message_notification';
 const MESSAGE_SOUND = 'message_notification';
 // Group messages get their OWN channel + tone so users can tell 1:1 vs group
-// apart by sound alone (contract: groups-v4-group_notification / group_notification.mp3).
-const GROUP_CHANNEL_ID = 'groups-v4-group_notification';
+// apart by sound alone (contract: groups-v5-group_notification / group_notification.mp3).
+const GROUP_CHANNEL_ID = 'groups-v5-group_notification';
 const GROUP_SOUND = 'group_notification';
 
 type NativeCache = {
