@@ -1,5 +1,12 @@
 # Smilers Mobile App — PRD
 
+## iter-364/365 (Jun 2026): "Archived" restyled as a colorful gradient borderline (+ slim divider fallback)
+User wanted the Archived row to be colorful/stylish and act as the visual borderline between the feature rows (Smilers AI, Diary, Devotion, Chat Once) and the conversations. `app/(tabs)/chats.tsx`:
+- Replaced the plain grey Archived row with a floating `LinearGradient` banner (diagonal `#A855F7→#6366F1→#3B82F6→#14B8A6`, matching the feature-icon accents): frosted translucent archive icon, bold white "Archived" title, "N chats tucked away" subtitle, a translucent count pill, chevron; rounded 18px, side margins, `Shadow.md`. Shown only when `archivedCount > 0` (unchanged behavior). New styles: `archivedBanner/archivedIconWrap/archivedMiddle/archivedTitle/archivedSubtitle/archivedCountPill/archivedCountText`.
+- iter-365: when `archivedCount === 0` (banner hidden), a slim 3px gradient line (`featureDivider`) still marks the borderline so the boundary always exists.
+Uses `expo-linear-gradient` (already installed). Lint: only pre-existing warnings, no errors. Pure JS/UI — no native rebuild needed; visible after redeploy / via Expo Go once signed in.
+
+
 ## iter-363 (Jun 2026): Notification toggles can't save (`users:updateProfile` Server Error) → moved to LOCAL device storage
 Toggling any notification type failed with `Couldn't save "<key>": [CONVEX M(users:updateProfile)] Server Error`. Root: the screen saved `updateProfile({ notifications: {...} })`, but the external Convex `users` schema/mutation doesn't accept/persist a `notifications` field → bare Server Error (same external-schema block noted in iter-353; NOT fixable in the app, and NOT the right place anyway).
 **Fix (app-side, no backend needed):** these are PER-DEVICE prefs ("...on this device"), so they now persist in local AsyncStorage.

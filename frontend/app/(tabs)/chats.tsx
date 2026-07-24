@@ -788,6 +788,18 @@ export default function ChatsScreen() {
                 </LinearGradient>
               </TouchableOpacity>
             ) : null}
+
+            {/* iter-365: when there are NO archived chats (so the gradient
+                banner above is hidden), a slim gradient line still marks the
+                borderline between the feature section and the conversations. */}
+            {archivedCount === 0 ? (
+              <LinearGradient
+                colors={['#A855F7', '#6366F1', '#3B82F6', '#14B8A6']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.featureDivider}
+              />
+            ) : null}
               </>
             ) : null}
           </>
@@ -943,6 +955,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     borderRadius: 18,
     ...Shadow.md,
+  },
+  featureDivider: {
+    height: 3,
+    borderRadius: 2,
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 12,
+    opacity: 0.55,
   },
   archivedIconWrap: {
     width: 42,
