@@ -1,5 +1,14 @@
 # Smilers Mobile App — PRD
 
+## iter-363 (Jun 2026): Notification toggles can't save (`users:updateProfile` Server Error) → moved to LOCAL device storage
+Toggling any notification type failed with `Couldn't save "<key>": [CONVEX M(users:updateProfile)] Server Error`. Root: the screen saved `updateProfile({ notifications: {...} })`, but the external Convex `users` schema/mutation doesn't accept/persist a `notifications` field → bare Server Error (same external-schema block noted in iter-353; NOT fixable in the app, and NOT the right place anyway).
+**Fix (app-side, no backend needed):** these are PER-DEVICE prefs ("...on this device"), so they now persist in local AsyncStorage.
+- New `src/push/notificationPrefs.ts`: `loadNotificationPrefs()`, `saveNotificationPref(key,value)`, `isNotificationTypeEnabled(key)` (defaults all ON), key `smilers_notification_prefs_v1`.
+- `app/notifications.tsx`: removed the `updateProfile`/`getCurrentUser`/`safeMutation` Convex path; toggles now load from + save to local storage (optimistic, can't throw a Convex error). `canEdit` no longer requires sign-in; helper text → "Loading your preferences…".
+Lint clean. ⚠️ Rebuild to validate on device.
+FOLLOW-UP (offered, not yet done): have the push-display layer consult `isNotificationTypeEnabled()` to actually SUPPRESS a type when toggled off (messages/groups/reactions/mentions/statuses — deliberately NOT calls, to avoid ever suppressing rings).
+
+
 ## iter-362 (Jun 2026): RETENTION P0 — WhatsApp-style entry (kill sign-in gates) + fix "No chats yet"
 User: >90% of registrants never return; blockers are (1) the "Opening Smilers…" spinner + "Couldn't verify your session" wall forcing re-sign-in (sometimes only fixable by reinstall), and (2) "No chats yet" empty chat/profile as if offline (calls still worked). Root: fragile OIDC (Hercules) session/Convex-auth lifecycle. Backend team confirmed Hercules token lifetimes are NOT configurable; active users (open ≤ every 30 days) stay signed in via silent refresh, so the recurring deaths are a CLIENT bug/UX, and the OIDC authority/client/callback flow must NOT be changed. User decisions: (1a) always open straight in with saved session, remove PIN/biometric App Lock entirely; (2b) fix app-side; (3a) keep one-time first sign-up only.
 Changes (all app-side, native-validated):

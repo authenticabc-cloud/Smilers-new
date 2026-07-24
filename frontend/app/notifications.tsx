@@ -1,18 +1,19 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import * as Notifications from 'expo-notifications';
-import { useMutation } from 'convex/react';
-import { api } from '../src/convexApi';
-import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import { requestPushDiagnosticsRetry, usePushDiagnostics } from '../src/push/pushDiagnostics';
 import { describePushProjectMismatch } from '../src/push/usePushNotifications';
 import { triggerEmergentSelfTestPush } from '../src/push/useEmergentPush';
 import { useAuth } from '../src/providers/AuthProvider';
-import { safeMutation } from '../src/lib/safeMutation';
+import {
+  loadNotificationPrefs,
+  saveNotificationPref,
+  type NotificationPrefs,
+} from '../src/push/notificationPrefs';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/theme';
 
 const ITEMS = [
@@ -27,19 +28,28 @@ const ITEMS = [
 export default function NotificationsScreen() {
   const router = useRouter();
   const { userInfo } = useAuth();
-  const { data: me, refetch } = useSafeConvexQuery<any | null>(api.users.getCurrentUser, {}, null);
-  const updateProfile = useMutation(api.users.updateProfile);
   const pushDiagnostics = usePushDiagnostics();
-  const notifications = (me?.notifications || {}) as Record<string, boolean | undefined>;
-  const canEdit = !!me;
-  // Optimistic local overrides so a toggle doesn't visually snap back while the
-  // mutation is in flight (and so we can revert precisely if it fails).
-  const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+
+  // Per-DEVICE notification prefs, stored locally (see notificationPrefs.ts).
+  // Not on the Convex profile — that caused a `users:updateProfile` Server
+  // Error and the toggles are device-scoped ("...on this device") anyway.
+  const [prefs, setPrefs] = useState<NotificationPrefs>({});
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
   const [saveError, setSaveError] = useState<string>('');
-  const isOn = useCallback(
-    (key: string) => (key in overrides ? overrides[key] : notifications[key] !== false),
-    [overrides, notifications],
-  );
+  useEffect(() => {
+    let cancelled = false;
+    loadNotificationPrefs().then((p) => {
+      if (!cancelled) {
+        setPrefs(p);
+        setPrefsLoaded(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const canEdit = prefsLoaded;
+  const isOn = useCallback((key: string) => prefs[key] !== false, [prefs]);
   const [retrying, setRetrying] = useState(false);
   const [copied, setCopied] = useState(false);
   const [runningLocalTest, setRunningLocalTest] = useState(false);
@@ -63,43 +73,22 @@ export default function NotificationsScreen() {
 
   const toggle = useCallback(
     async (key: string, value: boolean) => {
-      if (!me) {
-        return;
-      }
-      // Optimistic: reflect the choice immediately so the switch doesn't snap
-      // back while the mutation round-trips.
-      setOverrides((prev) => ({ ...prev, [key]: value }));
+      // Optimistic + instant local persistence. No network, so it can't fail
+      // with a Convex Server Error anymore.
+      setPrefs((prev) => ({ ...prev, [key]: value }));
       setSaveError('');
       try {
-        const payload = { notifications: { ...notifications, [key]: value } };
-        await safeMutation(
-          `users.updateProfile(notifications.${key})`,
-          () => updateProfile(payload),
-          payload,
-        );
-        await refetch();
-        // Clear the override once the server value reflects our change (or
-        // after a short settle) so we follow the source of truth again.
-        setOverrides((prev) => {
-          const next = { ...prev };
-          delete next[key];
-          return next;
-        });
+        const next = await saveNotificationPref(key, value);
+        setPrefs(next);
       } catch (errorValue: any) {
-        // Surface the real reason instead of silently reverting — this is the
-        // clue we need if the profile write is being rejected server-side.
-        const msg = errorValue?.data?.message || errorValue?.message || String(errorValue);
+        const msg = errorValue?.message || String(errorValue);
         setSaveError(`Couldn't save "${key}": ${msg}`);
-        // Revert the optimistic override so the UI matches the server state.
-        setOverrides((prev) => {
-          const next = { ...prev };
-          delete next[key];
-          return next;
-        });
-        console.warn('Failed to update notification', errorValue);
+        const restored = await loadNotificationPrefs();
+        setPrefs(restored);
+        console.warn('Failed to update notification pref', errorValue);
       }
     },
-    [me, notifications, refetch, updateProfile]
+    []
   );
 
   const tokenPreview = useMemo(() => {
@@ -347,7 +336,7 @@ export default function NotificationsScreen() {
         </Text>
         {!canEdit ? (
           <Text style={styles.helper} testID="notifications-auth-helper">
-            Sign in to change notification preferences.
+            Loading your preferences…
           </Text>
         ) : null}
 
