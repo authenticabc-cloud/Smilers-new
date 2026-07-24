@@ -1,5 +1,23 @@
 # Smilers Mobile App — PRD
 
+## iter-367 (Jun 2026): Call + notification bug batch (7 fixed, 2 flagged)
+All call/push behaviour is NATIVE-only → the user must rebuild the APK to validate end-to-end. Fixed this round:
+- **#2 Wrong caller name on receiver (Google/account name):** the incoming AND connecting screens in `StreamCallInner.tsx` rendered the raw push `displayName` instead of `resolvedPeerName` (device-contact name). Both now use `resolvedPeerName` (caller side still falls back to the dial-time name).
+- **#3 Ghost call — caller ends during ringing but callee keeps ringing & connects:** added an effect in `StreamCallInner` that closes the callee's incoming UI (`callHost.end()`) when `convStatus` flips to ended/declined/missed/cancelled *before* accept, so they can't answer a dead call. (Only explicit status closes it — transient WS null does not, to avoid false closes.)
+- **#5 Self-view not visible unless remote video off + make draggable:** self-view now has `zIndex:55, elevation:14` so it renders above the remote native video surface (Android z-orders surface views above plain views otherwise), and is draggable via `PanResponder` + spring snap-to-screen-bounds.
+- **#6 "Turn off video" pill overlapped the translation panel:** moved `videoPill` from `top:100` → `top:156` (clears the interpreter banner).
+- **#7 No in-app ringtone when receiver is on the app:** `StreamCallInner` now calls `useRingtonePlayer(isIncomingPending, {vibrate})` — the foreground Stream incoming UI was silent (Accept/Decline shown, no tone).
+- **#8 Group notifications showed the sender's name (not the group) + used the 1:1 tone:** the chat screen always sent `title = senderName`. Now for groups it sends `title = groupName`, `body = "Sender: message"`, `conversationType:'group'`, and new `conversationName`. `notifyPush.ts` + backend `NotifyEventBody` carry `conversation_name`; backend already routes groups to the `groups-v4-group_notification` channel (own tone). Verified via curl.
+- **#9 Notification toggle didn't suppress:** `backgroundTaskSetup.presentBackgroundLocalNotification` now consults `isNotificationTypeEnabled('messages'|'groups')` and returns early (suppresses the banner) when the user turned that type off.
+
+**Still open (need native investigation / external, flagged to user):**
+- **#1 Backgrounded (alive) app shows only a missed-call, doesn't ring** — killed-app rings fine. This is native FCM data-message handling in the Kotlin service when the process is backgrounded-but-alive; needs device logs + native inspection. NOT fixed this round.
+- **#4 Live interpreter still failing** — depends on the user's external Convex `callInterpreter.*` functions (blocked on their backend), not fixable in this repo.
+
+Lint clean (only pre-existing warnings); backend loads; web boots to Sign In.
+
+
+
 ## iter-366 (Jun 2026): Stream call — FIX crash (TDZ) + "Add Participants" (hide/show number) + latency pre-warm
 Three things this session (all NATIVE-only for calls → validate on the user's APK rebuild):
 - **P0 CRASH FIX (`StreamCallInner.tsx`):** `showVideo` (near the top of `CallUI`) read `callVideoHidden` which was declared ~120 lines LOWER via `useState` → a temporal-dead-zone `ReferenceError` that crashed EVERY Stream call the instant `CallUI` rendered (never surfaced on web since Stream is native-only). Moved the `callVideoHidden` state declaration up beside the other `useState`s. This likely contributed to the "calls spin until missed / don't connect" reports.

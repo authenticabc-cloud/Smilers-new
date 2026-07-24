@@ -56,6 +56,8 @@ export interface NotifyPushOpts {
   senderId?: string | null;
   /** 'group' | 'direct' → receiver picks the group vs 1:1 message tone. */
   conversationType?: 'group' | 'direct' | null;
+  /** Group name → shown as the notification title for group messages. */
+  conversationName?: string | null;
   /** Convex message/call id — lets the backend dedupe against Convex triggers. */
   idempotencyKey?: string | null;
 }
@@ -116,6 +118,7 @@ export function notifyEventPush(opts: NotifyPushOpts): void {
         sender_phone: opts.senderPhone || null,
         sender_id: opts.senderId || null,
         conversation_type: opts.conversationType || null,
+        conversation_name: opts.conversationName || null,
         idempotency_key: opts.idempotencyKey || null,
       }),
       signal: controller.signal,

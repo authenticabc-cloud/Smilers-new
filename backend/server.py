@@ -2955,6 +2955,7 @@ class NotifyEventBody(BaseModel):
     sender_phone: str | None = None  # E.164 → receiver device-contact name resolution
     sender_id: str | None = None  # Convex user id → fallback name resolution
     conversation_type: str | None = None  # "group" | "direct" → group vs 1:1 tone
+    conversation_name: str | None = None  # group name → notification title for groups
     idempotency_key: str | None = None
 
 
@@ -3053,6 +3054,9 @@ async def notify_event(body: NotifyEventBody):
             # distinguishable from 1:1 messages by sound alone.
             if conv_type == "group":
                 data["channelId"] = "groups-v4-group_notification"
+                conv_name = (body.conversation_name or "").strip()[:120]
+                if conv_name:
+                    data["conversationName"] = conv_name
 
     if await _is_duplicate_push(
         body.idempotency_key, _push_content_hash(recipients, data),

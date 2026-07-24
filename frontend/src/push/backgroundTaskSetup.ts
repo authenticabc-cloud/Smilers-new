@@ -366,6 +366,24 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
   backgroundNotificationKeys.add(notificationKey);
   trimBackgroundNotificationCache();
 
+  // #9: honour the per-device Notifications toggles. If the user turned OFF
+  // "Messages" (or "Group messages"), suppress the banner entirely. Calls are
+  // never suppressed here (handled by their own path above).
+  try {
+    const { isNotificationTypeEnabled } = require('./notificationPrefs');
+    const isGroupMsg =
+      String((payload as any).conversationType || '').toLowerCase() === 'group' ||
+      String((payload as any).channelId || '').startsWith('groups-');
+    const prefKey = isGroupMsg ? 'groups' : 'messages';
+    const enabled = await isNotificationTypeEnabled(prefKey);
+    if (!enabled) {
+      recordDiagnostic({ tag: 'MSG-PUSH', source: 'bg-task', message: `suppressed: ${prefKey} toggle OFF key=${notificationKey}` });
+      return;
+    }
+  } catch {
+    /* on any error, fall through and show the notification */
+  }
+
   let title = toNonEmptyString(payload.title) || 'New message';
   let body = getDisplayNameFromPayload(payload) || 'Open Smilers to view the message';
 

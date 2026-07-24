@@ -19,7 +19,7 @@
  * interpreter, call-waiting.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Image, Modal, Platform, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Dimensions, FlatList, Image, Modal, PanResponder, Platform, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 // @ts-expect-error — native-only Stream SDK, resolved in the dev/prod build
@@ -49,6 +49,7 @@ import {
 } from '../../lib/deviceContactIndex';
 import { InCallAudio } from '../../lib/webrtc/inCallManager';
 import { ControlBtn, AudioOutputMenu } from '../call/CallScreenComponents';
+import { useRingtonePlayer } from '../../lib/ringtone/useRingtonePlayer';
 import { addStreamParticipant, fetchCallParticipants, type CallRosterEntry } from '../../lib/twilio/twilioApi';
 import type { AudioOutputRoute } from '../call/callTypes';
 import * as Haptics from 'expo-haptics';
@@ -130,6 +131,47 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   const [seconds, setSeconds] = useState(0);
   const [callVideoHidden, setCallVideoHidden] = useState(false); // feature 3 (local hide)
   const wasConnectedRef = useRef(false);
+
+  // #5: draggable self-view (local camera preview). Anchored top-right by
+  // styles.selfView; we apply a translate on top so the user can move it
+  // anywhere and it snaps to stay on-screen.
+  const SELF_W = 110;
+  const SELF_H = 160;
+  const { width: winW, height: winH } = Dimensions.get('window');
+  const selfPan = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
+  const selfPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 3 || Math.abs(g.dy) > 3,
+        onPanResponderGrant: () => {
+          selfPan.extractOffset();
+        },
+        onPanResponderMove: Animated.event([null, { dx: selfPan.x, dy: selfPan.y }], {
+          useNativeDriver: false,
+        }),
+        onPanResponderRelease: () => {
+          selfPan.flattenOffset();
+          // Default anchor is top:60 right:16 → translate range keeps it on-screen.
+          const defaultLeft = winW - 16 - SELF_W;
+          const defaultTop = 60;
+          const x = (selfPan.x as any)._value as number;
+          const y = (selfPan.y as any)._value as number;
+          const minX = 12 - defaultLeft;
+          const maxX = winW - SELF_W - 12 - defaultLeft;
+          const minY = 54 - defaultTop;
+          const maxY = winH - SELF_H - 120 - defaultTop;
+          const cx = Math.min(maxX, Math.max(minX, x));
+          const cy = Math.min(maxY, Math.max(minY, y));
+          Animated.spring(selfPan, {
+            toValue: { x: cx, y: cy },
+            useNativeDriver: false,
+            friction: 7,
+          }).start();
+        },
+      }),
+    [selfPan, winW, winH],
+  );
 
   // Noise / echo cancellation state (Krisp). Only surfaced when the device
   // supports advanced audio processing (native build only).
@@ -533,9 +575,12 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
       ) : null}
 
       {!inPiP && videoMode && camOn && local ? (
-        <View style={styles.selfView}>
+        <Animated.View
+          style={[styles.selfView, { transform: selfPan.getTranslateTransform() }]}
+          {...selfPanResponder.panHandlers}
+        >
           <ParticipantView participant={local} style={StyleSheet.absoluteFill as any} />
-        </View>
+        </Animated.View>
       ) : null}
 
       {!inPiP ? (
@@ -1006,6 +1051,29 @@ export default function StreamCallInner() {
   const isIncomingPending =
     activeCallReady && !iAmCaller && !isAnswering && !locallyAccepted && convStatus === 'ringing';
 
+  // #7: play the callee's selected ringtone (+ vibrate) while the in-app
+  // incoming-call UI is showing — the FOREGROUND ring the Stream screen was
+  // missing (the callee saw Accept/Decline but heard nothing).
+  useRingtonePlayer(isIncomingPending, { vibrate: isIncomingPending });
+
+  // #3: the caller hung up WHILE it was still ringing → the Convex record flips
+  // to ended/declined (or disappears). Close the callee's incoming UI instead
+  // of letting them tap Accept and connect into a dead room. Only before we've
+  // accepted/connected (once connected, CallUI owns teardown).
+  useEffect(() => {
+    if (accepted) return;
+    if (!sawCallRef.current) return; // never saw a call yet — nothing to end
+    const ended =
+      convStatus === 'ended' ||
+      convStatus === 'declined' ||
+      convStatus === 'missed' ||
+      convStatus === 'cancelled';
+    if (ended && !endedRef.current) {
+      endedRef.current = true;
+      callHost.end();
+    }
+  }, [accepted, convStatus]);
+
   // 1) Caller: create the Convex ringing record (the doorbell FCM is already
   //    fired by startCall). Only when not answering and there's no active call.
   // Track that a call has existed so we NEVER (re)initiate after it ends — this
@@ -1253,7 +1321,7 @@ export default function StreamCallInner() {
           <Ionicons name="person" size={64} color={Colors.white} />
         </View>
         <Text style={styles.incomingName} numberOfLines={1}>
-          {displayName}
+          {resolvedPeerName}
         </Text>
         <Text style={styles.loadingText}>
           {isVideo ? 'Incoming video call' : 'Incoming voice call'}
@@ -1287,7 +1355,7 @@ export default function StreamCallInner() {
         <ActivityIndicator color={Colors.primary} size="large" />
         <Text style={styles.loadingText}>{isCaller ? 'Calling…' : 'Connecting…'}</Text>
         <Text style={styles.loadingName} numberOfLines={1}>
-          {displayName}
+          {resolvedPeerName}
         </Text>
         <TouchableOpacity style={styles.loadingEnd} onPress={hangup}>
           <Ionicons
@@ -1411,6 +1479,10 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     overflow: 'hidden',
     backgroundColor: '#111',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
+    zIndex: 55,
+    elevation: 14,
   },
   controlsWrap: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingBottom: 10 },
   controlsGrid: {
@@ -1444,7 +1516,7 @@ const styles = StyleSheet.create({
   },
   videoPill: {
     position: 'absolute',
-    top: 100,
+    top: 156,
     alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',

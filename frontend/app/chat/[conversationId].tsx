@@ -668,6 +668,7 @@ export default function ChatScreen() {
     senderPhone: string;
     senderId: string;
     conversationType: 'group' | 'direct';
+    groupName: string;
   } | null>(null);
   const sendMessage = useCallback(
     async (args: any) => {
@@ -675,15 +676,23 @@ export default function ChatScreen() {
       try {
         const ctx = pushNotifyCtxRef.current;
         if (ctx && ctx.recipients.length > 0) {
+          const isGrp = ctx.conversationType === 'group';
+          const preview = previewForMessageType(
+            args?.type,
+            typeof args?.text === 'string' ? args.text : null,
+          );
           notifyEventPush({
             recipients: ctx.recipients,
             event: 'message',
-            title: ctx.senderName,
-            message: previewForMessageType(args?.type, typeof args?.text === 'string' ? args.text : null),
+            // Group → show the GROUP name as the title and the sender inside the
+            // body ("Sender: message"), like WhatsApp. 1:1 → the sender's name.
+            title: isGrp ? ctx.groupName || 'Group chat' : ctx.senderName,
+            message: isGrp ? `${ctx.senderName}: ${preview}` : preview,
             conversationId: String(args?.conversationId || conversationId || ''),
             senderPhone: ctx.senderPhone || null,
             senderId: ctx.senderId || null,
             conversationType: ctx.conversationType,
+            conversationName: isGrp ? ctx.groupName || null : null,
             idempotencyKey: result != null ? String(result) : null,
           });
         }
@@ -3607,7 +3616,17 @@ export default function ChatScreen() {
     });
     const senderName = String(me?.name || me?.displayName || 'New message');
     const conv2: any = hydratedConversation || {};
-    const convType: 'group' | 'direct' = conv2?.type === 'group' || conv2?.isGroup === true ? 'group' : 'direct';
+    const convType: 'group' | 'direct' =
+      conv2?.type === 'group' || conv2?.isGroup === true || isGroupChat ? 'group' : 'direct';
+    const groupName =
+      convType === 'group'
+        ? String(
+            conv2?.name ||
+              conv2?.groupName ||
+              conv2?.title ||
+              getConversationDisplayName(conv2, meId || undefined, 'Group chat'),
+          ).trim()
+        : '';
     const senderPhone = String(me?.phoneE164 || me?.phone || '').trim();
     pushNotifyCtxRef.current = {
       recipients: Array.from(ids).slice(0, 20),
@@ -3615,6 +3634,7 @@ export default function ChatScreen() {
       senderPhone,
       senderId: meId || '',
       conversationType: convType,
+      groupName,
     };
     // iter-200: guarantee the backend learns my Convex id → enables
     // recipient matching for client-triggered pushes (see useEmergentPush).
