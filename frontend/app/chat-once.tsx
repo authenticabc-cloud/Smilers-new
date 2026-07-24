@@ -6,12 +6,12 @@ import {
   TouchableOpacity,
   ScrollView,
   TextInput,
-  KeyboardAvoidingView,
   Platform,
   Alert,
   Share,
   ActivityIndicator,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -157,7 +157,7 @@ function ChatOnceScreen() {
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
       >
         <ScrollView
           style={styles.scroll}

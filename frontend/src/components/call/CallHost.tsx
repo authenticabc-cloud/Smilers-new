@@ -16,6 +16,7 @@ import { Animated, Dimensions, PanResponder, Platform, StyleSheet, View } from '
 
 import CallErrorBoundary from '../CallErrorBoundary';
 import { callHost, useCallHost } from '../../lib/call/callHost';
+import { callActivity } from '../../lib/callActivity';
 import { CallScreenInner } from '../../../app/call/[conversationId]';
 import StreamCallInner from '../stream/StreamCallInnerEntry';
 
@@ -78,6 +79,19 @@ export default function CallHost() {
     const raf = requestAnimationFrame(() => setMounted(false));
     return () => cancelAnimationFrame(raf);
   }, [params]);
+
+  // App Lock guard: mark a call as "on screen" for the ENTIRE call lifetime so
+  // AppLockGate never re-locks over a live call. This lives here (the root-level
+  // host that stays mounted throughout the call) rather than in the /call route,
+  // which is only a shim that immediately pops itself — previously that pop
+  // cleared callActivity while the call was still running, so "Lock when
+  // leaving" would lock over active Stream calls.
+  const callActive = !!params || mounted;
+  useEffect(() => {
+    if (!callActive) return;
+    const dispose = callActivity.enter();
+    return dispose;
+  }, [callActive]);
 
   // Web previews can't run react-native-webrtc — skip the overlay entirely so
   // the bundle still renders for screenshots/QA. Real calls only run on native.

@@ -13,10 +13,10 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
   Platform,
   ScrollView,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -491,7 +491,7 @@ function ComposeModal({ initial, onClose, onSave }: { initial?: Schedule; onClos
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose}>
         <Pressable style={[styles.sheet, { maxHeight: '90%' }]} onPress={() => {}} testID="scheduled-compose-sheet">
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <KeyboardAvoidingView behavior="padding">
             <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.sheetContent}>
               <View style={styles.grabber} />
               <Text style={styles.sheetTitle}>{initial ? 'Edit scheduled message' : 'Schedule a message'}</Text>

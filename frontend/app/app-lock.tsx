@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   ScrollView,
@@ -12,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -434,7 +434,7 @@ export default function AppLockScreen() {
       >
         <View style={styles.modalBackdrop}>
           <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            behavior="padding"
             style={styles.modalKeyboard}
           >
             <View style={styles.modalCard}>

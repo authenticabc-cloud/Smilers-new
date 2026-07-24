@@ -3,7 +3,6 @@ import {
   Alert,
   FlatList,
   Image,
-  KeyboardAvoidingView,
   Linking,
   Modal,
   Platform,
@@ -15,6 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -606,7 +606,7 @@ function RedeemCodeModal({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <KeyboardAvoidingView
         style={styles.modalBackdrop}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
       >
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} testID="redeem-modal-backdrop" />
         <View style={styles.modalCard} testID="redeem-modal">

@@ -5,13 +5,13 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   Alert,
   ScrollView,
   Modal,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
@@ -70,7 +70,7 @@ export default function StatusComposeScreen() {
   return (
     <View style={[styles.container, { backgroundColor: palette.bg }]} testID="status-compose-screen">
       <SafeAreaView edges={['top', 'bottom']} style={styles.flexOne}>
-        <KeyboardAvoidingView style={styles.flexOne} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <KeyboardAvoidingView style={styles.flexOne} behavior="padding">
           <View style={styles.header}>
             <TouchableOpacity onPress={() => router.back()} hitSlop={12} testID="status-close">
               <Feather name="x" size={26} color={palette.fg} />

@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
   Platform,
   Pressable,
   ScrollView,
@@ -13,6 +12,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -240,7 +240,7 @@ function LegacyLanguagesScreen() {
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
       >
         <View style={styles.intro}>
           <Text style={styles.introBodyCentered}>
@@ -644,7 +644,7 @@ export function MessageLanguageScreen() {
         </TouchableOpacity>
       </View>
 
-      <KeyboardAvoidingView style={screenshotStyles.flexOne} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={screenshotStyles.flexOne} behavior="padding">
         <ScrollView contentContainerStyle={screenshotStyles.content} keyboardShouldPersistTaps="handled" testID="languages-scroll-view">
           <View style={screenshotStyles.sectionHeader} testID="languages-section-header">
             <Ionicons name="globe-outline" size={30} color={Colors.primary} />

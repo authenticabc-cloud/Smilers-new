@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -12,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -278,7 +278,7 @@ export default function TemplatesScreen() {
 
       <Modal visible={composerVisible} transparent animationType="slide" onRequestClose={() => setComposerVisible(false)}>
         <Pressable style={styles.modalBackdrop} onPress={() => setComposerVisible(false)}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalKeyboardWrap}>
+          <KeyboardAvoidingView behavior="padding" style={styles.modalKeyboardWrap}>
             <Pressable style={styles.modalCard} onPress={() => {}} testID="templates-modal">
               <Text style={styles.modalTitle} testID="templates-modal-title">{draft.id ? 'Edit quick reply' : 'New quick reply'}</Text>
               <Text style={styles.modalSub} testID="templates-modal-subtitle">

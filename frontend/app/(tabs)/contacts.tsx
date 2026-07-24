@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
-  KeyboardAvoidingView,
   Linking,
   Modal,
   Platform,
@@ -15,6 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { buildInviteUrl, buildInviteMessage } from '../../src/lib/inviteLink';
@@ -861,7 +861,7 @@ export default function ContactsScreen() {
       <Modal visible={showAddByPhone} transparent animationType="slide" onRequestClose={() => setShowAddByPhone(false)}>
         <Pressable style={styles.backdrop} onPress={() => setShowAddByPhone(false)}>
           <Pressable style={styles.sheet} onPress={() => undefined} testID="add-by-phone-sheet">
-            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+            <KeyboardAvoidingView behavior="padding">
               <View style={styles.grabber} />
               <Text style={styles.sheetTitle}>Add by phone number</Text>
               <Text style={styles.sheetSub}>We’ll send an invite if they’re not on Smilers yet.</Text>

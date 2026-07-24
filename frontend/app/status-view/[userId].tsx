@@ -9,13 +9,13 @@ import {
   Animated,
   ActivityIndicator,
   TextInput,
-  KeyboardAvoidingView,
   Keyboard,
   Platform,
   Alert,
   FlatList,
   Modal,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
@@ -689,7 +689,7 @@ function StatusViewScreenInner() {
       {/* Edit my status */}
       <Modal visible={editing} transparent animationType="slide" onRequestClose={() => setEditing(false)}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior="padding"
           style={styles.editBackdrop}
         >
           <View style={styles.editSheet}>

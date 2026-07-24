@@ -4,13 +4,13 @@ import {
   Alert,
   AppState,
   AppStateStatus,
-  KeyboardAvoidingView,
   Platform,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import * as LocalAuthentication from 'expo-local-authentication';
@@ -527,7 +527,7 @@ function LockOverlay({ biometric, onUnlock, onForgotPinSignOut }: LockOverlayPro
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="app-lock-overlay">
-      <KeyboardAvoidingView style={styles.flexOne} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={styles.flexOne} behavior="padding">
         <View style={styles.headerWrap}>
           <View style={styles.brandWrap}>
             <Ionicons name="lock-closed" size={28} color={Colors.primary} />

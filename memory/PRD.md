@@ -1,5 +1,15 @@
 # Smilers Mobile App — PRD
 
+## iter-371 (Jun 2026): App Lock interrupting calls + app-wide keyboard-covers-input fix
+Two pre-build bug fixes (both need the APK rebuild to validate — App Lock is native-call-only; keyboard-controller is a native module):
+- **#1 "Lock when leaving" interrupted calls:** `AppLockGate` already suppresses the re-lock while `callActivity.isActive()`, but with the new Stream architecture the `/call/[conversationId]` route is just a SHIM that immediately pops itself (`call-shim pop → back()` seen in logs) — so its `callActivity.enter()` disposer fired while the real call kept running in the root-level `CallHost`, dropping the guard. Fix: register `callActivity.enter()` inside **`CallHost.tsx`** (keyed on an active call, `!!params || mounted`), which stays mounted for the ENTIRE call for both Stream and legacy paths. `callActivity` is ref-counted so this composes safely.
+- **#2 Keyboard covered TextInputs across the app:** root cause was the SDK 54 edge-to-edge + newArch combo — every screen used RN's `KeyboardAvoidingView` with `behavior={Platform.OS === 'ios' ? 'padding' : undefined}`, i.e. **behavior `undefined` on Android → no-op**, and `adjustResize` alone doesn't inset under edge-to-edge. Fix per the `expo-keyboard-experience` skill:
+  - Installed `react-native-keyboard-controller@1.18.5` and wrapped the root (`app/_layout.tsx`) in `<KeyboardProvider>` (inside GestureHandlerRootView, above SafeAreaProvider).
+  - Swept **26 screens** (diary, study/*, ai-chat, devotionals/compose, status-compose, chat-once, templates, scheduled, conference-create, phone-verify, change-phone-number, find-by-phone, languages, help, app-lock, index, status-view, (tabs)/ads|contacts|profile, GiphyPicker, AppLockGate) to import `KeyboardAvoidingView` from `react-native-keyboard-controller` and use `behavior="padding"` (works cross-platform, incl. Android edge-to-edge).
+Lint clean (only pre-existing warnings; the GiphyPicker:287 unescaped-quote is pre-existing and Metro/Babel doesn't run ESLint). Web bundle builds & boots to Sign In.
+
+
+
 ## iter-370 (Jun 2026): Fixes from device logs — join latency, voice-camera, group tone, #9 diagnostics
 Diagnostic logs proved `call.join()` itself was taking **34–57s** (`join=57672ms` / `34444ms`; client-ready was <1.5s). Root cause = Stream's SDK retrying join **3× with exponential backoff** on a flaky edge. All NATIVE-only → validate on APK rebuild.
 - **Latency (New #1 + #3 delay):** rewrote the join in `StreamCallInner.tsx` to `join({ ..., maxJoinRetries: 1 })` wrapped in a **14s watchdog**; on timeout/fail it retries ONCE with a fresh call object (new edge often connects instantly). Worst case ~28s instead of 57s, and the End button is no longer starved by the 3-retry native storm. Added `attempt=` to the timing diagnostic.

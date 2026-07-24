@@ -7,7 +7,6 @@ import {
   FlatList,
   Image,
   Keyboard,
-  KeyboardAvoidingView,
   Modal,
   PanResponder,
   Platform,
@@ -18,6 +17,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../theme';
 
@@ -316,7 +316,7 @@ export default function GiphyPicker({ visible, onClose, onSelect }: GiphyPickerP
           testID="giphy-sheet"
         >
           <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            behavior="padding"
             style={styles.flexOne}
           >
             <View style={styles.handle} {...panResponder.panHandlers} />
