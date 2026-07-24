@@ -394,15 +394,37 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   const [pendingAdd, setPendingAdd] = useState<any | null>(null);
   const [adding, setAdding] = useState(false);
   const [roster, setRoster] = useState<CallRosterEntry[]>([]);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<any>(null);
+  const prevRosterRef = useRef<Map<string, string> | null>(null);
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 3500);
+  }, []);
 
   // Poll the privacy-aware roster while connected so names/masked-numbers stay
-  // fresh for everyone (the backend masks hidden numbers per-viewer).
+  // fresh for everyone (the backend masks hidden numbers per-viewer). We also
+  // diff successive snapshots to surface live "joined / left" toasts to EVERY
+  // participant (the shared roster is the single source of truth).
   useEffect(() => {
     if (!connected || !room || !myId) return;
     let active = true;
     const load = () => {
       fetchCallParticipants(room, myId).then((list) => {
-        if (active) setRoster(list);
+        if (!active) return;
+        setRoster(list);
+        const nextMap = new Map(list.map((r) => [r.identity, r.displayName || 'Someone']));
+        const prev = prevRosterRef.current;
+        if (prev) {
+          nextMap.forEach((name, id) => {
+            if (id !== myId && !prev.has(id)) showToast(`${name} joined the call`);
+          });
+          prev.forEach((name, id) => {
+            if (id !== myId && !nextMap.has(id)) showToast(`${name} left the call`);
+          });
+        }
+        prevRosterRef.current = nextMap;
       });
     };
     load();
@@ -411,7 +433,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
       active = false;
       clearInterval(iv);
     };
-  }, [connected, room, myId]);
+  }, [connected, room, myId, showToast]);
 
   const inCallIds = useMemo(() => {
     const s = new Set<string>();
@@ -472,6 +494,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
         });
         setPendingAdd(null);
         setShowAddPicker(false);
+        showToast(`You added ${String(contact.name || 'a contact')}`);
         if (room && myId) fetchCallParticipants(room, myId).then(setRoster);
       } catch (err: any) {
         Alert.alert('Could not add participant', err?.message || 'Please try again.');
@@ -479,7 +502,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
         setAdding(false);
       }
     },
-    [pendingAdd, room, myId, myName, myPhone, videoMode, conversationId, getOrCreateDirect],
+    [pendingAdd, room, myId, myName, myPhone, videoMode, conversationId, getOrCreateDirect, showToast],
   );
 
   const participantCount = (remoteParticipants?.length || 0) + 1; // +1 = me
@@ -497,6 +520,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
           onPress: async () => {
             try {
               await removeStreamParticipant({ streamRoom: room, identity: entry.identity, requesterIdentity: myId });
+              showToast(`You removed ${entry.displayName || 'a participant'}`);
               fetchCallParticipants(room, myId).then(setRoster);
             } catch (err: any) {
               Alert.alert('Could not remove', err?.message || 'Please try again.');
@@ -505,7 +529,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
         },
       ]);
     },
-    [room, myId],
+    [room, myId, showToast],
   );
 
   // Screen share (Stream). Android uses the system MediaProjection dialog (the
@@ -785,6 +809,14 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
             } catch {}
           }}
         />
+      ) : null}
+
+      {/* Live roster-change toast (joined / left / added / removed). */}
+      {toast && !inPiP && !isMini ? (
+        <View style={styles.callToast} pointerEvents="none">
+          <Ionicons name="people" size={14} color={Colors.white} />
+          <Text style={styles.callToastText} numberOfLines={1}>{toast}</Text>
+        </View>
       ) : null}
 
       {/* Participants pill — tap to open the privacy-aware roster. */}
@@ -1630,6 +1662,21 @@ const styles = StyleSheet.create({
     zIndex: 45,
   },
   participantsPillText: { color: Colors.white, fontSize: 12, fontWeight: '600' },
+  callToast: {
+    position: 'absolute',
+    top: 92,
+    alignSelf: 'center',
+    maxWidth: '86%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 18,
+    zIndex: 60,
+  },
+  callToastText: { color: Colors.white, fontSize: 13, fontWeight: '600', flexShrink: 1 },
   sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
   sheet: {
     backgroundColor: '#1c1c1e',

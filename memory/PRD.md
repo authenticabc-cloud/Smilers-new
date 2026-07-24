@@ -1,5 +1,13 @@
 # Smilers Mobile App — PRD
 
+## iter-369 (Jun 2026): Live in-call roster-change toasts
+`StreamCallInner.tsx` now surfaces transient toasts to EVERY participant when the call roster changes (NATIVE-only → validate on APK rebuild):
+- The 5s roster poll diffs successive snapshots (`prevRosterRef`): a new identity → "{name} joined the call"; a vanished identity → "{name} left the call". Because the diff is driven by the shared backend roster, all participants see the change without extra signalling.
+- The acting user also gets an immediate optimistic toast: "You added {name}" (on add) and "You removed {name}" (on remove).
+- Toast renders as a top-centered pill (auto-dismiss 3.5s, `zIndex 60`), hidden in PiP/mini. Lint clean; web boots.
+
+
+
 ## iter-368 (Jun 2026): Stream call — "Remove participant" (adder-only)
 Added removal to the in-call roster with the rule **only the person who added a participant can remove them** (NATIVE-only → validate on APK rebuild):
 - **Backend `POST /api/calls/remove-participant`** (`server.py`): loads the target's `twilio_call_participants` roster entry, **403s unless `requester_identity == entry.added_by`**, deletes the roster entry, then fires a silent `type='call-removed'` control push (with `stream_room`) to the removed device. Added `call-removed` to `send_push`'s `is_silent_control` set so it's data-only (no banner). Verified via curl: non-adder → 403, adder → 200, participant dropped from roster.
