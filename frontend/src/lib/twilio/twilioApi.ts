@@ -358,6 +358,39 @@ export async function addStreamParticipant(args: {
 }
 
 /**
+ * POST /api/calls/remove-participant — Stream-native removal. Only the person
+ * who ADDED the target (roster `added_by`) may remove them; the backend
+ * enforces this and 403s otherwise. Signals the removed device to leave.
+ */
+export async function removeStreamParticipant(args: {
+  streamRoom: string;
+  identity: string;
+  requesterIdentity: string;
+}): Promise<void> {
+  if (!BACKEND_URL) throw new Error('[twilio-api] EXPO_PUBLIC_BACKEND_URL is empty in this build');
+  const resp = await fetch(`${BACKEND_URL}/api/calls/remove-participant`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      stream_room: args.streamRoom,
+      identity: args.identity,
+      requester_identity: args.requesterIdentity,
+      backend_url: BACKEND_URL,
+    }),
+  });
+  if (!resp.ok) {
+    if (resp.status === 403) throw new Error('Only the person who added them can remove them.');
+    recordDiagnostic({ tag: 'CALL', source: 'removeStreamParticipant', message: `HTTP_${resp.status}` });
+    throw new Error(`[twilio-api] calls/remove-participant HTTP ${resp.status}`);
+  }
+  recordDiagnostic({
+    tag: 'CALL',
+    source: 'removeStreamParticipant',
+    message: `ok room=${args.streamRoom} identity=${args.identity}`,
+  });
+}
+
+/**
  * POST /api/twilio/remove-participant — host action: server-enforced
  * disconnect of a participant from the live room (via Twilio REST).
  */

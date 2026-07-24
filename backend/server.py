@@ -908,6 +908,67 @@ async def twilio_remove_participant(payload: TwilioRemoveParticipantRequest):
     return {"ok": True, "disconnected": disconnected}
 
 
+class StreamRemoveParticipantRequest(BaseModel):
+    """Remove a participant from a live Stream call. ONLY the person who ADDED
+    that participant may remove them (enforced against the roster's `added_by`)."""
+    stream_room: str = Field(..., min_length=1, max_length=160)
+    identity: str = Field(..., min_length=1, max_length=120)
+    requester_identity: str = Field(..., min_length=1, max_length=120)
+    backend_url: Optional[str] = None
+
+
+@api_router.post("/calls/remove-participant")
+async def stream_remove_participant(payload: StreamRemoveParticipantRequest, request: Request):
+    entry = await db.twilio_call_participants.find_one(
+        {"room_name": payload.stream_room, "identity": payload.identity}
+    )
+    added_by = (entry or {}).get("added_by")
+    # Authorization: only the adder can remove the person they added. (A user
+    # can always be removed by whoever added them; nobody else can.)
+    if not entry or added_by != payload.requester_identity:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the person who added this participant can remove them",
+        )
+
+    try:
+        await db.twilio_call_participants.delete_one(
+            {"room_name": payload.stream_room, "identity": payload.identity}
+        )
+    except Exception:
+        logger.warning("stream-remove-participant: roster delete failed (non-fatal)")
+
+    # Tell the removed participant's device to LEAVE the Stream room. Sent as a
+    # silent control signal (type=call-removed) — no banner; the app ends the
+    # matching active call.
+    backend_url = (payload.backend_url or "").strip().rstrip("/")
+    if not backend_url:
+        backend_url = str(request.base_url).rstrip("/")
+    if backend_url.startswith("http://"):
+        backend_url = "https://" + backend_url[len("http://"):]
+
+    push_data = {
+        "title": "Call",
+        "message": "You were removed from the call",
+        "type": "call-removed",
+        "stream_room": payload.stream_room,
+        "backendUrl": backend_url,
+    }
+
+    async def _dispatch():
+        try:
+            await send_push(
+                recipients=[payload.identity],
+                data=push_data,
+                idempotency_key=f"stream-remove:{payload.stream_room}:{payload.identity}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(f"stream-remove-participant: push failed (non-fatal): {exc}")
+
+    asyncio.create_task(_dispatch())
+    return {"ok": True}
+
+
 
 # ============================================================
 # Twilio Recording (Phase A.4)
@@ -2582,7 +2643,7 @@ async def send_push(
                 # ringtone. The Kotlin SmilersCallNotificationService intercepts them
                 # directly via handleIntent and handles the UI (dismiss ring, show
                 # missed-call, etc.).
-                is_silent_control = routing.get("type") in ("call-cancelled", "call-declined")
+                is_silent_control = routing.get("type") in ("call-cancelled", "call-declined", "call-removed")
                 # MESSAGE pushes are now ALSO sent data-only. Previously they carried
                 # a `notification` block, so Android auto-displayed the SERVER title
                 # (the sender's Google/account name) the instant the FCM arrived —

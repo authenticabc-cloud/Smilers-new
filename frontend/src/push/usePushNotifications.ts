@@ -17,6 +17,7 @@ import { getPushDiagnosticsState, setPushDiagnostics, setPushDiagnosticsRetryHan
 import { recordDiagnostic } from '../lib/diagnostics';
 import { useAuth } from '../providers/AuthProvider';
 import { isTwilioEnabled } from '../lib/twilio/twilioApi';
+import { callHost } from '../lib/call/callHost';
 import {
   shouldAskForFullScreenIntent,
   wasAlreadyPrompted,
@@ -299,6 +300,18 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
   // The foreground addNotificationReceivedListener handles this when caller
   // is active; if caller is also backgrounded, Convex cron expires the call.
   if (type === 'call-declined') {
+    return;
+  }
+
+  // call-removed: the person who added this user to a Stream conference removed
+  // them. Silent control signal — leave the matching active call, no banner.
+  if (type === 'call-removed') {
+    try {
+      const kickedRoom = toNonEmptyString(payload.stream_room);
+      const st = callHost.getState();
+      const curRoom = toNonEmptyString(st.params?.streamRoom);
+      if (st.params && (!kickedRoom || !curRoom || curRoom === kickedRoom)) callHost.end();
+    } catch {}
     return;
   }
 
@@ -1301,6 +1314,16 @@ export function usePushNotifications() {
               });
             });
         }
+      }
+      // call-removed arrives when the adder removes this user from a Stream
+      // conference while their app is OPEN — leave the matching active call.
+      if (type === 'call-removed') {
+        try {
+          const kickedRoom = toNonEmptyString(payload.stream_room);
+          const st = callHost.getState();
+          const curRoom = toNonEmptyString(st.params?.streamRoom);
+          if (st.params && (!kickedRoom || !curRoom || curRoom === kickedRoom)) callHost.end();
+        } catch {}
       }
       // iter-186: desktop login approval arriving while the app is OPEN —
       // contract section 2: "If the app is in the foreground, show the

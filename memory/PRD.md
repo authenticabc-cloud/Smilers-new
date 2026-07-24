@@ -1,5 +1,15 @@
 # Smilers Mobile App — PRD
 
+## iter-368 (Jun 2026): Stream call — "Remove participant" (adder-only)
+Added removal to the in-call roster with the rule **only the person who added a participant can remove them** (NATIVE-only → validate on APK rebuild):
+- **Backend `POST /api/calls/remove-participant`** (`server.py`): loads the target's `twilio_call_participants` roster entry, **403s unless `requester_identity == entry.added_by`**, deletes the roster entry, then fires a silent `type='call-removed'` control push (with `stream_room`) to the removed device. Added `call-removed` to `send_push`'s `is_silent_control` set so it's data-only (no banner). Verified via curl: non-adder → 403, adder → 200, participant dropped from roster.
+- **Client `removeStreamParticipant()`** in `twilioApi.ts` (surfaces a friendly message on 403).
+- **`StreamCallInner.tsx`:** the roster modal now shows a red remove (⊖) button on a row **only when `entry.addedBy === myId`**; tapping confirms then calls the endpoint and refreshes the roster. `RosterRow` extended with an optional `onRemove`.
+- **On-device kick handling (`usePushNotifications.ts`):** both the background handler and the foreground receiver now consume `type='call-removed'` — if the current `callHost` room matches `stream_room` (or no room set), they call `callHost.end()` so the removed user leaves immediately. Silent (no banner).
+Lint clean (only pre-existing warnings); backend loads; web boots to Sign In.
+
+
+
 ## iter-367 (Jun 2026): Call + notification bug batch (7 fixed, 2 flagged)
 All call/push behaviour is NATIVE-only → the user must rebuild the APK to validate end-to-end. Fixed this round:
 - **#2 Wrong caller name on receiver (Google/account name):** the incoming AND connecting screens in `StreamCallInner.tsx` rendered the raw push `displayName` instead of `resolvedPeerName` (device-contact name). Both now use `resolvedPeerName` (caller side still falls back to the dial-time name).

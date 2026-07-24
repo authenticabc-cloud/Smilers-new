@@ -50,7 +50,7 @@ import {
 import { InCallAudio } from '../../lib/webrtc/inCallManager';
 import { ControlBtn, AudioOutputMenu } from '../call/CallScreenComponents';
 import { useRingtonePlayer } from '../../lib/ringtone/useRingtonePlayer';
-import { addStreamParticipant, fetchCallParticipants, type CallRosterEntry } from '../../lib/twilio/twilioApi';
+import { addStreamParticipant, fetchCallParticipants, removeStreamParticipant, type CallRosterEntry } from '../../lib/twilio/twilioApi';
 import type { AudioOutputRoute } from '../call/callTypes';
 import * as Haptics from 'expo-haptics';
 import { Colors } from '../../theme';
@@ -484,6 +484,30 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
 
   const participantCount = (remoteParticipants?.length || 0) + 1; // +1 = me
 
+  // Remove a participant — allowed ONLY for the person who added them (the
+  // backend re-checks `added_by` and 403s otherwise; we also gate the UI).
+  const handleRemove = useCallback(
+    (entry: CallRosterEntry) => {
+      if (!room || !myId) return;
+      Alert.alert('Remove participant', `Remove ${entry.displayName || 'this person'} from the call?`, [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await removeStreamParticipant({ streamRoom: room, identity: entry.identity, requesterIdentity: myId });
+              fetchCallParticipants(room, myId).then(setRoster);
+            } catch (err: any) {
+              Alert.alert('Could not remove', err?.message || 'Please try again.');
+            }
+          },
+        },
+      ]);
+    },
+    [room, myId],
+  );
+
   // Screen share (Stream). Android uses the system MediaProjection dialog (the
   // foreground service is already wired via withWebRTCScreenshare); iOS uses
   // in-app capture (no broadcast-extension target needed). The ref is only
@@ -907,6 +931,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
                     name={r.displayName || 'Smilers user'}
                     phone={r.phoneNumber}
                     hidden={r.hideNumber}
+                    onRemove={r.addedBy && myId && r.addedBy === myId ? () => handleRemove(r) : undefined}
                   />
                 ))}
             </View>
@@ -928,7 +953,17 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   );
 }
 
-function RosterRow({ name, phone, hidden }: { name: string; phone: string | null; hidden?: boolean }) {
+function RosterRow({
+  name,
+  phone,
+  hidden,
+  onRemove,
+}: {
+  name: string;
+  phone: string | null;
+  hidden?: boolean;
+  onRemove?: () => void;
+}) {
   return (
     <View style={styles.rosterRow}>
       <View style={[styles.addRowAvatar, styles.addRowAvatarFallback]}>
@@ -942,6 +977,11 @@ function RosterRow({ name, phone, hidden }: { name: string; phone: string | null
           <Text style={styles.rosterHidden}>Number hidden</Text>
         ) : null}
       </View>
+      {onRemove ? (
+        <TouchableOpacity style={styles.rosterRemoveBtn} onPress={onRemove} hitSlop={8}>
+          <Ionicons name="remove-circle" size={24} color="#ff5a5f" />
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
@@ -1658,6 +1698,7 @@ const styles = StyleSheet.create({
   rosterList: { gap: 4 },
   rosterRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 },
   rosterHidden: { color: '#777', fontSize: 13, fontStyle: 'italic', marginTop: 1 },
+  rosterRemoveBtn: { padding: 4 },
   rosterAddBtn: {
     flexDirection: 'row',
     alignItems: 'center',
