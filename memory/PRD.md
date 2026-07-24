@@ -1,5 +1,19 @@
 # Smilers Mobile App — PRD
 
+## iter-366 (Jun 2026): Stream call — FIX crash (TDZ) + "Add Participants" (hide/show number) + latency pre-warm
+Three things this session (all NATIVE-only for calls → validate on the user's APK rebuild):
+- **P0 CRASH FIX (`StreamCallInner.tsx`):** `showVideo` (near the top of `CallUI`) read `callVideoHidden` which was declared ~120 lines LOWER via `useState` → a temporal-dead-zone `ReferenceError` that crashed EVERY Stream call the instant `CallUI` rendered (never surfaced on web since Stream is native-only). Moved the `callVideoHidden` state declaration up beside the other `useState`s. This likely contributed to the "calls spin until missed / don't connect" reports.
+- **P0 ADD PARTICIPANTS (1:1 → conference on Stream SFU):** replaced the old `handleAdd` "next milestone" stub with the full flow mirrored from the legacy Twilio screen:
+  - Contact picker modal (searches `api.contacts.getContacts`, excludes people already in the call) → **hide/show-number privacy step** → confirm.
+  - New backend endpoint **`POST /api/calls/add-participant`** (`server.py`): persists the privacy-aware roster into the SAME `twilio_call_participants` collection (keyed by the STREAM room id) and fires the FCM doorbell ring pointed at `/call/<conv>?streamRoom=<R>&answer=1` so the added person JOINS THE SAME Stream room (Stream's SFU mixes everyone). Whitelisted `stream_room` in the FCM data forwarding.
+  - Client helper `addStreamParticipant()` in `twilioApi.ts`; on confirm the adder resolves a valid direct conversation for the callee via `conversations.getOrCreateDirect({otherUserId})` for correct deep-link routing.
+  - **Privacy-aware roster** rendered in-call: a "N people" pill → roster modal showing masked/visible numbers via the existing `GET /api/twilio/call-participants` (backend masks per-viewer: only the adder/self see a hidden number). Verified via curl — viewer=adder sees the number, other viewers get `phone_number:null`.
+  - `usePushNotifications` call-tap handler now routes a push carrying `stream_room` into `/call/<conv>?streamRoom=…&answer=1`. `StreamCallInner` prefers `params.streamRoom` as the room to join (added participants have no Convex ring record for the adder↔them conversation).
+- **P1 LATENCY (safe pre-warm):** `StreamCallInner` now kicks off `createStreamVideoClient()` on MOUNT (cached in a ref) in parallel with the Convex ring round-trip that resolves the room id, so `join()` no longer pays the client-create cost after accept. Existing ring→connect telemetry retained.
+Lint clean on all changed files (only pre-existing warnings); backend loads; web boots to Sign In. ⚠️ Add-participant ring/join + the crash fix are native-only → require the user's APK rebuild to validate end-to-end.
+
+
+
 ## iter-364/365 (Jun 2026): "Archived" restyled as a colorful gradient borderline (+ slim divider fallback)
 User wanted the Archived row to be colorful/stylish and act as the visual borderline between the feature rows (Smilers AI, Diary, Devotion, Chat Once) and the conversations. `app/(tabs)/chats.tsx`:
 - Replaced the plain grey Archived row with a floating `LinearGradient` banner (diagonal `#A855F7→#6366F1→#3B82F6→#14B8A6`, matching the feature-icon accents): frosted translucent archive icon, bold white "Archived" title, "N chats tucked away" subtitle, a translucent count pill, chevron; rounded 18px, side margins, `Shadow.md`. Shown only when `archivedCount > 0` (unchanged behavior). New styles: `archivedBanner/archivedIconWrap/archivedMiddle/archivedTitle/archivedSubtitle/archivedCountPill/archivedCountText`.

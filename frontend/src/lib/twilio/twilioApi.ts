@@ -307,6 +307,57 @@ export async function addTwilioParticipant(args: {
 }
 
 /**
+ * POST /api/calls/add-participant — Stream-native "add participant". Rings the
+ * new person (FCM doorbell) into the SAME live Stream room (`streamRoom`) so
+ * Stream's SFU mixes everyone, and persists the adder's number-visibility
+ * choice into the same roster the /twilio/call-participants GET reads from.
+ */
+export async function addStreamParticipant(args: {
+  streamRoom: string;
+  adderIdentity: string;
+  adderDisplayName?: string;
+  adderPhone?: string;
+  calleeIdentity: string;
+  calleeDisplayName?: string;
+  calleePhone?: string;
+  hideNumber: boolean;
+  isVideo: boolean;
+  conversationId: string;
+}): Promise<void> {
+  if (!BACKEND_URL) throw new Error('[twilio-api] EXPO_PUBLIC_BACKEND_URL is empty in this build');
+  const resp = await fetch(`${BACKEND_URL}/api/calls/add-participant`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      stream_room: args.streamRoom,
+      adder_identity: args.adderIdentity,
+      adder_display_name: args.adderDisplayName ?? null,
+      adder_phone: args.adderPhone ?? null,
+      callee_identity: args.calleeIdentity,
+      callee_display_name: args.calleeDisplayName ?? null,
+      callee_phone: args.calleePhone ?? null,
+      hide_number: args.hideNumber,
+      is_video: args.isVideo,
+      conversation_id: args.conversationId,
+      backend_url: BACKEND_URL,
+    }),
+  });
+  if (!resp.ok) {
+    let body = '';
+    try {
+      body = (await resp.text()).slice(0, 200);
+    } catch {}
+    recordDiagnostic({ tag: 'CALL', source: 'addStreamParticipant', message: `HTTP_${resp.status} body=${body}` });
+    throw new Error(`[twilio-api] calls/add-participant HTTP ${resp.status}`);
+  }
+  recordDiagnostic({
+    tag: 'CALL',
+    source: 'addStreamParticipant',
+    message: `ok room=${args.streamRoom} callee=${args.calleeIdentity} hide=${args.hideNumber}`,
+  });
+}
+
+/**
  * POST /api/twilio/remove-participant — host action: server-enforced
  * disconnect of a participant from the live room (via Twilio REST).
  */

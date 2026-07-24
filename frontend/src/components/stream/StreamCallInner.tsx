@@ -19,7 +19,7 @@
  * interpreter, call-waiting.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Image, Modal, Platform, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 // @ts-expect-error — native-only Stream SDK, resolved in the dev/prod build
@@ -49,6 +49,7 @@ import {
 } from '../../lib/deviceContactIndex';
 import { InCallAudio } from '../../lib/webrtc/inCallManager';
 import { ControlBtn, AudioOutputMenu } from '../call/CallScreenComponents';
+import { addStreamParticipant, fetchCallParticipants, type CallRosterEntry } from '../../lib/twilio/twilioApi';
 import type { AudioOutputRoute } from '../call/callTypes';
 import * as Haptics from 'expo-haptics';
 import { Colors } from '../../theme';
@@ -93,10 +94,18 @@ type CallUIProps = {
   onHangup: () => void;
   /** ms epoch when the call was accepted/initiated — for connect-latency telemetry. */
   acceptedAt: number | null;
+  /** Stream room id used to add participants + fetch the privacy-aware roster. */
+  room: string | null;
+  /** This user's Convex id / name / phone — for the add-participant roster. */
+  myId: string | null;
+  myName: string;
+  myPhone: string;
+  /** Convex conversation id of the current call (fallback for add routing). */
+  conversationId: string;
 };
 
 /** In-call UI (inside StreamCall context). */
-function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acceptedAt }: CallUIProps) {
+function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acceptedAt, room, myId, myName, myPhone, conversationId }: CallUIProps) {
   const call = useCall();
   const { mode } = useCallHost();
   const isMini = mode === 'mini';
@@ -119,6 +128,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   const [audioRoute, setAudioRoute] = useState<AudioOutputRoute>(isVideo ? 'speaker' : 'earpiece');
   const [audioMenuVisible, setAudioMenuVisible] = useState(false);
   const [seconds, setSeconds] = useState(0);
+  const [callVideoHidden, setCallVideoHidden] = useState(false); // feature 3 (local hide)
   const wasConnectedRef = useRef(false);
 
   // Noise / echo cancellation state (Krisp). Only surfaced when the device
@@ -257,7 +267,6 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
 
   const [awaitingVideoAccept, setAwaitingVideoAccept] = useState(false);
   const [incomingVideoReqFrom, setIncomingVideoReqFrom] = useState<string | null>(null);
-  const [callVideoHidden, setCallVideoHidden] = useState(false); // feature 3 (shared)
 
   const switchToVideo = useCallback(() => {
     if (!call) return;
@@ -334,12 +343,104 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
     }
   }, []);
 
+  // ── Add participant (1:1 → conference on Stream SFU) + privacy roster ─────
+  const contacts = useQuery(api.contacts.getContacts, {}) as any[] | undefined;
+  const getOrCreateDirect = useMutation((api as any).conversations.getOrCreateDirect);
+  const [showAddPicker, setShowAddPicker] = useState(false);
+  const [showRoster, setShowRoster] = useState(false);
+  const [addSearch, setAddSearch] = useState('');
+  const [pendingAdd, setPendingAdd] = useState<any | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [roster, setRoster] = useState<CallRosterEntry[]>([]);
+
+  // Poll the privacy-aware roster while connected so names/masked-numbers stay
+  // fresh for everyone (the backend masks hidden numbers per-viewer).
+  useEffect(() => {
+    if (!connected || !room || !myId) return;
+    let active = true;
+    const load = () => {
+      fetchCallParticipants(room, myId).then((list) => {
+        if (active) setRoster(list);
+      });
+    };
+    load();
+    const iv = setInterval(load, 5000);
+    return () => {
+      active = false;
+      clearInterval(iv);
+    };
+  }, [connected, room, myId]);
+
+  const inCallIds = useMemo(() => {
+    const s = new Set<string>();
+    if (myId) s.add(myId);
+    (participants || []).forEach((p: any) => p?.userId && s.add(String(p.userId)));
+    roster.forEach((r) => r.identity && s.add(r.identity));
+    return s;
+  }, [myId, participants, roster]);
+
+  const addableContacts = useMemo(() => {
+    const q = addSearch.trim().toLowerCase();
+    return (contacts || [])
+      .filter((c) => c?._id && !inCallIds.has(String(c._id)))
+      .filter(
+        (c) =>
+          !q ||
+          String(c.name || '').toLowerCase().includes(q) ||
+          String(c.phoneNumber || '').includes(q),
+      );
+  }, [contacts, inCallIds, addSearch]);
+
   const handleAdd = useCallback(() => {
-    Alert.alert(
-      'Add people',
-      'Group & conference calling on the new calling system is the next milestone. For now you can start a group call from a group chat.',
-    );
-  }, []);
+    if (!room) {
+      Alert.alert('Add people', 'The call is still connecting — try again in a moment.');
+      return;
+    }
+    setAddSearch('');
+    setPendingAdd(null);
+    setShowAddPicker(true);
+  }, [room]);
+
+  const confirmAdd = useCallback(
+    async (hideNumber: boolean) => {
+      const contact = pendingAdd;
+      if (!contact?._id || !room || !myId) return;
+      setAdding(true);
+      try {
+        // Resolve a valid direct conversation for the added person so their
+        // ring/answer deep-link (/call/<conversationId>) opens a real context.
+        let convForAdd = conversationId;
+        try {
+          const cid = await getOrCreateDirect({ otherUserId: String(contact._id) });
+          if (cid) convForAdd = String(cid);
+        } catch {
+          /* fall back to the current call's conversationId */
+        }
+        await addStreamParticipant({
+          streamRoom: room,
+          adderIdentity: myId,
+          adderDisplayName: myName,
+          adderPhone: myPhone || undefined,
+          calleeIdentity: String(contact._id),
+          calleeDisplayName: String(contact.name || ''),
+          calleePhone: contact.phoneNumber ? String(contact.phoneNumber) : undefined,
+          hideNumber,
+          isVideo: videoMode,
+          conversationId: convForAdd,
+        });
+        setPendingAdd(null);
+        setShowAddPicker(false);
+        if (room && myId) fetchCallParticipants(room, myId).then(setRoster);
+      } catch (err: any) {
+        Alert.alert('Could not add participant', err?.message || 'Please try again.');
+      } finally {
+        setAdding(false);
+      }
+    },
+    [pendingAdd, room, myId, myName, myPhone, videoMode, conversationId, getOrCreateDirect],
+  );
+
+  const participantCount = (remoteParticipants?.length || 0) + 1; // +1 = me
 
   // Screen share (Stream). Android uses the system MediaProjection dialog (the
   // foreground service is already wired via withWebRTCScreenshare); iOS uses
@@ -616,9 +717,190 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
           }}
         />
       ) : null}
+
+      {/* Participants pill — tap to open the privacy-aware roster. */}
+      {!inPiP && !isMini ? (
+        <TouchableOpacity
+          style={styles.participantsPill}
+          onPress={() => setShowRoster(true)}
+          testID="stream-participants-pill"
+          hitSlop={8}
+        >
+          <Ionicons name="people" size={14} color={Colors.white} />
+          <Text style={styles.participantsPillText}>
+            {participantCount} {participantCount === 1 ? 'person' : 'people'}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
+
+      {/* Add participant: contact picker → hide/show-number privacy step. */}
+      <Modal
+        visible={showAddPicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => (adding ? undefined : setShowAddPicker(false))}
+      >
+        <View style={styles.sheetBackdrop}>
+          <View style={styles.sheet}>
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>{pendingAdd ? 'Share number?' : 'Add to call'}</Text>
+              <Pressable onPress={() => (adding ? undefined : setShowAddPicker(false))} hitSlop={8}>
+                <Ionicons name="close" size={22} color={Colors.white} />
+              </Pressable>
+            </View>
+
+            {pendingAdd ? (
+              <View style={styles.privacyStep}>
+                <View style={styles.privacyAvatar}>
+                  <Text style={styles.privacyAvatarText}>
+                    {String(pendingAdd.name || '?').trim().charAt(0).toUpperCase()}
+                  </Text>
+                </View>
+                <Text style={styles.privacyName}>{pendingAdd.name || 'Contact'}</Text>
+                <Text style={styles.privacyMsg}>
+                  Should other participants be able to see{' '}
+                  {String(pendingAdd.name || 'this contact').split(' ')[0]}&apos;s phone number?
+                </Text>
+                <Pressable
+                  style={[styles.privacyChoice, styles.privacyHide]}
+                  disabled={adding}
+                  onPress={() => confirmAdd(true)}
+                >
+                  <Ionicons name="eye-off" size={20} color={Colors.white} />
+                  <View style={styles.privacyChoiceText}>
+                    <Text style={styles.privacyChoiceTitle}>Hide number</Text>
+                    <Text style={styles.privacyChoiceSub}>Others won&apos;t see their phone number</Text>
+                  </View>
+                </Pressable>
+                <Pressable
+                  style={[styles.privacyChoice, styles.privacyShow]}
+                  disabled={adding}
+                  onPress={() => confirmAdd(false)}
+                >
+                  <Ionicons name="eye" size={20} color={Colors.white} />
+                  <View style={styles.privacyChoiceText}>
+                    <Text style={styles.privacyChoiceTitle}>Show number</Text>
+                    <Text style={styles.privacyChoiceSub}>Others will see their phone number</Text>
+                  </View>
+                </Pressable>
+                <Pressable style={styles.privacyBack} disabled={adding} onPress={() => setPendingAdd(null)}>
+                  <Text style={styles.privacyBackText}>{adding ? 'Adding…' : 'Back'}</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <>
+                <View style={styles.searchRow}>
+                  <Ionicons name="search" size={16} color="#888" />
+                  <TextInput
+                    style={styles.searchInput}
+                    placeholder="Search contacts"
+                    placeholderTextColor="#888"
+                    value={addSearch}
+                    onChangeText={setAddSearch}
+                    autoCorrect={false}
+                  />
+                </View>
+                <FlatList
+                  data={addableContacts}
+                  keyExtractor={(item) => String(item._id)}
+                  keyboardShouldPersistTaps="handled"
+                  style={styles.addList}
+                  ListEmptyComponent={
+                    <Text style={styles.addEmpty}>
+                      {contacts === undefined ? 'Loading contacts…' : 'No contacts to add'}
+                    </Text>
+                  }
+                  renderItem={({ item }) => (
+                    <Pressable style={styles.addRow} onPress={() => setPendingAdd(item)}>
+                      {item.avatar ? (
+                        <Image source={{ uri: item.avatar }} style={styles.addRowAvatar} />
+                      ) : (
+                        <View style={[styles.addRowAvatar, styles.addRowAvatarFallback]}>
+                          <Text style={styles.addRowAvatarText}>
+                            {String(item.name || '?').trim().charAt(0).toUpperCase()}
+                          </Text>
+                        </View>
+                      )}
+                      <View style={styles.addRowTextWrap}>
+                        <Text style={styles.addRowName} numberOfLines={1}>{item.name || 'Contact'}</Text>
+                        {item.phoneNumber ? (
+                          <Text style={styles.addRowPhone} numberOfLines={1}>{item.phoneNumber}</Text>
+                        ) : null}
+                      </View>
+                      <Ionicons name="add-circle" size={22} color={Colors.primary} />
+                    </Pressable>
+                  )}
+                />
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Privacy-aware roster of everyone in the call. */}
+      <Modal
+        visible={showRoster}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowRoster(false)}
+      >
+        <View style={styles.sheetBackdrop}>
+          <View style={styles.sheet}>
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>In this call ({participantCount})</Text>
+              <Pressable onPress={() => setShowRoster(false)} hitSlop={8}>
+                <Ionicons name="close" size={22} color={Colors.white} />
+              </Pressable>
+            </View>
+            <View style={styles.rosterList}>
+              <RosterRow name={`${myName || 'You'} (you)`} phone={null} />
+              {roster
+                .filter((r) => r.identity && r.identity !== myId)
+                .map((r) => (
+                  <RosterRow
+                    key={r.identity}
+                    name={r.displayName || 'Smilers user'}
+                    phone={r.phoneNumber}
+                    hidden={r.hideNumber}
+                  />
+                ))}
+            </View>
+            <Pressable
+              style={styles.rosterAddBtn}
+              onPress={() => {
+                setShowRoster(false);
+                handleAdd();
+              }}
+            >
+              <Ionicons name="person-add" size={18} color={Colors.white} />
+              <Text style={styles.rosterAddText}>Add participant</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
     </View>
   );
 }
+
+function RosterRow({ name, phone, hidden }: { name: string; phone: string | null; hidden?: boolean }) {
+  return (
+    <View style={styles.rosterRow}>
+      <View style={[styles.addRowAvatar, styles.addRowAvatarFallback]}>
+        <Text style={styles.addRowAvatarText}>{name.trim().charAt(0).toUpperCase()}</Text>
+      </View>
+      <View style={styles.addRowTextWrap}>
+        <Text style={styles.addRowName} numberOfLines={1}>{name}</Text>
+        {phone ? (
+          <Text style={styles.addRowPhone} numberOfLines={1}>{phone}</Text>
+        ) : hidden ? (
+          <Text style={styles.rosterHidden}>Number hidden</Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 
 export default function StreamCallInner() {
   const { params } = useCallHost();
@@ -626,6 +908,10 @@ export default function StreamCallInner() {
   const isVideo = params?.type === 'video';
   const isAnswering = params?.answer === '1' || params?.answer === 'true';
   const displayName = params?.displayName || 'Call';
+  // When this device was ADDED into an existing Stream call, the ring/answer
+  // deep-link carries the shared room id. We then join THAT room directly
+  // (there is no Convex ring record for the adder↔me conversation).
+  const streamRoomParam = params?.streamRoom || '';
 
   const canQuery = !!conversationId && conversationId.length > 10;
   const me = useQuery(api.users.getCurrentUser, canQuery ? {} : 'skip') as any;
@@ -677,7 +963,7 @@ export default function StreamCallInner() {
   useEffect(() => {
     if (callId) liveCallIdRef.current = String(callId);
   }, [callId]);
-  const streamCallId: string | undefined = pinnedRoom || callId || createdCallId || undefined;
+  const streamCallId: string | undefined = streamRoomParam || pinnedRoom || callId || createdCallId || undefined;
 
   // Role resolution. The foreground listener routes an in-app incoming call to
   // /call/<id> WITHOUT answer=1, so we must show Accept/Decline here (the old
@@ -770,6 +1056,19 @@ export default function StreamCallInner() {
     void markCalleeRinging({ callId: String(callId) }).catch(() => {});
   }, [isCaller, callId, convStatus, markCalleeRinging]);
 
+  // Latency: begin creating (or reusing) the singleton Stream client the
+  // instant the screen mounts — in PARALLEL with the Convex ring round-trip
+  // that resolves `streamCallId`. Without this, join() couldn't even start
+  // until AFTER the client was created post-accept, adding its cost to the
+  // critical path. The promise is cached so the join effect awaits the same
+  // in-flight client instead of kicking off a second create.
+  const clientWarmupRef = useRef<Promise<any> | null>(null);
+  useEffect(() => {
+    if (!clientWarmupRef.current) {
+      clientWarmupRef.current = createStreamVideoClient().catch(() => null);
+    }
+  }, []);
+
   // 4) Join the Stream call (media) — only once ACCEPTED (caller, notification
   //    answer, or in-app Accept) AND we have the unique per-call room id.
   //    ring:false → no Stream push (Ashwini's doorbell owns ringing).
@@ -780,7 +1079,8 @@ export default function StreamCallInner() {
     (async () => {
       try {
         const t0 = acceptedAtRef.current || Date.now();
-        const c = await createStreamVideoClient();
+        // Reuse the mount-time warmup so the client WS is already connecting.
+        const c = await (clientWarmupRef.current || createStreamVideoClient());
         if (!c || !mounted) return;
         setClient(c);
         recordDiagnostic({
@@ -1014,6 +1314,11 @@ export default function StreamCallInner() {
             callId={callId ? String(callId) : streamCallId ? String(streamCallId) : null}
             onHangup={hangup}
             acceptedAt={acceptedAt}
+            room={streamCallId ? String(streamCallId) : null}
+            myId={me?._id ? String(me._id) : null}
+            myName={String(me?.name || me?.displayName || 'You')}
+            myPhone={String(me?.phoneE164 || me?.phone || '')}
+            conversationId={conversationId}
           />
           {waitingBanner}
         </NoiseCancellationProvider>
@@ -1197,4 +1502,99 @@ const styles = StyleSheet.create({
   miniRoot: { flex: 1, backgroundColor: '#0b141a' },
   miniCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 6 },
   miniText: { color: Colors.white, fontSize: 12, paddingHorizontal: 6 },
+
+  // ── Add participant / roster ──────────────────────────────────────────────
+  participantsPill: {
+    position: 'absolute',
+    top: 54,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    zIndex: 45,
+  },
+  participantsPillText: { color: Colors.white, fontSize: 12, fontWeight: '600' },
+  sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+  sheet: {
+    backgroundColor: '#1c1c1e',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 24,
+    maxHeight: '78%',
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  sheetTitle: { color: Colors.white, fontSize: 18, fontWeight: '700' },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    height: 44,
+    marginBottom: 8,
+  },
+  searchInput: { flex: 1, color: Colors.white, fontSize: 15, padding: 0 },
+  addList: { maxHeight: 360 },
+  addEmpty: { color: '#888', textAlign: 'center', paddingVertical: 28, fontSize: 14 },
+  addRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
+  addRowAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#333' },
+  addRowAvatarFallback: { alignItems: 'center', justifyContent: 'center' },
+  addRowAvatarText: { color: Colors.white, fontSize: 18, fontWeight: '700' },
+  addRowTextWrap: { flex: 1 },
+  addRowName: { color: Colors.white, fontSize: 16, fontWeight: '500' },
+  addRowPhone: { color: '#9a9a9a', fontSize: 13, marginTop: 1 },
+  privacyStep: { alignItems: 'center', paddingTop: 8, paddingBottom: 6, gap: 8 },
+  privacyAvatar: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  privacyAvatarText: { color: Colors.white, fontSize: 26, fontWeight: '700' },
+  privacyName: { color: Colors.white, fontSize: 18, fontWeight: '700' },
+  privacyMsg: { color: '#b5b5b5', fontSize: 14, textAlign: 'center', paddingHorizontal: 16, marginBottom: 6 },
+  privacyChoice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    width: '100%',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  privacyHide: { backgroundColor: 'rgba(255,255,255,0.10)' },
+  privacyShow: { backgroundColor: 'rgba(255,255,255,0.06)' },
+  privacyChoiceText: { flex: 1 },
+  privacyChoiceTitle: { color: Colors.white, fontSize: 16, fontWeight: '600' },
+  privacyChoiceSub: { color: '#9a9a9a', fontSize: 12, marginTop: 1 },
+  privacyBack: { paddingVertical: 12 },
+  privacyBackText: { color: Colors.primary, fontSize: 15, fontWeight: '600' },
+  rosterList: { gap: 4 },
+  rosterRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 },
+  rosterHidden: { color: '#777', fontSize: 13, fontStyle: 'italic', marginTop: 1 },
+  rosterAddBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: Colors.primary,
+    borderRadius: 14,
+    paddingVertical: 14,
+    marginTop: 14,
+  },
+  rosterAddText: { color: Colors.white, fontSize: 16, fontWeight: '700' },
 });

@@ -609,6 +609,128 @@ async def webrtc_ring(payload: WebRtcRingRequest, request: Request):
     return {"scheduled": True, "conversation_id": payload.conversation_id}
 
 
+# ============================================================
+# Stream call — add participant (1:1 → conference on Stream SFU)
+# ============================================================
+#
+# When EXPO_PUBLIC_USE_TWILIO=0 calls run on the Stream Video SDK. "Adding" a
+# participant to a live Stream call = ringing the new person (FCM doorbell) and
+# telling their device to JOIN THE SAME STREAM ROOM (`stream_room`) so Stream's
+# SFU mixes everyone. Also persists the adder's number-visibility choice into
+# the same `twilio_call_participants` collection the roster GET reads from, so
+# the privacy-aware roster works identically to the legacy Twilio path.
+class StreamAddParticipantRequest(BaseModel):
+    stream_room: str = Field(..., min_length=1, max_length=160)
+    adder_identity: str = Field(..., min_length=1, max_length=120)
+    adder_display_name: Optional[str] = Field(None, max_length=120)
+    adder_phone: Optional[str] = Field(None, max_length=40)
+    callee_identity: str = Field(..., min_length=1, max_length=120)
+    callee_display_name: Optional[str] = Field(None, max_length=120)
+    callee_phone: Optional[str] = Field(None, max_length=40)
+    hide_number: bool = Field(False, description="If true, other participants do NOT see the callee's phone number")
+    is_video: bool = False
+    # The DIRECT conversation between the adder and the callee — used to route
+    # the callee's ring/answer deep-link (/call/<conversation_id>).
+    conversation_id: str = Field(..., min_length=1, max_length=128)
+    backend_url: Optional[str] = None
+
+
+@api_router.post("/calls/add-participant")
+async def stream_add_participant(payload: StreamAddParticipantRequest, request: Request):
+    # 1) Persist the privacy-aware roster entry (keyed by the STREAM room id so
+    #    the existing /twilio/call-participants GET returns it). Also record the
+    #    ADDER once so their own number can be shown/hidden consistently.
+    now = datetime.now(timezone.utc)
+    try:
+        await db.twilio_call_participants.update_one(
+            {"room_name": payload.stream_room, "identity": payload.callee_identity},
+            {
+                "$set": {
+                    "room_name": payload.stream_room,
+                    "identity": payload.callee_identity,
+                    "display_name": payload.callee_display_name,
+                    "phone_number": payload.callee_phone,
+                    "hide_number": bool(payload.hide_number),
+                    "added_by": payload.adder_identity,
+                    "updated_at": now,
+                },
+                "$setOnInsert": {"created_at": now},
+            },
+            upsert=True,
+        )
+        # Ensure the adder appears in the roster too (number visible to self).
+        await db.twilio_call_participants.update_one(
+            {"room_name": payload.stream_room, "identity": payload.adder_identity},
+            {
+                "$set": {
+                    "room_name": payload.stream_room,
+                    "identity": payload.adder_identity,
+                    "display_name": payload.adder_display_name,
+                    "phone_number": payload.adder_phone,
+                    "hide_number": False,
+                    "added_by": payload.adder_identity,
+                    "updated_at": now,
+                },
+                "$setOnInsert": {"created_at": now},
+            },
+            upsert=True,
+        )
+    except Exception:
+        logger.warning("stream-add-participant: persisting roster entry failed (non-fatal)")
+
+    # 2) Ring the callee into the SAME Stream room via the FCM doorbell. The
+    #    `stream_room` + a streamRoom query param on action_url tell the callee's
+    #    device to join room R instead of creating a conversation-keyed room.
+    backend_url = (payload.backend_url or "").strip().rstrip("/")
+    if not backend_url:
+        backend_url = str(request.base_url).rstrip("/")
+    if backend_url.startswith("http://"):
+        backend_url = "https://" + backend_url[len("http://"):]
+
+    display_name = payload.adder_display_name or "Smilers User"
+    call_id = f"add_{payload.stream_room}_{int(now.timestamp())}"
+    push_data = {
+        "title": display_name,
+        "message": "Adding you to a video call" if payload.is_video else "Adding you to a call",
+        "type": "call",
+        "callId": call_id,
+        "callerId": payload.adder_identity,
+        "callerName": display_name,
+        "displayName": display_name,
+        "callerPhone": (payload.adder_phone or "").strip(),
+        "conversationId": payload.conversation_id,
+        "twilio_is_video": "1" if payload.is_video else "0",
+        "twilio_caller_identity": payload.adder_identity,
+        # Stream room to JOIN — read by the mobile call screen + push handler.
+        "stream_room": payload.stream_room,
+        "backendUrl": backend_url,
+        # answer=1 → the added callee auto-joins room R on tap (they already
+        # tapped the ring to accept). streamRoom threads the shared room through.
+        "action_url": (
+            f"/call/{payload.conversation_id}"
+            f"?streamRoom={payload.stream_room}&answer=1"
+            f"&type={'video' if payload.is_video else 'voice'}"
+            f"&displayName={display_name}"
+        ),
+        "channel_id": "calls-v4-smilers_never_cry",
+        "subtext": "Incoming call",
+    }
+
+    async def _dispatch():
+        try:
+            await send_push(
+                recipients=[payload.callee_identity],
+                data=push_data,
+                idempotency_key=f"stream-add:{payload.stream_room}:{payload.callee_identity}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(f"stream-add-participant: push failed (non-fatal): {exc}")
+
+    asyncio.create_task(_dispatch())
+    return {"ok": True, "stream_room": payload.stream_room, "call_id": call_id}
+
+
+
 
 # ============================================================
 # Twilio Multiparty — add participant + privacy-aware roster
@@ -2443,6 +2565,8 @@ async def send_push(
                     "conversationId",
                     "displayName",
                     "backendUrl",
+                    # Stream call room to JOIN (1:1 → conference "add participant").
+                    "stream_room",
                     # Group-message tone routing: the app picks the group
                     # notification channel/sound when these are present.
                     "channelId",

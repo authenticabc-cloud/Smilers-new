@@ -1194,6 +1194,18 @@ export function usePushNotifications() {
           } as any);
           return;
         }
+        // Stream "add participant": the caller added this device into an
+        // EXISTING Stream room. Join that same room (streamRoom) and auto-accept
+        // (answer=1) since tapping the ring IS the accept.
+        const streamRoom = toNonEmptyString((payload as any).stream_room);
+        if (streamRoom) {
+          const addIsVideo = String((payload as any).twilio_is_video ?? '0') === '1' ? 'video' : 'voice';
+          router.push(
+            (`/call/${conversationId}?streamRoom=${encodeURIComponent(streamRoom)}&answer=1&type=${addIsVideo}` +
+              (displayName ? `&displayName=${encodeURIComponent(displayName)}` : '')) as any,
+          );
+          return;
+        }
         router.push(
           displayName
             ? (`/call/${conversationId}?displayName=${encodeURIComponent(displayName)}` as any)
