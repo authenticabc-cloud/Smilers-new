@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Mod
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useConvex, useMutation } from 'convex/react';
 import Header from '../../src/components/Header';
 import Avatar from '../../src/components/Avatar';
@@ -753,25 +754,38 @@ export default function ChatsScreen() {
               onPress={() => router.push('/chat-once' as any)}
               testID="chat-once"
             />
-            {/* iter-213: "Archived" row — shown only when there's at least
-                one archived chat (matches the web app). Sits directly
-                below Chat Once. */}
+            {/* iter-364: "Archived" — restyled as a vibrant floating gradient
+                banner. It serves as the visual BORDERLINE between the feature
+                rows above (Smilers AI, Diary, Devotion, Chat Once) and the real
+                conversations below. Shown only when there's ≥1 archived chat. */}
             {archivedCount > 0 ? (
               <TouchableOpacity
                 onPress={() => router.push('/archived' as any)}
-                style={styles.row}
-                activeOpacity={0.7}
+                activeOpacity={0.85}
                 testID="chat-archived"
               >
-                <View style={[styles.pinnedIcon, styles.archivedIcon]}>
-                  <Feather name="archive" size={22} color={Colors.textSecondary} />
-                </View>
-                <View style={styles.rowMiddle}>
-                  <Text style={styles.rowTitle}>Archived</Text>
-                  <Text style={styles.rowSubtitle} numberOfLines={1}>
-                    {archivedCount} {archivedCount === 1 ? 'chat' : 'chats'}
-                  </Text>
-                </View>
+                <LinearGradient
+                  colors={['#A855F7', '#6366F1', '#3B82F6', '#14B8A6']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.archivedBanner}
+                >
+                  <View style={styles.archivedIconWrap}>
+                    <Feather name="archive" size={20} color={Colors.white} />
+                  </View>
+                  <View style={styles.archivedMiddle}>
+                    <Text style={styles.archivedTitle}>Archived</Text>
+                    <Text style={styles.archivedSubtitle} numberOfLines={1}>
+                      {archivedCount === 1
+                        ? '1 chat tucked away'
+                        : `${archivedCount} chats tucked away`}
+                    </Text>
+                  </View>
+                  <View style={styles.archivedCountPill}>
+                    <Text style={styles.archivedCountText}>{archivedCount}</Text>
+                  </View>
+                  <Feather name="chevron-right" size={20} color="rgba(255,255,255,0.95)" />
+                </LinearGradient>
               </TouchableOpacity>
             ) : null}
               </>
@@ -919,8 +933,57 @@ function PinnedRow({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   listContent: { paddingBottom: 180 },
-  archivedIcon: {
-    backgroundColor: Colors.borderLight,
+  archivedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 12,
+    marginTop: 8,
+    marginBottom: 12,
+    paddingVertical: 13,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+    ...Shadow.md,
+  },
+  archivedIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
+  },
+  archivedMiddle: {
+    flex: 1,
+    marginLeft: Spacing.md,
+  },
+  archivedTitle: {
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.bold,
+    color: Colors.white,
+    marginBottom: 2,
+    letterSpacing: 0.2,
+  },
+  archivedSubtitle: {
+    fontSize: FontSize.sm,
+    color: 'rgba(255,255,255,0.9)',
+    fontWeight: FontWeight.medium,
+  },
+  archivedCountPill: {
+    minWidth: 26,
+    height: 26,
+    borderRadius: 13,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.28)',
+    marginRight: 6,
+  },
+  archivedCountText: {
+    color: Colors.white,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.bold,
   },
   swipeArchiveAction: {
     backgroundColor: Colors.primary,
