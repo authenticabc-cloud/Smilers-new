@@ -1256,7 +1256,7 @@ export default function StreamCallInner() {
   // (survives the in-call audio session). Play it while our outgoing call is
   // still ringing and stop the moment we connect / the call ends.
   const isOutgoingRinging =
-    activeCallReady && iAmCaller && !connected && convStatus === 'ringing';
+    activeCallReady && iAmCaller && !accepted && convStatus === 'ringing';
   useEffect(() => {
     if (!isOutgoingRinging) return;
     InCallAudio.startRingback?.();

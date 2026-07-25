@@ -1,6 +1,14 @@
 # Smilers Mobile App — PRD
 
-## iter-387 (Jun 2026): Noise/echo cancellation auto-on (reliable) + user toggle
+## iter-388 (Jun 2026): P0 CRASH FIX — "Call ended unexpectedly: Property 'connected' doesn't exist"
+REGRESSION I introduced in iter-384 (#5 ringback): `isOutgoingRinging` referenced `connected`, but that expression lives in the OUTER `StreamCallInner` component where `connected` doesn't exist (it's a `CallUI`-only local). During render the dep evaluation threw a `ReferenceError` → the call screen crashed with "Call ended unexpectedly / Property 'connected' doesn't exist" on the caller (ring still fired on the callee because `ringWebrtcCall` runs in `startCall` before the screen mounts). Fixed by using the in-scope `accepted` flag: `isOutgoingRinging = activeCallReady && iAmCaller && !accepted && convStatus === 'ringing'`. Lint clean; web boots. ⚠️ Rebuild APK to confirm calls connect on the caller again.
+
+Also from the same logs (NOT regressions):
+- ✅ Callee FATAL Convex desync at cold start STILL occurs but the iter-383 SELF-HEAL fired (`FATAL desync detected → recreating Convex client`) and recovered in ~1.6s — no blank screen. Working as designed.
+- "register failed: Aborted" / "notifyPush fail: Aborted" — network request timeouts (AbortController), not code bugs; intermittent connectivity to the backend.
+- #3 study-room "not a member / no code" persists — confirmed EXTERNAL Convex (`study/rooms:*`, only `_generated` here); the web-app backend must fix create-room/membership/join-code.
+
+ (reliable) + user toggle
 User request: NC on by default, user can turn it off mid-call. The pieces existed (Krisp `NoiseCancellationProvider`, a "Noise" toggle button, auto-enable-on-join) but the auto-enable ran as a single-shot `[nc]` effect that fired BEFORE Krisp's async capability detection resolved, so NC silently never turned on for some devices. Fixed `NoiseCancellationAutoEnable` to read `deviceSupportsAdvancedAudioProcessing`/`isSupported` as primitives and auto-enable EXACTLY ONCE as soon as support resolves (`didAutoEnableRef` guard) — so it reliably turns on, and never re-enables after the user deliberately taps the "Noise" control OFF during the call. Lint clean; web boots. ⚠️ Krisp is native-only — validate on APK rebuild.
 
  in call
