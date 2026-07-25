@@ -1,6 +1,9 @@
 # Smilers Mobile App — PRD
 
-## iter-386 (Jun 2026): Enhancement — proactive weak-connection warning in call
+## iter-387 (Jun 2026): Noise/echo cancellation auto-on (reliable) + user toggle
+User request: NC on by default, user can turn it off mid-call. The pieces existed (Krisp `NoiseCancellationProvider`, a "Noise" toggle button, auto-enable-on-join) but the auto-enable ran as a single-shot `[nc]` effect that fired BEFORE Krisp's async capability detection resolved, so NC silently never turned on for some devices. Fixed `NoiseCancellationAutoEnable` to read `deviceSupportsAdvancedAudioProcessing`/`isSupported` as primitives and auto-enable EXACTLY ONCE as soon as support resolves (`didAutoEnableRef` guard) — so it reliably turns on, and never re-enables after the user deliberately taps the "Noise" control OFF during the call. Lint clean; web boots. ⚠️ Krisp is native-only — validate on APK rebuild.
+
+ in call
 `StreamCallInner.tsx`: when the (weaker-of-both) `connQuality` sits at POOR for >3s while connected, show a "Weak connection — audio may drop" toast (rate-limited once/20s, cleared on recovery) so users know a glitch isn't an app bug. Builds on the iter-382 ConnQualityBars signal. Also converted the ring-delivery wiring to a static import (removed require() lint warnings). Lint clean; web boots.
 
  + caller "Reached their phone ✓"

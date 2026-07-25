@@ -74,16 +74,26 @@ const CTRL_BG_ON = 'rgba(233,181,59,0.92)';
  */
 function NoiseCancellationAutoEnable() {
   const nc = useNoiseCancellation?.() as any;
+  // Read the support/enabled flags as primitives so this effect re-runs when
+  // they resolve — Krisp capability detection is ASYNC, so the old single-shot
+  // `[nc]` effect often ran before `isSupported`/`deviceSupports…` were ready
+  // and then never retried → NC silently never turned on for some devices.
+  const deviceOk = !!nc?.deviceSupportsAdvancedAudioProcessing;
+  const isSupported = !!nc?.isSupported;
+  const setEnabled = nc?.setEnabled;
+  // Auto-enable EXACTLY ONCE per call so we never re-enable after the user
+  // deliberately turns it OFF during the call (the toggle sets isEnabled=false;
+  // we must respect that).
+  const didAutoEnableRef = useRef(false);
   useEffect(() => {
-    if (!nc) return;
-    const { isSupported, deviceSupportsAdvancedAudioProcessing, isEnabled, setEnabled } = nc;
-    if (deviceSupportsAdvancedAudioProcessing && isSupported && !isEnabled && setEnabled) {
-      try {
-        const r = setEnabled(true);
-        if (r && typeof r.catch === 'function') r.catch(() => {});
-      } catch {}
-    }
-  }, [nc]);
+    if (didAutoEnableRef.current) return;
+    if (!setEnabled || !(deviceOk && isSupported)) return;
+    didAutoEnableRef.current = true;
+    try {
+      const r = setEnabled(true);
+      if (r && typeof r.catch === 'function') r.catch(() => {});
+    } catch {}
+  }, [deviceOk, isSupported, setEnabled]);
   return null;
 }
 
