@@ -591,23 +591,35 @@ async def webrtc_ring(payload: WebRtcRingRequest, request: Request):
         "subtext": "Incoming call",
     }
 
-    async def _dispatch():
-        try:
-            stats = await send_push(
-                recipients=payload.callee_identities,
-                data=push_data,
-                idempotency_key=f"twilio-call:{call_id}",
-            )
-            logger.info(
-                f"webrtc-ring pushed to {len(payload.callee_identities)} callees: "
-                f"tokens={stats.get('token_count')} ok={stats.get('success_count')} "
-                f"err={stats.get('error_count')} backendUrl={backend_url}"
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception(f"webrtc-ring: push failed (non-fatal): {exc}")
+    # iter-385: await the dispatch so we can return REAL delivery info to the
+    # caller ("Reached their phone ✓"). The callee rings at the same instant
+    # either way — awaiting only delays the HTTP RESPONSE (which the caller
+    # doesn't block on), not the push itself.
+    delivered = False
+    token_count = 0
+    try:
+        stats = await send_push(
+            recipients=payload.callee_identities,
+            data=push_data,
+            idempotency_key=f"twilio-call:{call_id}",
+        )
+        token_count = int(stats.get("token_count") or 0)
+        delivered = int(stats.get("success_count") or 0) > 0
+        logger.info(
+            f"webrtc-ring pushed to {len(payload.callee_identities)} callees: "
+            f"tokens={token_count} ok={stats.get('success_count')} "
+            f"err={stats.get('error_count')} backendUrl={backend_url}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(f"webrtc-ring: push failed (non-fatal): {exc}")
 
-    asyncio.create_task(_dispatch())
-    return {"scheduled": True, "conversation_id": payload.conversation_id}
+    return {
+        "scheduled": True,
+        "conversation_id": payload.conversation_id,
+        "call_id": call_id,
+        "token_count": token_count,
+        "delivered": delivered,
+    }
 
 
 # ============================================================
@@ -2212,6 +2224,12 @@ class RegisterPushBody(BaseModel):
     # so client-triggered pushes (/api/notify-event) address recipients
     # by Convex id. Storing it here lets send_push match on EITHER id.
     convex_user_id: str | None = None
+    # iter-385: the device's per-type notification toggles (messages, groups,
+    # …). Stored on the token doc so send_push can AUTHORITATIVELY skip a
+    # recipient who turned a type OFF — the previous JS-only suppression was
+    # bypassed whenever the OS auto-displayed a notification-block push before
+    # the app's background task ran (the "toggle OFF but still shows" bug).
+    notification_prefs: dict | None = None
 
 
 @api_router.post("/register-push", status_code=201)
@@ -2246,6 +2264,14 @@ async def register_push(body: RegisterPushBody):
         # iter-198: persist the Convex user id for client-triggered pushes.
         if body.convex_user_id:
             update_set["convex_user_id"] = body.convex_user_id
+        # iter-385: persist the device's notification toggles (booleans only)
+        # so send_push can suppress opted-out types server-side.
+        if isinstance(body.notification_prefs, dict):
+            update_set["notification_prefs"] = {
+                str(k): bool(v)
+                for k, v in body.notification_prefs.items()
+                if isinstance(v, bool)
+            }
         await db.push_tokens.update_one(
             {
                 "user_id": body.user_id,
@@ -2659,6 +2685,37 @@ async def send_push(
                 )
             tokens = _deduped_tokens
             stats["token_count"] = len(tokens)
+            # iter-385: AUTHORITATIVE server-side suppression of message/group
+            # pushes. The device syncs its per-type toggles on register; if a
+            # recipient turned "messages"/"groups" OFF, drop their token so no
+            # push (data-only OR notification-block) reaches them — the old
+            # JS-only suppression was bypassed whenever the OS auto-displayed
+            # the notification-block push before the app's background task ran.
+            # `native_token_count` records the pre-suppression count so the
+            # relay-skip gate below still fires (a SUPPRESSED native recipient
+            # must NOT leak a banner via the Emergent relay fallback).
+            stats["native_token_count"] = len(tokens)
+            if is_message_push_global and tokens:
+                _is_group_push = (
+                    str(data.get("conversationType") or "").lower() == "group"
+                    or str(data.get("channelId") or "").startswith("groups-")
+                )
+                _pref_key = "groups" if _is_group_push else "messages"
+                _kept_by_pref = []
+                for _t in tokens:
+                    _prefs = _t.get("notification_prefs") or {}
+                    if _prefs.get(_pref_key) is False:
+                        logger.info(
+                            "send_push: suppressing %s push for user=%s (device toggle OFF)",
+                            _pref_key,
+                            str(_t.get("user_id") or "")[:14],
+                        )
+                        continue
+                    _kept_by_pref.append(_t)
+                if len(_kept_by_pref) != len(tokens):
+                    tokens = _kept_by_pref
+                    stats["token_count"] = len(tokens)
+                    stats["suppressed_by_pref"] = stats["native_token_count"] - len(tokens)
             # iter-342: per-recipient token-mapping diagnostic. Pinpoints WHY a
             # push (esp. a call-declined to the caller) delivered to nobody:
             #   • recipients with 0 tokens  → the id we were given matches no
@@ -2898,11 +2955,12 @@ async def send_push(
     # relay leak a duplicate banner — the app builds the single notification from
     # the data push. Web-only recipients (no FCM tokens) still fall through to
     # the relay so they aren't left without any notification.
-    if is_message_push_global and stats.get("token_count", 0) > 0:
+    if is_message_push_global and stats.get("native_token_count", stats.get("token_count", 0)) > 0:
         logger.info(
             "send_push: native message recipient "
-            f"(token_count={stats['token_count']}, success={stats.get('success_count', 0)}) "
-            "— skipping Emergent relay to avoid a duplicate banner"
+            f"(native_tokens={stats.get('native_token_count', 0)}, sent={stats.get('token_count', 0)}, "
+            f"suppressed={stats.get('suppressed_by_pref', 0)}, success={stats.get('success_count', 0)}) "
+            "— skipping Emergent relay to avoid a duplicate/opted-out banner"
         )
         return stats
     payload: dict = {"recipients": recipients, "data": data}

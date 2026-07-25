@@ -132,6 +132,17 @@ async function postRegisterPush(opts: {
       channelIds = null;
     }
   }
+  // iter-385: include the device's per-type notification toggles so the backend
+  // can AUTHORITATIVELY suppress opted-out message/group pushes server-side
+  // (the JS-only suppression was bypassed by OS auto-display of notification
+  // pushes). Best-effort — never block registration on a prefs read failure.
+  let notificationPrefs: Record<string, boolean> | null = null;
+  try {
+    const { loadNotificationPrefs } = require('./notificationPrefs');
+    notificationPrefs = await loadNotificationPrefs();
+  } catch {
+    notificationPrefs = null;
+  }
   const url = `${BACKEND_URL}/api/register-push`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 10_000);
@@ -161,6 +172,7 @@ async function postRegisterPush(opts: {
               message_channel_id: channelIds.messageChannelId,
             }
           : {}),
+        ...(notificationPrefs ? { notification_prefs: notificationPrefs } : {}),
       }),
       signal: controller.signal,
     });

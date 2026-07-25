@@ -80,6 +80,14 @@ export default function NotificationsScreen() {
       try {
         const next = await saveNotificationPref(key, value);
         setPrefs(next);
+        // iter-385: push the updated toggles to the backend immediately so it
+        // can suppress opted-out message/group pushes server-side (the JS-only
+        // suppression was bypassed by the OS auto-displaying notification
+        // pushes). Best-effort; the next app-open re-register also syncs.
+        try {
+          const { reregisterPushDevice } = require('../src/push/useEmergentPush');
+          void reregisterPushDevice();
+        } catch {}
       } catch (errorValue: any) {
         const msg = errorValue?.message || String(errorValue);
         setSaveError(`Couldn't save "${key}": ${msg}`);

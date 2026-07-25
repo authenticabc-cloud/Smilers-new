@@ -44,7 +44,7 @@ export async function ringWebrtcCall(args: {
   const callId =
     args.callId || `call_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   try {
-    await fetch(`${BACKEND_URL}/api/calls/ring`, {
+    const resp = await fetch(`${BACKEND_URL}/api/calls/ring`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -65,6 +65,16 @@ export async function ringWebrtcCall(args: {
         backend_url: BACKEND_URL,
       }),
     });
+    // iter-385: record whether the doorbell reached the callee's device so the
+    // caller screen can show "Reached their phone ✓" (curbs frustrated re-dials).
+    try {
+      const json = await resp.json();
+      const { setRingDelivery } = require('../call/ringDelivery');
+      setRingDelivery(args.conversationId, {
+        delivered: !!json?.delivered,
+        tokenCount: Number(json?.token_count || 0),
+      });
+    } catch {}
     recordDiagnostic({ tag: 'CALL', source: 'ringWebrtcCall', message: `ok conv=${args.conversationId} callId=${callId} video=${args.isVideo}` });
   } catch (e: any) {
     recordDiagnostic({ tag: 'CALL', source: 'ringWebrtcCall', message: `fail ${e?.message || e}` });

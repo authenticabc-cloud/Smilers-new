@@ -597,10 +597,44 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   // The participant currently sharing their screen (local or remote).
   const sharer = (participants || []).find((p: any) => p?.screenShareStream);
 
+  // iter-385: caller "Reached their phone ✓" — subscribe to the ring-delivery
+  // signal recorded by ringWebrtcCall so the caller knows the FCM doorbell
+  // actually landed on the callee's device (curbs the frustrated re-dialing
+  // that caused overlapping calls). Only meaningful while WE are the caller and
+  // the callee hasn't joined yet.
+  const [ringDelivered, setRingDelivered] = useState(false);
+  useEffect(() => {
+    if (!isCaller || !conversationId) return;
+    let mounted = true;
+    const read = () => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { getRingDelivery } = require('../../lib/call/ringDelivery');
+        const d = getRingDelivery(String(conversationId));
+        if (mounted) setRingDelivered(!!(d && d.delivered));
+      } catch {}
+    };
+    read();
+    let unsub = () => {};
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { subscribeRingDelivery } = require('../../lib/call/ringDelivery');
+      unsub = subscribeRingDelivery(read);
+    } catch {}
+    return () => {
+      mounted = false;
+      try {
+        unsub();
+      } catch {}
+    };
+  }, [isCaller, conversationId]);
+
   const statusLine = connected
     ? fmt(seconds)
     : isCaller
-      ? 'Ringing…'
+      ? ringDelivered
+        ? 'Ringing • Reached their phone ✓'
+        : 'Ringing…'
       : 'Connecting…';
 
   // MINI (PIP) — compact tap-to-expand tile.

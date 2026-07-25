@@ -1,6 +1,15 @@
 # Smilers Mobile App — PRD
 
-## iter-384 (Jun 2026): Post-rebuild fixes — ✅ blank screen gone (no FATAL in logs), 1:1 chats instant
+## iter-385 (Jun 2026): #1 authoritative notification suppression + caller "Reached their phone ✓"
+**#1 Notification toggle-OFF still showed (Google names) — ROOT CAUSE + robust fix:**
+The message displayed with the sender's Google/account name = an OS-rendered `notification`-block push, which Android auto-displays BEFORE the app's background JS runs, so the JS-only suppression in `backgroundTaskSetup` was bypassed. The FCM v1 path already sends messages data-only, but suppression still depended on an OS-display race (and a backend redeploy). Fix = make suppression AUTHORITATIVE server-side:
+- Frontend syncs the device's per-type toggles to the backend on register (`useEmergentPush` → `notification_prefs` in `/api/register-push` body) and re-registers immediately when a toggle changes (`app/notifications.tsx` → `reregisterPushDevice`).
+- Backend `register_push` persists `notification_prefs` on the `push_tokens` doc; `send_push` now DROPS any recipient token whose `messages`/`groups` toggle is OFF (group vs 1:1 detected via `conversationType`/`channelId`). Tracks `native_token_count` (pre-suppression) so the Emergent-relay-skip gate still fires → a suppressed native recipient gets NOTHING (no data push, no relay banner). Verified end-to-end: 1:1 with messages=OFF → 0 tokens kept; group with groups=ON → delivered.
+
+**Enhancement — caller "Reached their phone ✓":** `/api/calls/ring` now awaits `send_push` and returns `{delivered, token_count}` (callee ring at same instant; only the HTTP response — which the caller doesn't block on — waits). `ringWebrtcCall` records it into a new `src/lib/call/ringDelivery.ts` store (keyed by conversationId); `StreamCallInner` subscribes and shows "Ringing • Reached their phone ✓" while the caller waits — telling them the doorbell landed, curbing the frustrated re-dialing behind #2.
+Lint clean; backend syntax OK; ring endpoint returns new fields; web boots. ⚠️ Native — validate on APK rebuild (and REDEPLOY the backend so the prefs/ring changes are live).
+
+ — ✅ blank screen gone (no FATAL in logs), 1:1 chats instant
 User rebuilt & tested; the P0 blank/`[CONVEX FATAL ERROR]` did NOT recur and 1:1 chats now open instantly. Fixed this round:
 - **#4b Study-room settings "can't type" (frontend, `app/study/rooms/settings/[roomId].tsx`):** the `useEffect` re-seeded `name`/`description`/`aiCanRead` from the LIVE `room` query on every reactive tick, overwriting each keystroke/toggle → inputs felt frozen. Now seeds local state ONCE per room (keyed on room id) and never clobbers in-progress edits.
 - **#5 caller hears no ringing (frontend, `StreamCallInner.tsx`):** the Stream call screen never wired the existing native ringback (`InCallAudio.startRingback()` → bundled Smilers theme on the VOICE-CALL stream). Added an effect that plays it while `isOutgoingRinging` (caller + not connected + convStatus==='ringing') and stops on connect/end.
