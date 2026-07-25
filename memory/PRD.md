@@ -1,5 +1,16 @@
 # Smilers Mobile App — PRD
 
+## iter-374 (Jun 2026): Study Materials — Bible & Quran reader (Phase 1)
+First half of the big feature (per user: freely-licensable content now, ESV/NIV/NKJV later with a licensed key; scroll-sync over the Stream call data channel). Read-alone works everywhere; "read with all" sync is NATIVE-only (needs a live Stream call).
+- **Backend proxy** (`server.py`): `GET /api/bible/chapter?translation&book&chapter` (getbible.net v2, public-domain), `GET /api/quran/surahs` + `GET /api/quran/surah?number&edition&with_arabic` (alquran.cloud). 24h in-memory cache. Added top-level `import time`. Verified via curl (KJV John 3, 114 surahs, Al-Faatiha Arabic+translation).
+- **Versions/languages:** Bible — English KJV, French Louis Segond, Spanish Reina-Valera, Italian Riveduta, German Schlachter, Portuguese Almeida; **Asante Twi shown but disabled ("not available yet")** since no reliable public-domain source. Quran — en.sahih/fr.hamidullah/es.cortes/it.piccardo/de.aburida/pt.elhayek, paired with Arabic (quran-uthmani). ESV/NIV/NKJV deferred (need API.Bible key).
+- **Client:** `src/lib/scripture/api.ts` (config + fetch + static 66-book list), `src/lib/scripture/sync.ts` (`useScriptureSync` — leader broadcasts `{material,translation/edition,book/chapter/surah,scrollPct}` via the active Stream call's `sendCustomEvent`; followers apply + scrollTo), `app/study/scripture.tsx` (mode chooser Read alone / Read with all → version/book/chapter or surah pickers → verse/ayah reader, throttled scroll broadcast). Route registered in `_layout.tsx`.
+- **Entry point:** a "Materials" (book) button in the Study Room header (`app/study/rooms/[roomId].tsx`) → Bible/Quran chooser.
+- **Verified on web:** Bible (John 3, KJV) and Quran (Al-Faatiha, Arabic+English) both render via the mode chooser. Lint clean.
+NEXT (Phase 2, user choice "a then b"): Group-call orchestration (#2 a–e) — needs the user's EXTERNAL Convex contract (they will confirm admins + add-member mutation); I'll define the exact Convex mutations/queries/fields and build mobile UI + FastAPI relay against it.
+
+
+
 ## iter-373 (Jun 2026): Voice Typing — local-language commands + "Send to…" per note
 - **#2 Local-language voice commands:** expanded the prompt keyword matcher (`app/study/voice-typing.tsx`) with Akan/Twi (awie, kɔ so, aane, daabi…), French (fini, continuer, oui, non), Hausa (an gama, ci gaba, a'a), and Ewe/Ga terms, alongside English. Refined finish-vs-continue disambiguation using a "strong finish" set to avoid overlap with shared yes/no tokens.
 - **#3 "Send to…" per saved note:** each history note now has a **Send** action → Alert menu with "Ask Study AI" (routes to `/study/session?q=…`), "Save to Diary" (routes to `/diary?prefill=…`), and "Share…" (OS share sheet). Wired the receivers: `study/session.tsx` now seeds its input from a `q` param; `diary.tsx` seeds its composer draft from a `prefill` param.

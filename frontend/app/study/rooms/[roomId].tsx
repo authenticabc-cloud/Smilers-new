@@ -92,6 +92,19 @@ export default function RoomDetail() {
           <Feather name="arrow-left" size={24} color={Colors.textPrimary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{pick(room, 'name') || 'Study room'}</Text>
+        <TouchableOpacity
+          onPress={() =>
+            Alert.alert('Study materials', 'Open a book to read — alone or with everyone in the call.', [
+              { text: 'Bible', onPress: () => router.push({ pathname: '/study/scripture', params: { type: 'bible', roomId } } as any) },
+              { text: 'Quran', onPress: () => router.push({ pathname: '/study/scripture', params: { type: 'quran', roomId } } as any) },
+              { text: 'Cancel', style: 'cancel' },
+            ])
+          }
+          hitSlop={10}
+          style={{ marginRight: 14 }}
+        >
+          <Feather name="book-open" size={22} color={Colors.primary} />
+        </TouchableOpacity>
         {isAdmin ? (
           <TouchableOpacity
             onPress={() => router.push({ pathname: '/study/rooms/settings/[roomId]', params: { roomId } } as any)}

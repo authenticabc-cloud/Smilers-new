@@ -545,6 +545,7 @@ export default function RootLayout() {
               <Stack.Screen name="study/index" />
               <Stack.Screen name="study/session" />
               <Stack.Screen name="study/voice-typing" />
+              <Stack.Screen name="study/scripture" />
             </Stack>
             <VoiceCommandLauncher />
             <DriveModeController />

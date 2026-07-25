@@ -6,6 +6,7 @@ import os
 import logging
 import asyncio
 import re
+import time
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
@@ -967,6 +968,122 @@ async def stream_remove_participant(payload: StreamRemoveParticipantRequest, req
 
     asyncio.create_task(_dispatch())
     return {"ok": True}
+
+
+# ============================================================
+# Study Materials — Bible & Quran reader (free, public-domain sources)
+# ============================================================
+# Bible: getbible.net v2 (public-domain translations, no key).
+# Quran: alquran.cloud v1 (no key).
+# Thin caching proxy so the mobile app avoids CORS and upstream hiccups.
+# Copyrighted versions (ESV/NIV/NKJV) are intentionally NOT here — they require
+# a licensed key (API.Bible) and will be added later.
+
+_SCRIPTURE_CACHE: dict[str, tuple[float, dict]] = {}
+_SCRIPTURE_TTL = 60 * 60 * 24  # 24h — scripture text never changes
+
+
+async def _scripture_get(url: str) -> dict:
+    now = time.time()
+    hit = _SCRIPTURE_CACHE.get(url)
+    if hit and (now - hit[0]) < _SCRIPTURE_TTL:
+        return hit[1]
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as http:
+        resp = await http.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+    if len(_SCRIPTURE_CACHE) > 500:
+        _SCRIPTURE_CACHE.pop(next(iter(_SCRIPTURE_CACHE)))
+    _SCRIPTURE_CACHE[url] = (now, data)
+    return data
+
+
+@api_router.get("/bible/chapter")
+async def bible_chapter(translation: str, book: int, chapter: int):
+    """Return a normalized Bible chapter: {book_name, chapter, verses:[{verse,text}]}.
+    `translation` is a getbible.net id (e.g. kjv, ls1910, valera, riveduta,
+    schlachter, almeida). `book` is 1..66 (Genesis..Revelation)."""
+    tr = "".join(ch for ch in translation.lower() if ch.isalnum())
+    if not tr or not (1 <= book <= 66) or not (1 <= chapter <= 150):
+        raise HTTPException(status_code=400, detail="invalid translation/book/chapter")
+    try:
+        data = await _scripture_get(f"https://api.getbible.net/v2/{tr}/{book}/{chapter}.json")
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Could not load this passage. Try another version.")
+    verses = [
+        {"verse": int(v.get("verse", 0)), "text": str(v.get("text", "")).strip()}
+        for v in (data.get("verses") or [])
+    ]
+    return {
+        "book_name": data.get("book_name"),
+        "chapter": chapter,
+        "translation": tr,
+        "verses": verses,
+    }
+
+
+@api_router.get("/quran/surahs")
+async def quran_surahs():
+    """List all 114 surahs (number, names, ayah count)."""
+    try:
+        data = await _scripture_get("https://api.alquran.cloud/v1/surah")
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Could not load the surah list.")
+    out = [
+        {
+            "number": s.get("number"),
+            "name": s.get("name"),
+            "englishName": s.get("englishName"),
+            "englishNameTranslation": s.get("englishNameTranslation"),
+            "numberOfAyahs": s.get("numberOfAyahs"),
+        }
+        for s in (data.get("data") or [])
+    ]
+    return {"surahs": out}
+
+
+@api_router.get("/quran/surah")
+async def quran_surah(number: int, edition: str = "en.sahih", with_arabic: bool = True):
+    """Return a surah's ayahs in the requested translation edition, optionally
+    paired with the Arabic (quran-uthmani). Editions: en.sahih, fr.hamidullah,
+    es.cortes, it.piccardo, de.aburida, pt.elhayek, quran-uthmani."""
+    ed = "".join(ch for ch in edition if ch.isalnum() or ch in ".-")
+    if not (1 <= number <= 114) or not ed:
+        raise HTTPException(status_code=400, detail="invalid surah/edition")
+    editions = f"quran-uthmani,{ed}" if (with_arabic and ed != "quran-uthmani") else ed
+    try:
+        data = await _scripture_get(f"https://api.alquran.cloud/v1/surah/{number}/editions/{editions}")
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Could not load this surah.")
+    blocks = data.get("data") or []
+    if isinstance(blocks, dict):
+        blocks = [blocks]
+    arabic_map: dict[int, str] = {}
+    trans_block = None
+    name = None
+    for b in blocks:
+        edid = (b.get("edition") or {}).get("identifier")
+        name = name or b.get("englishName")
+        if edid == "quran-uthmani":
+            for a in b.get("ayahs") or []:
+                arabic_map[a.get("numberInSurah")] = a.get("text", "")
+        else:
+            trans_block = b
+    src = trans_block or (blocks[0] if blocks else None)
+    ayahs = []
+    if src:
+        for a in src.get("ayahs") or []:
+            n = a.get("numberInSurah")
+            ayahs.append(
+                {"numberInSurah": n, "text": a.get("text", ""), "arabic": arabic_map.get(n, "")}
+            )
+    return {
+        "number": number,
+        "name": name,
+        "edition": ed,
+        "ayahs": ayahs,
+    }
+
 
 
 
