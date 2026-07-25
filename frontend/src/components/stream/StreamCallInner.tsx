@@ -291,15 +291,25 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
     if (convStatus === 'ended' || convStatus === 'declined') onHangup();
   }, [convStatus, onHangup]);
 
-  // End if the remote genuinely leaves AFTER connecting — debounced so a
-  // transient ICE reconnect (remote momentarily 0 participants) doesn't kill
-  // the call. Only hangs up if the remote stays gone for 10s.
+  // End if the remote genuinely leaves AFTER connecting.
+  // #6b FIX ("other party stays ~30s on 'connecting' after I end"): when the
+  // remote DELIBERATELY hangs up, the call record also flips to ended/declined
+  // — end almost immediately instead of waiting out the ICE-reconnect grace
+  // period (Stream otherwise keeps us in RECONNECTING for ~30s chasing a peer
+  // that's gone). A plain participant drop with NO ended-status is treated as a
+  // possible transient ICE blip and still gets the 10s grace. The
+  // remote-present guard keeps a ring-TTL "ended" from killing a live call.
   useEffect(() => {
     if (!wasConnectedRef.current) return;
     if (remoteParticipants.length > 0) return;
-    const t = setTimeout(() => onHangup(), 10000);
+    const remoteHungUp =
+      convStatus === 'ended' ||
+      convStatus === 'declined' ||
+      convStatus === 'cancelled' ||
+      convStatus === 'missed';
+    const t = setTimeout(() => onHangup(), remoteHungUp ? 400 : 10000);
     return () => clearTimeout(t);
-  }, [remoteParticipants.length, onHangup]);
+  }, [remoteParticipants.length, convStatus, onHangup]);
 
   const toggleMic = useCallback(async () => {
     if (!call) return;
@@ -1173,6 +1183,22 @@ export default function StreamCallInner() {
   // incoming-call UI is showing — the FOREGROUND ring the Stream screen was
   // missing (the callee saw Accept/Decline but heard nothing).
   useRingtonePlayer(isIncomingPending, { vibrate: isIncomingPending });
+
+  // #5 FIX (caller hears no ringing): the old WebRTC screen played the bundled
+  // Smilers ringback tone to the CALLER while waiting for the callee to answer;
+  // the Stream screen never wired it, so the caller only *saw* "ringing" with
+  // silence. `InCallAudio.startRingback()` plays on Android's VOICE-CALL stream
+  // (survives the in-call audio session). Play it while our outgoing call is
+  // still ringing and stop the moment we connect / the call ends.
+  const isOutgoingRinging =
+    activeCallReady && iAmCaller && !connected && convStatus === 'ringing';
+  useEffect(() => {
+    if (!isOutgoingRinging) return;
+    InCallAudio.startRingback?.();
+    return () => {
+      InCallAudio.stopRingback?.();
+    };
+  }, [isOutgoingRinging]);
 
   // #3: the caller hung up WHILE it was still ringing → the Convex record flips
   // to ended/declined (or disappears). Close the callee's incoming UI instead

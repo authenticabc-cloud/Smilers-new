@@ -3,7 +3,7 @@
  * regenerate the join code, manage members (promote/demote/remove) and
  * delete or leave the room. Owner-only actions are gated on `role`.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -39,12 +39,23 @@ export default function RoomSettings() {
   const [aiCanRead, setAiCanRead] = useState(false);
   const [savingMeta, setSavingMeta] = useState(false);
 
+  // FIX (#4b "can't type in Room name/Description / can't toggle AI"): `room`
+  // is a LIVE Convex query whose reference changes on every reactive tick
+  // (presence, member polling, etc.). The old effect re-seeded these local
+  // fields on EVERY `room` change, so each keystroke / toggle was instantly
+  // overwritten by the stored value — making the inputs feel frozen. Seed the
+  // local state only ONCE per room (keyed on the room id) and never clobber
+  // the user's in-progress edits afterwards.
+  const seededForRoomRef = useRef<string | null>(null);
   useEffect(() => {
     if (!room) return;
+    const rid = String(pick(room, '_id', 'id') || roomId || '');
+    if (!rid || seededForRoomRef.current === rid) return;
+    seededForRoomRef.current = rid;
     setName(pick(room, 'name') || '');
     setDescription(pick(room, 'description') || '');
     setAiCanRead(!!pick(room, 'aiCanReadRoomContent'));
-  }, [room]);
+  }, [room, roomId]);
 
   const members: any[] = useMemo(() => {
     const m = pick(room, 'members') || [];

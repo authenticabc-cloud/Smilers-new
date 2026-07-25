@@ -1,6 +1,20 @@
 # Smilers Mobile App — PRD
 
-## iter-383 (Jun 2026): P0 REAL ROOT CAUSE — `[CONVEX FATAL ERROR] Base version … doesn't match version 0`
+## iter-384 (Jun 2026): Post-rebuild fixes — ✅ blank screen gone (no FATAL in logs), 1:1 chats instant
+User rebuilt & tested; the P0 blank/`[CONVEX FATAL ERROR]` did NOT recur and 1:1 chats now open instantly. Fixed this round:
+- **#4b Study-room settings "can't type" (frontend, `app/study/rooms/settings/[roomId].tsx`):** the `useEffect` re-seeded `name`/`description`/`aiCanRead` from the LIVE `room` query on every reactive tick, overwriting each keystroke/toggle → inputs felt frozen. Now seeds local state ONCE per room (keyed on room id) and never clobbers in-progress edits.
+- **#5 caller hears no ringing (frontend, `StreamCallInner.tsx`):** the Stream call screen never wired the existing native ringback (`InCallAudio.startRingback()` → bundled Smilers theme on the VOICE-CALL stream). Added an effect that plays it while `isOutgoingRinging` (caller + not connected + convStatus==='ringing') and stops on connect/end.
+- **#6b other party stuck ~30s on "connecting" after remote ends (frontend, `StreamCallInner.tsx`):** the remote-left teardown used a flat 10s ICE-grace debounce. Now if the remote left AND the call record shows ended/declined/cancelled/missed (= deliberate hangup), it ends in 400ms; a plain participant drop with no ended-status keeps the 10s grace. Remote-present guard still prevents a ring-TTL from killing a live call.
+
+- **#2 caller double-fire (frontend, `src/lib/twilio/startCall.ts`):** the caller placed two calls ~10ms apart (double-tap/double-render), and the receiver log showed the first ring `notifeeCallWake cancelled` right when the 2nd dial started, with subsequent dials never reaching the callee. Added a 3s per-conversation start dedup. (The deeper "backgrounded app doesn't ring / no missed-call" FCM-doorbell reliability still needs paired backend+device logs.)
+
+**Deferred / not fixable here:**
+- **#4a/#4c/#4d Study-room Server Errors** (`submitRoomQuizAttempt`, "not a member", join-code not generated, `removeMember`) — these are EXTERNAL Convex functions (`study/rooms:*`; only `_generated` exists in this repo). The user's web-app Convex backend must fix them.
+- **#6a self/remote video mutually exclusive** — two simultaneous video tracks don't render on the WebRTC-legacy fork; needs the Future Task-1 Stream-SDK-native migration (or a Stream support ticket). iter-382 already fixed the background-black self-view.
+- **#3 group conversations spin** — 1:1 is instant (iter-381 FlatList fix); groups are slow because the external `api.messages.list` group query is heavier server-side. Frontend gate is not group-specific; can't profile Convex from here.
+- **#1 notification toggle-OFF still shows (with Google names)** — strongly implies the OS/native FCM path auto-displays a `notification`-block push before JS suppression runs; needs backend payload (data-only) or native-service investigation.
+
+ — `[CONVEX FATAL ERROR] Base version … doesn't match version 0`
 A fresh device log finally captured the actual cause of "nothing shows / Reconnecting… forever" (only fixable by clear-storage/reinstall): the Convex client logs a FATAL `Base version 1 passed up doesn't match the current version 0` ~1.3s into cold start, after which the singleton `ConvexReactClient` **stops syncing for the whole process** (cached feature rows show, but conversations never load). It's triggered by a `closeAndReconnect` (hardReconnect) racing the initial boot auth-handshake — and `chats.tsx`'s `chats-empty-with-cache` recovery fires exactly that within ~1s of boot. A process restart "fixes" it only because it builds a new client.
 **Fixes:**
 1. **SELF-HEAL (the game-changer) — `ConvexClientProvider.tsx` rewritten:** the client now lives in state; a global `console.error` watcher detects the FATAL marker and swaps in a brand-new `ConvexReactClient` (bumping a `key` to fully remount + re-subscribe), which re-authenticates with the still-valid token. This turns an uninstall-level bug into a ~1s automatic recovery. Debounced (max 1 recreate / 5s) so it can't loop. Exposes `recreateConvexClient()`.

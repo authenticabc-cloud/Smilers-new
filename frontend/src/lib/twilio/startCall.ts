@@ -53,8 +53,27 @@ export interface StartCallArgs {
   startMuted?: boolean;
 }
 
+// #2 FIX: the caller placing two calls ~10ms apart (double-tap / double render
+// of the call handler) was cancelling the callee's first ring and then the
+// rapid re-dials never reached the callee ("subsequent calls didn't go
+// through"). Dedup starts for the same conversation within a short window.
+const recentStartByConv: Record<string, number> = {};
+const START_DEDUP_MS = 3000;
+
 export async function startCall(args: StartCallArgs): Promise<void> {
   const { router, conversationId, isVideo, displayName } = args;
+
+  const nowTs = Date.now();
+  const lastStart = recentStartByConv[conversationId] || 0;
+  if (nowTs - lastStart < START_DEDUP_MS) {
+    recordDiagnostic({
+      tag: 'CALL',
+      source: 'startCall',
+      message: `deduped duplicate start conv=${conversationId} dtMs=${nowTs - lastStart}`,
+    });
+    return;
+  }
+  recentStartByConv[conversationId] = nowTs;
 
   // Legacy fallback when Twilio is disabled OR when the caller
   // identity isn't ready yet (e.g., auth race condition).
