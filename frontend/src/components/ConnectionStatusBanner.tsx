@@ -19,11 +19,12 @@
  * timers in the background. This is the user-facing receipt of those.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View, Platform } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useConvex } from 'convex/react';
 import { forceConvexReconnect } from '../providers/useConvexAutoReconnect';
+import { recreateConvexClient } from '../providers/ConvexClientProvider';
 import { Colors, FontSize, FontWeight, Spacing } from '../theme';
 
 const SHOW_DELAY_MS = 5_000;
@@ -31,6 +32,7 @@ const SHOW_DELAY_MS = 5_000;
 export default function ConnectionStatusBanner() {
   const client = useConvex();
   const [disconnected, setDisconnected] = useState(false);
+  const disconnectedRef = useRef(false);
 
   useEffect(() => {
     if (!client || Platform.OS === 'web') return;
@@ -47,10 +49,12 @@ export default function ConnectionStatusBanner() {
               clearTimeout(timeout);
               timeout = null;
             }
+            disconnectedRef.current = false;
             setDisconnected(false);
           } else {
             if (timeout) return; // already counting down
             timeout = setTimeout(() => {
+              disconnectedRef.current = true;
               setDisconnected(true);
             }, SHOW_DELAY_MS);
           }
@@ -79,6 +83,12 @@ export default function ConnectionStatusBanner() {
       <TouchableOpacity
         onPress={() => {
           void forceConvexReconnect('connection-banner');
+          // iter-383: if a FATAL desync killed the client, soft/hard reconnect
+          // can't recover it — only replacing the client does. If we're still
+          // disconnected a few seconds after the user asked to retry, recreate.
+          setTimeout(() => {
+            if (disconnectedRef.current) recreateConvexClient();
+          }, 3500);
         }}
         style={styles.retryBtn}
         activeOpacity={0.7}

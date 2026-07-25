@@ -1,6 +1,15 @@
 # Smilers Mobile App — PRD
 
-## iter-382 (Jun 2026): #4 self-view flicker fix + in-call connection-quality indicator
+## iter-383 (Jun 2026): P0 REAL ROOT CAUSE — `[CONVEX FATAL ERROR] Base version … doesn't match version 0`
+A fresh device log finally captured the actual cause of "nothing shows / Reconnecting… forever" (only fixable by clear-storage/reinstall): the Convex client logs a FATAL `Base version 1 passed up doesn't match the current version 0` ~1.3s into cold start, after which the singleton `ConvexReactClient` **stops syncing for the whole process** (cached feature rows show, but conversations never load). It's triggered by a `closeAndReconnect` (hardReconnect) racing the initial boot auth-handshake — and `chats.tsx`'s `chats-empty-with-cache` recovery fires exactly that within ~1s of boot. A process restart "fixes" it only because it builds a new client.
+**Fixes:**
+1. **SELF-HEAL (the game-changer) — `ConvexClientProvider.tsx` rewritten:** the client now lives in state; a global `console.error` watcher detects the FATAL marker and swaps in a brand-new `ConvexReactClient` (bumping a `key` to fully remount + re-subscribe), which re-authenticates with the still-valid token. This turns an uninstall-level bug into a ~1s automatic recovery. Debounced (max 1 recreate / 5s) so it can't loop. Exposes `recreateConvexClient()`.
+2. **STOP THE TRIGGER — `useConvexAutoReconnect.ts`:** `forceConvexReconnect` now refuses the hard `closeAndReconnect` for the first 8s after a client is (re)created (`FORCE_HARD_BOOT_GUARD_MS`), so the early auto-callers (chats-empty-with-cache etc.) can't race the handshake. Soft reconnect still runs.
+3. **`(tabs)/_layout.tsx`:** me-stall watchdog moved 6s/14s → 9s/16s so its hard reconnect fires *past* the 8s boot guard and actually recovers a stale-token stall.
+4. **`ConnectionStatusBanner.tsx`:** "Retry" now escalates to `recreateConvexClient()` if still disconnected 3.5s after a manual retry (belt-and-braces for any fatal the auto-watcher missed).
+Lint clean; web boots. ⚠️ Native/session — validate on the APK rebuild; a fresh log should now show `FATAL desync detected → recreating Convex client (self-heal)` instead of a permanent blank.
+
+ + in-call connection-quality indicator
 Both in `src/components/stream/StreamCallInner.tsx` (NATIVE-only → validate on APK rebuild):
 - **#4 (self-view appears then disappears):** the local camera track is released by WebRTC on app background (worsened by the AppState churn from iter-380) and can drop during the SFU renegotiation right after join, leaving the self-view black/gone until the user toggled camera off+on. Added two idempotent re-assertions of `call.camera.enable()`: (a) ~0/600ms after `connected` while `videoMode && camOn`, and (b) on every AppState `active` transition while video is wanted (re-acquires the camera released while backgrounded). Added `AppState` to the RN import.
 - **Enhancement — connection-quality indicator:** new `ConnQualityBars` (3 signal bars + Poor/Good/Excellent label, colour-coded) rendered top-left whenever `connected && !inPiP`. Reads Stream's per-participant `connectionQuality` (1 poor/2 good/3 excellent) and shows the WEAKER of remote/local so the user gets an honest WhatsApp-style signal. Non-overlapping with the centered top bar.

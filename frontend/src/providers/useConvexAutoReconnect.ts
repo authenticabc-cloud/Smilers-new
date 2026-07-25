@@ -59,6 +59,16 @@ const MIN_HARD_RESTART_INTERVAL_MS = 30_000;
 // every component. Set by `useConvexAutoReconnect` on mount.
 let activeClient: ConvexReactClient | null = null;
 
+// iter-383: timestamp when the CURRENT active client was registered (mount /
+// recreate). A `closeAndReconnect` (hardReconnect) that races the initial boot
+// auth-handshake causes the FATAL "[CONVEX FATAL ERROR] Base version N passed
+// up doesn't match the current version 0" desync, which permanently kills sync
+// until the process restarts (the "nothing shows / Reconnecting… forever"
+// bug). We therefore refuse hard reconnects for the first few seconds after a
+// client is (re)created — the window where that race happens.
+let activeClientMountedAt = 0;
+const FORCE_HARD_BOOT_GUARD_MS = 8_000;
+
 type ConvexConnectionState = {
   isWebSocketConnected: boolean;
   hasEverConnected: boolean;
@@ -161,6 +171,7 @@ export function useConvexAutoReconnect(client: ConvexReactClient) {
   useEffect(() => {
     let cancelled = false;
     activeClient = client; // iter-213: register for manual reconnect callers.
+    activeClientMountedAt = Date.now(); // iter-383: boot-guard reference.
     mountedAtRef.current = Date.now();
 
     const withinSettleWindow = () => Date.now() - mountedAtRef.current < SETTLE_WINDOW_MS;
@@ -445,6 +456,22 @@ export async function forceConvexReconnect(reason: string = 'manual'): Promise<b
       tag: 'CONVEX',
       source: 'auto-reconnect',
       message: `manual hard-reconnect skipped (call in progress) reason=${reason}`,
+    });
+    return soft;
+  }
+  // iter-383: refuse the hard `closeAndReconnect` while the client is still in
+  // its boot-handshake window — firing it then races the auth handshake and
+  // triggers the FATAL "Base version … doesn't match version 0" desync that
+  // permanently kills sync ("nothing shows / Reconnecting… forever"). The
+  // early auto-callers (chats-empty-with-cache fires within ~1s of cold start)
+  // are exactly what hit this. Soft reconnect already ran above; the socket
+  // recovers on its own or via a later (post-guard) reconnect.
+  const bootAge = Date.now() - activeClientMountedAt;
+  if (activeClientMountedAt && bootAge < FORCE_HARD_BOOT_GUARD_MS) {
+    recordDiagnostic({
+      tag: 'CONVEX',
+      source: 'auto-reconnect',
+      message: `hard-reconnect skipped (boot guard ${Math.round(bootAge / 1000)}s) reason=${reason}`,
     });
     return soft;
   }
