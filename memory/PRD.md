@@ -1,5 +1,12 @@
 # Smilers Mobile App — PRD
 
+## iter-373 (Jun 2026): Voice Typing — local-language commands + "Send to…" per note
+- **#2 Local-language voice commands:** expanded the prompt keyword matcher (`app/study/voice-typing.tsx`) with Akan/Twi (awie, kɔ so, aane, daabi…), French (fini, continuer, oui, non), Hausa (an gama, ci gaba, a'a), and Ewe/Ga terms, alongside English. Refined finish-vs-continue disambiguation using a "strong finish" set to avoid overlap with shared yes/no tokens.
+- **#3 "Send to…" per saved note:** each history note now has a **Send** action → Alert menu with "Ask Study AI" (routes to `/study/session?q=…`), "Save to Diary" (routes to `/diary?prefill=…`), and "Share…" (OS share sheet). Wired the receivers: `study/session.tsx` now seeds its input from a `q` param; `diary.tsx` seeds its composer draft from a `prefill` param.
+Lint clean (only pre-existing warnings); web bundle builds; screen renders. Still NATIVE-only for the actual dictation.
+
+
+
 ## iter-372 (Jun 2026): New feature — Voice Typing (Study AI)
 Added a "Voice Typing" card in the Study AI grid **right after Study Rooms** (`app/study/index.tsx`, free), route `app/study/voice-typing.tsx` (registered in `_layout.tsx`). NATIVE-only (on-device speech recognition + TTS) → validate on the APK rebuild.
 - **Live word-by-word dictation** via `expo-speech-recognition@56.0.1` (installed; AndroidManifest already had RECORD_AUDIO + the `com.google.android.googlequicksearchbox` speech `<queries>`, iOS Info.plist already had NSMicrophone/NSSpeechRecognition usage strings — so no native edits needed; module autolinks at build time). `continuous:true, interimResults:true, addsPunctuation:true`, auto language-detection on Android (no forced `lang`).

@@ -66,9 +66,9 @@ function answerToText(m: any): string {
 
 export default function StudySession() {
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ sessionId?: string; subject?: string; mode?: string; capture?: string }>();
+  const params = useLocalSearchParams<{ sessionId?: string; subject?: string; mode?: string; capture?: string; q?: string }>();
   const [sessionId, setSessionId] = useState<string | null>(params.sessionId || null);
-  const [text, setText] = useState('');
+  const [text, setText] = useState(params.q ? String(params.q) : '');
   const [images, setImages] = useState<{ uri: string; mime?: string }[]>([]);
   const [mode, setMode] = useState<StudyMode>((params.mode as StudyMode) || 'guided');
   const [targetLang, setTargetLang] = useState('English');

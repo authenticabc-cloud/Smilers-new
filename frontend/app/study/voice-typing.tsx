@@ -19,6 +19,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -47,10 +48,40 @@ const PAUSE_MS = 10000; // 10s of silence → prompt
 type Phase = 'idle' | 'listening' | 'promptFinish' | 'promptCopy' | 'onhold';
 type Mode = 'dictation' | 'finishCmd' | 'copyCmd';
 
-const FINISH_WORDS = ['finish', 'finished', 'done', 'complete', 'stop', "that's all", 'thats all', 'yes'];
-const CONTINUE_WORDS = ['continue', 'resume', 'keep going', 'not yet', 'more', 'carry on', 'no'];
-const YES_WORDS = ['yes', 'yeah', 'yep', 'sure', 'copy', 'ok', 'okay', 'please'];
-const NO_WORDS = ['no', 'nope', "don't", 'dont', 'keep', 'leave', 'save'];
+// Command keywords — English + common local-language equivalents (Akan/Twi,
+// French, Hausa, Ewe/Ga) so voice replies to the prompts work for more users.
+const FINISH_WORDS = [
+  // English
+  'finish', 'finished', 'done', 'complete', 'stop', "that's all", 'thats all', 'yes',
+  // Akan / Twi
+  'awie', 'awiei', 'me awie', 'aba awiei',
+  // French
+  'fini', 'termin', 'oui',
+  // Hausa
+  'an gama', 'gama',
+  // Ewe / Ga
+  'vɔ', 'ewu', 'egbe',
+];
+const CONTINUE_WORDS = [
+  // English
+  'continue', 'resume', 'keep going', 'not yet', 'more', 'carry on', 'no',
+  // Akan / Twi
+  'kɔ so', 'ko so', 'toa so', 'toaso', 'daabi',
+  // French
+  'continuer', 'continue', 'encore', 'non', 'pas encore',
+  // Hausa
+  'ci gaba', "a'a",
+  // Ewe / Ga
+  'yi edzi', 'kɔ yi',
+];
+const YES_WORDS = [
+  'yes', 'yeah', 'yep', 'sure', 'copy', 'ok', 'okay', 'please',
+  'aane', 'yiw', 'oui', 'copie', 'na', 'eh',
+];
+const NO_WORDS = [
+  'no', 'nope', "don't", 'dont', 'keep', 'leave', 'save',
+  'daabi', 'non', "a'a", 'aa',
+];
 
 function matchAny(text: string, words: string[]): boolean {
   const t = text.toLowerCase();
@@ -101,9 +132,10 @@ export default function VoiceTypingScreen() {
     // Command mode (voice reply to a prompt). Only act on a final result.
     if (!e?.isFinal || !transcript) return;
     if (modeRef.current === 'finishCmd') {
-      // Order matters: check "continue/no" before "finish/yes" isn't reliable,
-      // so decide by which set matches; default to continue if ambiguous.
-      if (matchAny(transcript, CONTINUE_WORDS) && !matchAny(transcript, ['finish', 'finished', 'done', 'complete', 'stop'])) {
+      // "Continue" wins over "finish" when both loosely match, unless a strong
+      // finish word is present (avoids ambiguity around shared yes/no tokens).
+      const strongFinish = ['finish', 'finished', 'done', 'complete', 'stop', 'awie', 'fini', 'gama'];
+      if (matchAny(transcript, CONTINUE_WORDS) && !matchAny(transcript, strongFinish)) {
         handleContinue();
       } else if (matchAny(transcript, FINISH_WORDS)) {
         handleFinished();
@@ -349,6 +381,28 @@ export default function VoiceTypingScreen() {
     ]);
   }, []);
 
+  // "Send to…" — route a saved note straight into Study AI, the Diary composer,
+  // or the OS share sheet (to drop it into any chat/app).
+  const sendNote = useCallback((note: VoiceNote) => {
+    Alert.alert('Send to…', undefined, [
+      {
+        text: 'Ask Study AI',
+        onPress: () => router.push({ pathname: '/study/session', params: { q: note.text } } as any),
+      },
+      {
+        text: 'Save to Diary',
+        onPress: () => router.push({ pathname: '/diary', params: { prefill: note.text } } as any),
+      },
+      {
+        text: 'Share…',
+        onPress: () => {
+          Share.share({ message: note.text }).catch(() => {});
+        },
+      },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }, []);
+
   const displayText = useMemo(() => (committed + (interim ? ' ' + interim : '')).trim(), [committed, interim]);
   const isPrompt = phase === 'promptFinish' || phase === 'promptCopy';
 
@@ -434,6 +488,10 @@ export default function VoiceTypingScreen() {
               <View key={n.id} style={styles.noteRow}>
                 <Text style={styles.noteText} numberOfLines={4}>{n.text}</Text>
                 <View style={styles.noteActions}>
+                  <TouchableOpacity onPress={() => sendNote(n)} style={styles.noteBtn} hitSlop={8}>
+                    <Feather name="send" size={16} color={Colors.primaryDark} />
+                    <Text style={styles.noteBtnText}>Send</Text>
+                  </TouchableOpacity>
                   <TouchableOpacity onPress={() => copyNote(n)} style={styles.noteBtn} hitSlop={8}>
                     <Feather name={copiedId === n.id ? 'check' : 'copy'} size={16} color={Colors.primaryDark} />
                     <Text style={styles.noteBtnText}>{copiedId === n.id ? 'Copied' : 'Copy'}</Text>

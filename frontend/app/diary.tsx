@@ -60,7 +60,7 @@ import {
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery, useConvex } from 'convex/react';
 import * as Clipboard from 'expo-clipboard';
 import { pickDocument } from '../src/lib/nativePickers';
@@ -374,7 +374,8 @@ export default function DiaryScreen() {
   // ─── Local store (still primary when cloud unavailable) ──────
   const [localEntries, setLocalEntries] = useState<DiaryEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const [draft, setDraft] = useState('');
+  const prefillParams = useLocalSearchParams<{ prefill?: string }>();
+  const [draft, setDraft] = useState(prefillParams.prefill ? String(prefillParams.prefill) : '');
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showMenu, setShowMenu] = useState(false);
