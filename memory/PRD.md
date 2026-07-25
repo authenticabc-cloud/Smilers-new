@@ -1,5 +1,8 @@
 # Smilers Mobile App — PRD
 
+## iter-381 (Jun 2026): #5 — slow conversation open + unresponsive back button (JS-thread freeze on mount)
+Root cause: the chat message list (`app/chat/[conversationId].tsx`) is a **non-inverted `FlatList` that `scrollToEnd`s on mount** with NO virtualization limits (`getItemLayout`/`windowSize`/`initialNumToRender` all unset). To reach the bottom on open it rendered every row synchronously, blocking the JS thread for seconds → "doesn't load instantly" + back button/controls unresponsive right after opening. Messages are paginated to 50 and `ChatMessageRow` is already `React.memo`, so the fix is bounding the render window. Added `initialNumToRender={12}`, `maxToRenderPerBatch={10}`, `updateCellsBatchingPeriod={50}`, `windowSize={11}`, `removeClippedSubviews` (Android). Lint clean. ⚠️ Native perf — validate on the APK rebuild.
+
 ## iter-380 (Jun 2026): P0 — "Nothing shows" / blank-screen reconnect storm (root cause from device logs)
 Two device diagnostic sessions pinpointed the recurring blank-screen bug:
 - **Session 1 (permanent blank):** the app flapped `AppState active↔background` every 1-2s. `app/(tabs)/chats.tsx` fired `forceConvexReconnect` (→ `closeAndReconnect`) on EVERY `active` with no cooldown → the Convex socket was torn down faster than it could re-auth/load → `me`/conversations NEVER resolved → permanent blank until storage cleared. The same churn perpetually re-armed the 12s `SETTLE_WINDOW` in `useConvexAutoReconnect`, so the heartbeat auto-recovery never ran either.

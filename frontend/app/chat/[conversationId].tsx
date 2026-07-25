@@ -4426,6 +4426,19 @@ export default function ChatScreen() {
                 <Text style={styles.emptyText}>Say hello with a smile 😊</Text>
               </View>
             }
+            // iter-381: virtualization caps. The list is NOT inverted and
+            // `scrollToEnd`s on mount, so without these FlatList rendered EVERY
+            // message row synchronously on open (to reach the bottom) — that
+            // blocked the JS thread for seconds, which is exactly why the user
+            // reported the conversation "doesn't load instantly" and the back
+            // button + controls were unresponsive right after opening. Bounding
+            // the render window keeps the initial commit small; rows fill in as
+            // they scroll into view.
+            initialNumToRender={12}
+            maxToRenderPerBatch={10}
+            updateCellsBatchingPeriod={50}
+            windowSize={11}
+            removeClippedSubviews={Platform.OS === 'android'}
           />
         )}
 
