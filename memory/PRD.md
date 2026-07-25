@@ -1,5 +1,17 @@
 # Smilers Mobile App — PRD
 
+## iter-380 (Jun 2026): P0 — "Nothing shows" / blank-screen reconnect storm (root cause from device logs)
+Two device diagnostic sessions pinpointed the recurring blank-screen bug:
+- **Session 1 (permanent blank):** the app flapped `AppState active↔background` every 1-2s. `app/(tabs)/chats.tsx` fired `forceConvexReconnect` (→ `closeAndReconnect`) on EVERY `active` with no cooldown → the Convex socket was torn down faster than it could re-auth/load → `me`/conversations NEVER resolved → permanent blank until storage cleared. The same churn perpetually re-armed the 12s `SETTLE_WINDOW` in `useConvexAutoReconnect`, so the heartbeat auto-recovery never ran either.
+- **Session 2 (cold-start ~33s blank):** with a stale cached id_token, Convex authenticated with the expired token → queries returned empty; the token only rotated when a reconnect finally forced `fetchAccessToken(force)` at ~33s (`getFreshIdToken force=true refresh OK` right before `me` resolved). AuthProvider refreshes silently but the Convex auth memo is (intentionally) stable across rotations, so Convex is never told about the fresh token.
+**Fixes (all app-side, native-validated):**
+1. `chats.tsx` foreground reconnect now only fires on a GENUINE resume (backgrounded ≥ 3s) and is rate-limited (20s cooldown) — spurious sub-3s flaps are ignored, killing the reconnect storm.
+2. `useConvexAutoReconnect` only re-arms the settle window on a genuine resume (bg ≥ 3s), so the heartbeat recovery can run during any residual churn.
+3. `app/(tabs)/_layout.tsx` cold-start watchdog: if `me` hasn't resolved 6s/14s after auth, fire one `forceConvexReconnect('tabs-me-stall')` — cuts the stale-token blank window from ~33s to seconds.
+Lint clean; web boots to Sign In. ⚠️ Native/session behaviour — requires the user's APK rebuild + a fresh device log to confirm the blank state is gone. Did NOT touch the OIDC flow or the Convex auth memo (both fragile — prior loops documented in iter-315/316).
+
+
+
 ## iter-374 (Jun 2026): Study Materials — Bible & Quran reader (Phase 1)
 First half of the big feature (per user: freely-licensable content now, ESV/NIV/NKJV later with a licensed key; scroll-sync over the Stream call data channel). Read-alone works everywhere; "read with all" sync is NATIVE-only (needs a live Stream call).
 - **Backend proxy** (`server.py`): `GET /api/bible/chapter?translation&book&chapter` (getbible.net v2, public-domain), `GET /api/quran/surahs` + `GET /api/quran/surah?number&edition&with_arabic` (alquran.cloud). 24h in-memory cache. Added top-level `import time`. Verified via curl (KJV John 3, 114 surahs, Al-Faatiha Arabic+translation).

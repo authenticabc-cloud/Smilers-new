@@ -286,6 +286,12 @@ export function useConvexAutoReconnect(client: ConvexReactClient) {
     // ---------------------------------------------------------------
     // 1. AppState foreground listener
     // ---------------------------------------------------------------
+    // iter-380: track how long we were actually backgrounded so a spurious
+    // sub-second AppState flap (observed churning every 1-2s on some devices)
+    // does NOT re-arm the settle window. Perpetually re-arming it during such
+    // churn kept `withinSettleWindow()` true forever → the heartbeat
+    // auto-recovery never ran → a stuck socket never healed ("nothing shows").
+    let backgroundedAt: number | null = null;
     const appStateSub = AppState.addEventListener('change', (next) => {
       const prev = appStateRef.current;
       appStateRef.current = next;
@@ -300,7 +306,18 @@ export function useConvexAutoReconnect(client: ConvexReactClient) {
         source: 'useConvexAutoReconnect',
         message: `${prev} -> ${next} callActive=${callHost.isActive()}`,
       });
+      if (next === 'background' || next === 'inactive') {
+        if (backgroundedAt == null) backgroundedAt = Date.now();
+        return;
+      }
       if (next === 'active' && prev !== 'active') {
+        const bgFor = backgroundedAt ? Date.now() - backgroundedAt : 0;
+        backgroundedAt = null;
+        // Ignore spurious sub-3s flaps: no auth re-handshake happens for those
+        // (AuthProvider only refreshes the OIDC token after real idle time), so
+        // re-arming the settle window / kicking a reconnect only starves
+        // recovery and churns the socket.
+        if (bgFor < 3000) return;
         // iter-292 RESUME-FIX: the SETTLE_WINDOW that prevents the FATAL
         // "Base version … doesn't match …" desync was only armed at MOUNT,
         // so it protected cold-start but NOT resume-from-background. On
@@ -308,7 +325,7 @@ export function useConvexAutoReconnect(client: ConvexReactClient) {
         // refreshes the OIDC token → setIdToken → Convex re-auth handshake.
         // If our reconnect runs concurrently with that re-auth, the socket
         // desyncs → sync permanently dies → infinite "Opening Smilers…" until
-        // the user clears app storage. Re-arming the settle window on EVERY
+        // the user clears app storage. Re-arming the settle window on a GENUINE
         // foreground transition lets the token re-auth complete before we
         // touch the socket. Convex's own internal backoff still reconnects in
         // the meantime; our heartbeat assists once the window elapses.

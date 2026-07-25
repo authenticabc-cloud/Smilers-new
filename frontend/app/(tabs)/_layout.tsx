@@ -9,6 +9,7 @@ import { PHONE_VERIFIED_INSTALL_KEY, readStoredString } from '../../src/lib/sett
 import { useLocalReadMap } from '../../src/hooks/useLocalReadMap';
 import { conversationLastActivityMs, effectiveUnread } from '../../src/lib/localReadState';
 import { callDebug } from '../../src/lib/callDebugLog';
+import { forceConvexReconnect } from '../../src/providers/useConvexAutoReconnect';
 import { Colors, FontSize, FontWeight } from '../../src/theme';
 
 export default function TabsLayout() {
@@ -180,6 +181,42 @@ export default function TabsLayout() {
       cancelled = true;
     };
   }, [isAuthenticated]);
+
+  // iter-380 COLD-START STALL FIX: device logs showed `getCurrentUser` (me)
+  // taking ~33s to resolve on a cold start with a stale cached id_token —
+  // Convex authenticated with the expired token, queries returned empty, and
+  // the token only rotated when a reconnect eventually forced it. During that
+  // window the app is BLANK. AuthProvider refreshes the token silently but the
+  // Convex auth memo is (intentionally) stable across rotations, so Convex is
+  // never told about the fresh token → it keeps using the rejected one. A
+  // single forced reconnect re-runs fetchAccessToken(force) and re-auths with
+  // the fresh token (exactly what unblocked it at 33s in the logs). Kick it at
+  // 6s and 14s if `me` still hasn't resolved, so the blank window is seconds,
+  // not tens of seconds. Guarded to at most 2 kicks per stall.
+  const meStallKicksRef = React.useRef(0);
+  useEffect(() => {
+    if (!isAuthenticated || !hasVerifiedInstall) return;
+    if (!meLoading) {
+      meStallKicksRef.current = 0;
+      return;
+    }
+    const t1 = setTimeout(() => {
+      if (meStallKicksRef.current >= 1) return;
+      meStallKicksRef.current = 1;
+      callDebug.push('CONVEX', 'tabs me-stall 6s → forceConvexReconnect');
+      void forceConvexReconnect('tabs-me-stall-6s');
+    }, 6000);
+    const t2 = setTimeout(() => {
+      if (meStallKicksRef.current >= 2) return;
+      meStallKicksRef.current = 2;
+      callDebug.push('CONVEX', 'tabs me-stall 14s → forceConvexReconnect');
+      void forceConvexReconnect('tabs-me-stall-14s');
+    }, 14000);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [isAuthenticated, hasVerifiedInstall, meLoading]);
 
   // iter-300: latch "we successfully booted into the tabs once". Set the
   // instant `me` resolves to a real user with the install verified — from

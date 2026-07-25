@@ -308,18 +308,36 @@ export default function ChatsScreen() {
     setTimeout(() => setReconnecting(false), 1800);
   }, [reconnecting]);
 
-  // iter-221 D — auto pull-to-refresh on FOREGROUND.
+  // iter-221 D — auto pull-to-refresh on FOREGROUND (iter-380 HARDENED).
   //
   // When the user brings the app back from background, the OS may have
-  // killed the Convex WebSocket silently. useConvexAutoReconnect
-  // already fires a soft reconnect on AppState 'active' — here we ALSO
-  // surface the same visible "Reconnecting…" spinner the user gets
-  // from a manual pull, so they have immediate visual feedback that
-  // the chat list is being refreshed and they don't need to pull
-  // themselves.
+  // killed the Convex WebSocket silently — a real resume should refresh.
+  //
+  // BUT device logs (session with rapid AppState churn) showed some devices
+  // flapping active↔background every 1-2s. The old unconditional reconnect
+  // fired `closeAndReconnect()` on EVERY 'active', tearing down the Convex
+  // socket faster than it could re-authenticate and load — so `me` /
+  // conversations NEVER resolved and the app showed a permanent BLANK screen
+  // ("nothing shows") recoverable only by clearing storage. We now only
+  // reconnect on a GENUINE resume: the app was backgrounded for a meaningful
+  // duration AND not more often than a cooldown. Spurious sub-3s flaps (which
+  // don't actually kill the socket) are ignored so a flapping device can't
+  // weaponise this into a reconnect storm.
+  const fgBgAtRef = useRef<number | null>(null);
+  const lastFgReconnectRef = useRef(0);
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'background' || next === 'inactive') {
+        if (fgBgAtRef.current == null) fgBgAtRef.current = Date.now();
+        return;
+      }
       if (next === 'active') {
+        const bgAt = fgBgAtRef.current;
+        fgBgAtRef.current = null;
+        const bgDuration = bgAt ? Date.now() - bgAt : 0;
+        if (bgDuration < 3000) return; // spurious flap — socket is fine
+        if (Date.now() - lastFgReconnectRef.current < 20_000) return; // cooldown
+        lastFgReconnectRef.current = Date.now();
         void handlePullToReconnect();
       }
     });
