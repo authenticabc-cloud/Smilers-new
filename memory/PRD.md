@@ -1,6 +1,12 @@
 # Smilers Mobile App — PRD
 
-## iter-381 (Jun 2026): #5 — slow conversation open + unresponsive back button (JS-thread freeze on mount)
+## iter-382 (Jun 2026): #4 self-view flicker fix + in-call connection-quality indicator
+Both in `src/components/stream/StreamCallInner.tsx` (NATIVE-only → validate on APK rebuild):
+- **#4 (self-view appears then disappears):** the local camera track is released by WebRTC on app background (worsened by the AppState churn from iter-380) and can drop during the SFU renegotiation right after join, leaving the self-view black/gone until the user toggled camera off+on. Added two idempotent re-assertions of `call.camera.enable()`: (a) ~0/600ms after `connected` while `videoMode && camOn`, and (b) on every AppState `active` transition while video is wanted (re-acquires the camera released while backgrounded). Added `AppState` to the RN import.
+- **Enhancement — connection-quality indicator:** new `ConnQualityBars` (3 signal bars + Poor/Good/Excellent label, colour-coded) rendered top-left whenever `connected && !inPiP`. Reads Stream's per-participant `connectionQuality` (1 poor/2 good/3 excellent) and shows the WEAKER of remote/local so the user gets an honest WhatsApp-style signal. Non-overlapping with the centered top bar.
+Lint clean; web boots (Stream tree is native-only, so the indicator/self-view only appear on a device build).
+
+ + unresponsive back button (JS-thread freeze on mount)
 Root cause: the chat message list (`app/chat/[conversationId].tsx`) is a **non-inverted `FlatList` that `scrollToEnd`s on mount** with NO virtualization limits (`getItemLayout`/`windowSize`/`initialNumToRender` all unset). To reach the bottom on open it rendered every row synchronously, blocking the JS thread for seconds → "doesn't load instantly" + back button/controls unresponsive right after opening. Messages are paginated to 50 and `ChatMessageRow` is already `React.memo`, so the fix is bounding the render window. Added `initialNumToRender={12}`, `maxToRenderPerBatch={10}`, `updateCellsBatchingPeriod={50}`, `windowSize={11}`, `removeClippedSubviews` (Android). Lint clean. ⚠️ Native perf — validate on the APK rebuild.
 
 ## iter-380 (Jun 2026): P0 — "Nothing shows" / blank-screen reconnect storm (root cause from device logs)

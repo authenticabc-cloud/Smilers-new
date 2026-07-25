@@ -19,7 +19,7 @@
  * interpreter, call-waiting.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Dimensions, FlatList, Image, Modal, PanResponder, Platform, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, AppState, Dimensions, FlatList, Image, Modal, PanResponder, Platform, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 // @ts-expect-error — native-only Stream SDK, resolved in the dev/prod build
@@ -189,6 +189,46 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   const connected = callingState === CallingState.JOINED && !!remote;
   const remoteHasVideo = !!(remote && ((remote as any).videoStream || (remote as any).publishedTracks?.includes?.(2)));
   const showVideo = (videoMode || remoteHasVideo) && !callVideoHidden;
+
+  // #4 FIX (self-view appears briefly then disappears): the local camera track
+  // gets released by WebRTC whenever the app is backgrounded (and Stream can
+  // drop the local publish during the SFU renegotiation right after join). The
+  // self-view tile then goes black / vanishes until the user toggles the
+  // camera off+on. Re-assert `camera.enable()` (a) shortly after we connect and
+  // (b) whenever the app returns to the foreground — as long as the user still
+  // wants video on. Idempotent and best-effort.
+  useEffect(() => {
+    if (!call || !connected || !(videoMode && camOn)) return;
+    let cancelled = false;
+    call.camera.enable().catch(() => {});
+    const t = setTimeout(() => {
+      if (!cancelled) call.camera.enable().catch(() => {});
+    }, 600);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [call, connected, videoMode, camOn]);
+
+  useEffect(() => {
+    if (!call) return;
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active' && videoMode && camOn) {
+        // Camera was likely released while backgrounded — re-acquire it so the
+        // self-view (and our outgoing video) don't stay black on return.
+        setTimeout(() => call.camera.enable().catch(() => {}), 300);
+      }
+    });
+    return () => sub.remove();
+  }, [call, videoMode, camOn]);
+
+  // Connection-quality (Stream exposes SfuModels.ConnectionQuality per
+  // participant: 0 unknown, 1 poor, 2 good, 3 excellent). Surface the weaker of
+  // remote/local so the user gets an honest WhatsApp-style signal indicator.
+  const remoteQuality = Number((remote as any)?.connectionQuality ?? 0);
+  const localQuality = Number((local as any)?.connectionQuality ?? 0);
+  const rated = [remoteQuality, localQuality].filter((q) => q > 0);
+  const connQuality = rated.length ? Math.min(...rated) : 0;
 
   useEffect(() => {
     if (!call) return;
@@ -604,6 +644,12 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
           </View>
         )}
       </View>
+
+      {!inPiP && connected ? (
+        <View style={styles.connQualityWrap} pointerEvents="none" testID="conn-quality">
+          <ConnQualityBars quality={connQuality} />
+        </View>
+      ) : null}
 
       {!inPiP ? (
         hasScreenShare ? (
@@ -1506,6 +1552,31 @@ export default function StreamCallInner() {
   );
 }
 
+// In-call connection-quality indicator (WhatsApp-style signal bars). Maps
+// Stream's per-participant ConnectionQuality (1 poor / 2 good / 3 excellent)
+// to 3 bars + colour. Renders nothing useful until a rating exists.
+function ConnQualityBars({ quality }: { quality: number }) {
+  const level = quality >= 3 ? 3 : quality === 2 ? 2 : quality === 1 ? 1 : 0;
+  const color = level >= 3 ? '#34D399' : level === 2 ? '#FBBF24' : level === 1 ? '#F87171' : 'rgba(255,255,255,0.35)';
+  const label = level >= 3 ? 'Excellent' : level === 2 ? 'Good' : level === 1 ? 'Poor' : '';
+  const heights = [7, 11, 15];
+  return (
+    <View style={styles.connBarsRow}>
+      {heights.map((h, i) => (
+        <View
+          key={i}
+          style={[
+            styles.connBar,
+            { height: h, backgroundColor: i < level ? color : 'rgba(255,255,255,0.22)' },
+          ]}
+        />
+      ))}
+      {label ? <Text style={[styles.connLabel, { color }]}>{label}</Text> : null}
+    </View>
+  );
+}
+
+
 const styles = StyleSheet.create({
   loading: { flex: 1, backgroundColor: '#0B0B0B', alignItems: 'center', justifyContent: 'center' },
   loadingText: { color: Colors.white, fontSize: 20, fontWeight: '600', marginTop: 20 },
@@ -1581,6 +1652,32 @@ const styles = StyleSheet.create({
   topBar: { position: 'absolute', top: 56, left: 0, right: 0, alignItems: 'center' },
   topName: { color: Colors.white, fontSize: 18, fontWeight: '700' },
   topStatus: { color: '#D1D5DB', fontSize: 14, marginTop: 2 },
+  connQualityWrap: {
+    position: 'absolute',
+    top: 54,
+    left: 16,
+    zIndex: 56,
+    elevation: 15,
+  },
+  connBarsRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 3,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 10,
+  },
+  connBar: {
+    width: 4,
+    borderRadius: 2,
+  },
+  connLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    marginLeft: 6,
+    alignSelf: 'center',
+  },
   selfView: {
     position: 'absolute',
     top: 60,
