@@ -48,6 +48,7 @@ import {
   resolveDeviceContactNameFromUser,
 } from '../../lib/deviceContactIndex';
 import { InCallAudio } from '../../lib/webrtc/inCallManager';
+import { getRingDelivery, subscribeRingDelivery } from '../../lib/call/ringDelivery';
 import { ControlBtn, AudioOutputMenu } from '../call/CallScreenComponents';
 import { useRingtonePlayer } from '../../lib/ringtone/useRingtonePlayer';
 import { addStreamParticipant, fetchCallParticipants, removeStreamParticipant, type CallRosterEntry } from '../../lib/twilio/twilioApi';
@@ -453,6 +454,35 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
     toastTimerRef.current = setTimeout(() => setToast(null), 3500);
   }, []);
 
+  // iter-386 (enhancement): proactive WEAK-CONNECTION warning. When the
+  // (weaker-of-both) connection quality sits at POOR (1) for >3s while
+  // connected, surface a toast so the user knows audio may glitch and it isn't
+  // an app bug. Rate-limited to once per 20s and cleared the moment quality
+  // recovers, so it never nags on a brief dip. Builds on the connQuality signal
+  // already shown by the ConnQualityBars indicator.
+  const poorSinceRef = useRef<number | null>(null);
+  const lastPoorWarnRef = useRef(0);
+  useEffect(() => {
+    if (!connected) {
+      poorSinceRef.current = null;
+      return;
+    }
+    if (connQuality !== 1) {
+      poorSinceRef.current = null;
+      return;
+    }
+    if (poorSinceRef.current == null) poorSinceRef.current = Date.now();
+    const t = setTimeout(() => {
+      const since = poorSinceRef.current;
+      if (since == null) return;
+      if (Date.now() - since < 3000) return;
+      if (Date.now() - lastPoorWarnRef.current < 20_000) return;
+      lastPoorWarnRef.current = Date.now();
+      showToast('Weak connection — audio may drop');
+    }, 3200);
+    return () => clearTimeout(t);
+  }, [connected, connQuality, showToast]);
+
   // Poll the privacy-aware roster while connected so names/masked-numbers stay
   // fresh for everyone (the backend masks hidden numbers per-viewer). We also
   // diff successive snapshots to surface live "joined / left" toasts to EVERY
@@ -607,20 +637,11 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
     if (!isCaller || !conversationId) return;
     let mounted = true;
     const read = () => {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { getRingDelivery } = require('../../lib/call/ringDelivery');
-        const d = getRingDelivery(String(conversationId));
-        if (mounted) setRingDelivered(!!(d && d.delivered));
-      } catch {}
+      const d = getRingDelivery(String(conversationId));
+      if (mounted) setRingDelivered(!!(d && d.delivered));
     };
     read();
-    let unsub = () => {};
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { subscribeRingDelivery } = require('../../lib/call/ringDelivery');
-      unsub = subscribeRingDelivery(read);
-    } catch {}
+    const unsub = subscribeRingDelivery(read);
     return () => {
       mounted = false;
       try {

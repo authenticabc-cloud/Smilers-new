@@ -1,6 +1,9 @@
 # Smilers Mobile App — PRD
 
-## iter-385 (Jun 2026): #1 authoritative notification suppression + caller "Reached their phone ✓"
+## iter-386 (Jun 2026): Enhancement — proactive weak-connection warning in call
+`StreamCallInner.tsx`: when the (weaker-of-both) `connQuality` sits at POOR for >3s while connected, show a "Weak connection — audio may drop" toast (rate-limited once/20s, cleared on recovery) so users know a glitch isn't an app bug. Builds on the iter-382 ConnQualityBars signal. Also converted the ring-delivery wiring to a static import (removed require() lint warnings). Lint clean; web boots.
+
+ + caller "Reached their phone ✓"
 **#1 Notification toggle-OFF still showed (Google names) — ROOT CAUSE + robust fix:**
 The message displayed with the sender's Google/account name = an OS-rendered `notification`-block push, which Android auto-displays BEFORE the app's background JS runs, so the JS-only suppression in `backgroundTaskSetup` was bypassed. The FCM v1 path already sends messages data-only, but suppression still depended on an OS-display race (and a backend redeploy). Fix = make suppression AUTHORITATIVE server-side:
 - Frontend syncs the device's per-type toggles to the backend on register (`useEmergentPush` → `notification_prefs` in `/api/register-push` body) and re-registers immediately when a toggle changes (`app/notifications.tsx` → `reregisterPushDevice`).
