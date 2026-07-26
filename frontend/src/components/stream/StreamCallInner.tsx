@@ -578,6 +578,17 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   );
   const hasPendingOrDeclined = waitingMembers.length > 0;
 
+  // Group summary counts for the participants pill: how many have joined
+  // (+1 for me, who is always joined) vs. how many are still ringing (pending).
+  const groupJoinedCount = useMemo(
+    () => roster.filter((r) => r.identity && r.identity !== myId && r.status === 'joined').length + 1,
+    [roster, myId],
+  );
+  const groupRingingCount = useMemo(
+    () => roster.filter((r) => r.identity && r.identity !== myId && r.status === 'pending').length,
+    [roster, myId],
+  );
+
   // Mid-call "Call Again" — re-ring ONLY the pending/declined members.
   const [callingAgain, setCallingAgain] = useState(false);
   const handleCallAgain = useCallback(async () => {
@@ -1120,7 +1131,11 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
         >
           <Ionicons name="people" size={14} color={Colors.white} />
           <Text style={styles.participantsPillText}>
-            {participantCount} {participantCount === 1 ? 'person' : 'people'}
+            {isGroupCall
+              ? groupRingingCount > 0
+                ? `${groupJoinedCount} joined · ${groupRingingCount} ringing`
+                : `${groupJoinedCount} in call`
+              : `${participantCount} ${participantCount === 1 ? 'person' : 'people'}`}
           </Text>
         </TouchableOpacity>
       ) : null}
