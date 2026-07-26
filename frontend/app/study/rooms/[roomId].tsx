@@ -50,11 +50,14 @@ export default function RoomDetail() {
   const [shareOpen, setShareOpen] = useState(false);
   const [newDeckOpen, setNewDeckOpen] = useState(false);
 
-  const role = pick(room, 'role', 'myRole') || 'member';
-  const isAdmin = role === 'owner' || role === 'admin';
-  const joinCode = pick(room, 'joinCode', 'code');
+  // iter-399: the deployed (web-canonical) backend labels the code "INVITE CODE"
+  // and stores it under `inviteCode` (like groups/conferences), while older
+  // builds used `joinCode`/`code`. Accept all so the code shows regardless.
+  const role = pick(room, 'role', 'myRole', 'memberRole') || 'member';
+  const isAdmin = role === 'owner' || role === 'admin' || role === 'chief';
+  const joinCode = pick(room, 'joinCode', 'code', 'inviteCode');
   const members: any[] = useMemo(() => {
-    const m = pick(room, 'members') || [];
+    const m = pick(room, 'members', 'memberList', 'participants', 'memberRecords') || [];
     return Array.isArray(m) ? m : [];
   }, [room]);
   const aiCanRead = !!pick(room, 'aiCanReadRoomContent');
@@ -131,7 +134,7 @@ export default function RoomDetail() {
         {(['quizzes', 'decks', 'members'] as Tab[]).map((t) => (
           <TouchableOpacity key={t} style={[styles.tab, tab === t && styles.tabOn]} onPress={() => setTab(t)}>
             <Text style={[styles.tabText, tab === t && styles.tabTextOn]}>
-              {t === 'quizzes' ? 'Quizzes' : t === 'decks' ? 'Decks' : `Members (${members.length || pick(room, 'memberCount') || 0})`}
+              {t === 'quizzes' ? 'Quizzes' : t === 'decks' ? 'Decks' : `Members (${members.length || pick(room, 'memberCount', 'membersCount') || 0})`}
             </Text>
           </TouchableOpacity>
         ))}

@@ -619,6 +619,51 @@ export default function DiaryScreen() {
     );
   }, [myUserId, cloudReady, clearDiaryCloud]);
 
+  // ─── Export diary to a shareable text file (off-device backup) ─────
+  const [exporting, setExporting] = useState(false);
+  const handleExport = useCallback(async () => {
+    if (exporting) return;
+    if (!allEntries || allEntries.length === 0) {
+      Alert.alert('Nothing to export', 'Your Diary is empty.');
+      return;
+    }
+    setExporting(true);
+    setShowMenu(false);
+    try {
+      const lines = ['# My Smilers Diary', `Exported ${new Date().toLocaleString()}`, ''];
+      // Newest first for a readable export.
+      const ordered = [...allEntries].sort((a, b) => b._creationTime - a._creationTime);
+      for (const e of ordered) {
+        const when = new Date(e._creationTime).toLocaleString();
+        const body =
+          (e.text && e.text.trim()) ||
+          (e.attachment?.fileName ? `[${e.kind}] ${e.attachment.fileName}` : `[${e.kind}]`);
+        const from = e.forwardedFrom?.conversationName
+          ? ` (from ${e.forwardedFrom.conversationName})`
+          : '';
+        lines.push(`— ${when}${from}`, body, '');
+      }
+      const content = lines.join('\n');
+      const path = `${LegacyFileSystem.cacheDirectory}smilers-diary-${Date.now()}.txt`;
+      await LegacyFileSystem.writeAsStringAsync(path, content);
+      const Sharing = await import('expo-sharing');
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(path, {
+          mimeType: 'text/plain',
+          dialogTitle: 'Export My Diary',
+          UTI: 'public.plain-text',
+        });
+      } else {
+        await Clipboard.setStringAsync(content);
+        Alert.alert('Copied', 'Sharing is unavailable — your Diary was copied to the clipboard.');
+      }
+    } catch (errorValue: any) {
+      Alert.alert('Export failed', String(errorValue?.message || errorValue));
+    } finally {
+      setExporting(false);
+    }
+  }, [exporting, allEntries]);
+
   // ─── Copy an entry's content to clipboard ─────────────────────
   const handleCopy = useCallback(async (entry: DiaryEntry) => {
     try {
@@ -1025,6 +1070,14 @@ export default function DiaryScreen() {
       >
         <Pressable style={styles.modalBackdrop} onPress={() => setShowMenu(false)}>
           <Pressable style={styles.menuSheet}>
+            <TouchableOpacity style={styles.menuItem} onPress={handleExport} disabled={exporting}>
+              {exporting ? (
+                <ActivityIndicator size="small" color={Colors.diaryDark} />
+              ) : (
+                <Feather name="share" size={16} color={Colors.diaryDark} />
+              )}
+              <Text style={[styles.menuItemText, { color: Colors.diaryDark }]}>Export my Diary</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={styles.menuItem} onPress={handleClearAll}>
               <Feather name="trash-2" size={16} color={Colors.danger} />
               <Text style={[styles.menuItemText, { color: Colors.danger }]}>Clear all entries</Text>

@@ -8,8 +8,8 @@
  * `aiCanReadRoomContent` defaults OFF — generating with useRoomContent=true
  * while it's off throws FORBIDDEN.
  */
-import { useCallback, useState } from 'react';
-import { useAction, useMutation } from 'convex/react';
+import { useCallback, useEffect, useState } from 'react';
+import { useAction, useConvex, useMutation } from 'convex/react';
 import { api } from '../../convexApi';
 import { useSafeConvexQuery } from '../../hooks/useSafeConvexQuery';
 import { useAuth } from '../../providers/AuthProvider';
@@ -37,6 +37,36 @@ export function useRoom(roomId: string | null) {
     null,
     !!roomId,
   );
+  // iter-399 DIAGNOSTIC: getRoom returns null on native for rooms the creator
+  // owns (works on web). useSafeConvexQuery swallows the error, so we do a
+  // one-shot raw call to log the actual result/error — a filtered logcat
+  // (`adb logcat | grep STUDYROOM`) then reveals whether getRoom threw (bad
+  // arg / auth) or genuinely returned null (backend membership shape), so we
+  // can align the field/arg contract precisely. Remove once resolved.
+  const convex = useConvex();
+  useEffect(() => {
+    if (!roomId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await (convex as any).query((api as any).study?.rooms?.getRoom, { roomId });
+        if (cancelled) return;
+        const keys = raw && typeof raw === 'object' ? Object.keys(raw) : null;
+        // eslint-disable-next-line no-console
+        console.log(
+          `[STUDYROOM] getRoom(${roomId}) ->`,
+          raw === null ? 'NULL (treated as not-a-member)' : `keys=${JSON.stringify(keys)}`,
+        );
+      } catch (e: any) {
+        if (cancelled) return;
+        // eslint-disable-next-line no-console
+        console.log(`[STUDYROOM] getRoom(${roomId}) THREW:`, String(e?.message || e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [roomId, convex]);
   const leaveRoom = useMutation((api as any).study.rooms.leaveRoom);
   const updateRoom = useMutation((api as any).study.rooms.updateRoom);
   const regenerateJoinCode = useMutation((api as any).study.rooms.regenerateJoinCode);

@@ -82,9 +82,9 @@ export default function StudyRooms() {
                   <Feather name="users" size={20} color={Colors.primary} />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.roomName} numberOfLines={1}>{pick(r, 'name') || 'Study room'}</Text>
+                  <Text style={styles.roomName} numberOfLines={1}>{pick(r, 'name', 'roomName', 'title') || 'Study room'}</Text>
                   <Text style={styles.roomSub} numberOfLines={1}>
-                    {`${pick(r, 'memberCount', 'membersCount') ?? (r.members?.length ?? 0)} members`}
+                    {`${pick(r, 'memberCount', 'membersCount') ?? (r.members?.length ?? r.memberList?.length ?? 0)} members`}
                     {role && role !== 'member' ? ` · ${role}` : ''}
                   </Text>
                   {typeof activeToday === 'number' && activeToday > 0 ? (
