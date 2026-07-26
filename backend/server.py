@@ -2852,6 +2852,72 @@ async def _prune_dead_token(token_doc: dict, error_message: str | None) -> bool:
         return False
 
 
+# ── Task 3: proactive stale-token purge (DB bloat prevention) ───────────────
+# Reactive pruning (_prune_dead_token) removes tokens Firebase reports as dead,
+# but a token whose app is uninstalled/rebuilt is never SENT to again once the
+# user re-registers a new token, so its old row lingers forever. We also want to
+# collapse the rare case of many rows for one (user, platform). This time-based
+# sweep deletes any push_tokens row not refreshed in `days` days — a live device
+# re-registers on every cold start (see useEmergentPush), so a row untouched for
+# months is definitively stale.
+_STALE_TOKEN_DAYS = int(os.environ.get("PUSH_TOKEN_STALE_DAYS", "90"))
+_TOKEN_PURGE_INTERVAL_SECONDS = 24 * 60 * 60  # daily
+
+
+async def _purge_stale_push_tokens(days: int = _STALE_TOKEN_DAYS) -> int:
+    """Delete push_tokens whose `updated_at` (fallback `created_at`) is older
+    than `days` days. Returns the number of rows removed."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, days))
+    try:
+        res = await db.push_tokens.delete_many(
+            {
+                "$or": [
+                    {"updated_at": {"$lt": cutoff}},
+                    # rows that predate updated_at tracking: fall back to created_at
+                    {"updated_at": {"$exists": False}, "created_at": {"$lt": cutoff}},
+                ]
+            }
+        )
+        removed = int(getattr(res, "deleted_count", 0) or 0)
+        if removed:
+            logger.info(f"push-token purge: removed {removed} stale token(s) older than {days}d")
+        return removed
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"push-token purge failed (non-fatal): {e}")
+        return 0
+
+
+async def _push_token_purge_loop():
+    """Background loop: purge stale tokens once at boot, then daily."""
+    while True:
+        try:
+            await _purge_stale_push_tokens()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"push-token purge loop error (non-fatal): {e}")
+        await asyncio.sleep(_TOKEN_PURGE_INTERVAL_SECONDS)
+
+
+class PurgeStaleTokensBody(BaseModel):
+    days: int | None = None
+
+
+@api_router.post("/maintenance/purge-stale-tokens")
+async def purge_stale_tokens(body: PurgeStaleTokensBody):
+    """Manually trigger the stale-token sweep (also runs daily in the
+    background). Returns how many rows were removed and the cutoff used."""
+    days = body.days if (body.days and body.days > 0) else _STALE_TOKEN_DAYS
+    before = await db.push_tokens.count_documents({})
+    removed = await _purge_stale_push_tokens(days)
+    after = await db.push_tokens.count_documents({})
+    return {
+        "removed": removed,
+        "days": days,
+        "tokens_before": before,
+        "tokens_after": after,
+    }
+
+
+
 async def _recent_call_push_to_user(token_user_id: str, call_key: str = "") -> bool:
     """
     iter-199: SEMANTIC call-push dedupe. Incoming-call pushes can originate
@@ -4313,6 +4379,12 @@ async def _warn_missing_integration_keys():
         )
     else:
         logger.info("Safe Browsing key present — malicious-link detection active.")
+    # Task 3: start the daily stale push-token purge (runs once now, then daily).
+    try:
+        asyncio.create_task(_push_token_purge_loop())
+        logger.info(f"push-token purge loop started (stale threshold = {_STALE_TOKEN_DAYS}d)")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"could not start push-token purge loop: {e}")
 
 
 @app.on_event("shutdown")
