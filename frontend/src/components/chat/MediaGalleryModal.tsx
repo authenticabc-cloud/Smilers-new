@@ -82,26 +82,42 @@ function GalleryVideoPage({
 export default function MediaGalleryModal({
   items,
   e2eeStatus,
+  controlled = false,
+  openMsgId: openMsgIdProp = null,
+  onRequestClose,
 }: {
   items: GalleryItem[];
   e2eeStatus: any;
+  // Controlled mode (used by the profile shared-media grid, which is pushed on
+  // top of the still-mounted chat screen): drive open/close via props instead
+  // of the global store so the two hosts never both open at once.
+  controlled?: boolean;
+  openMsgId?: string | null;
+  onRequestClose?: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const convex = useConvex();
   const { width } = useWindowDimensions();
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [openIdStore, setOpenIdStore] = useState<string | null>(null);
+  const openId = controlled ? openMsgIdProp : openIdStore;
   const [activeIndex, setActiveIndex] = useState(0);
   const [busy, setBusy] = useState<null | 'download' | 'share'>(null);
   const listRef = useRef<FlatList<GalleryItem>>(null);
 
   useEffect(() => {
+    if (controlled) return; // store not used in controlled mode
     setGalleryHostMounted(true);
-    const unsub = subscribeGallery(() => setOpenId(getOpenMsgId()));
+    const unsub = subscribeGallery(() => setOpenIdStore(getOpenMsgId()));
     return () => {
       unsub();
       setGalleryHostMounted(false);
     };
-  }, []);
+  }, [controlled]);
+
+  const doClose = useCallback(() => {
+    if (controlled) onRequestClose?.();
+    else closeGallery();
+  }, [controlled, onRequestClose]);
 
   const visible = !!openId && items.length > 0;
   const initialIndex = Math.max(
