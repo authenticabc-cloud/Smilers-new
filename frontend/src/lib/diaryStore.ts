@@ -79,6 +79,14 @@ export interface DiaryEntry {
   attachment?: DiaryAttachment | null;
   /** Present when this entry was forwarded into Diary from another chat. */
   forwardedFrom?: DiaryEntryForwardSource | null;
+  /**
+   * iter-397: set true once this local entry has been pushed to the cloud
+   * (`api.diary.appendEntry`). We KEEP the local copy (marked) instead of
+   * deleting it, so notes can never vanish from the device if the cloud
+   * append didn't durably persist or `listEntries` later returns empty.
+   * Display de-dupes flushed locals against the cloud copy by content.
+   */
+  _flushedToCloud?: boolean;
 }
 
 const KEY_PREFIX = 'smilers.diary.';
@@ -158,6 +166,25 @@ export async function deleteDiaryEntry(
 ): Promise<void> {
   const existing = await readDiaryEntries(userId);
   await writeAll(userId, existing.filter((e) => e._id !== entryId));
+}
+
+/**
+ * iter-397: mark a local entry as flushed to the cloud WITHOUT deleting it.
+ * Previously the flush deleted the local copy right after the cloud append
+ * resolved; if that append didn't durably persist (older build / schema),
+ * the note was lost forever. Keeping the marked copy lets the display layer
+ * hide it when the cloud returns a match, yet still show it if the cloud
+ * doesn't — so a user's own notes can never disappear from their device.
+ */
+export async function markDiaryEntryFlushed(
+  userId: string | null | undefined,
+  entryId: string,
+): Promise<void> {
+  const existing = await readDiaryEntries(userId);
+  await writeAll(
+    userId,
+    existing.map((e) => (e._id === entryId ? { ...e, _flushedToCloud: true } : e)),
+  );
 }
 
 export async function clearDiary(userId: string | null | undefined): Promise<void> {

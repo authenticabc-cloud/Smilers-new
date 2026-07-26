@@ -82,6 +82,7 @@ import {
   appendDiaryEntry,
   clearDiary,
   deleteDiaryEntry,
+  markDiaryEntryFlushed,
   readDiaryEntries,
   type DiaryEntry,
 } from '../src/lib/diaryStore';
@@ -135,12 +136,32 @@ function formatSyncedRelative(ts: number): string {
  * connected). Stable sort by `_creationTime` ascending so the
  * newest-at-bottom convention is preserved.
  */
+// iter-397: a stable content signature so a local entry that has ALREADY been
+// flushed to the cloud (and comes back with a different Convex _id) is not
+// shown twice. Cloud and local copies of the same note share kind/text/
+// attachment/forward-source, so we key on those rather than the _id.
+function diaryContentSig(e: DiaryEntry): string {
+  const a = e.attachment;
+  const attKey = a ? (a.storageId || a.mediaUrl || a.fileUrl || a.fileName || '') : '';
+  const fwd = e.forwardedFrom?.originalMessageId || e.forwardedFrom?.originalCreationTime || '';
+  return `${e.kind}|${(e.text || '').trim()}|${attKey}|${fwd}`;
+}
+
 function mergeEntries(cloud: DiaryEntry[], local: DiaryEntry[]): DiaryEntry[] {
-  const byId = new Map<string, DiaryEntry>();
-  // Local first, cloud overrides.
-  for (const e of local) byId.set(e._id, e);
-  for (const e of cloud) byId.set(e._id, e);
-  return Array.from(byId.values()).sort((a, b) => a._creationTime - b._creationTime);
+  // Cloud is the source of truth: show every cloud entry. Then add any LOCAL
+  // entry whose content isn't already represented on the cloud — this keeps
+  // not-yet-synced notes (and any that failed to persist server-side) visible
+  // so they can never silently disappear from the device.
+  const cloudSigs = new Set(cloud.map(diaryContentSig));
+  const result: DiaryEntry[] = [...cloud];
+  const seenLocalIds = new Set<string>();
+  for (const e of local) {
+    if (seenLocalIds.has(e._id)) continue;
+    seenLocalIds.add(e._id);
+    if (cloudSigs.has(diaryContentSig(e))) continue;
+    result.push(e);
+  }
+  return result.sort((a, b) => a._creationTime - b._creationTime);
 }
 
 export default function DiaryScreen() {
@@ -428,8 +449,11 @@ export default function DiaryScreen() {
     if (!myUserId) return;
     if (localEntries.length === 0) return;
 
-    const cloudIds = new Set(cloudEntries.map((e) => e._id));
-    const orphans = localEntries.filter((e) => !cloudIds.has(e._id));
+    // iter-397: flush only entries NOT yet marked as pushed to cloud. We used
+    // to compare local _id against cloud _id (different id namespaces, so every
+    // entry always looked like an orphan). Now we track a per-entry flushed
+    // marker so each note is uploaded exactly once and never re-duplicated.
+    const orphans = localEntries.filter((e) => !e._flushedToCloud);
     if (orphans.length === 0) {
       localFlushedRef.current = true;
       return;
@@ -446,30 +470,30 @@ export default function DiaryScreen() {
             forwardedFrom: entry.forwardedFrom,
             clientCreationTime: entry._creationTime,
           });
-          // On success, drop the local copy so we don't double-show
-          // after the cloud query refreshes.
+          // iter-397: mark (NOT delete) the local copy on success. Deleting it
+          // caused permanent loss when the cloud append didn't durably persist.
+          // The display layer de-dupes the kept copy against the cloud version.
           // eslint-disable-next-line no-await-in-loop
-          await deleteDiaryEntry(myUserId, entry._id);
+          await markDiaryEntryFlushed(myUserId, entry._id);
         } catch {
-          // Best-effort — leave the orphan local; next session retries.
+          // Best-effort — leave the orphan unmarked; next session retries.
         }
       }
       setLocalEntries(await readDiaryEntries(myUserId));
     })();
   }, [cloudReady, cloudEntries, localEntries, myUserId, appendEntryCloud]);
 
-  // ─── Display entries: cloud if ready, else local ──────────────
+  // ─── Display entries: cloud + any local not yet on cloud ──────────
   const allEntries = useMemo<DiaryEntry[]>(() => {
     if (cloudReady) return mergeEntries(cloudEntries, localEntries);
     return localEntries;
   }, [cloudReady, cloudEntries, localEntries]);
 
-  // Cloud notes live on the server; local copies are DELETED after they flush
-  // to cloud. So a returning user's local store is empty and the notes only
-  // reappear once `api.diary.listEntries` resolves. While that query is still
-  // in flight (worsened by a Convex reconnect on cold start), we must NOT show
-  // the definitive "Your Diary is empty" message — the notes aren't gone, just
-  // still syncing. This flag drives a "Syncing your notes…" state instead.
+  // iter-397: local copies are now KEPT (marked flushed) rather than deleted
+  // after they sync, so a returning user's notes render from the local store
+  // immediately AND are de-duped against the cloud copy. While the cloud query
+  // is still in flight on cold start we still show "Syncing your notes…" rather
+  // than a false "empty" state.
   const cloudSyncing = !!myUserId && !cloudReady && cloudEntriesQuery.loading;
 
   // Track WHEN the cloud last delivered our notes so the header can show a
