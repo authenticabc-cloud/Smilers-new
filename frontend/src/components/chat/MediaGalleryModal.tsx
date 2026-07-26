@@ -176,7 +176,7 @@ export default function MediaGalleryModal({
       visible={visible}
       transparent={false}
       animationType="fade"
-      onRequestClose={closeGallery}
+      onRequestClose={doClose}
     >
       <View style={styles.wrap} testID="media-gallery">
         <FlatList
@@ -215,7 +215,7 @@ export default function MediaGalleryModal({
 
         <TouchableOpacity
           style={[styles.close, { top: insets.top + 8 }]}
-          onPress={closeGallery}
+          onPress={doClose}
           hitSlop={12}
           testID="media-gallery-close"
         >

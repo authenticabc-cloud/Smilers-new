@@ -6,7 +6,6 @@ import {
   Alert,
   Image,
   Modal,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -43,6 +42,9 @@ import ActionButton from '../../src/components/user-profile/ActionButton';
 import FilterIndicator from '../../src/components/FilterIndicator';
 import GroupInCommonRow from '../../src/components/user-profile/GroupInCommonRow';
 import MediaGrid, { MediaTabBtn } from '../../src/components/user-profile/MediaGrid';
+import MediaGalleryModal, { type GalleryItem } from '../../src/components/chat/MediaGalleryModal';
+import { useConversationE2EE } from '../../src/hooks/useConversationE2EE';
+import { shareMessage } from '../../src/lib/messageMedia';
 import type { MediaTab } from '../../src/components/user-profile/types';
 
 export default function UserProfileScreen() {
@@ -142,6 +144,12 @@ export default function UserProfileScreen() {
     return { photos, videos, files };
   }, [messagesPage]);
 
+  // E2EE key for this conversation so the shared-media gallery can decrypt
+  // the same way the chat screen does (media URLs are null until decrypted).
+  const e2eeStatus = useConversationE2EE(
+    hasValidConversationId ? (conversationId as string) : null,
+  );
+
   // Candidate groups = all of the viewer's group conversations (from
   // listGroups). Membership of the *target* user is verified per-row via
   // getGroupMembers (group rows don't always carry member IDs).
@@ -204,7 +212,31 @@ export default function UserProfileScreen() {
 
   // --- UI state -----------------------------------------------------------
   const [mediaTab, setMediaTab] = useState<MediaTab>('photos');
-  const [previewUri, setPreviewUri] = useState<string | null>(null);
+  // Controlled shared-media gallery (swipe through photos/videos). We drive it
+  // via props rather than the chat screen's global store because the profile
+  // is pushed ON TOP of the still-mounted chat screen — using the store would
+  // open both hosts at once. See MediaGalleryModal controlled mode.
+  const [galleryOpenId, setGalleryOpenId] = useState<string | null>(null);
+  const galleryItems: GalleryItem[] = useMemo(() => {
+    const src = mediaTab === 'videos' ? sharedMedia.videos : sharedMedia.photos;
+    return src.map((m: any) => ({
+      msgId: String(m._id),
+      type: (m?.type === 'video' ? 'video' : 'image') as 'image' | 'video',
+      msg: m,
+    }));
+  }, [mediaTab, sharedMedia]);
+  const handleMediaPreview = useCallback(
+    (item: any) => {
+      if (item?.type === 'file' || item?.type === 'document') {
+        shareMessage({ client: convex as any, message: item }).catch(() => {
+          /* user cancelled or share unavailable */
+        });
+        return;
+      }
+      setGalleryOpenId(String(item?._id));
+    },
+    [convex],
+  );
   // iter-226: tap the profile photo → enlarge; save respects the owner's policy.
   const [avatarViewerOpen, setAvatarViewerOpen] = useState(false);
   const [savingPhoto, setSavingPhoto] = useState(false);
@@ -755,7 +787,7 @@ export default function UserProfileScreen() {
                   ? sharedMedia.videos
                   : sharedMedia.files
             }
-            onPreview={(uri) => setPreviewUri(uri)}
+            onPreview={handleMediaPreview}
           />
         </View>
 
@@ -862,33 +894,14 @@ export default function UserProfileScreen() {
         </View>
       </Modal>
 
-      {/* Image preview modal */}
-      <Modal
-        visible={!!previewUri}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setPreviewUri(null)}
-      >
-        <Pressable
-          style={styles.previewBackdrop}
-          onPress={() => setPreviewUri(null)}
-        >
-          {previewUri ? (
-            <Image
-              source={{ uri: previewUri }}
-              style={styles.previewImage}
-              resizeMode="contain"
-            />
-          ) : null}
-          <TouchableOpacity
-            style={[styles.previewClose, { top: insets.top + 12 }]}
-            onPress={() => setPreviewUri(null)}
-            hitSlop={12}
-          >
-            <Feather name="x" size={26} color={Colors.white} />
-          </TouchableOpacity>
-        </Pressable>
-      </Modal>
+      {/* Shared-media swipe gallery (photos/videos) — controlled mode */}
+      <MediaGalleryModal
+        controlled
+        items={galleryItems}
+        e2eeStatus={e2eeStatus}
+        openMsgId={galleryOpenId}
+        onRequestClose={() => setGalleryOpenId(null)}
+      />
     </View>
   );
 }

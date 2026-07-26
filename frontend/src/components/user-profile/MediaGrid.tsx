@@ -54,7 +54,7 @@ export default function MediaGrid({
 }: {
   tab: MediaTab;
   items: any[];
-  onPreview: (uri: string) => void;
+  onPreview: (item: any) => void;
 }) {
   if (items.length === 0) {
     return (
@@ -79,7 +79,12 @@ export default function MediaGrid({
     return (
       <View style={styles.filesList}>
         {items.map((file: any) => (
-          <View key={file._id} style={styles.fileRow}>
+          <TouchableOpacity
+            key={file._id}
+            style={styles.fileRow}
+            activeOpacity={0.85}
+            onPress={() => onPreview(file)}
+          >
             <View style={styles.fileIcon}>
               <Feather name="file-text" size={20} color={Colors.primary} />
             </View>
@@ -93,7 +98,8 @@ export default function MediaGrid({
                   : 'FILE'}
               </Text>
             </View>
-          </View>
+            <Feather name="share-2" size={18} color={Colors.textSecondary} />
+          </TouchableOpacity>
         ))}
       </View>
     );
@@ -109,7 +115,7 @@ export default function MediaGrid({
             key={item._id}
             style={styles.mediaTile}
             activeOpacity={0.85}
-            onPress={() => (src ? onPreview(src) : undefined)}
+            onPress={() => onPreview(item)}
           >
             {src && /^https?:/i.test(src) ? (
               <Image source={{ uri: src }} style={styles.mediaTileImg} resizeMode="cover" />
