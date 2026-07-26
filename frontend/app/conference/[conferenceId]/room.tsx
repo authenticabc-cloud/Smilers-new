@@ -52,7 +52,10 @@ import { StatusBar } from 'expo-status-bar';
 
 import { api } from '../../../src/convexApi';
 import { useSafeConvexQuery } from '../../../src/hooks/useSafeConvexQuery';
-import { useConferenceMesh } from '../../../src/lib/call/mesh/useConferenceMesh';
+import {
+  ConferenceStreamProvider,
+  useConferenceStreamMedia,
+} from '../../../src/lib/call/useConferenceStream';
 import { getDisplayInitials } from '../../../src/lib/displayName';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../../src/theme';
 
@@ -182,11 +185,26 @@ function safeMutate<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
 }
 
 export default function ConferenceRoomScreen() {
-  const router = useRouter();
-  const { width } = useWindowDimensions();
   const { conferenceId: rawId } = useLocalSearchParams<{ conferenceId?: string | string[] }>();
   const conferenceId = Array.isArray(rawId) ? rawId[0] : rawId;
   const isValid = typeof conferenceId === 'string' && conferenceId.length > 4;
+  return (
+    <ConferenceStreamProvider conferenceId={conferenceId} isActive={isValid}>
+      <ConferenceRoomInner conferenceId={conferenceId} isValid={isValid} />
+    </ConferenceStreamProvider>
+  );
+}
+
+function ConferenceRoomInner({
+  conferenceId,
+  isValid,
+}: {
+  conferenceId?: string;
+  isValid: boolean;
+}) {
+  const router = useRouter();
+  const { width } = useWindowDimensions();
+  const media = useConferenceStreamMedia();
 
   // --- Room state ---
   const { data: state, refetch: refetchState, loading: stateLoading } = useSafeConvexQuery<RoomState>(
@@ -247,28 +265,16 @@ export default function ConferenceRoomScreen() {
   useEffect(() => {
     setLocalCamOn(myVideoEnabled);
   }, [myVideoEnabled]);
-  const { remoteStreams, localStream, speaking, connectionStates } = useConferenceMesh({
-    conferenceId,
-    myUserId,
-    peerUserIds,
-    isActive: isValid && !!myUserId,
-    micEnabled: localMicOn,
-    videoEnabled: isVideoConf,
-    cameraOn: localCamOn,
-  });
-
-  // Native-only RTCView (video tiles). Web/Expo Go get a null stub.
-  const [RTCViewImpl, setRTCViewImpl] = useState<any>(null);
+  // --- Live voice+video via Stream SFU (Task 1: replaces the legacy mesh) ---
+  // Drive Stream's mic/camera from the local toggle state. Media itself is
+  // rendered per-tile via the Stream participant from `media.byUserId`.
+  const { speaking, byUserId: streamByUserId, ParticipantView: StreamParticipantView, setMic, setCam } = media;
   useEffect(() => {
-    if (Platform.OS === 'web' || !isVideoConf) return;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('../../../src/lib/webrtc/RTCViewWrapper');
-      if (mod?.default) setRTCViewImpl(() => mod.default);
-    } catch {
-      /* RTCView unavailable — fall back to avatar tiles */
-    }
-  }, [isVideoConf]);
+    setMic(localMicOn);
+  }, [localMicOn, setMic, media.ready]);
+  useEffect(() => {
+    setCam(isVideoConf && localCamOn);
+  }, [isVideoConf, localCamOn, setCam, media.ready]);
 
   // --- Mutations ---
   const joinRoomM = useMutation((api as any).conferenceRoom.joinRoom);
@@ -678,8 +684,7 @@ export default function ConferenceRoomScreen() {
           contentContainerStyle={styles.gridContent}
           columnWrapperStyle={columns > 1 ? styles.gridRow : undefined}
           renderItem={({ item }) => {
-            const tileStream = item.userId === myUserId ? localStream : remoteStreams[item.userId];
-            const streamURL = tileStream?.toURL ? tileStream.toURL() : null;
+            const streamParticipant = streamByUserId[item.userId] || null;
             return (
               <ParticipantTile
                 participant={item}
@@ -687,8 +692,8 @@ export default function ConferenceRoomScreen() {
                 canManage={isChair && item.userId !== myUserId}
                 width={tileWidth}
                 height={tileHeight}
-                streamURL={streamURL}
-                RTCViewImpl={RTCViewImpl}
+                streamParticipant={streamParticipant}
+                ParticipantViewImpl={StreamParticipantView}
                 mirror={item.userId === myUserId}
                 isSpeaking={item.userId === myUserId ? !!speaking.__local : !!speaking[item.userId]}
                 onLongPress={() => (isChair && item.userId !== myUserId ? setActionTarget(item) : undefined)}
@@ -1171,8 +1176,8 @@ function ParticipantTile({
   canManage,
   width,
   height,
-  streamURL,
-  RTCViewImpl,
+  streamParticipant,
+  ParticipantViewImpl,
   mirror,
   isSpeaking,
   connectionQuality,
@@ -1183,8 +1188,8 @@ function ParticipantTile({
   canManage: boolean;
   width: number;
   height: number;
-  streamURL?: string | null;
-  RTCViewImpl?: any;
+  streamParticipant?: any | null;
+  ParticipantViewImpl?: any;
   mirror?: boolean;
   isSpeaking?: boolean;
   connectionQuality?: 'good' | 'fair' | 'poor' | null;
@@ -1196,7 +1201,9 @@ function ParticipantTile({
   const videoOn = participant.videoEnabled !== false;
   const isSuspended = participant.status === 'suspended';
   const handRaised = !!participant.handRaised;
-  const showVideo = videoOn && !!streamURL && !!RTCViewImpl;
+  // A Stream participant is publishing video when it has a videoStream track.
+  const hasStreamVideo = !!(streamParticipant && streamParticipant.videoStream);
+  const showVideo = videoOn && hasStreamVideo && !!ParticipantViewImpl;
 
   return (
     <Pressable
@@ -1214,12 +1221,11 @@ function ParticipantTile({
       {/* Video area / avatar */}
       <View style={styles.tileVideo}>
         {showVideo ? (
-          <RTCViewImpl
-            streamURL={streamURL}
+          <ParticipantViewImpl
+            participant={streamParticipant}
             style={StyleSheet.absoluteFill}
             objectFit="cover"
             mirror={!!mirror}
-            zOrder={0}
           />
         ) : videoOn ? (
           <View style={styles.tileVideoActive}>
