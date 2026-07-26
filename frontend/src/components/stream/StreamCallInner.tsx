@@ -74,26 +74,35 @@ const CTRL_BG_ON = 'rgba(233,181,59,0.92)';
  */
 function NoiseCancellationAutoEnable() {
   const nc = useNoiseCancellation?.() as any;
-  // Read the support/enabled flags as primitives so this effect re-runs when
-  // they resolve — Krisp capability detection is ASYNC, so the old single-shot
-  // `[nc]` effect often ran before `isSupported`/`deviceSupports…` were ready
-  // and then never retried → NC silently never turned on for some devices.
-  const deviceOk = !!nc?.deviceSupportsAdvancedAudioProcessing;
-  const isSupported = !!nc?.isSupported;
   const setEnabled = nc?.setEnabled;
-  // Auto-enable EXACTLY ONCE per call so we never re-enable after the user
-  // deliberately turns it OFF during the call (the toggle sets isEnabled=false;
-  // we must respect that).
-  const didAutoEnableRef = useRef(false);
+  const isEnabled = !!nc?.isEnabled;
+  // #3: the user wants noise/echo cancellation ON automatically at call start
+  // (the "Noise" control should already be yellow), and only OFF if THEY turn
+  // it off. The previous gate required `deviceSupportsAdvancedAudioProcessing`,
+  // which is false on some devices even though `setEnabled` works there (proven
+  // by the manual toggle turning it on) — so it never auto-engaged. We now try
+  // as soon as the NC controller is available and RETRY a few times until it
+  // actually sticks (Krisp sometimes needs the audio track live first). Once it
+  // succeeds we stop, so a later user OFF is respected.
+  const succeededRef = useRef(false);
+  const attemptsRef = useRef(0);
   useEffect(() => {
-    if (didAutoEnableRef.current) return;
-    if (!setEnabled || !(deviceOk && isSupported)) return;
-    didAutoEnableRef.current = true;
-    try {
-      const r = setEnabled(true);
-      if (r && typeof r.catch === 'function') r.catch(() => {});
-    } catch {}
-  }, [deviceOk, isSupported, setEnabled]);
+    if (succeededRef.current || !setEnabled) return;
+    if (isEnabled) {
+      succeededRef.current = true;
+      return;
+    }
+    if (attemptsRef.current >= 5) return;
+    const delay = attemptsRef.current === 0 ? 0 : 900;
+    const t = setTimeout(() => {
+      attemptsRef.current += 1;
+      try {
+        const r = setEnabled(true);
+        if (r && typeof r.catch === 'function') r.catch(() => {});
+      } catch {}
+    }, delay);
+    return () => clearTimeout(t);
+  }, [setEnabled, isEnabled]);
   return null;
 }
 
@@ -308,7 +317,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   // — end almost immediately instead of waiting out the ICE-reconnect grace
   // period (Stream otherwise keeps us in RECONNECTING for ~30s chasing a peer
   // that's gone). A plain participant drop with NO ended-status is treated as a
-  // possible transient ICE blip and still gets the 10s grace. The
+  // possible transient ICE blip and still gets a short (3s) grace. The
   // remote-present guard keeps a ring-TTL "ended" from killing a live call.
   useEffect(() => {
     if (!wasConnectedRef.current) return;
@@ -318,7 +327,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
       convStatus === 'declined' ||
       convStatus === 'cancelled' ||
       convStatus === 'missed';
-    const t = setTimeout(() => onHangup(), remoteHungUp ? 400 : 10000);
+    const t = setTimeout(() => onHangup(), remoteHungUp ? 400 : 3000);
     return () => clearTimeout(t);
   }, [remoteParticipants.length, convStatus, onHangup]);
 

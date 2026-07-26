@@ -1,6 +1,13 @@
 # Smilers Mobile App — PRD
 
-## iter-388 (Jun 2026): P0 CRASH FIX — "Call ended unexpectedly: Property 'connected' doesn't exist"
+## iter-389 (Jun 2026): #2 link long-press menu, #3 NC auto-on reliability, #4 faster call-end (Convex items ON HOLD)
+User asked to HOLD all Convex-backend items → #1 reaction (`messages:addReaction` Server Error) + #3 study-room deferred to a batch the user will assemble. Frontend fixes done:
+- **#2 link long-press:** link/partly-link messages render via `MediaBubble → LinkPreviewMessage`, whose inner `TouchableOpacity` had only `onPress` (open URL) and swallowed the bubble's long-press. Threaded `onLongPress` into `LinkPreviewMessage` (and passed it from MediaBubble) → tap opens the link, long-press opens the reply/forward/share/copy menu.
+- **#3 NC auto-on state:** the auto-enable gate required `deviceSupportsAdvancedAudioProcessing`, false on some devices where `setEnabled` still works (manual toggle proved it) → NC never auto-engaged and the "Noise" button stayed grey at call start. Rewrote `NoiseCancellationAutoEnable` to try as soon as the NC controller exists and RETRY (~5×/900ms) until `isEnabled` sticks, then stop (respects a later user OFF). Button should now be yellow from call start.
+- **#4 faster call-end:** plain remote-participant-drop debounce cut 10s → 3s (deliberate-hangup fast path stays 400ms) so the other side drops in ~3s instead of >10s.
+Lint clean; web boots. ⚠️ Native — validate on APK rebuild.
+
+ — "Call ended unexpectedly: Property 'connected' doesn't exist"
 REGRESSION I introduced in iter-384 (#5 ringback): `isOutgoingRinging` referenced `connected`, but that expression lives in the OUTER `StreamCallInner` component where `connected` doesn't exist (it's a `CallUI`-only local). During render the dep evaluation threw a `ReferenceError` → the call screen crashed with "Call ended unexpectedly / Property 'connected' doesn't exist" on the caller (ring still fired on the callee because `ringWebrtcCall` runs in `startCall` before the screen mounts). Fixed by using the in-scope `accepted` flag: `isOutgoingRinging = activeCallReady && iAmCaller && !accepted && convStatus === 'ringing'`. Lint clean; web boots. ⚠️ Rebuild APK to confirm calls connect on the caller again.
 
 Also from the same logs (NOT regressions):

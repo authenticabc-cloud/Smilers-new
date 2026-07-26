@@ -613,7 +613,7 @@ function BubbleBodyInner({ msg, timeStr, textStyle, isMine, e2eeStatus, searchTe
     case 'text':
     default:
       if (extractFirstUrl(msg.text || '')) {
-        return <LinkPreviewMessage msg={msg} textStyle={textStyle} isMine={isMine} />;
+        return <LinkPreviewMessage msg={msg} textStyle={textStyle} isMine={isMine} onLongPress={onLongPress} />;
       }
       return <RichMessageText text={msg.text || ''} textStyle={textStyle} highlightTerm={searchTerm} highlightActive={isActiveSearchMatch} enablePhoneLinks />;
   }
@@ -749,7 +749,7 @@ function RichMessageText({
   );
 }
 
-function LinkPreviewMessage({ msg, textStyle, isMine }: { msg: any; textStyle?: any; isMine: boolean }) {
+function LinkPreviewMessage({ msg, textStyle, isMine, onLongPress }: { msg: any; textStyle?: any; isMine: boolean; onLongPress?: () => void }) {
   const url = extractFirstUrl(msg.text || '') || '';
   const safeUrl = url.replace(/^https?:\/\//, '');
   const domain = safeUrl.split('/')[0] || 'link';
@@ -794,7 +794,13 @@ function LinkPreviewMessage({ msg, textStyle, isMine }: { msg: any; textStyle?: 
   }
 
   return (
-    <TouchableOpacity onPress={onOpen} activeOpacity={0.82} testID={`link-preview-${msg._id}`}>
+    <TouchableOpacity
+      onPress={onOpen}
+      onLongPress={onLongPress}
+      delayLongPress={250}
+      activeOpacity={0.82}
+      testID={`link-preview-${msg._id}`}
+    >
       <Text style={[styles.bubbleText, textStyle, styles.linkLeadText]}>{leadText}</Text>
       <View style={[styles.linkCard, isMine ? styles.linkCardMine : null]}>
         <Text style={[styles.linkCardTitle, { color: cardTextColor }]} numberOfLines={1}>{domain}</Text>
