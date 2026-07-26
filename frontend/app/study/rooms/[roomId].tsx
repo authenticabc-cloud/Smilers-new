@@ -12,6 +12,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Switch,
   Text,
@@ -68,6 +69,23 @@ export default function RoomDetail() {
     Alert.alert('Copied', `Room code ${joinCode} copied to clipboard.`);
   }, [joinCode]);
 
+  // iter-401: one-tap invite — share the join code (and a short how-to) via the
+  // system share sheet so inviting people to a study room isn't a manual
+  // copy-paste. The room name gives the invitee context.
+  const shareCode = useCallback(async () => {
+    if (!joinCode) return;
+    const roomName = pick(room, 'name') || 'my study room';
+    try {
+      await Share.share({
+        message:
+          `Join "${roomName}" on Smilers Study Rooms.\n` +
+          `Open Smilers → Study → Study Rooms → "Join with code" and enter:\n\n${joinCode}`,
+      });
+    } catch {
+      /* user dismissed the share sheet — no-op */
+    }
+  }, [joinCode, room]);
+
   if (loading && !room) {
     return (
       <View style={styles.centerRoot}>
@@ -121,13 +139,24 @@ export default function RoomDetail() {
       </View>
 
       {joinCode ? (
-        <TouchableOpacity style={styles.codeCard} onPress={copyCode} activeOpacity={0.7}>
-          <View>
-            <Text style={styles.codeLabel}>ROOM CODE · tap to copy</Text>
-            <Text style={styles.codeValue}>{String(joinCode)}</Text>
-          </View>
-          <Feather name="copy" size={20} color={Colors.primary} />
-        </TouchableOpacity>
+        <View style={styles.codeCard}>
+          <TouchableOpacity style={styles.codeCardMain} onPress={copyCode} activeOpacity={0.7}>
+            <View>
+              <Text style={styles.codeLabel}>ROOM CODE · tap to copy</Text>
+              <Text style={styles.codeValue}>{String(joinCode)}</Text>
+            </View>
+            <Feather name="copy" size={20} color={Colors.primary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.codeShareBtn}
+            onPress={shareCode}
+            hitSlop={8}
+            testID="room-share-invite"
+          >
+            <Feather name="share-2" size={16} color={Colors.white} />
+            <Text style={styles.codeShareText}>Share invite</Text>
+          </TouchableOpacity>
+        </View>
       ) : null}
 
       <View style={styles.tabs}>
@@ -486,9 +515,6 @@ const styles = StyleSheet.create({
   },
   headerTitle: { flex: 1, color: Colors.textPrimary, fontSize: 19, fontWeight: '800' },
   codeCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
     marginHorizontal: 16,
     marginBottom: 12,
     backgroundColor: Colors.primaryLight,
@@ -496,6 +522,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
+  codeCardMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  codeShareBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: 12,
+    paddingVertical: 9,
+    borderRadius: 10,
+    backgroundColor: Colors.primary,
+  },
+  codeShareText: { color: Colors.white, fontSize: 14, fontWeight: '700' },
   codeLabel: { color: Colors.primaryDark, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
   codeValue: { color: Colors.primaryDark, fontSize: 24, fontWeight: '900', letterSpacing: 4, marginTop: 2 },
   tabs: {
