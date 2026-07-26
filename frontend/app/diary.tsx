@@ -118,6 +118,17 @@ interface RenderItem {
   key: string;
 }
 
+/** Short "last synced" relative label for the Diary header badge. */
+function formatSyncedRelative(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 45_000) return 'Synced just now';
+  const mins = Math.round(diff / 60_000);
+  if (mins < 60) return `Synced ${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `Synced ${hrs}h ago`;
+  return 'Synced with cloud';
+}
+
 /**
  * Merge cloud + local diary entries by `_id`, with cloud entries
  * winning on conflict (cloud is the source of truth once we're
@@ -461,6 +472,20 @@ export default function DiaryScreen() {
   // still syncing. This flag drives a "Syncing your notes…" state instead.
   const cloudSyncing = !!myUserId && !cloudReady && cloudEntriesQuery.loading;
 
+  // Track WHEN the cloud last delivered our notes so the header can show a
+  // reassuring "Synced Xm ago ✓" badge (confirms the notes are backed up).
+  // A 30s tick keeps the relative label fresh while the screen stays open.
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  const [, setSyncNow] = useState(0);
+  useEffect(() => {
+    if (cloudReady) setLastSyncedAt(Date.now());
+  }, [cloudReady, cloudEntries]);
+  useEffect(() => {
+    if (!lastSyncedAt) return;
+    const id = setInterval(() => setSyncNow((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, [lastSyncedAt]);
+
   const visibleEntries = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return allEntries;
@@ -703,11 +728,18 @@ export default function DiaryScreen() {
 
   // ─── Sync status indicator (cloud/local) ──────────────────────
   const syncBadge = useMemo(() => {
+    if (cloudSyncing) {
+      return { text: 'Syncing your notes…', color: Colors.diaryDark, icon: 'cloud-sync-outline' as const };
+    }
     if (cloudReady) {
-      return { text: 'Synced with Smilers cloud', color: Colors.diaryDark, icon: 'cloud-check' as const };
+      return {
+        text: lastSyncedAt ? formatSyncedRelative(lastSyncedAt) : 'Synced with Smilers cloud',
+        color: Colors.diaryDark,
+        icon: 'cloud-check' as const,
+      };
     }
     return { text: 'Saved on this device', color: Colors.textMuted, icon: 'cloud-off-outline' as const };
-  }, [cloudReady]);
+  }, [cloudReady, cloudSyncing, lastSyncedAt]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="diary-screen">
