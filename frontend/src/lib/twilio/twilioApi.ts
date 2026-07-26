@@ -271,6 +271,191 @@ export interface CallRosterEntry {
   phoneNumber: string | null;
   hideNumber: boolean;
   addedBy: string | null;
+  /** Group-call status: 'joined' | 'pending' | 'declined'. */
+  status: 'joined' | 'pending' | 'declined';
+  /** 'member' for original group members, 'added' for people added mid-call. */
+  callRole: 'member' | 'added';
+}
+
+// ── Group call orchestration (Phase 2) ──────────────────────────────────────
+
+/** POST /api/calls/group-ring — ring ALL group members into one Stream room. */
+export async function groupRing(args: {
+  streamRoom: string;
+  conversationId: string;
+  callerIdentity: string;
+  callerDisplayName?: string;
+  callerPhone?: string;
+  conversationName?: string;
+  members: { identity: string; displayName?: string; phone?: string }[];
+  isVideo: boolean;
+}): Promise<{ rang: number; delivered: number; tokenCount: number } | null> {
+  if (!BACKEND_URL || !args.streamRoom) return null;
+  try {
+    const resp = await fetch(`${BACKEND_URL}/api/calls/group-ring`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        stream_room: args.streamRoom,
+        conversation_id: args.conversationId,
+        caller_identity: args.callerIdentity,
+        caller_display_name: args.callerDisplayName ?? null,
+        caller_phone: args.callerPhone ?? null,
+        conversation_name: args.conversationName ?? null,
+        members: args.members.map((m) => ({
+          identity: m.identity,
+          display_name: m.displayName ?? null,
+          phone: m.phone ?? null,
+        })),
+        is_video: args.isVideo,
+        backend_url: BACKEND_URL,
+      }),
+    });
+    const json = await resp.json().catch(() => ({}));
+    recordDiagnostic({ tag: 'CALL', source: 'groupRing', message: `room=${args.streamRoom} rang=${json?.rang}` });
+    return { rang: Number(json?.rang || 0), delivered: Number(json?.delivered || 0), tokenCount: Number(json?.token_count || 0) };
+  } catch (e: any) {
+    recordDiagnostic({ tag: 'CALL', source: 'groupRing', message: `fail ${e?.message || e}` });
+    return null;
+  }
+}
+
+/** POST /api/calls/group-again — re-ring ONLY pending/declined members. */
+export async function groupCallAgain(args: {
+  streamRoom: string;
+  conversationId: string;
+  callerIdentity: string;
+  callerDisplayName?: string;
+  callerPhone?: string;
+  conversationName?: string;
+  isVideo: boolean;
+}): Promise<number> {
+  if (!BACKEND_URL || !args.streamRoom) return 0;
+  try {
+    const resp = await fetch(`${BACKEND_URL}/api/calls/group-again`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        stream_room: args.streamRoom,
+        conversation_id: args.conversationId,
+        caller_identity: args.callerIdentity,
+        caller_display_name: args.callerDisplayName ?? null,
+        caller_phone: args.callerPhone ?? null,
+        conversation_name: args.conversationName ?? null,
+        is_video: args.isVideo,
+        backend_url: BACKEND_URL,
+      }),
+    });
+    const json = await resp.json().catch(() => ({}));
+    return Number(json?.rerang || 0);
+  } catch {
+    return 0;
+  }
+}
+
+/** POST /api/calls/participant-status — report MY own join/decline status. */
+export async function reportParticipantStatus(args: {
+  streamRoom: string;
+  identity: string;
+  status: 'joined' | 'declined' | 'pending';
+  displayName?: string;
+}): Promise<void> {
+  if (!BACKEND_URL || !args.streamRoom || !args.identity) return;
+  try {
+    await fetch(`${BACKEND_URL}/api/calls/participant-status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        stream_room: args.streamRoom,
+        identity: args.identity,
+        status: args.status,
+        display_name: args.displayName ?? null,
+      }),
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** POST /api/calls/request-add — non-admin asks admins to approve adding X. */
+export async function requestAddParticipant(args: {
+  streamRoom: string;
+  conversationId: string;
+  requesterIdentity: string;
+  requesterName?: string;
+  targetIdentity: string;
+  targetName?: string;
+  targetPhone?: string;
+  adminIdentities: string[];
+  isVideo: boolean;
+  addPermanently: boolean;
+}): Promise<boolean> {
+  if (!BACKEND_URL) return false;
+  try {
+    const resp = await fetch(`${BACKEND_URL}/api/calls/request-add`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        stream_room: args.streamRoom,
+        conversation_id: args.conversationId,
+        requester_identity: args.requesterIdentity,
+        requester_name: args.requesterName ?? null,
+        target_identity: args.targetIdentity,
+        target_name: args.targetName ?? null,
+        target_phone: args.targetPhone ?? null,
+        admin_identities: args.adminIdentities,
+        is_video: args.isVideo,
+        add_permanently: args.addPermanently,
+        backend_url: BACKEND_URL,
+      }),
+    });
+    const json = await resp.json().catch(() => ({}));
+    return !!json?.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** POST /api/calls/request-add-declined — tell requester an admin declined. */
+export async function declineAddRequest(args: {
+  requesterIdentity: string;
+  targetName?: string;
+  adminName?: string;
+}): Promise<void> {
+  if (!BACKEND_URL) return;
+  try {
+    await fetch(`${BACKEND_URL}/api/calls/request-add-declined`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        requester_identity: args.requesterIdentity,
+        target_name: args.targetName ?? null,
+        admin_name: args.adminName ?? null,
+      }),
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** POST /api/calls/admin-kick — admin removes a member from the group call. */
+export async function adminKickParticipant(args: {
+  streamRoom: string;
+  identity: string;
+  requesterIdentity: string;
+}): Promise<void> {
+  if (!BACKEND_URL) throw new Error('[twilio-api] EXPO_PUBLIC_BACKEND_URL is empty in this build');
+  const resp = await fetch(`${BACKEND_URL}/api/calls/admin-kick`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      stream_room: args.streamRoom,
+      identity: args.identity,
+      requester_identity: args.requesterIdentity,
+      backend_url: BACKEND_URL,
+    }),
+  });
+  if (!resp.ok) throw new Error(`[twilio-api] admin-kick HTTP ${resp.status}`);
 }
 
 /**

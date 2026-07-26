@@ -875,6 +875,8 @@ async def twilio_call_participants(room_name: str, viewer: str = ""):
                 "phone_number": phone if can_see_phone else None,
                 "hide_number": hide,
                 "added_by": added_by,
+                "status": d.get("status") or "joined",
+                "call_role": d.get("call_role") or "added",
             }
         )
     return {"participants": participants}
@@ -977,6 +979,324 @@ async def stream_remove_participant(payload: StreamRemoveParticipantRequest, req
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception(f"stream-remove-participant: push failed (non-fatal): {exc}")
+
+    asyncio.create_task(_dispatch())
+    return {"ok": True}
+
+
+# ============================================================
+# Group call orchestration (Phase 2)
+# ============================================================
+# A group call rings ALL current group members at once (tap-to-join/decline)
+# and tracks each member's status (pending → joined/declined) in the SAME
+# `twilio_call_participants` roster (keyed by the shared Stream room). The
+# in-call roster UI reads status from the /twilio/call-participants GET.
+
+def _normalize_backend_url(payload_url: Optional[str], request: Request) -> str:
+    backend_url = (payload_url or "").strip().rstrip("/")
+    if not backend_url:
+        backend_url = str(request.base_url).rstrip("/")
+    if backend_url.startswith("http://"):
+        backend_url = "https://" + backend_url[len("http://"):]
+    return backend_url
+
+
+class GroupMemberRingItem(BaseModel):
+    identity: str = Field(..., min_length=1, max_length=120)
+    display_name: Optional[str] = Field(None, max_length=160)
+    phone: Optional[str] = Field(None, max_length=40)
+
+
+class GroupRingRequest(BaseModel):
+    stream_room: str = Field(..., min_length=1, max_length=160)
+    conversation_id: str = Field(..., min_length=1, max_length=128)
+    caller_identity: str = Field(..., min_length=1, max_length=120)
+    caller_display_name: Optional[str] = Field(None, max_length=160)
+    caller_phone: Optional[str] = Field(None, max_length=40)
+    conversation_name: Optional[str] = Field(None, max_length=160)
+    members: List[GroupMemberRingItem] = Field(default_factory=list)
+    is_video: bool = False
+    backend_url: Optional[str] = None
+
+
+async def _upsert_roster_entry(room: str, identity: str, **fields) -> None:
+    now = datetime.now(timezone.utc)
+    try:
+        await db.twilio_call_participants.update_one(
+            {"room_name": room, "identity": identity},
+            {"$set": {"room_name": room, "identity": identity, "updated_at": now, **fields},
+             "$setOnInsert": {"created_at": now}},
+            upsert=True,
+        )
+    except Exception:
+        logger.warning("group-call: roster upsert failed (non-fatal)")
+
+
+def _group_ring_push(*, conversation_id: str, stream_room: str, display_name: str,
+                     caller_identity: str, caller_phone: str, is_video: bool,
+                     conversation_name: str, call_id: str, backend_url: str) -> dict:
+    return {
+        "title": conversation_name or display_name,
+        "message": f"{display_name} is calling the group" if conversation_name else "Incoming group call",
+        "type": "call",
+        "callId": call_id,
+        "callerId": caller_identity,
+        "callerName": display_name,
+        "displayName": conversation_name or display_name,
+        "callerPhone": (caller_phone or "").strip(),
+        "conversationId": conversation_id,
+        "conversationType": "group",
+        "conversationName": conversation_name or "",
+        "twilio_is_video": "1" if is_video else "0",
+        "twilio_caller_identity": caller_identity,
+        # Everyone joins the SAME Stream room; no answer=1 → show the incoming
+        # tap-to-join/decline UI (not auto-answer).
+        "stream_room": stream_room,
+        "backendUrl": backend_url,
+        "action_url": (
+            f"/call/{conversation_id}"
+            f"?streamRoom={stream_room}"
+            f"&type={'video' if is_video else 'voice'}"
+            f"&group=1"
+            f"&displayName={conversation_name or display_name}"
+        ),
+        "channel_id": "calls-v4-smilers_never_cry",
+        "subtext": "Incoming group call",
+    }
+
+
+@api_router.post("/calls/group-ring")
+async def group_ring(payload: GroupRingRequest, request: Request):
+    now = datetime.now(timezone.utc)
+    backend_url = _normalize_backend_url(payload.backend_url, request)
+    # Caller is already in → joined.
+    await _upsert_roster_entry(
+        payload.stream_room, payload.caller_identity,
+        display_name=payload.caller_display_name, phone_number=payload.caller_phone,
+        hide_number=False, added_by=payload.caller_identity,
+        status="joined", call_role="member",
+    )
+    ring_targets: List[str] = []
+    for m in payload.members:
+        if not m.identity or m.identity == payload.caller_identity:
+            continue
+        await _upsert_roster_entry(
+            payload.stream_room, m.identity,
+            display_name=m.display_name, phone_number=m.phone,
+            hide_number=False, added_by=payload.caller_identity,
+            status="pending", call_role="member",
+        )
+        ring_targets.append(m.identity)
+
+    display_name = payload.caller_display_name or "Smilers User"
+    call_id = f"group_{payload.stream_room}_{int(now.timestamp())}"
+    push_data = _group_ring_push(
+        conversation_id=payload.conversation_id, stream_room=payload.stream_room,
+        display_name=display_name, caller_identity=payload.caller_identity,
+        caller_phone=payload.caller_phone or "", is_video=payload.is_video,
+        conversation_name=payload.conversation_name or "", call_id=call_id,
+        backend_url=backend_url,
+    )
+    delivered = 0
+    token_count = 0
+    if ring_targets:
+        try:
+            stats = await send_push(
+                recipients=ring_targets, data=push_data,
+                idempotency_key=f"group-call:{call_id}",
+            )
+            token_count = int(stats.get("token_count") or 0)
+            delivered = int(stats.get("success_count") or 0)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(f"group-ring: push failed (non-fatal): {exc}")
+    return {"ok": True, "call_id": call_id, "rang": len(ring_targets),
+            "token_count": token_count, "delivered": delivered}
+
+
+class GroupAgainRequest(BaseModel):
+    stream_room: str = Field(..., min_length=1, max_length=160)
+    conversation_id: str = Field(..., min_length=1, max_length=128)
+    caller_identity: str = Field(..., min_length=1, max_length=120)
+    caller_display_name: Optional[str] = Field(None, max_length=160)
+    caller_phone: Optional[str] = Field(None, max_length=40)
+    conversation_name: Optional[str] = Field(None, max_length=160)
+    is_video: bool = False
+    backend_url: Optional[str] = None
+
+
+@api_router.post("/calls/group-again")
+async def group_again(payload: GroupAgainRequest, request: Request):
+    """Re-ring ONLY the members who haven't joined (pending or declined)."""
+    now = datetime.now(timezone.utc)
+    backend_url = _normalize_backend_url(payload.backend_url, request)
+    try:
+        docs = await db.twilio_call_participants.find(
+            {"room_name": payload.stream_room, "status": {"$in": ["pending", "declined"]}}
+        ).to_list(500)
+    except Exception:
+        docs = []
+    targets: List[str] = []
+    for d in docs:
+        ident = d.get("identity")
+        if not ident or ident == payload.caller_identity:
+            continue
+        await _upsert_roster_entry(payload.stream_room, ident, status="pending")
+        targets.append(ident)
+    if not targets:
+        return {"ok": True, "rerang": 0}
+    display_name = payload.caller_display_name or "Smilers User"
+    call_id = f"groupagain_{payload.stream_room}_{int(now.timestamp())}"
+    push_data = _group_ring_push(
+        conversation_id=payload.conversation_id, stream_room=payload.stream_room,
+        display_name=display_name, caller_identity=payload.caller_identity,
+        caller_phone=payload.caller_phone or "", is_video=payload.is_video,
+        conversation_name=payload.conversation_name or "", call_id=call_id,
+        backend_url=backend_url,
+    )
+    try:
+        await send_push(recipients=targets, data=push_data,
+                        idempotency_key=f"group-again:{call_id}")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(f"group-again: push failed (non-fatal): {exc}")
+    return {"ok": True, "rerang": len(targets)}
+
+
+class ParticipantStatusRequest(BaseModel):
+    stream_room: str = Field(..., min_length=1, max_length=160)
+    identity: str = Field(..., min_length=1, max_length=120)
+    status: str = Field(..., pattern="^(joined|declined|pending)$")
+    display_name: Optional[str] = Field(None, max_length=160)
+
+
+@api_router.post("/calls/participant-status")
+async def participant_status(payload: ParticipantStatusRequest):
+    """A member's device reports its own status (joined/declined) so every
+    participant's roster shows accurate Joined/Declined/Pending badges."""
+    fields = {"status": payload.status}
+    if payload.display_name:
+        fields["display_name"] = payload.display_name
+    await _upsert_roster_entry(payload.stream_room, payload.identity, **fields)
+    return {"ok": True}
+
+
+class CallAddRequestRequest(BaseModel):
+    """Non-admin requests an admin's approval to add a non-member to the call."""
+    stream_room: str = Field(..., min_length=1, max_length=160)
+    conversation_id: str = Field(..., min_length=1, max_length=128)
+    requester_identity: str = Field(..., min_length=1, max_length=120)
+    requester_name: Optional[str] = Field(None, max_length=160)
+    target_identity: str = Field(..., min_length=1, max_length=120)
+    target_name: Optional[str] = Field(None, max_length=160)
+    target_phone: Optional[str] = Field(None, max_length=40)
+    admin_identities: List[str] = Field(default_factory=list)
+    is_video: bool = False
+    add_permanently: bool = False
+    backend_url: Optional[str] = None
+
+
+@api_router.post("/calls/request-add")
+async def call_request_add(payload: CallAddRequestRequest, request: Request):
+    """Silent control push to every admin: '{requester} wants to add {target}'.
+    Admins approve in-call (→ /calls/add-participant) or decline."""
+    if not payload.admin_identities:
+        return {"ok": False, "reason": "no-admins"}
+    backend_url = _normalize_backend_url(payload.backend_url, request)
+    push_data = {
+        "title": "Call request",
+        "message": f"{payload.requester_name or 'A member'} wants to add someone",
+        "type": "call-add-request",
+        "stream_room": payload.stream_room,
+        "conversationId": payload.conversation_id,
+        "requester_identity": payload.requester_identity,
+        "requester_name": payload.requester_name or "",
+        "target_identity": payload.target_identity,
+        "target_name": payload.target_name or "",
+        "target_phone": payload.target_phone or "",
+        "add_permanently": "1" if payload.add_permanently else "0",
+        "twilio_is_video": "1" if payload.is_video else "0",
+        "backendUrl": backend_url,
+    }
+
+    async def _dispatch():
+        try:
+            await send_push(
+                recipients=payload.admin_identities, data=push_data,
+                idempotency_key=f"call-add-req:{payload.stream_room}:{payload.target_identity}:{int(datetime.now(timezone.utc).timestamp())}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(f"call-request-add: push failed (non-fatal): {exc}")
+
+    asyncio.create_task(_dispatch())
+    return {"ok": True, "notified_admins": len(payload.admin_identities)}
+
+
+class CallAddDeclinedRequest(BaseModel):
+    requester_identity: str = Field(..., min_length=1, max_length=120)
+    target_name: Optional[str] = Field(None, max_length=160)
+    admin_name: Optional[str] = Field(None, max_length=160)
+
+
+@api_router.post("/calls/request-add-declined")
+async def call_request_add_declined(payload: CallAddDeclinedRequest):
+    """Notify the requester that an admin declined their add-request (silent)."""
+    push_data = {
+        "title": "Call request",
+        "message": f"An admin declined adding {payload.target_name or 'that person'}",
+        "type": "call-add-declined",
+        "target_name": payload.target_name or "",
+    }
+
+    async def _dispatch():
+        try:
+            await send_push(
+                recipients=[payload.requester_identity], data=push_data,
+                idempotency_key=f"call-add-decl:{payload.requester_identity}:{int(datetime.now(timezone.utc).timestamp())}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(f"call-request-add-declined: push failed (non-fatal): {exc}")
+
+    asyncio.create_task(_dispatch())
+    return {"ok": True}
+
+
+class AdminKickRequest(BaseModel):
+    """Admin removes a member from the live group call. The app asserts admin
+    status (verified against the Convex group `admins` list before calling)."""
+    stream_room: str = Field(..., min_length=1, max_length=160)
+    identity: str = Field(..., min_length=1, max_length=120)
+    requester_identity: str = Field(..., min_length=1, max_length=120)
+    backend_url: Optional[str] = None
+
+
+@api_router.post("/calls/admin-kick")
+async def admin_kick(payload: AdminKickRequest, request: Request):
+    """Admin-only kick from a group call. Drops the roster entry and signals the
+    kicked device to leave (silent type=call-removed). Admin authority is
+    established by the app (Convex `admins`) — this endpoint trusts that gate,
+    mirroring how add-participant trusts the client's privacy choice."""
+    backend_url = _normalize_backend_url(payload.backend_url, request)
+    try:
+        await db.twilio_call_participants.delete_one(
+            {"room_name": payload.stream_room, "identity": payload.identity}
+        )
+    except Exception:
+        logger.warning("admin-kick: roster delete failed (non-fatal)")
+    push_data = {
+        "title": "Call",
+        "message": "You were removed from the call",
+        "type": "call-removed",
+        "stream_room": payload.stream_room,
+        "backendUrl": backend_url,
+    }
+
+    async def _dispatch():
+        try:
+            await send_push(
+                recipients=[payload.identity], data=push_data,
+                idempotency_key=f"admin-kick:{payload.stream_room}:{payload.identity}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(f"admin-kick: push failed (non-fatal): {exc}")
 
     asyncio.create_task(_dispatch())
     return {"ok": True}
@@ -2400,7 +2720,7 @@ def _derive_push_routing(data: dict) -> dict[str, str]:
         out["type"] = "missed-call"
     elif explicit_type == "message":
         out["type"] = "message"
-    elif explicit_type in ("call-cancelled", "call-declined"):
+    elif explicit_type in ("call-cancelled", "call-declined", "call-removed", "call-add-request", "call-add-declined"):
         # Control signals — preserve exactly so the callee/caller Kotlin handler
         # routes them correctly. Without this they get overridden to "call" or
         # "message" by the has_call_metadata / channel-detection fallback below.
@@ -2807,6 +3127,13 @@ async def send_push(
                     "channelId",
                     "conversationType",
                     "conversationName",
+                    # Group-call add-request control-push fields (Phase 2).
+                    "requester_identity",
+                    "requester_name",
+                    "target_identity",
+                    "target_name",
+                    "target_phone",
+                    "add_permanently",
                 ):
                     _v = data.get(_k)
                     if _v is not None and _k not in fcm_data:
@@ -2817,7 +3144,13 @@ async def send_push(
                 # ringtone. The Kotlin SmilersCallNotificationService intercepts them
                 # directly via handleIntent and handles the UI (dismiss ring, show
                 # missed-call, etc.).
-                is_silent_control = routing.get("type") in ("call-cancelled", "call-declined", "call-removed")
+                is_silent_control = routing.get("type") in (
+                    "call-cancelled",
+                    "call-declined",
+                    "call-removed",
+                    "call-add-request",
+                    "call-add-declined",
+                )
                 # MESSAGE pushes are now ALSO sent data-only. Previously they carried
                 # a `notification` block, so Android auto-displayed the SERVER title
                 # (the sender's Google/account name) the instant the FCM arrived —
