@@ -2738,7 +2738,15 @@ def _derive_push_routing(data: dict) -> dict[str, str]:
         if out.get("type") not in ("call-cancelled", "call-declined"):
             out["type"] = "call"
         out["conversationId"] = parts[1]
-        out["callId"] = parts[1]
+        # iter-396 FIX (P0 subsequent-call suppression): do NOT clobber an explicit
+        # per-attempt callId. webrtc_ring sends a UNIQUE call_id per attempt, but the
+        # action_url is /call/<conversationId>, so parsing it here used to overwrite
+        # callId with the STABLE conversationId. The native Android dedup
+        # (checkAndMarkHandled) keys on callId with a 5-min window, so a stable
+        # conversationId made every 2nd/3rd call to the same person get silently
+        # suppressed. Only fall back to conversationId when no explicit callId exists.
+        if not str(data.get("callId") or "").strip():
+            out["callId"] = parts[1]
     elif len(parts) >= 2 and parts[0] == "chat":
         # Don't downgrade an explicit call / control-signal type via the
         # action_url path. call-cancelled / call-declined route to /chat/<id>

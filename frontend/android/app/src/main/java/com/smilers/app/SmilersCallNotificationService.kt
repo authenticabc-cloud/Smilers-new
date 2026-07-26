@@ -183,7 +183,17 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
             // Mark handled so the ring-timeout runnable skips if it still fires
             checkAndMarkHandled("missed:$notifKey")
             val appCtx = ctx.applicationContext
-            val displayName = callerName.ifBlank { "Smilers user" }
+            // iter-396 FIX (#2): prefer the device-contact name resolved during the
+            // ring FCM (lookupContactNameByPhone → e.g. "ABC Albania"), cached in
+            // callIdToCallerName keyed by BOTH callId and conversationId. The JS
+            // bridge only knows the caller's account/displayName ("Smilers"), so use
+            // the resolved contact name when available to keep the missed-call name
+            // consistent with the incoming-call name.
+            val resolvedName = synchronized(dedupLock) {
+                callIdToCallerName[conversationId].takeUnless { it.isNullOrBlank() }
+                    ?: callIdToCallerName[callId].takeUnless { it.isNullOrBlank() }
+            }
+            val displayName = (resolvedName ?: callerName).ifBlank { "Smilers user" }
             // Ensure missed-call channel exists
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val mgr = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
