@@ -453,6 +453,14 @@ export default function DiaryScreen() {
     return localEntries;
   }, [cloudReady, cloudEntries, localEntries]);
 
+  // Cloud notes live on the server; local copies are DELETED after they flush
+  // to cloud. So a returning user's local store is empty and the notes only
+  // reappear once `api.diary.listEntries` resolves. While that query is still
+  // in flight (worsened by a Convex reconnect on cold start), we must NOT show
+  // the definitive "Your Diary is empty" message — the notes aren't gone, just
+  // still syncing. This flag drives a "Syncing your notes…" state instead.
+  const cloudSyncing = !!myUserId && !cloudReady && cloudEntriesQuery.loading;
+
   const visibleEntries = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return allEntries;
@@ -774,6 +782,23 @@ export default function DiaryScreen() {
           <View style={styles.loadingWrap}>
             <ActivityIndicator color={Colors.diary} size="large" />
           </View>
+        ) : rows.length === 0 && cloudSyncing && !searchQuery ? (
+          <View style={styles.emptyWrap}>
+            <ActivityIndicator color={Colors.diary} size="large" />
+            <Text style={styles.emptyTitle}>Syncing your notes…</Text>
+            <Text style={styles.emptyBody}>
+              Your saved notes are safe and loading from the cloud. This can take
+              a moment right after opening the app.
+            </Text>
+            <TouchableOpacity
+              style={styles.syncRetryBtn}
+              onPress={() => cloudEntriesQuery.refetch()}
+              testID="diary-sync-retry"
+            >
+              <Feather name="refresh-cw" size={15} color={Colors.diaryDark} />
+              <Text style={styles.syncRetryText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
         ) : rows.length === 0 ? (
           <View style={styles.emptyWrap}>
             <View style={styles.emptyIcon}>
@@ -1062,6 +1087,18 @@ const styles = StyleSheet.create({
   },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: Spacing.xl, gap: Spacing.md },
+  syncRetryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.diary,
+    backgroundColor: Colors.diaryLight,
+  },
+  syncRetryText: { color: Colors.diaryDark, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
   emptyIcon: {
     width: 72, height: 72, borderRadius: 36,
     backgroundColor: Colors.diaryLight,
