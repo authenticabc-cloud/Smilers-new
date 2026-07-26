@@ -43,12 +43,15 @@ interface RingPrefs {
   ringtone: RingId;
   notificationSound: RingId;
   vibrate: boolean;
+  /** iter-402: hide the message text in notifications (lock-screen privacy). */
+  hideMessagePreview: boolean;
 }
 
 const DEFAULT_PREFS: RingPrefs = {
   ringtone: DEFAULT_RING_ID,
   notificationSound: 'smilers_notification',
   vibrate: true,
+  hideMessagePreview: false,
 };
 
 function resolveCallChannelSound(ringtoneId?: RingId | null) {
@@ -292,6 +295,13 @@ export default function RingtonesScreen() {
     [persist, prefs],
   );
 
+  const setHideMessagePreview = useCallback(
+    (v: boolean) => {
+      void persist({ ...prefs, hideMessagePreview: v });
+    },
+    [persist, prefs],
+  );
+
   // Stop preview when switching modes.
   useEffect(() => {
     void stopCurrentSound();
@@ -443,6 +453,27 @@ export default function RingtonesScreen() {
               trackColor={{ true: Colors.primary, false: Colors.border }}
               thumbColor={Colors.white}
               testID="ringtones-vibrate"
+            />
+          </View>
+        </View>
+
+        {/* Privacy */}
+        <Text style={styles.sectionLabel}>Privacy</Text>
+        <View style={styles.card}>
+          <View style={styles.cardRow}>
+            <Ionicons name="eye-off-outline" size={22} color={Colors.primary} />
+            <View style={styles.cardRowMid}>
+              <Text style={styles.cardRowTitle}>Hide message content</Text>
+              <Text style={styles.cardRowSub}>
+                Show “New message” instead of the text on the lock screen
+              </Text>
+            </View>
+            <Switch
+              value={prefs.hideMessagePreview}
+              onValueChange={setHideMessagePreview}
+              trackColor={{ true: Colors.primary, false: Colors.border }}
+              thumbColor={Colors.white}
+              testID="ringtones-hide-preview"
             />
           </View>
         </View>

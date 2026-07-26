@@ -24,11 +24,11 @@
 
 import { Platform } from 'react-native';
 
-const MESSAGE_CHANNEL_ID = 'messages-v5-message_notification';
+const MESSAGE_CHANNEL_ID = 'messages-v6-message_notification';
 const MESSAGE_SOUND = 'message_notification';
 // Group messages get their OWN channel + tone so users can tell 1:1 vs group
-// apart by sound alone (contract: groups-v5-group_notification / group_notification.mp3).
-const GROUP_CHANNEL_ID = 'groups-v5-group_notification';
+// apart by sound alone (contract: groups-v6-group_notification / group_notification.mp3).
+const GROUP_CHANNEL_ID = 'groups-v6-group_notification';
 const GROUP_SOUND = 'group_notification';
 
 type NativeCache = {
@@ -141,6 +141,13 @@ export async function displayGroupedMessageNotification(
   try {
     await ensureChannel(native, channelId, channelSound, isGroup ? 'Group messages' : 'Messages');
 
+    // iter-402: honor the "Hide message content" privacy toggle — replace the
+    // text with a generic label but keep the sender/conversation name + tone.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { readHideMessagePreview } = require('./notificationChannels');
+    const hidePreview = await readHideMessagePreview().catch(() => false);
+    const safeBody = hidePreview ? 'New message' : body;
+
     const notificationId = `msg-conv-${conversationId}`;
     const routeData = { ...data, type: 'message', conversationId };
 
@@ -180,13 +187,13 @@ export async function displayGroupedMessageNotification(
     // app can wake for both onMessageReceived and handleIntent) by skipping an
     // exact-duplicate consecutive line.
     const nextLines = [...priorLines];
-    if (nextLines[nextLines.length - 1] !== body) {
-      nextLines.push(body);
+    if (nextLines[nextLines.length - 1] !== safeBody) {
+      nextLines.push(safeBody);
     }
     const lines = nextLines.slice(-6);
     const msgCount = nextLines.length;
 
-    const summaryBody = msgCount >= 2 ? `${msgCount} new messages` : body;
+    const summaryBody = msgCount >= 2 ? `${msgCount} new messages` : safeBody;
 
     await native.notifee.displayNotification({
       id: notificationId,
@@ -207,7 +214,7 @@ export async function displayGroupedMessageNotification(
         style:
           msgCount >= 2
             ? { type: native.AndroidStyle.INBOX, lines, title: convName, summary: summaryBody }
-            : { type: native.AndroidStyle.BIGTEXT, text: body },
+            : { type: native.AndroidStyle.BIGTEXT, text: safeBody },
       },
     });
 

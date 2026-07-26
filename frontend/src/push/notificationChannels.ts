@@ -82,7 +82,7 @@ export function getChannelIdsForPrefs(prefs?: RingtonePrefs | null): {
   const messageSound = resolveMessageChannelSound(prefs?.notificationSound) || 'silent';
   return {
     callChannelId: `calls-v4-${callSound}`,
-    messageChannelId: `messages-v5-${messageSound}`,
+    messageChannelId: `messages-v6-${messageSound}`,
   };
 }
 
@@ -91,6 +91,22 @@ export async function readRingtonePrefs(): Promise<RingtonePrefs | null> {
     return (await readStoredJson(RINGTONE_PREFS_KEY, null)) as RingtonePrefs | null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * iter-402: whether the user chose to hide message text in notifications
+ * (lock-screen privacy). Read from the same ringtone prefs blob so the headless
+ * notification renderers can honor it. Defaults to false (show preview).
+ */
+export async function readHideMessagePreview(): Promise<boolean> {
+  try {
+    const prefs = (await readStoredJson(RINGTONE_PREFS_KEY, null)) as
+      | (RingtonePrefs & { hideMessagePreview?: boolean })
+      | null;
+    return prefs?.hideMessagePreview === true;
+  } catch {
+    return false;
   }
 }
 
@@ -178,7 +194,13 @@ export async function applyNotificationChannelPrefs(prefs?: RingtonePrefs | null
   const fallbacks: Array<[string, any]> = [
     ['calls-v4-smilers_never_cry', fallbackCallOpts],
     [LEGACY_CALLS_CHANNEL, fallbackCallOpts],
-    ['messages-v5-message_notification', fallbackMessageOpts],
+    ['messages-v6-message_notification', fallbackMessageOpts],
+    // iter-402: group messages get their OWN channel + distinct Smilers group
+    // tone. Created here too (not just on-demand) so the channel exists with
+    // the correct sound from app start — Android channels are immutable, so a
+    // fresh -v6- id guarantees the right tone even after an app update where an
+    // older -v5- group channel was stuck on the wrong/default sound.
+    ['groups-v6-group_notification', { ...fallbackMessageOpts, name: 'Group messages', sound: 'group_notification' }],
     [LEGACY_MESSAGES_CHANNEL, fallbackMessageOpts],
   ];
   for (const [channelId, opts] of fallbacks) {

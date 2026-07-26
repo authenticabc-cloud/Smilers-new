@@ -468,9 +468,18 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
   }
 
   const messageChannel = isGroupMsg
-    ? 'groups-v5-group_notification'
-    : 'messages-v5-message_notification';
+    ? 'groups-v6-group_notification'
+    : 'messages-v6-message_notification';
   const messageSound = isGroupMsg ? 'group_notification' : 'message_notification';
+  // iter-402: honor the "Hide message content" privacy toggle in the fallback path too.
+  let bodyText = body;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { readHideMessagePreview } = require('./notificationChannels');
+    if (await readHideMessagePreview()) bodyText = 'New message';
+  } catch {
+    /* default: show preview */
+  }
   if (Platform.OS === 'android') {
     try {
       await Notifications.setNotificationChannelAsync(messageChannel, {
@@ -492,7 +501,7 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
     identifier: `msg-${notificationKey}`,
     content: {
       title,
-      body,
+      body: bodyText,
       data: payload,
       sound: messageSound,
       autoDismiss: true,

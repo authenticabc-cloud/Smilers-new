@@ -3696,7 +3696,7 @@ async def notify_event(body: NotifyEventBody):
             # Group messages get their own tone channel so they're
             # distinguishable from 1:1 messages by sound alone.
             if conv_type == "group":
-                data["channelId"] = "groups-v5-group_notification"
+                data["channelId"] = "groups-v6-group_notification"
                 conv_name = (body.conversation_name or "").strip()[:120]
                 if conv_name:
                     data["conversationName"] = conv_name

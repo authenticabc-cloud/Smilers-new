@@ -560,7 +560,7 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
 
   // iter-252: schedule on the VERSIONED message channel (custom Smilers tone),
   // not the legacy immutable `messages-v3` (stuck on the system default tone).
-  const messageChannel = 'messages-v5-message_notification';
+  const messageChannel = 'messages-v6-message_notification';
   if (Platform.OS === 'android') {
     try {
       await Notifications.setNotificationChannelAsync(messageChannel, {
@@ -575,10 +575,19 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
       });
     } catch {}
   }
+  // iter-402: honor the "Hide message content" privacy toggle.
+  let bodyText = body;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { readHideMessagePreview } = require('./notificationChannels');
+    if (await readHideMessagePreview()) bodyText = 'New message';
+  } catch {
+    /* default: show preview */
+  }
   await Notifications.scheduleNotificationAsync({
     content: {
       title,
-      body,
+      body: bodyText,
       data: payload,
       sound: 'message_notification',
       autoDismiss: true,
