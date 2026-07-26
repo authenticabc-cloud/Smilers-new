@@ -28,6 +28,7 @@ import { requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer, us
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { pickImageLibrary, pickCamera, pickDocument } from '../../src/lib/nativePickers';
+import MediaGalleryModal from '../../src/components/chat/MediaGalleryModal';
 import * as Location from 'expo-location';
 import AttachmentSheet from '../../src/components/AttachmentSheet';
 import ShareContactsDialog from '../../src/components/ShareContactsDialog';
@@ -1147,6 +1148,17 @@ export default function ChatScreen() {
       return msg;
     });
   }, [e2eeStatus.enabled, e2eeStatus.passphrase, e2eeStatus.salt, messagesForRender]);
+
+  // #4: ordered media list (chronological, matching on-screen order) that
+  // powers the swipe-between-photos/videos gallery. Each media bubble opens the
+  // shared <MediaGalleryModal> at its message instead of a per-message viewer.
+  const galleryMedia = useMemo(
+    () =>
+      (decryptedMessages || [])
+        .filter((m: any) => m && (m.type === 'image' || m.type === 'video'))
+        .map((m: any) => ({ msgId: String(m._id), type: m.type as 'image' | 'video', msg: m })),
+    [decryptedMessages]
+  );
 
   // iter-147: also honor the canonical conversation field
   // `conversation.disappearAfter` if the server has set one. It may be
@@ -4441,6 +4453,8 @@ export default function ChatScreen() {
             removeClippedSubviews={Platform.OS === 'android'}
           />
         )}
+
+        <MediaGalleryModal items={galleryMedia} e2eeStatus={e2eeStatus} />
 
         <View
           style={[

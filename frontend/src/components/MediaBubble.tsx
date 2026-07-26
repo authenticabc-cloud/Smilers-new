@@ -21,6 +21,7 @@ import {
   type AudioSource,
 } from 'expo-audio';
 import { useVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
+import { openGalleryFor, isGalleryHostMounted } from '../lib/chat/mediaGalleryStore';
 import * as Linking from 'expo-linking';
 import { router as expoRouter } from 'expo-router';
 import { useConvex, useMutation, useQuery } from 'convex/react';
@@ -494,7 +495,7 @@ export default function MediaBubble({
           </TouchableOpacity>
         ) : null}
 
-        <BubbleBody msg={msg} timeStr={timeStr} textStyle={[bubbleTextStyle, { color: messageTextColor }]} isMine={isMine} e2eeStatus={e2eeStatus || null} searchTerm={searchTerm} isActiveSearchMatch={isActiveSearchMatch} />
+        <BubbleBody msg={msg} timeStr={timeStr} textStyle={[bubbleTextStyle, { color: messageTextColor }]} isMine={isMine} e2eeStatus={e2eeStatus || null} searchTerm={searchTerm} isActiveSearchMatch={isActiveSearchMatch} onLongPress={onLongPress} />
 
         <View style={styles.bubbleMeta}>
           {msg.starred ? <Feather name="star" size={11} color={Colors.tickYellow} style={styles.starIcon} /> : null}
@@ -537,15 +538,15 @@ export default function MediaBubble({
   );
 }
 
-function BubbleBody({ msg, timeStr, textStyle, isMine, e2eeStatus, searchTerm, isActiveSearchMatch }: { msg: any; timeStr: string; textStyle?: any; isMine: boolean; e2eeStatus: E2EEStatus | null; searchTerm?: string | null; isActiveSearchMatch?: boolean }) {
+function BubbleBody({ msg, timeStr, textStyle, isMine, e2eeStatus, searchTerm, isActiveSearchMatch, onLongPress }: { msg: any; timeStr: string; textStyle?: any; isMine: boolean; e2eeStatus: E2EEStatus | null; searchTerm?: string | null; isActiveSearchMatch?: boolean; onLongPress?: () => void }) {
   return (
     <BubbleErrorBoundary fallbackLabel="Message couldn't load">
-      <BubbleBodyInner msg={msg} timeStr={timeStr} textStyle={textStyle} isMine={isMine} e2eeStatus={e2eeStatus} searchTerm={searchTerm} isActiveSearchMatch={isActiveSearchMatch} />
+      <BubbleBodyInner msg={msg} timeStr={timeStr} textStyle={textStyle} isMine={isMine} e2eeStatus={e2eeStatus} searchTerm={searchTerm} isActiveSearchMatch={isActiveSearchMatch} onLongPress={onLongPress} />
     </BubbleErrorBoundary>
   );
 }
 
-function BubbleBodyInner({ msg, timeStr, textStyle, isMine, e2eeStatus, searchTerm, isActiveSearchMatch }: { msg: any; timeStr: string; textStyle?: any; isMine: boolean; e2eeStatus: E2EEStatus | null; searchTerm?: string | null; isActiveSearchMatch?: boolean }) {
+function BubbleBodyInner({ msg, timeStr, textStyle, isMine, e2eeStatus, searchTerm, isActiveSearchMatch, onLongPress }: { msg: any; timeStr: string; textStyle?: any; isMine: boolean; e2eeStatus: E2EEStatus | null; searchTerm?: string | null; isActiveSearchMatch?: boolean; onLongPress?: () => void }) {
   // iter-134: Call logs in chat. Backend may surface call history as
   // virtual messages with either `type: 'call'` or `kind: 'call'`,
   // so we detect both. The CallLogMessage component is purely
@@ -835,7 +836,7 @@ function ImageMessage({ msg, timeStr, textStyle, e2eeStatus, isMine }: { msg: an
 
   return (
     <>
-      <TouchableOpacity activeOpacity={0.9} onPress={() => { markConsumed(); setOpen(true); }} testID="image-bubble" disabled={loading}>
+      <TouchableOpacity activeOpacity={0.9} onPress={() => { markConsumed(); if (isGalleryHostMounted() && msg?._id) { openGalleryFor(String(msg._id)); } else { setOpen(true); } }} testID="image-bubble" disabled={loading}>
         <View style={styles.imageWrap}>
           <Image source={{ uri: src }} style={styles.image} resizeMode="cover" />
           <View style={styles.imageTimeOverlay}>
@@ -1204,7 +1205,11 @@ function VideoMessage({
             style={styles.videoFullscreenBtn}
             onPress={(event) => {
               event.stopPropagation?.();
-              setViewerOpen(true);
+              if (isGalleryHostMounted() && msg?._id) {
+                openGalleryFor(String(msg._id));
+              } else {
+                setViewerOpen(true);
+              }
             }}
             hitSlop={6}
             testID="video-fullscreen-btn"
