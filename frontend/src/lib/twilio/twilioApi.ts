@@ -627,6 +627,8 @@ export async function fetchCallParticipants(roomName: string, viewer: string): P
       phoneNumber: p.phone_number ?? null,
       hideNumber: !!p.hide_number,
       addedBy: p.added_by ?? null,
+      status: (p.status as 'joined' | 'pending' | 'declined') || 'joined',
+      callRole: (p.call_role as 'member' | 'added') || 'added',
     }));
   } catch {
     return [];

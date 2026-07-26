@@ -18,6 +18,7 @@ import { recordDiagnostic } from '../lib/diagnostics';
 import { useAuth } from '../providers/AuthProvider';
 import { isTwilioEnabled } from '../lib/twilio/twilioApi';
 import { callHost } from '../lib/call/callHost';
+import { pushAddRequest } from '../lib/call/callAddRequestStore';
 import {
   shouldAskForFullScreenIntent,
   wasAlreadyPrompted,
@@ -312,6 +313,31 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
       const curRoom = toNonEmptyString(st.params?.streamRoom);
       if (st.params && (!kickedRoom || !curRoom || curRoom === kickedRoom)) callHost.end();
     } catch {}
+    return;
+  }
+
+  // call-add-request: a non-admin asked to add someone to a group call. Silent
+  // control → surface an in-call Approve/Decline banner to this admin (consumed
+  // by <CallUI> via callAddRequestStore). No tray banner.
+  if (type === 'call-add-request') {
+    try {
+      pushAddRequest({
+        streamRoom: toNonEmptyString(payload.stream_room) || '',
+        conversationId: toNonEmptyString(payload.conversationId) || '',
+        requesterIdentity: toNonEmptyString(payload.requester_identity) || '',
+        requesterName: toNonEmptyString(payload.requester_name) || '',
+        targetIdentity: toNonEmptyString(payload.target_identity) || '',
+        targetName: toNonEmptyString(payload.target_name) || '',
+        targetPhone: toNonEmptyString(payload.target_phone) || '',
+        addPermanently: toNonEmptyString(payload.add_permanently) === '1',
+        isVideo: toNonEmptyString(payload.twilio_is_video) === '1',
+      });
+    } catch {}
+    return;
+  }
+
+  // call-add-declined: an admin declined this user's add-request. Silent.
+  if (type === 'call-add-declined') {
     return;
   }
 
@@ -1323,6 +1349,22 @@ export function usePushNotifications() {
           const st = callHost.getState();
           const curRoom = toNonEmptyString(st.params?.streamRoom);
           if (st.params && (!kickedRoom || !curRoom || curRoom === kickedRoom)) callHost.end();
+        } catch {}
+      }
+      // call-add-request while OPEN — surface the in-call Approve/Decline banner.
+      if (type === 'call-add-request') {
+        try {
+          pushAddRequest({
+            streamRoom: toNonEmptyString(payload.stream_room) || '',
+            conversationId: toNonEmptyString(payload.conversationId) || '',
+            requesterIdentity: toNonEmptyString(payload.requester_identity) || '',
+            requesterName: toNonEmptyString(payload.requester_name) || '',
+            targetIdentity: toNonEmptyString(payload.target_identity) || '',
+            targetName: toNonEmptyString(payload.target_name) || '',
+            targetPhone: toNonEmptyString(payload.target_phone) || '',
+            addPermanently: toNonEmptyString(payload.add_permanently) === '1',
+            isVideo: toNonEmptyString(payload.twilio_is_video) === '1',
+          });
         } catch {}
       }
       // iter-186: desktop login approval arriving while the app is OPEN —

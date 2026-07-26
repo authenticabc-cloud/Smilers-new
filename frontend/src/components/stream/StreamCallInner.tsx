@@ -19,7 +19,7 @@
  * interpreter, call-waiting.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, AppState, Dimensions, FlatList, Image, Modal, PanResponder, Platform, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, AppState, Dimensions, FlatList, Image, Modal, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 // @ts-expect-error — native-only Stream SDK, resolved in the dev/prod build
@@ -49,9 +49,10 @@ import {
 } from '../../lib/deviceContactIndex';
 import { InCallAudio } from '../../lib/webrtc/inCallManager';
 import { getRingDelivery, subscribeRingDelivery } from '../../lib/call/ringDelivery';
+import { getAddRequest, subscribeAddRequest, clearAddRequest, type PendingAddRequest } from '../../lib/call/callAddRequestStore';
 import { ControlBtn, AudioOutputMenu } from '../call/CallScreenComponents';
 import { useRingtonePlayer } from '../../lib/ringtone/useRingtonePlayer';
-import { addStreamParticipant, fetchCallParticipants, removeStreamParticipant, type CallRosterEntry } from '../../lib/twilio/twilioApi';
+import { addStreamParticipant, fetchCallParticipants, removeStreamParticipant, groupCallAgain, reportParticipantStatus, requestAddParticipant, declineAddRequest, adminKickParticipant, type CallRosterEntry } from '../../lib/twilio/twilioApi';
 import type { AudioOutputRoute } from '../call/callTypes';
 import * as Haptics from 'expo-haptics';
 import { Colors } from '../../theme';
@@ -123,10 +124,24 @@ type CallUIProps = {
   myPhone: string;
   /** Convex conversation id of the current call (fallback for add routing). */
   conversationId: string;
+  /** Group-call orchestration (Phase 2). */
+  isGroupCall: boolean;
+  isGroupAdmin: boolean;
+  adminIdentities: string[];
+  conversationName: string;
+};
+
+// Visual mapping for group-call member statuses shown in the live waiting
+// strip (mirrors the legacy WebRTC group-call invite strip: Ringing / Joined /
+// Declined). Backend roster status: pending → Ringing…, joined, declined.
+const GROUP_STATUS_META: Record<string, { label: string; color: string }> = {
+  pending: { label: 'Ringing…', color: '#E4B53B' },
+  joined: { label: 'Joined', color: '#34C759' },
+  declined: { label: 'Declined', color: '#FF3B30' },
 };
 
 /** In-call UI (inside StreamCall context). */
-function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acceptedAt, room, myId, myName, myPhone, conversationId }: CallUIProps) {
+function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acceptedAt, room, myId, myName, myPhone, conversationId, isGroupCall, isGroupAdmin, adminIdentities, conversationName }: CallUIProps) {
   const call = useCall();
   const { mode } = useCallHost();
   const isMini = mode === 'mini';
@@ -458,11 +473,13 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   // ── Add participant (1:1 → conference on Stream SFU) + privacy roster ─────
   const contacts = useQuery(api.contacts.getContacts, {}) as any[] | undefined;
   const getOrCreateDirect = useMutation((api as any).conversations.getOrCreateDirect);
+  const addGroupMemberMutation = useMutation((api as any).conversations.addGroupMember);
   const [showAddPicker, setShowAddPicker] = useState(false);
   const [showRoster, setShowRoster] = useState(false);
   const [addSearch, setAddSearch] = useState('');
   const [pendingAdd, setPendingAdd] = useState<any | null>(null);
   const [adding, setAdding] = useState(false);
+  const [addPermanent, setAddPermanent] = useState(false);
   const [roster, setRoster] = useState<CallRosterEntry[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<any>(null);
@@ -542,6 +559,115 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
     return s;
   }, [myId, participants, roster]);
 
+  // ── Group call: report MY status "joined" once connected so every
+  // participant's waiting strip shows me green (mirrors the legacy WebRTC
+  // invite strip). Pending/declined come from the ring + decline signals.
+  const reportedJoinedRef = useRef(false);
+  useEffect(() => {
+    if (!isGroupCall || !connected || !room || !myId) return;
+    if (reportedJoinedRef.current) return;
+    reportedJoinedRef.current = true;
+    void reportParticipantStatus({ streamRoom: room, identity: myId, status: 'joined', displayName: myName });
+  }, [isGroupCall, connected, room, myId, myName]);
+
+  // Waiting strip: members who have NOT joined (pending/declined). Excludes me
+  // and anyone already joined so the strip only shows who we're still waiting on.
+  const waitingMembers = useMemo(
+    () => roster.filter((r) => r.identity && r.identity !== myId && r.status !== 'joined'),
+    [roster, myId],
+  );
+  const hasPendingOrDeclined = waitingMembers.length > 0;
+
+  // Mid-call "Call Again" — re-ring ONLY the pending/declined members.
+  const [callingAgain, setCallingAgain] = useState(false);
+  const handleCallAgain = useCallback(async () => {
+    if (!room || !myId || callingAgain) return;
+    setCallingAgain(true);
+    try {
+      const n = await groupCallAgain({
+        streamRoom: room,
+        conversationId,
+        callerIdentity: myId,
+        callerDisplayName: myName,
+        callerPhone: myPhone || undefined,
+        conversationName,
+        isVideo: videoMode,
+      });
+      showToast(n > 0 ? `Ringing ${n} ${n === 1 ? 'person' : 'people'} again…` : 'Everyone has already joined');
+      if (room && myId) fetchCallParticipants(room, myId).then(setRoster);
+    } finally {
+      setCallingAgain(false);
+    }
+  }, [room, myId, callingAgain, conversationId, myName, myPhone, conversationName, videoMode, showToast]);
+
+  // ── Admin: incoming "request to add X" (from a non-admin) → Approve/Decline.
+  const [addReq, setAddReq] = useState<PendingAddRequest | null>(getAddRequest());
+  useEffect(() => {
+    const unsub = subscribeAddRequest(() => setAddReq(getAddRequest()));
+    return unsub;
+  }, []);
+  const [resolvingReq, setResolvingReq] = useState(false);
+  // Only the admins on THIS call see the prompt (match room when known).
+  const showAddReq =
+    isGroupCall && isGroupAdmin && !!addReq &&
+    (!room || !addReq.streamRoom || addReq.streamRoom === room);
+
+  const approveAddReq = useCallback(async () => {
+    if (!addReq || !room || !myId || resolvingReq) return;
+    setResolvingReq(true);
+    try {
+      let convForAdd = conversationId;
+      try {
+        const cid = await getOrCreateDirect({ otherUserId: addReq.targetIdentity });
+        if (cid) convForAdd = String(cid);
+      } catch {
+        /* fall back */
+      }
+      await addStreamParticipant({
+        streamRoom: room,
+        adderIdentity: myId,
+        adderDisplayName: myName,
+        adderPhone: myPhone || undefined,
+        calleeIdentity: addReq.targetIdentity,
+        calleeDisplayName: addReq.targetName || '',
+        calleePhone: addReq.targetPhone || undefined,
+        hideNumber: false,
+        isVideo: videoMode,
+        conversationId: convForAdd,
+      });
+      if (addReq.addPermanently) {
+        try {
+          await addGroupMemberMutation({ conversationId, userId: addReq.targetIdentity });
+        } catch {
+          /* non-fatal */
+        }
+      }
+      showToast(`Added ${addReq.targetName || 'the requested person'}`);
+      if (room && myId) fetchCallParticipants(room, myId).then(setRoster);
+    } catch (err: any) {
+      Alert.alert('Could not add', err?.message || 'Please try again.');
+    } finally {
+      clearAddRequest();
+      setResolvingReq(false);
+    }
+  }, [addReq, room, myId, resolvingReq, conversationId, myName, myPhone, videoMode, getOrCreateDirect, addGroupMemberMutation, showToast]);
+
+  const declineAddReq = useCallback(async () => {
+    if (!addReq || resolvingReq) return;
+    setResolvingReq(true);
+    try {
+      await declineAddRequest({
+        requesterIdentity: addReq.requesterIdentity,
+        targetName: addReq.targetName,
+        adminName: myName,
+      });
+    } finally {
+      clearAddRequest();
+      setResolvingReq(false);
+    }
+  }, [addReq, resolvingReq, myName]);
+
+
   const addableContacts = useMemo(() => {
     const q = addSearch.trim().toLowerCase();
     return (contacts || [])
@@ -561,15 +687,38 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
     }
     setAddSearch('');
     setPendingAdd(null);
+    setAddPermanent(false);
     setShowAddPicker(true);
   }, [room]);
 
   const confirmAdd = useCallback(
-    async (hideNumber: boolean) => {
+    async (hideNumber: boolean, permanent: boolean) => {
       const contact = pendingAdd;
       if (!contact?._id || !room || !myId) return;
       setAdding(true);
       try {
+        // Non-admin in a GROUP call → cannot add directly. Send an approval
+        // request to all admins (they approve/decline in-call). Mirrors the
+        // WebRTC waiting flow: the person shows once an admin approves.
+        if (isGroupCall && !isGroupAdmin) {
+          const ok = await requestAddParticipant({
+            streamRoom: room,
+            conversationId,
+            requesterIdentity: myId,
+            requesterName: myName,
+            targetIdentity: String(contact._id),
+            targetName: String(contact.name || ''),
+            targetPhone: contact.phoneNumber ? String(contact.phoneNumber) : undefined,
+            adminIdentities: adminIdentities || [],
+            isVideo: videoMode,
+            addPermanently: permanent,
+          });
+          setPendingAdd(null);
+          setShowAddPicker(false);
+          showToast(ok ? 'Request sent to the group admins' : 'Could not send request');
+          return;
+        }
+
         // Resolve a valid direct conversation for the added person so their
         // ring/answer deep-link (/call/<conversationId>) opens a real context.
         let convForAdd = conversationId;
@@ -591,6 +740,14 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
           isVideo: videoMode,
           conversationId: convForAdd,
         });
+        // Admin opted to also add them to the group permanently.
+        if (isGroupCall && isGroupAdmin && permanent) {
+          try {
+            await addGroupMemberMutation({ conversationId, userId: String(contact._id) });
+          } catch {
+            showToast('Added to call (couldn’t add to group permanently)');
+          }
+        }
         setPendingAdd(null);
         setShowAddPicker(false);
         showToast(`You added ${String(contact.name || 'a contact')}`);
@@ -601,7 +758,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
         setAdding(false);
       }
     },
-    [pendingAdd, room, myId, myName, myPhone, videoMode, conversationId, getOrCreateDirect, showToast],
+    [pendingAdd, room, myId, myName, myPhone, videoMode, conversationId, getOrCreateDirect, showToast, isGroupCall, isGroupAdmin, adminIdentities, addGroupMemberMutation],
   );
 
   const participantCount = (remoteParticipants?.length || 0) + 1; // +1 = me
@@ -618,7 +775,11 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
           style: 'destructive',
           onPress: async () => {
             try {
-              await removeStreamParticipant({ streamRoom: room, identity: entry.identity, requesterIdentity: myId });
+              if (isGroupCall && isGroupAdmin) {
+                await adminKickParticipant({ streamRoom: room, identity: entry.identity, requesterIdentity: myId });
+              } else {
+                await removeStreamParticipant({ streamRoom: room, identity: entry.identity, requesterIdentity: myId });
+              }
               showToast(`You removed ${entry.displayName || 'a participant'}`);
               fetchCallParticipants(room, myId).then(setRoster);
             } catch (err: any) {
@@ -628,7 +789,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
         },
       ]);
     },
-    [room, myId, showToast],
+    [room, myId, showToast, isGroupCall, isGroupAdmin],
   );
 
   // Screen share (Stream). Android uses the system MediaProjection dialog (the
@@ -964,6 +1125,82 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
         </TouchableOpacity>
       ) : null}
 
+      {/* Group-call waiting strip — mirrors the WebRTC invite strip: a live
+          horizontal list of members we're still waiting on (Ringing/Declined),
+          plus a "Call again" chip that re-rings only them. */}
+      {isGroupCall && !inPiP && !isMini && hasPendingOrDeclined ? (
+        <View style={styles.waitStrip} testID="group-call-waiting-strip">
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.waitStripContent}
+          >
+            {waitingMembers.map((m) => {
+              const meta = GROUP_STATUS_META[m.status] || GROUP_STATUS_META.pending;
+              return (
+                <View key={m.identity} style={styles.waitChip} testID={`group-call-wait-chip-${m.identity}`}>
+                  <View style={[styles.waitDot, { backgroundColor: meta.color }]} />
+                  <Text style={styles.waitChipName} numberOfLines={1}>{m.displayName || 'Member'}</Text>
+                  <Text style={[styles.waitChipStatus, { color: meta.color }]}>{meta.label}</Text>
+                  {isGroupAdmin ? (
+                    <Pressable hitSlop={8} onPress={() => handleRemove(m)} testID={`group-call-wait-kick-${m.identity}`}>
+                      <Ionicons name="close-circle" size={16} color="rgba(255,255,255,0.7)" />
+                    </Pressable>
+                  ) : null}
+                </View>
+              );
+            })}
+            <TouchableOpacity
+              style={styles.waitAgainChip}
+              onPress={handleCallAgain}
+              disabled={callingAgain}
+              testID="group-call-call-again"
+            >
+              {callingAgain ? (
+                <ActivityIndicator size="small" color={Colors.white} />
+              ) : (
+                <Ionicons name="refresh" size={15} color={Colors.white} />
+              )}
+              <Text style={styles.waitAgainText}>Call again</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+      ) : null}
+
+      {/* Admin: a non-admin requested adding someone → Approve / Decline. */}
+      {showAddReq && addReq && !inPiP && !isMini ? (
+        <View style={styles.addReqBanner} testID="group-call-add-request">
+          <View style={styles.addReqTextWrap}>
+            <Text style={styles.addReqTitle} numberOfLines={1}>
+              {addReq.requesterName || 'A member'} wants to add {addReq.targetName || 'someone'}
+            </Text>
+            {addReq.addPermanently ? (
+              <Text style={styles.addReqSub}>Will also be added to the group</Text>
+            ) : null}
+          </View>
+          <TouchableOpacity
+            style={[styles.addReqBtn, styles.addReqDecline]}
+            onPress={declineAddReq}
+            disabled={resolvingReq}
+            testID="group-call-add-request-decline"
+          >
+            <Ionicons name="close" size={18} color={Colors.white} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.addReqBtn, styles.addReqApprove]}
+            onPress={approveAddReq}
+            disabled={resolvingReq}
+            testID="group-call-add-request-approve"
+          >
+            {resolvingReq ? (
+              <ActivityIndicator size="small" color={Colors.white} />
+            ) : (
+              <Ionicons name="checkmark" size={18} color={Colors.white} />
+            )}
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       {/* Add participant: contact picker → hide/show-number privacy step. */}
       <Modal
         visible={showAddPicker}
@@ -974,50 +1211,101 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
         <View style={styles.sheetBackdrop}>
           <View style={styles.sheet}>
             <View style={styles.sheetHeader}>
-              <Text style={styles.sheetTitle}>{pendingAdd ? 'Share number?' : 'Add to call'}</Text>
+              <Text style={styles.sheetTitle}>
+                {pendingAdd
+                  ? isGroupCall && !isGroupAdmin
+                    ? 'Request to add'
+                    : 'Share number?'
+                  : 'Add to call'}
+              </Text>
               <Pressable onPress={() => (adding ? undefined : setShowAddPicker(false))} hitSlop={8}>
                 <Ionicons name="close" size={22} color={Colors.white} />
               </Pressable>
             </View>
 
             {pendingAdd ? (
-              <View style={styles.privacyStep}>
-                <View style={styles.privacyAvatar}>
-                  <Text style={styles.privacyAvatarText}>
-                    {String(pendingAdd.name || '?').trim().charAt(0).toUpperCase()}
+              isGroupCall && !isGroupAdmin ? (
+                // Non-admin → cannot add directly; request admin approval.
+                <View style={styles.privacyStep}>
+                  <View style={styles.privacyAvatar}>
+                    <Text style={styles.privacyAvatarText}>
+                      {String(pendingAdd.name || '?').trim().charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                  <Text style={styles.privacyName}>{pendingAdd.name || 'Contact'}</Text>
+                  <Text style={styles.privacyMsg}>
+                    Only group admins can add people. Send a request for an admin to approve
+                    adding {String(pendingAdd.name || 'this contact').split(' ')[0]} to the call.
                   </Text>
+                  <Pressable
+                    style={[styles.privacyChoice, styles.privacyShow]}
+                    disabled={adding}
+                    onPress={() => confirmAdd(false, false)}
+                  >
+                    <Ionicons name="paper-plane" size={20} color={Colors.white} />
+                    <View style={styles.privacyChoiceText}>
+                      <Text style={styles.privacyChoiceTitle}>{adding ? 'Sending…' : 'Send request to admins'}</Text>
+                      <Text style={styles.privacyChoiceSub}>An admin will approve or decline</Text>
+                    </View>
+                  </Pressable>
+                  <Pressable style={styles.privacyBack} disabled={adding} onPress={() => setPendingAdd(null)}>
+                    <Text style={styles.privacyBackText}>Back</Text>
+                  </Pressable>
                 </View>
-                <Text style={styles.privacyName}>{pendingAdd.name || 'Contact'}</Text>
-                <Text style={styles.privacyMsg}>
-                  Should other participants be able to see{' '}
-                  {String(pendingAdd.name || 'this contact').split(' ')[0]}&apos;s phone number?
-                </Text>
-                <Pressable
-                  style={[styles.privacyChoice, styles.privacyHide]}
-                  disabled={adding}
-                  onPress={() => confirmAdd(true)}
-                >
-                  <Ionicons name="eye-off" size={20} color={Colors.white} />
-                  <View style={styles.privacyChoiceText}>
-                    <Text style={styles.privacyChoiceTitle}>Hide number</Text>
-                    <Text style={styles.privacyChoiceSub}>Others won&apos;t see their phone number</Text>
+              ) : (
+                <View style={styles.privacyStep}>
+                  <View style={styles.privacyAvatar}>
+                    <Text style={styles.privacyAvatarText}>
+                      {String(pendingAdd.name || '?').trim().charAt(0).toUpperCase()}
+                    </Text>
                   </View>
-                </Pressable>
-                <Pressable
-                  style={[styles.privacyChoice, styles.privacyShow]}
-                  disabled={adding}
-                  onPress={() => confirmAdd(false)}
-                >
-                  <Ionicons name="eye" size={20} color={Colors.white} />
-                  <View style={styles.privacyChoiceText}>
-                    <Text style={styles.privacyChoiceTitle}>Show number</Text>
-                    <Text style={styles.privacyChoiceSub}>Others will see their phone number</Text>
-                  </View>
-                </Pressable>
-                <Pressable style={styles.privacyBack} disabled={adding} onPress={() => setPendingAdd(null)}>
-                  <Text style={styles.privacyBackText}>{adding ? 'Adding…' : 'Back'}</Text>
-                </Pressable>
-              </View>
+                  <Text style={styles.privacyName}>{pendingAdd.name || 'Contact'}</Text>
+                  {isGroupCall && isGroupAdmin ? (
+                    <Pressable
+                      style={styles.permToggle}
+                      disabled={adding}
+                      onPress={() => setAddPermanent((v) => !v)}
+                      testID="group-call-add-permanent"
+                    >
+                      <Ionicons
+                        name={addPermanent ? 'checkbox' : 'square-outline'}
+                        size={20}
+                        color={addPermanent ? Colors.primary : Colors.white}
+                      />
+                      <Text style={styles.permToggleText}>Also add to the group permanently</Text>
+                    </Pressable>
+                  ) : null}
+                  <Text style={styles.privacyMsg}>
+                    Should other participants be able to see{' '}
+                    {String(pendingAdd.name || 'this contact').split(' ')[0]}&apos;s phone number?
+                  </Text>
+                  <Pressable
+                    style={[styles.privacyChoice, styles.privacyHide]}
+                    disabled={adding}
+                    onPress={() => confirmAdd(true, addPermanent)}
+                  >
+                    <Ionicons name="eye-off" size={20} color={Colors.white} />
+                    <View style={styles.privacyChoiceText}>
+                      <Text style={styles.privacyChoiceTitle}>Hide number</Text>
+                      <Text style={styles.privacyChoiceSub}>Others won&apos;t see their phone number</Text>
+                    </View>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.privacyChoice, styles.privacyShow]}
+                    disabled={adding}
+                    onPress={() => confirmAdd(false, addPermanent)}
+                  >
+                    <Ionicons name="eye" size={20} color={Colors.white} />
+                    <View style={styles.privacyChoiceText}>
+                      <Text style={styles.privacyChoiceTitle}>Show number</Text>
+                      <Text style={styles.privacyChoiceSub}>Others will see their phone number</Text>
+                    </View>
+                  </Pressable>
+                  <Pressable style={styles.privacyBack} disabled={adding} onPress={() => setPendingAdd(null)}>
+                    <Text style={styles.privacyBackText}>{adding ? 'Adding…' : 'Back'}</Text>
+                  </Pressable>
+                </View>
+              )
             ) : (
               <>
                 <View style={styles.searchRow}>
@@ -1084,7 +1372,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
               </Pressable>
             </View>
             <View style={styles.rosterList}>
-              <RosterRow name={`${myName || 'You'} (you)`} phone={null} />
+              <RosterRow name={`${myName || 'You'} (you)`} phone={null} status={isGroupCall ? 'joined' : undefined} />
               {roster
                 .filter((r) => r.identity && r.identity !== myId)
                 .map((r) => (
@@ -1093,10 +1381,30 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
                     name={r.displayName || 'Smilers user'}
                     phone={r.phoneNumber}
                     hidden={r.hideNumber}
-                    onRemove={r.addedBy && myId && r.addedBy === myId ? () => handleRemove(r) : undefined}
+                    status={isGroupCall ? r.status : undefined}
+                    onRemove={
+                      (isGroupCall && isGroupAdmin) || (r.addedBy && myId && r.addedBy === myId)
+                        ? () => handleRemove(r)
+                        : undefined
+                    }
                   />
                 ))}
             </View>
+            {isGroupCall && hasPendingOrDeclined ? (
+              <Pressable
+                style={styles.rosterAgainBtn}
+                onPress={handleCallAgain}
+                disabled={callingAgain}
+                testID="group-call-roster-again"
+              >
+                {callingAgain ? (
+                  <ActivityIndicator size="small" color={Colors.white} />
+                ) : (
+                  <Ionicons name="refresh" size={18} color={Colors.white} />
+                )}
+                <Text style={styles.rosterAddText}>Call again ({waitingMembers.length})</Text>
+              </Pressable>
+            ) : null}
             <Pressable
               style={styles.rosterAddBtn}
               onPress={() => {
@@ -1105,7 +1413,9 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
               }}
             >
               <Ionicons name="person-add" size={18} color={Colors.white} />
-              <Text style={styles.rosterAddText}>Add participant</Text>
+              <Text style={styles.rosterAddText}>
+                {isGroupCall && !isGroupAdmin ? 'Request to add someone' : 'Add participant'}
+              </Text>
             </Pressable>
           </View>
         </View>
@@ -1120,12 +1430,15 @@ function RosterRow({
   phone,
   hidden,
   onRemove,
+  status,
 }: {
   name: string;
   phone: string | null;
   hidden?: boolean;
   onRemove?: () => void;
+  status?: 'joined' | 'pending' | 'declined';
 }) {
+  const meta = status ? GROUP_STATUS_META[status] : null;
   return (
     <View style={styles.rosterRow}>
       <View style={[styles.addRowAvatar, styles.addRowAvatarFallback]}>
@@ -1139,6 +1452,12 @@ function RosterRow({
           <Text style={styles.rosterHidden}>Number hidden</Text>
         ) : null}
       </View>
+      {meta ? (
+        <View style={styles.rosterStatusWrap}>
+          <View style={[styles.waitDot, { backgroundColor: meta.color }]} />
+          <Text style={[styles.rosterStatusText, { color: meta.color }]}>{meta.label}</Text>
+        </View>
+      ) : null}
       {onRemove ? (
         <TouchableOpacity style={styles.rosterRemoveBtn} onPress={onRemove} hitSlop={8}>
           <Ionicons name="remove-circle" size={24} color="#ff5a5f" />
@@ -1174,6 +1493,22 @@ export default function StreamCallInner() {
   const endCall = useMutation((api as any).calls.endCall);
   const declineCall = useMutation((api as any).calls.declineCall);
   const markCalleeRinging = useMutation((api as any).calls.markCalleeRinging);
+
+  // ── Group-call orchestration context (Phase 2) ──────────────────────────
+  // Admins/members are fields on the group conversation doc (web-team contract:
+  // getConversation → { admins[], chiefAdmin, adminOrder[], type }).
+  const convDoc = useQuery(
+    (api as any).conversations.getConversation,
+    canQuery ? ({ conversationId } as any) : 'skip',
+  ) as any;
+  const isGroupConv = convDoc?.type === 'group' || convDoc?.isGroup === true;
+  const isGroupCall = params?.group === '1' || params?.group === 'true' || isGroupConv;
+  const adminIdentities = useMemo(
+    () => (Array.isArray(convDoc?.admins) ? convDoc.admins.map((a: any) => String(a)) : []),
+    [convDoc],
+  );
+  const isGroupAdmin = !!(me?._id && adminIdentities.includes(String(me._id)));
+  const conversationName = String(convDoc?.name || convDoc?.groupName || displayName || 'Group call');
 
   const [client, setClient] = useState<any>(undefined);
   const [call, setCall] = useState<any>(null);
@@ -1452,8 +1787,18 @@ export default function StreamCallInner() {
     if (endedRef.current) return;
     endedRef.current = true;
     if (callId) void declineCall({ callId: String(callId) }).catch(() => {});
+    // Group call: report my "declined" status so every participant's waiting
+    // strip shows me red (mirrors the WebRTC invite strip).
+    if (isGroupCall && streamCallId && me?._id) {
+      void reportParticipantStatus({
+        streamRoom: String(streamCallId),
+        identity: String(me._id),
+        status: 'declined',
+        displayName: String(me?.name || me?.displayName || ''),
+      });
+    }
     callHost.end();
-  }, [callId, declineCall]);
+  }, [callId, declineCall, isGroupCall, streamCallId, me]);
 
   const hangup = useCallback(() => {
     if (endedRef.current) return;
@@ -1644,6 +1989,10 @@ export default function StreamCallInner() {
             myName={String(me?.name || me?.displayName || 'You')}
             myPhone={String(me?.phoneE164 || me?.phone || '')}
             conversationId={conversationId}
+            isGroupCall={isGroupCall}
+            isGroupAdmin={isGroupAdmin}
+            adminIdentities={adminIdentities}
+            conversationName={conversationName}
           />
           {waitingBanner}
         </NoiseCancellationProvider>
@@ -1993,4 +2342,71 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   rosterAddText: { color: Colors.white, fontSize: 16, fontWeight: '700' },
+
+  // ── Group-call waiting strip + status UI (Phase 2) ──────────────────────
+  waitStrip: { position: 'absolute', top: 92, left: 0, right: 0 },
+  waitStripContent: { paddingHorizontal: 12, gap: 8, alignItems: 'center' },
+  waitChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  waitDot: { width: 8, height: 8, borderRadius: 4 },
+  waitChipName: { color: Colors.white, fontSize: 13, fontWeight: '600', maxWidth: 110 },
+  waitChipStatus: { fontSize: 11, fontWeight: '700' },
+  waitAgainChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  waitAgainText: { color: Colors.white, fontSize: 13, fontWeight: '700' },
+  permToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    alignSelf: 'stretch',
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+    marginBottom: 4,
+  },
+  permToggleText: { color: Colors.white, fontSize: 14, fontWeight: '600', flexShrink: 1 },
+  rosterAgainBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 14,
+    paddingVertical: 12,
+    marginTop: 12,
+  },
+  rosterStatusWrap: { flexDirection: 'row', alignItems: 'center', gap: 5, marginRight: 6 },
+  rosterStatusText: { fontSize: 12, fontWeight: '700' },
+  addReqBanner: {
+    position: 'absolute',
+    top: 140,
+    left: 12,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(20,20,20,0.92)',
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  addReqTextWrap: { flex: 1 },
+  addReqTitle: { color: Colors.white, fontSize: 13, fontWeight: '700' },
+  addReqSub: { color: 'rgba(255,255,255,0.7)', fontSize: 11, marginTop: 1 },
+  addReqBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  addReqApprove: { backgroundColor: '#34C759' },
+  addReqDecline: { backgroundColor: 'rgba(255,255,255,0.18)' },
 });

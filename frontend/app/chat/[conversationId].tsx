@@ -3599,6 +3599,24 @@ export default function ChatScreen() {
     ).trim();
   }, [hydratedConversation]);
 
+  // Group-call member list (Phase 2): ring ALL current group members into one
+  // shared Stream room. Built from getGroupMembers (account name + phone).
+  const groupCallMembers = useMemo(() => {
+    if (!isGroupChat || !Array.isArray(groupMembers)) return [];
+    const meId = me?._id ? String(me._id) : '';
+    return groupMembers
+      .map((m: any) => ({
+        identity: String(m?.userId || m?._id || '').trim(),
+        displayName: m?.name || m?.displayName || undefined,
+        phone: m?.phoneE164 || m?.phone || m?.phoneNumber || undefined,
+      }))
+      .filter((m: any) => m.identity && m.identity !== meId);
+  }, [isGroupChat, groupMembers, me]);
+  const groupCallName = useMemo(() => {
+    const c: any = hydratedConversation || {};
+    return String(c?.name || c?.groupName || c?.title || 'Group call');
+  }, [hydratedConversation]);
+
   // iter-198: keep the sender-side push context fresh (see sendMessage
   // wrapper above). Recipients = every other participant's Convex id.
   useEffect(() => {
@@ -4003,6 +4021,9 @@ export default function ChatScreen() {
                 conversationId: String(conversationId || ''),
                 isVideo: false,
                 displayName: title,
+                isGroup: isGroupChat,
+                groupMembers: isGroupChat ? groupCallMembers : undefined,
+                conversationName: isGroupChat ? groupCallName : undefined,
               });
             }}
             style={styles.headerIconButton}
@@ -4023,6 +4044,9 @@ export default function ChatScreen() {
                 conversationId: String(conversationId || ''),
                 isVideo: true,
                 displayName: title,
+                isGroup: isGroupChat,
+                groupMembers: isGroupChat ? groupCallMembers : undefined,
+                conversationName: isGroupChat ? groupCallName : undefined,
               });
             }}
             style={styles.headerIconButton}

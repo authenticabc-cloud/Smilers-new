@@ -25,7 +25,7 @@
 import { Alert } from 'react-native';
 import type { Router } from 'expo-router';
 
-import { initiateTwilioCall, isTwilioEnabled, ringWebrtcCall } from './twilioApi';
+import { initiateTwilioCall, isTwilioEnabled, ringWebrtcCall, groupRing } from './twilioApi';
 import { recordDiagnostic } from '../diagnostics';
 import { api } from '../../convexApi';
 import { getActiveConvexClient } from '../../providers/useConvexAutoReconnect';
@@ -51,6 +51,11 @@ export interface StartCallArgs {
   autoShare?: boolean;
   /** Start with the microphone muted (used for screen-share without narration). */
   startMuted?: boolean;
+  /** Group call: ring ALL these members into one shared Stream room. */
+  isGroup?: boolean;
+  groupMembers?: { identity: string; displayName?: string; phone?: string }[];
+  /** Group name shown in the ring + in-call header. */
+  conversationName?: string;
 }
 
 // #2 FIX: the caller placing two calls ~10ms apart (double-tap / double render
@@ -74,6 +79,38 @@ export async function startCall(args: StartCallArgs): Promise<void> {
     return;
   }
   recentStartByConv[conversationId] = nowTs;
+
+  // ── Group call: ring ALL members into one shared Stream room and open the
+  // call screen in group mode (tap-to-join/decline roster). Bypasses the 1:1
+  // twilio/legacy engine selection. See /api/calls/group-ring.
+  if (args.isGroup) {
+    const room = `grp_${conversationId}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+    recordDiagnostic({
+      tag: 'CALL',
+      source: 'startCall',
+      message: `route=group conv=${conversationId} video=${isVideo} members=${args.groupMembers?.length || 0} room=${room}`,
+    });
+    if (args.callerIdentity && (args.groupMembers?.length || 0) > 0) {
+      void groupRing({
+        streamRoom: room,
+        conversationId,
+        callerIdentity: args.callerIdentity,
+        callerDisplayName: args.callerDisplayName,
+        callerPhone: args.callerPhone,
+        conversationName: args.conversationName,
+        members: args.groupMembers || [],
+        isVideo,
+      });
+    }
+    // answer=1 → the caller auto-joins the room they created; group=1 flags
+    // the call screen into group-orchestration mode.
+    router.push(
+      `/call/${conversationId}?type=${isVideo ? 'video' : 'voice'}` +
+        `&streamRoom=${encodeURIComponent(room)}&group=1&answer=1` +
+        `&displayName=${encodeURIComponent(args.conversationName || displayName)}` as any,
+    );
+    return;
+  }
 
   // Legacy fallback when Twilio is disabled OR when the caller
   // identity isn't ready yet (e.g., auth race condition).
