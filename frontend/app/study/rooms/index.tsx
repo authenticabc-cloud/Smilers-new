@@ -202,7 +202,8 @@ function JoinRoomSheet({
         Alert.alert('Room not found', 'Check the code and try again.');
         setPreview(null);
       } else {
-        setPreview(res);
+        // Flatten in case preview is wrapped as { room, ... } like getRoom.
+        setPreview(res.room ?? res);
       }
     } catch (err: any) {
       Alert.alert('Could not find room', err?.data?.message || err?.message || 'Please try again.');
@@ -218,7 +219,7 @@ function JoinRoomSheet({
       onClose();
       setCode('');
       setPreview(null);
-      const id = res?.roomId || res?._id;
+      const id = res?.roomId || res?._id || res?.room?._id;
       if (id) router.push({ pathname: '/study/rooms/[roomId]', params: { roomId: String(id) } } as any);
     } catch (err: any) {
       Alert.alert('Could not join', err?.data?.message || err?.message || 'Please try again.');

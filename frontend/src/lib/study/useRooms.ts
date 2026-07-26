@@ -8,11 +8,35 @@
  * `aiCanReadRoomContent` defaults OFF — generating with useRoomContent=true
  * while it's off throws FORBIDDEN.
  */
-import { useCallback, useEffect, useState } from 'react';
-import { useAction, useConvex, useMutation } from 'convex/react';
+import { useCallback, useMemo, useState } from 'react';
+import { useAction, useMutation } from 'convex/react';
 import { api } from '../../convexApi';
 import { useSafeConvexQuery } from '../../hooks/useSafeConvexQuery';
 import { useAuth } from '../../providers/AuthProvider';
+
+// iter-399: the deployed backend returns a WRAPPED shape — `getRoom` →
+// `{ room, myRole, members }` and `listMyRooms` → `[{ room, role, joinedAt }]`.
+// The screens expect a FLAT room (they read `r._id`, `r.name`, `r.joinCode`,
+// `r.role`/`myRole`, `r.members`). Flatten here so the id used for navigation
+// is the real `room._id` (the old code read the wrapper's missing `_id`,
+// navigating to `/study/rooms/undefined` → getRoom(null) → "not a member").
+function flattenRoomListItem(item: any): any {
+  if (item && typeof item === 'object' && item.room && typeof item.room === 'object') {
+    return { ...item.room, role: item.role, myRole: item.role, joinedAt: item.joinedAt };
+  }
+  return item;
+}
+function flattenRoomDetail(raw: any): any {
+  if (raw && typeof raw === 'object' && raw.room && typeof raw.room === 'object') {
+    return {
+      ...raw.room,
+      myRole: raw.myRole,
+      role: raw.myRole,
+      members: Array.isArray(raw.members) ? raw.members : [],
+    };
+  }
+  return raw;
+}
 
 /** My rooms + create/join. */
 export function useMyRooms() {
@@ -23,50 +47,25 @@ export function useMyRooms() {
     [],
     isAuthenticated,
   );
+  const flatRooms = useMemo(
+    () => (Array.isArray(rooms) ? rooms.map(flattenRoomListItem) : []),
+    [rooms],
+  );
   const createRoom = useMutation((api as any).study.rooms.createRoom);
   const joinRoom = useMutation((api as any).study.rooms.joinRoom);
   const previewRoomByCode = useAction((api as any).study.rooms.previewRoomByCode);
-  return { rooms: rooms || [], loading, createRoom, joinRoom, previewRoomByCode };
+  return { rooms: flatRooms, loading, createRoom, joinRoom, previewRoomByCode };
 }
 
 /** A single room (null for non-members) + membership/admin mutations. */
 export function useRoom(roomId: string | null) {
-  const { data: room, loading } = useSafeConvexQuery<any>(
+  const { data: raw, loading } = useSafeConvexQuery<any>(
     (api as any).study?.rooms?.getRoom,
     roomId ? { roomId } : undefined,
     null,
     !!roomId,
   );
-  // iter-399 DIAGNOSTIC: getRoom returns null on native for rooms the creator
-  // owns (works on web). useSafeConvexQuery swallows the error, so we do a
-  // one-shot raw call to log the actual result/error — a filtered logcat
-  // (`adb logcat | grep STUDYROOM`) then reveals whether getRoom threw (bad
-  // arg / auth) or genuinely returned null (backend membership shape), so we
-  // can align the field/arg contract precisely. Remove once resolved.
-  const convex = useConvex();
-  useEffect(() => {
-    if (!roomId) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const raw = await (convex as any).query((api as any).study?.rooms?.getRoom, { roomId });
-        if (cancelled) return;
-        const keys = raw && typeof raw === 'object' ? Object.keys(raw) : null;
-        // eslint-disable-next-line no-console
-        console.log(
-          `[STUDYROOM] getRoom(${roomId}) ->`,
-          raw === null ? 'NULL (treated as not-a-member)' : `keys=${JSON.stringify(keys)}`,
-        );
-      } catch (e: any) {
-        if (cancelled) return;
-        // eslint-disable-next-line no-console
-        console.log(`[STUDYROOM] getRoom(${roomId}) THREW:`, String(e?.message || e));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [roomId, convex]);
+  const room = useMemo(() => flattenRoomDetail(raw), [raw]);
   const leaveRoom = useMutation((api as any).study.rooms.leaveRoom);
   const updateRoom = useMutation((api as any).study.rooms.updateRoom);
   const regenerateJoinCode = useMutation((api as any).study.rooms.regenerateJoinCode);
