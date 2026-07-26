@@ -1,5 +1,13 @@
 # Smilers Mobile App — PRD
 
+## iter-403 (Jun 2026): Per-conversation MUTE — made the stub real (potential improvement)
+- The chat "Mute notifications" option existed but was a no-op stub (local `useState`, not persisted, didn't suppress anything). Made it fully functional & device-local:
+  - New `src/lib/mutedConversations.ts` (AsyncStorage set: `getMutedConversations`/`isConversationMuted`/`setConversationMuted`).
+  - `app/chat/[conversationId].tsx`: loads persisted mute on mount; the `mute` action now persists via `setConversationMuted` (works for direct AND group chats since a group is a conversation).
+  - Renderers suppress muted convos: `backgroundTaskSetup.ts` (bg/killed) checks `isConversationMuted(conversationId)` right after group detection → returns early (logs `MSG-PUSH muted ... suppressed`); `usePushNotifications.ts` (foreground) checks before display. Complements the existing global per-type toggles (`isNotificationTypeEnabled`).
+- Device-local by design (instant/offline; future: sync via Convex). Lint clean. Native-only → validate after APK rebuild.
+
+
 ## iter-402 (Jun 2026): Message/group notification TONE fix (channel-immutability) + "Hide message content" privacy toggle
 - **Diagnosis (with Convex dev's contract):** the push flow is Convex → FastAPI relay (`server.py`) → FCM. The relay ALREADY sends messages data-only (`is_message_push`) and the native JS renderer (`notifeeMessageDisplay.ts`) ALREADY picks the group channel + group tone via `conversationType==='group'`. So the code was correct — the wrong tone was **Android channel immutability**: an earlier build created the `-v5-` message/group channels with the wrong/default sound, and Android keeps a channel's sound forever (an app UPDATE can't change it). The wrong NAME + missing MSG-PUSH/MSG-NAME logs indicate the user's installed APK also predates the current name-resolution/logging — a rebuild is required.
 - **Fix #2 (tone):** bumped message/group channel ids `-v5- → -v6-` everywhere so the rebuilt app creates FRESH channels with the correct Smilers `message_notification`/`group_notification` sounds: `notificationChannels.ts` (message id + added a `groups-v6-group_notification` fallback created at startup), `backgroundTaskSetup.ts`, `usePushNotifications.ts`, `notifeeMessageDisplay.ts`, and relay `server.py` (`channelId` for group msgs → v6). Group detection stays version-agnostic (`conversationType` / `startsWith('groups-')`), so Convex's v4 string still works. NAME correctness comes automatically once they rebuild with current code.

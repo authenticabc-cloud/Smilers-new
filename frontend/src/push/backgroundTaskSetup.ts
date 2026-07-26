@@ -370,6 +370,21 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
     String((payload as any).conversationType || '').toLowerCase() === 'group' ||
     String((payload as any).channelId || '').startsWith('groups-');
 
+  // iter-403: honour the per-conversation MUTE. If the user muted this specific
+  // chat/group on this device, suppress the banner + sound entirely.
+  try {
+    const mutedConvId = toNonEmptyString(payload.conversationId);
+    if (mutedConvId) {
+      const { isConversationMuted } = require('../lib/mutedConversations');
+      if (await isConversationMuted(mutedConvId)) {
+        recordDiagnostic({ tag: 'MSG-PUSH', source: 'bg-task', message: `muted conv=${mutedConvId} — suppressed key=${notificationKey}` });
+        return;
+      }
+    }
+  } catch {
+    /* on error, fall through and show the notification */
+  }
+
   // #9: honour the per-device Notifications toggles. If the user turned OFF
   // "Messages" (or "Group messages"), suppress the banner entirely. Calls are
   // never suppressed here (handled by their own path above).

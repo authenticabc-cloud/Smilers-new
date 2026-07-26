@@ -537,6 +537,19 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
     /* no override — keep account name */
   }
 
+  // iter-403: per-conversation MUTE — suppress the banner + sound for a chat the
+  // user muted on this device (foreground/JS path).
+  try {
+    const mutedConvId = toNonEmptyString(payload.conversationId);
+    if (mutedConvId) {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { isConversationMuted } = require('../lib/mutedConversations');
+      if (await isConversationMuted(mutedConvId)) return;
+    }
+  } catch {
+    /* on error, fall through and show the notification */
+  }
+
   // iter-260: bundle message notifications per-conversation (WhatsApp-style)
   // via notifee, which supports Android notification groups. Falls back to the
   // expo path below when notifee is unavailable.

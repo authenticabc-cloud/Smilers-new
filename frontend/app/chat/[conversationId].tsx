@@ -23,6 +23,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useConvex, useMutation, useQuery } from 'convex/react';
 import { forceConvexReconnect } from '../../src/providers/useConvexAutoReconnect';
 import { recordingActivity } from '../../src/lib/recordingActivity';
+import { isConversationMuted, setConversationMuted } from '../../src/lib/mutedConversations';
 import * as Clipboard from 'expo-clipboard';
 import { requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
@@ -290,6 +291,19 @@ export default function ChatScreen() {
   const [showOptionsMenu, setShowOptionsMenu] = useState(false);
   const [showDisappearingSheet, setShowDisappearingSheet] = useState(false);
   const [muted, setMuted] = useState(false);
+  // iter-403: load the persisted per-conversation mute state on mount so the
+  // toggle reflects reality (and matches what the notification renderers honor).
+  useEffect(() => {
+    let cancelled = false;
+    if (typeof conversationId === 'string' && conversationId) {
+      isConversationMuted(conversationId).then((m) => {
+        if (!cancelled) setMuted(m);
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId]);
   const [fallbackReady, setFallbackReady] = useState(false);
   const [quickTemplates, setQuickTemplates] = useState<any[]>([]);
   const [chatAppearance, setChatAppearance] = useState(DEFAULT_CHAT_APPEARANCE);
@@ -3819,6 +3833,9 @@ export default function ChatScreen() {
         case 'mute':
           setMuted((m) => {
             const next = !m;
+            if (typeof conversationId === 'string' && conversationId) {
+              void setConversationMuted(conversationId, next);
+            }
             Alert.alert(next ? 'Notifications muted' : 'Notifications unmuted', next ? 'You won\'t receive sounds or banners for this chat.' : 'You\'ll receive notifications again.');
             return next;
           });
