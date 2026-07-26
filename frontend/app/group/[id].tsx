@@ -664,6 +664,14 @@ function GroupInfoInner() {
             const resolvedName = displayNameForMember(m);
             return (
               <View key={mid} style={styles.memberRow} testID={`group-member-${mid}`}>
+                <TouchableOpacity
+                  style={styles.memberTap}
+                  activeOpacity={0.6}
+                  onPress={() =>
+                    router.push(`/user/${mid}?conversationId=${conversationId}` as any)
+                  }
+                  testID={`group-member-open-${mid}`}
+                >
                 <View style={styles.memberAvatar}>
                   {m?.avatarUrl ? (
                     <Image source={{ uri: m.avatarUrl }} style={styles.memberAvatarImg} />
@@ -697,6 +705,7 @@ function GroupInfoInner() {
                       : m?.bio || m?.statusMessage || 'Hey there! I am using Smilers.'}
                   </Text>
                 </View>
+                </TouchableOpacity>
                 {isAdmin && !isMe && !isChiefMember ? (
                   <View style={styles.memberActions}>
                     {/* Promote / Demote (chief only for demote) */}
@@ -1195,6 +1204,7 @@ const styles = StyleSheet.create({
   memberAvatarImg: { width: 44, height: 44, borderRadius: 22 },
   memberAvatarText: { color: Colors.primary, fontWeight: FontWeight.bold, fontSize: 16 },
   memberBody: { flex: 1 },
+  memberTap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
   memberNameLine: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
   crown: { fontSize: 14 },
   memberName: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },

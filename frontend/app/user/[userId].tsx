@@ -422,10 +422,11 @@ export default function UserProfileScreen() {
   );
   const [phoneCopied, setPhoneCopied] = useState(false);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const copyPhone = async () => {
-    if (!contactPhone) return;
+  const copyPhone = async (val?: string) => {
+    const num = (val || contactPhone || '').trim();
+    if (!num) return;
     try {
-      await Clipboard.setStringAsync(contactPhone);
+      await Clipboard.setStringAsync(num);
       setPhoneCopied(true);
       if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
       copyTimerRef.current = setTimeout(() => setPhoneCopied(false), 1600);
@@ -438,6 +439,62 @@ export default function UserProfileScreen() {
       if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
     };
   }, []);
+
+  // ── iter-396: group member phone-number privacy gate ─────────────────────
+  // When opened from a conversation (group or direct), the number is gated
+  // server-side by api.groupMemberProfile.getMemberProfile — the ONLY query
+  // that applies the gate (getUserById stays ungated for other screens). The
+  // number is returned ONLY when the viewer is self, already has the member
+  // saved as a device contact, OR the owner approved a view request; it is
+  // masked with an eye button otherwise (fail-closed — phone is null server-side).
+  const memberProfileEnabled = hasValidUserId && hasValidConversationId && !isSelf;
+  const { data: memberProfile } = useSafeConvexQuery<any | null>(
+    (api as any).groupMemberProfile?.getMemberProfile,
+    memberProfileEnabled
+      ? { conversationId: String(conversationId), userId: String(userId) }
+      : {},
+    null,
+    memberProfileEnabled,
+  );
+  const phoneGateActive = memberProfileEnabled;
+  const hasGate =
+    !!memberProfile && typeof (memberProfile as any).phoneVisible === 'boolean';
+  const phoneVisible = phoneGateActive
+    ? isSelf || (hasGate && (memberProfile as any).phoneVisible === true)
+    : !!contactPhone;
+  const gatedPhone = phoneGateActive
+    ? phoneVisible
+      ? String((memberProfile as any)?.phone || contactPhone || '').trim()
+      : ''
+    : contactPhone;
+  const phoneReqStatus: string =
+    (typeof (memberProfile as any)?.phoneRequestStatus === 'string' &&
+      (memberProfile as any).phoneRequestStatus) ||
+    'none';
+
+  const requestPhoneView = useMutation((api as any).phoneViewRequests?.request);
+  const [phoneReqBusy, setPhoneReqBusy] = useState(false);
+  const handleRequestPhoneView = async () => {
+    if (phoneReqBusy || !hasValidUserId) return;
+    setPhoneReqBusy(true);
+    try {
+      await requestPhoneView?.({ ownerId: String(userId) } as any);
+    } catch {
+      Alert.alert('Request', 'Could not send the request. Please try again.');
+    } finally {
+      setPhoneReqBusy(false);
+    }
+  };
+  // Live alert when the owner approves the number-view request while on screen.
+  const prevPhoneStatusRef = useRef<string>('none');
+  useEffect(() => {
+    if (phoneReqStatus === prevPhoneStatusRef.current) return;
+    const prev = prevPhoneStatusRef.current;
+    prevPhoneStatusRef.current = phoneReqStatus;
+    if (prev === 'pending' && phoneReqStatus === 'approved') {
+      Alert.alert('Approved', `${displayName} approved — you can now view the number.`);
+    }
+  }, [phoneReqStatus, displayName]);
 
   // --- Actions ------------------------------------------------------------
   const openChat = async () => {
@@ -688,8 +745,8 @@ export default function UserProfileScreen() {
           </Text>
         </View>
 
-        {/* PHONE NUMBER (web parity — visible with verification + copy) */}
-        {contactPhone ? (
+        {/* PHONE NUMBER — privacy-gated for group/conversation members */}
+        {phoneGateActive || contactPhone ? (
           <>
             <View style={styles.sectionDivider} />
             <View style={styles.section}>
@@ -697,33 +754,85 @@ export default function UserProfileScreen() {
                 <Feather name="phone" size={13} color={Colors.primary} />
                 <Text style={styles.sectionLabel}>PHONE NUMBER</Text>
               </View>
-              <View style={styles.phoneRow}>
-                <Text style={styles.phoneNumber} numberOfLines={1} testID="user-profile-phone">
-                  {contactPhone}
-                </Text>
-                {contactPhoneVerified ? (
-                  <View style={styles.verifiedPill} testID="user-profile-phone-verified">
-                    <MaterialCommunityIcons name="shield-check" size={13} color="#15803D" />
-                    <Text style={styles.verifiedText}>Verified</Text>
-                  </View>
-                ) : null}
-                <View style={{ flex: 1 }} />
-                <TouchableOpacity
-                  onPress={copyPhone}
-                  hitSlop={8}
-                  style={styles.copyBtn}
-                  testID="user-profile-phone-copy"
-                >
-                  <Feather
-                    name={phoneCopied ? 'check' : 'copy'}
-                    size={16}
-                    color={phoneCopied ? '#15803D' : Colors.primary}
-                  />
-                  <Text style={[styles.copyText, phoneCopied ? { color: '#15803D' } : null]}>
-                    {phoneCopied ? 'Copied' : 'Copy'}
+              {phoneVisible && gatedPhone ? (
+                <View style={styles.phoneRow}>
+                  <Text style={styles.phoneNumber} numberOfLines={1} testID="user-profile-phone">
+                    {gatedPhone}
                   </Text>
-                </TouchableOpacity>
-              </View>
+                  {contactPhoneVerified ? (
+                    <View style={styles.verifiedPill} testID="user-profile-phone-verified">
+                      <MaterialCommunityIcons name="shield-check" size={13} color="#15803D" />
+                      <Text style={styles.verifiedText}>Verified</Text>
+                    </View>
+                  ) : null}
+                  <View style={{ flex: 1 }} />
+                  <TouchableOpacity
+                    onPress={() => copyPhone(gatedPhone)}
+                    hitSlop={8}
+                    style={styles.copyBtn}
+                    testID="user-profile-phone-copy"
+                  >
+                    <Feather
+                      name={phoneCopied ? 'check' : 'copy'}
+                      size={16}
+                      color={phoneCopied ? '#15803D' : Colors.primary}
+                    />
+                    <Text style={[styles.copyText, phoneCopied ? { color: '#15803D' } : null]}>
+                      {phoneCopied ? 'Copied' : 'Copy'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <>
+                  <View style={styles.phoneRow}>
+                    <Text
+                      style={styles.phoneMasked}
+                      numberOfLines={1}
+                      testID="user-profile-phone-masked"
+                    >
+                      {'\u2022'.repeat(4)} {'\u2022'.repeat(4)} {'\u2022'.repeat(3)}
+                    </Text>
+                    <View style={{ flex: 1 }} />
+                    <TouchableOpacity
+                      onPress={handleRequestPhoneView}
+                      hitSlop={8}
+                      disabled={phoneReqStatus === 'pending' || phoneReqBusy}
+                      style={[
+                        styles.eyeBtn,
+                        phoneReqStatus === 'pending' ? styles.eyeBtnDisabled : null,
+                      ]}
+                      testID="user-profile-phone-eye"
+                    >
+                      {phoneReqBusy ? (
+                        <ActivityIndicator size="small" color={Colors.primary} />
+                      ) : (
+                        <Feather
+                          name={phoneReqStatus === 'pending' ? 'clock' : 'eye'}
+                          size={15}
+                          color={phoneReqStatus === 'declined' ? Colors.danger : Colors.primary}
+                        />
+                      )}
+                      <Text
+                        style={[
+                          styles.eyeText,
+                          phoneReqStatus === 'declined' ? { color: Colors.danger } : null,
+                        ]}
+                      >
+                        {phoneReqStatus === 'pending'
+                          ? 'Requested…'
+                          : phoneReqStatus === 'declined'
+                            ? 'Declined — retry'
+                            : 'Request to view'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.phoneHint}>
+                    {phoneReqStatus === 'pending'
+                      ? 'Waiting for approval to view this number.'
+                      : `Save ${displayName.split(' ')[0] || 'them'} to your contacts, or request approval to view their number.`}
+                  </Text>
+                </>
+              )}
             </View>
           </>
         ) : null}
@@ -1077,6 +1186,24 @@ const styles = StyleSheet.create({
   verifiedText: { fontSize: 12, color: '#15803D', fontWeight: FontWeight.bold },
   copyBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 4 },
   copyText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.semibold },
+  phoneMasked: {
+    fontSize: 17,
+    letterSpacing: 3,
+    color: Colors.textSecondary,
+    fontWeight: FontWeight.semibold,
+  },
+  eyeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.primaryLight,
+  },
+  eyeBtnDisabled: { opacity: 0.6 },
+  eyeText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.semibold },
+  phoneHint: { fontSize: 12, color: Colors.textSecondary, marginTop: 8, lineHeight: 17 },
 
   // Groups in common
   groupsList: { gap: 18 },

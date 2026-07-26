@@ -13,6 +13,7 @@ import DriveModeToggle from '../../src/components/DriveModeToggle';
 import { LoginApprovalBanner } from '../../src/components/LoginApprovalBanner';
 import { LiveLocationRequestBanner } from '../../src/components/LiveLocationRequestBanner';
 import { PhotoSaveRequestBanner } from '../../src/components/PhotoSaveRequestBanner';
+import { PhoneViewRequestBanner } from '../../src/components/PhoneViewRequestBanner';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { readCacheMeta, writeCache } from '../../src/lib/offlineCache';
@@ -722,6 +723,8 @@ export default function ChatsScreen() {
             <LiveLocationRequestBanner />
             {/* Incoming profile-photo save requests — approve/decline. */}
             <PhotoSaveRequestBanner />
+            {/* Incoming phone-number view requests — approve/decline. */}
+            <PhoneViewRequestBanner />
             <PinnedRow
               iconBg={Colors.aiBadge}
               iconBgDark={Colors.aiBadgeDark}
