@@ -2146,11 +2146,40 @@ function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e
   const showApkCaution = isApk && !isMine;
 
   const onOpen = async () => {
-    if (!src) return;
+    if (!src) {
+      if (srcError) {
+        Alert.alert(
+          'Couldn’t open file',
+          'This document failed to download or decrypt. Check your connection and try again.',
+        );
+      }
+      return;
+    }
     markConsumed();
+    // Android blocks handing a raw file:// URI to another app (FileUriExposed),
+    // so decrypted/cached documents (file://) must be opened via the OS share
+    // sheet, which exposes a content:// URI through the FileProvider. Remote
+    // http(s) URLs still open directly. Falls back to Linking on any failure.
     try {
+      if (src.startsWith('file://')) {
+        const Sharing = await import('expo-sharing');
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(src, {
+            mimeType: msg.mimeType || undefined,
+            dialogTitle: msg.fileName || 'Open document',
+            UTI: msg.mimeType || undefined,
+          });
+          return;
+        }
+      }
       await Linking.openURL(src);
-    } catch {}
+    } catch {
+      try {
+        await Linking.openURL(src);
+      } catch {
+        Alert.alert('Couldn’t open file', 'No app is available to open this document.');
+      }
+    }
   };
 
   return (
@@ -2158,7 +2187,7 @@ function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e
       <TouchableOpacity
         style={styles.fileBody}
         onPress={onOpen}
-        disabled={!src}
+        disabled={!src && !srcError}
         activeOpacity={0.7}
         testID={`file-open-${msg._id}`}
       >

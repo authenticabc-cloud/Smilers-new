@@ -471,6 +471,10 @@ export default function UserProfileScreen() {
     (typeof (memberProfile as any)?.phoneRequestStatus === 'string' &&
       (memberProfile as any).phoneRequestStatus) ||
     'none';
+  // Whether the viewer already has this member saved as a device contact
+  // (drives the header "In your contacts" badge and auto-unmasks the number).
+  const phoneSavedOnDevice = Boolean((memberProfile as any)?.phoneSavedOnDevice);
+  const showSavedBadge = phoneGateActive && hasGate;
 
   const requestPhoneView = useMutation((api as any).phoneViewRequests?.request);
   const [phoneReqBusy, setPhoneReqBusy] = useState(false);
@@ -688,6 +692,29 @@ export default function UserProfileScreen() {
             {presenceLabel}
           </Text>
 
+          {showSavedBadge ? (
+            <View
+              style={[
+                styles.savedBadge,
+                phoneSavedOnDevice ? styles.savedBadgeOn : styles.savedBadgeOff,
+              ]}
+              testID="user-profile-saved-badge"
+            >
+              <Feather
+                name={phoneSavedOnDevice ? 'user-check' : 'user-x'}
+                size={12}
+                color={phoneSavedOnDevice ? '#15803D' : Colors.textSecondary}
+              />
+              <Text
+                style={[
+                  styles.savedBadgeText,
+                  phoneSavedOnDevice ? { color: '#15803D' } : { color: Colors.textSecondary },
+                ]}
+              >
+                {phoneSavedOnDevice ? 'In your contacts' : 'Not in your contacts'}
+              </Text>
+            </View>
+          ) : null}
           {(level || engagementCount > 0) ? (
             <View style={styles.levelPill} testID="user-profile-level-pill">
               <MaterialCommunityIcons name="crown" size={14} color="#E11D48" />
@@ -1204,6 +1231,19 @@ const styles = StyleSheet.create({
   eyeBtnDisabled: { opacity: 0.6 },
   eyeText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.semibold },
   phoneHint: { fontSize: 12, color: Colors.textSecondary, marginTop: 8, lineHeight: 17 },
+  savedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    alignSelf: 'center',
+    marginTop: 8,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: Radius.pill,
+  },
+  savedBadgeOn: { backgroundColor: '#E7F6EC' },
+  savedBadgeOff: { backgroundColor: '#F1EEE8' },
+  savedBadgeText: { fontSize: 12, fontWeight: FontWeight.semibold },
 
   // Groups in common
   groupsList: { gap: 18 },
