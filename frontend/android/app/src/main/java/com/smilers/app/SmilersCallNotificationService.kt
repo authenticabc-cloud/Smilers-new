@@ -23,8 +23,15 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
         private const val TAG = "SmilersCall"
         private const val CALL_CHANNEL_ID = "incoming-call-native-v1"
         private const val MISSED_CALL_CHANNEL_ID = "missed-call-native-v1"
+        // Dedicated NATIVE message channels — fresh ids so Android creates them with the
+        // correct Smilers message/group tones (channel sound is immutable once created, so
+        // we avoid colliding with any JS-created messages-v*/groups-v* channel that an older
+        // build may have registered with the wrong/default sound).
+        private const val MSG_CHANNEL_ID = "messages-native-v1-message_notification"
+        private const val GROUP_MSG_CHANNEL_ID = "groups-native-v1-group_notification"
         private const val NOTIFICATION_ID_BASE = 0x53004C
         private const val MISSED_NOTIFICATION_ID_BASE = 0x53104C
+        private const val MSG_NOTIFICATION_ID_BASE = 0x53204C
         private const val RING_TIMEOUT_MS = 35_000L
         // 5-minute window: backend sends direct + relay missed-call FCMs up to 2 min apart,
         // and FCMs can arrive 7+ min after the call ends (backend delay). Both must be caught
@@ -312,6 +319,19 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
                 }
             }
 
+            // Path BM: MESSAGE / group-message — render NATIVELY (device-contact name +
+            // Smilers message tone on our own channel) and RETURN so we never fall through
+            // to super.handleIntent → Expo, which was auto-displaying message pushes on the
+            // generic `expo_notifications_fallback_notification_channel` with the raw account
+            // title ("Smilers") and the default/universal tone (root cause from the ADB log).
+            if (type == "message") {
+                try {
+                    if (handleMessageNotification(data)) return
+                } catch (e: Exception) {
+                    Log.e(TAG, "handleIntent message failed: ${e.message}", e)
+                }
+            }
+
             // Path B3: call-declined — callee declined; Device A (caller) should end its call screen.
             // Kotlin logs it and brings the caller's app to the foreground so the Convex reactive
             // query can update immediately. The JS background task also calls declineCall via
@@ -528,10 +548,18 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
             override fun onMessageReceived(remoteMessage: RemoteMessage) {
                 Log.d(TAG, "Delegate.onMessageReceived: data=${remoteMessage.data}")
                 val handled = tryHandleCallMessage(remoteMessage)
-                if (!handled) {
-                    Log.d(TAG, "Delegate: not a call, forwarding to Expo")
-                    super.onMessageReceived(remoteMessage)
+                if (handled) return
+                // Render message pushes natively (contact name + Smilers tone) instead of
+                // letting Expo auto-display them on the fallback channel.
+                if (remoteMessage.data["type"] == "message") {
+                    try {
+                        if (handleMessageNotification(remoteMessage.data)) return
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Delegate message failed: ${e.message}", e)
+                    }
                 }
+                Log.d(TAG, "Delegate: not a call, forwarding to Expo")
+                super.onMessageReceived(remoteMessage)
             }
         }
     }
@@ -561,10 +589,16 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
                 "keys=${remoteMessage.data.keys}"
         )
         val handled = tryHandleCallMessage(remoteMessage)
-        if (!handled) {
-            Log.d(TAG, "onMessageReceived: not a call, delegating to Expo (MSG-PUSH hasNotifBlock=$hasNotifBlock)")
-            super.onMessageReceived(remoteMessage)
+        if (handled) return
+        if (remoteMessage.data["type"] == "message") {
+            try {
+                if (handleMessageNotification(remoteMessage.data)) return
+            } catch (e: Exception) {
+                Log.e(TAG, "onMessageReceived message failed: ${e.message}", e)
+            }
         }
+        Log.d(TAG, "onMessageReceived: not a call, delegating to Expo (MSG-PUSH hasNotifBlock=$hasNotifBlock)")
+        super.onMessageReceived(remoteMessage)
     }
 
     // ─── Shared helpers ───
@@ -1358,5 +1392,174 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
             mgr.createNotificationChannel(channel)
             Log.d(TAG, "Channel $MISSED_CALL_CHANNEL_ID created")
         } catch (e: Exception) { Log.e(TAG, "createMissedCallChannel FAILED: ${e.message}", e) }
+    }
+
+    // ─── Native MESSAGE notification rendering ───────────────────────────────
+    // Renders chat/group message pushes ourselves (device-contact name + Smilers
+    // message/group tone) instead of delegating to Expo, which auto-displayed them
+    // on the generic fallback channel with the account name + universal tone.
+
+    private fun ensureMessageChannel(channelId: String, name: String, soundRes: String) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (mgr.getNotificationChannel(channelId) != null) return
+        try {
+            val soundUri = Uri.parse("android.resource://$packageName/raw/$soundRes")
+            val audioAttrs = AudioAttributes.Builder()
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                .build()
+            val channel = NotificationChannel(channelId, name, NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Smilers message notifications"
+                setSound(soundUri, audioAttrs)
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 250, 250, 250)
+                lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+            }
+            mgr.createNotificationChannel(channel)
+            Log.d(TAG, "ensureMessageChannel: created $channelId sound=$soundRes")
+        } catch (e: Exception) { Log.e(TAG, "ensureMessageChannel FAILED: ${e.message}", e) }
+    }
+
+    // Reads a value out of React Native AsyncStorage. Supports BOTH backends the
+    // library may use: legacy (DB `RKStorage`, table `catalystLocalStorage`) and the
+    // newer Room store (DB `AsyncStorage`, table `Storage`). Lets this native service
+    // honour the JS-managed per-conversation mute + "hide message content" prefs
+    // without a bridge module.
+    private fun readAsyncStorageValue(key: String): String? {
+        val backends = listOf(
+            Pair("RKStorage", "catalystLocalStorage"),
+            Pair("AsyncStorage", "Storage"),
+        )
+        for ((dbName, table) in backends) {
+            try {
+                val dbFile = applicationContext.getDatabasePath(dbName)
+                if (dbFile == null || !dbFile.exists()) continue
+                val value = android.database.sqlite.SQLiteDatabase.openDatabase(
+                    dbFile.path, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY
+                ).use { db ->
+                    db.rawQuery("SELECT value FROM $table WHERE `key` = ?", arrayOf(key)).use { c ->
+                        if (c.moveToFirst()) c.getString(0) else null
+                    }
+                }
+                if (value != null) return value
+            } catch (e: Exception) {
+                Log.w(TAG, "readAsyncStorageValue($key@$dbName) failed: ${e.message}")
+            }
+        }
+        return null
+    }
+
+    private fun isConversationMutedNative(convId: String): Boolean {
+        if (convId.isEmpty()) return false
+        return try {
+            val raw = readAsyncStorageValue("smilers_muted_conversations_v1") ?: return false
+            val arr = org.json.JSONArray(raw)
+            (0 until arr.length()).any { arr.optString(it) == convId }
+        } catch (e: Exception) { false }
+    }
+
+    private fun readHideMessagePreviewNative(): Boolean {
+        return try {
+            val raw = readAsyncStorageValue("smilers_ringtone_prefs") ?: return false
+            org.json.JSONObject(raw).optBoolean("hideMessagePreview", false)
+        } catch (e: Exception) { false }
+    }
+
+    private fun isAppInForeground(): Boolean {
+        return try {
+            val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            val procs = am.runningAppProcesses ?: return false
+            procs.any {
+                it.processName == packageName &&
+                    it.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+            }
+        } catch (e: Exception) { false }
+    }
+
+    private fun handleMessageNotification(data: Map<String, String>): Boolean {
+        if (data["type"] != "message") return false
+        val convId = data["conversationId"] ?: ""
+
+        // Dedup: idempotency_key is unique per message (falls back to conv+text).
+        val dedupeId = (data["idempotency_key"] ?: data["messageId"] ?: "").ifEmpty {
+            "$convId:${data["message"] ?: data["body"] ?: ""}"
+        }
+        if (checkAndMarkHandled("msg:$dedupeId")) {
+            Log.d(TAG, "handleMessageNotification: dedup — msg:$dedupeId suppressed"); return true
+        }
+
+        // Foreground: the in-app realtime path surfaces the message — no banner (parity
+        // with the JS background task, which bails when the app is active). Marked handled
+        // above so Expo won't post a duplicate either.
+        if (isAppInForeground()) {
+            Log.d(TAG, "handleMessageNotification: app foreground — banner suppressed"); return true
+        }
+
+        // Per-conversation mute (device-local, stored by JS in AsyncStorage).
+        if (isConversationMutedNative(convId)) {
+            Log.d(TAG, "handleMessageNotification: conv=$convId muted — suppressed"); return true
+        }
+
+        val isGroup = (data["conversationType"] ?: "").equals("group", true) ||
+            (data["channel_id"] ?: "").startsWith("groups-") ||
+            (data["channelId"] ?: "").startsWith("groups-")
+
+        val accountName = listOf(data["title"], data["displayName"], data["senderName"])
+            .firstOrNull { !it.isNullOrBlank() }?.trim() ?: ""
+        val messageText = (data["message"] ?: data["body"] ?: "").trim().ifBlank { "New message" }
+        val senderPhone = (data["senderPhone"] ?: data["callerPhone"] ?: "").trim()
+        val deviceName = lookupContactNameByPhone(senderPhone)
+
+        var title: String
+        var body: String
+        if (isGroup) {
+            val groupName = listOf(data["conversationName"], data["title"])
+                .firstOrNull { !it.isNullOrBlank() }?.trim() ?: "Group"
+            val senderName = deviceName ?: accountName.takeIf { it.isNotBlank() && it != groupName } ?: ""
+            title = groupName
+            body = if (senderName.isNotBlank()) "$senderName: $messageText" else messageText
+        } else {
+            // Direct: prefer the saved DEVICE-CONTACT name; never surface the generic
+            // account label "Smilers" as the title.
+            title = deviceName
+                ?: accountName.takeIf { it.isNotBlank() && !it.equals("Smilers", true) }
+                ?: "New message"
+            body = messageText
+        }
+        if (readHideMessagePreviewNative()) body = "New message"
+
+        val channelId = if (isGroup) GROUP_MSG_CHANNEL_ID else MSG_CHANNEL_ID
+        val soundRes = if (isGroup) "group_notification" else "message_notification"
+        ensureMessageChannel(channelId, if (isGroup) "Group messages" else "Messages", soundRes)
+
+        val notifKey = convId.ifEmpty { dedupeId }
+        val notifId = MSG_NOTIFICATION_ID_BASE + (notifKey.hashCode() and 0x0FFF)
+        val tapUrl = if (convId.isNotEmpty()) "smilers://chat/$convId" else "smilers://home"
+        val tapIntent = Intent(this, MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            setData(Uri.parse(tapUrl))
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+        val tapPi = PendingIntent.getActivity(this, notifId, tapIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val soundUri = Uri.parse("android.resource://$packageName/raw/$soundRes")
+        val notification = NotificationCompat.Builder(this, channelId)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setContentIntent(tapPi)
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(false)
+            .setSound(soundUri) // pre-O devices (O+ uses the channel sound)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .build()
+        NotificationManagerCompat.from(this).notify(notifId, notification)
+        Log.d(TAG, "handleMessageNotification: posted natively id=$notifId group=$isGroup " +
+            "channel=$channelId title='$title' deviceName=${deviceName ?: "(none)"} phone=$senderPhone")
+        return true
     }
 }
