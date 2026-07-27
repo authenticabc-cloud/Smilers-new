@@ -188,6 +188,22 @@ function writeDecryptedToCache(
   return file.uri;
 }
 
+// Returns the URI of a previously-decrypted cache file if it still exists on
+// disk (survives app restarts / in-memory cache clears), so re-opening a large
+// file is instant — no re-download, no re-decrypt. Uses the same deterministic
+// path scheme as writeDecryptedToCache.
+function existingDecryptedCacheUri(cacheKey: string, extension: string): string | null {
+  try {
+    const safeExt = extension.replace(/[^a-zA-Z0-9]/g, '') || 'bin';
+    const safeKey = cacheKey.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const file = new File(Paths.cache, 'smilers-e2ee', `${safeKey}.${safeExt}`);
+    if (file.exists && (file.size ?? 0) > 0) return file.uri;
+  } catch {
+    // treat any FS error as "no cache"
+  }
+  return null;
+}
+
 /**
  * Returns a renderable URL for a chat message, transparently handling E2EE
  * decryption when `msg.encrypted === true`. Non-encrypted messages return
@@ -245,6 +261,23 @@ export function useDecryptedMediaUrl(msg: any, e2ee: E2EEStatus | null | undefin
       return () => {
         cancelledRef.current = true;
       };
+    }
+
+    // Persistent disk cache: a prior decrypt of this message may still be on
+    // disk (images use data URIs so they're skipped). Reusing it makes
+    // re-opening instant — no re-download, no re-decrypt — even for lazy files.
+    if (messageId && type !== 'image') {
+      const ext = inferExtension(msg, type === 'voice' || type === 'audio' ? 'm4a' : 'bin');
+      const cachedUri = existingDecryptedCacheUri(messageId, ext);
+      if (cachedUri) {
+        decryptedCache.set(messageId, cachedUri);
+        setUrl(cachedUri);
+        setLoading(false);
+        setError(null);
+        return () => {
+          cancelledRef.current = true;
+        };
+      }
     }
 
     // Large file whose decryption hasn't been triggered yet — stay idle so the

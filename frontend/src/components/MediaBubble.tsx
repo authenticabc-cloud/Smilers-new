@@ -2223,23 +2223,23 @@ function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e
   const showApkCaution = isApk && !isMine;
 
   // iter-410: large encrypted files decrypt lazily (on first open) to avoid
-  // freezing/OOM on render. If the user tapped a deferred file, open it as
-  // soon as the decrypted URL is ready.
-  const wantOpenRef = useRef(false);
+  // freezing/OOM on render. If the user tapped a deferred file, run the pending
+  // action (open or save) as soon as the decrypted URL is ready.
+  const pendingActionRef = useRef<null | 'open' | 'save'>(null);
 
-  const openSrc = useCallback(async (uri: string) => {
+  const runAction = useCallback(async (uri: string, mode: 'open' | 'save') => {
     markConsumed();
     // Android blocks handing a raw file:// URI to another app (FileUriExposed),
-    // so decrypted/cached documents (file://) must be opened via the OS share
-    // sheet, which exposes a content:// URI through the FileProvider. Remote
-    // http(s) URLs still open directly. Falls back to Linking on any failure.
+    // so decrypted/cached documents (file://) must go through the OS share
+    // sheet, which exposes a content:// URI via the FileProvider. On mobile the
+    // share sheet is also the canonical "Save to Files / Drive" entry point.
     try {
       if (uri.startsWith('file://')) {
         const Sharing = await import('expo-sharing');
         if (await Sharing.isAvailableAsync()) {
           await Sharing.shareAsync(uri, {
             mimeType: msg.mimeType || undefined,
-            dialogTitle: msg.fileName || 'Open document',
+            dialogTitle: mode === 'save' ? 'Save to Files' : (msg.fileName || 'Open document'),
             UTI: msg.mimeType || undefined,
           });
           return;
@@ -2256,26 +2256,26 @@ function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e
   }, [markConsumed, msg.mimeType, msg.fileName]);
 
   useEffect(() => {
-    if (src && wantOpenRef.current) {
-      wantOpenRef.current = false;
-      void openSrc(src);
+    if (src && pendingActionRef.current) {
+      const mode = pendingActionRef.current;
+      pendingActionRef.current = null;
+      void runAction(src, mode);
     }
-  }, [src, openSrc]);
+  }, [src, runAction]);
 
-  const onOpen = async () => {
+  // Shared entry for both the row tap (open) and the Save button.
+  const trigger = (mode: 'open' | 'save') => {
     if (!src) {
       if (loading) return; // decryption already in progress
       if (deferred) {
-        // First tap on a large file — start decrypting and auto-open when ready.
-        wantOpenRef.current = true;
+        // First tap on a large file — decrypt, then run the action when ready.
+        pendingActionRef.current = mode;
         decrypt?.();
         return;
       }
       if (srcError) {
         const reason = String(srcError).slice(0, 140);
-        // Surface the real reason so download/HTTP failures are distinguishable
-        // from decrypt/out-of-memory failures (large files) at a glance.
-        console.warn('[FileMessage] open blocked — srcError:', srcError, 'size:', msg?.fileSize);
+        console.warn('[FileMessage] action blocked — srcError:', srcError, 'size:', msg?.fileSize);
         Alert.alert(
           'Couldn’t open file',
           `This document failed to download or decrypt. Check your connection and try again.\n\n(${reason})`,
@@ -2283,8 +2283,11 @@ function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e
       }
       return;
     }
-    void openSrc(src);
+    void runAction(src, mode);
   };
+
+  const onOpen = () => trigger('open');
+  const onSave = () => trigger('save');
 
   return (
     <View>
@@ -2329,6 +2332,18 @@ function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e
           />
         )}
       </TouchableOpacity>
+      {!loading && !srcError && (src || deferred) ? (
+        <TouchableOpacity
+          style={styles.fileSaveBtn}
+          onPress={onSave}
+          activeOpacity={0.7}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          testID={`file-save-${msg._id}`}
+        >
+          <Feather name="download" size={13} color={isMine ? 'rgba(246,255,249,0.9)' : Colors.primary} />
+          <Text style={[styles.fileSaveText, isMine ? styles.fileSaveTextMine : null]}>Save to Files</Text>
+        </TouchableOpacity>
+      ) : null}
       {showApkCaution ? (
         <View style={styles.apkCaution} testID={`apk-caution-${msg._id}`}>
           <Feather name="alert-triangle" size={13} color={Colors.warning} />
@@ -2784,6 +2799,17 @@ const styles = StyleSheet.create({
   fileProgressTrackMine: { backgroundColor: 'rgba(246,255,249,0.25)' },
   fileProgressFill: { height: '100%', borderRadius: 2, backgroundColor: Colors.primary },
   fileProgressFillMine: { backgroundColor: '#F6FFF9' },
+  fileSaveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 5,
+    marginTop: 6,
+    paddingVertical: 4,
+    paddingHorizontal: 2,
+  },
+  fileSaveText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold, color: Colors.primary },
+  fileSaveTextMine: { color: 'rgba(246,255,249,0.9)' },
   viewerWrap: { flex: 1, backgroundColor: '#000' },
   viewerBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   viewerImage: { width: '100%', height: '100%' },

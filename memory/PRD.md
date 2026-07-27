@@ -1,5 +1,11 @@
 # Smilers Mobile App — PRD
 
+## iter-412 (Jun 2026): Persistent decrypted-file cache + "Save to Files" shortcut
+- **Instant re-open:** `useDecryptedMediaUrl` now checks the on-disk decrypted cache (`Paths.cache/smilers-e2ee/<msgId>.<ext>`, via `existingDecryptedCacheUri`) BEFORE downloading/decrypting — so re-opening a large file (even after an app restart / in-memory cache clear) skips both the download and the AES-GCM decrypt. Images (data URIs) are skipped.
+- **Save to Files:** `FileMessage` now shows a "Save to Files" shortcut under the document row. It reuses the decrypt-then-act flow (`trigger('save')`) and opens the OS share sheet with a "Save to Files" title (the platform-correct save entry point). For lazy large files it decrypts first (with progress) then presents the sheet.
+- Refactored the file open/save into a single `runAction(uri, mode)` + `pendingActionRef` so both the row tap and the Save button share the lazy-decrypt path. Lint clean; app bundles. Device-only to fully validate.
+
+
 ## iter-411 (Jun 2026): Download progress bar for large encrypted files
 - Enhancement on iter-410's lazy large-file decrypt. `useDecryptedMediaUrl` now downloads big ciphertext via legacy `createDownloadResumable` (byte-level progress callback) → reads bytes with the new `File(uri).bytes()`. Falls back to `File.downloadFileAsync` (no progress) then `fetch`.
 - Exposes throttled `progress {received,total}` (updates only every ≥2%). `FileMessage` shows "Downloading… X.X / Y.Y MB" + a thin progress bar during the download phase, then "Decrypting…" during the JS AES-GCM step. Device-only (native streaming) — validate after APK rebuild.
