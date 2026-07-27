@@ -83,6 +83,7 @@ import {
   clearDiary,
   deleteDiaryEntry,
   markDiaryEntryFlushed,
+  migrateAnonDiaryEntries,
   readDiaryEntries,
   type DiaryEntry,
 } from '../src/lib/diaryStore';
@@ -423,6 +424,17 @@ export default function DiaryScreen() {
     if (!myUserId) return;
     let cancelled = false;
     (async () => {
+      // sml-diary-recovery: first pull any notes stranded in the anonymous
+      // bucket (written while Convex was briefly unauthenticated → me._id null)
+      // into this user's bucket, so entries added during an auth blip reappear.
+      try {
+        const recovered = await migrateAnonDiaryEntries(myUserId);
+        if (recovered > 0) {
+          console.log(`[diary] recovered ${recovered} stranded entr${recovered === 1 ? 'y' : 'ies'} from anon bucket`);
+        }
+      } catch {
+        /* best-effort — never block the diary load */
+      }
       const data = await readDiaryEntries(myUserId);
       if (!cancelled) {
         setLocalEntries(data);

@@ -224,7 +224,7 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
         }
     }
 
-    init { Log.d(TAG, "INSTANTIATED — build 20260706-C") }
+    init { Log.d(TAG, "INSTANTIATED — build 20260727-MSGDIAG") }
 
     override fun onCreate() {
         super.onCreate()
@@ -474,11 +474,14 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
             }
 
             // Not a Smilers-owned FCM — dump key fields for debugging, then let Expo handle it.
-            Log.w(TAG, "handleIntent FALLTHROUGH: type=${data["type"]} " +
+            val hasNotifBlockHi = !notifTitle.isNullOrEmpty() || !notifBody.isNullOrEmpty()
+            Log.w(TAG, "MSG-PUSH handleIntent FALLTHROUGH: type=${data["type"]} " +
+                "hasNotifBlock=$hasNotifBlockHi " +
                 "callId=${data["callId"]} convId=$convId " +
                 "hasBody=${!data["body"].isNullOrEmpty()} " +
-                "notifTitle=$notifTitle " +
+                "MSG-NAME notifTitle='$notifTitle' dataTitle='${data["title"] ?: data["displayName"] ?: ""}' " +
                 "notifBody=${notifBody.take(80)} " +
+                "dataChannel='${data["channel_id"] ?: ""}' " +
                 "bodySnippet=${data["body"]?.take(120)}")
         }
         // super.handleIntent posts any FCM notification payload to the channel specified by
@@ -536,9 +539,30 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
     // ─── Layer 2: direct onMessageReceived override ───
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
         Log.e(TAG, "=== onMessageReceived ENTRY === data=${remoteMessage.data}")
+        // sml-msgdiag: explicit message-push diagnostics so a captured ADB log
+        // reveals WHY a message rings with the wrong (universal) tone / shows the
+        // Google-account name. hasNotifBlock=true means the FCM carried a
+        // `notification` block → Android auto-displays it on the DEFAULT channel
+        // (universal tone) with the server-set title, bypassing the app's
+        // per-conversation channel/tone + device-contact-name rendering. The fix
+        // for that is sender-side: send message pushes DATA-ONLY (no notification
+        // block) with type="message".
+        val rmNotif = remoteMessage.notification
+        val hasNotifBlock = rmNotif != null
+        val ptype = remoteMessage.data["type"] ?: "(none)"
+        Log.d(
+            TAG,
+            "MSG-PUSH: type=$ptype hasNotifBlock=$hasNotifBlock " +
+                "notifTitle='${rmNotif?.title ?: ""}' notifBody='${(rmNotif?.body ?: "").take(60)}' " +
+                "notifChannel='${rmNotif?.channelId ?: ""}' " +
+                "dataTitle='${remoteMessage.data["title"] ?: remoteMessage.data["displayName"] ?: ""}' " +
+                "dataChannel='${remoteMessage.data["channel_id"] ?: ""}' " +
+                "convId='${remoteMessage.data["conversationId"] ?: ""}' " +
+                "keys=${remoteMessage.data.keys}"
+        )
         val handled = tryHandleCallMessage(remoteMessage)
         if (!handled) {
-            Log.d(TAG, "onMessageReceived: not a call, delegating to Expo")
+            Log.d(TAG, "onMessageReceived: not a call, delegating to Expo (MSG-PUSH hasNotifBlock=$hasNotifBlock)")
             super.onMessageReceived(remoteMessage)
         }
     }

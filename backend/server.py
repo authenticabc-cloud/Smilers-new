@@ -3238,6 +3238,28 @@ async def send_push(
                 # "message", so they keep their notification block and stay OS-displayed.
                 is_message_push = routing.get("type") == "message"
 
+                # sml-msgdiag: log exactly how THIS push was classified so we can
+                # confirm whether message pushes go out data-only (correct: app
+                # renders the per-conversation channel/tone + device-contact name)
+                # or with a notification block (bug: Android auto-displays the
+                # server title on the default channel → universal tone + account
+                # name). hasNotifBlock == not(data_only). If Convex sends a chat
+                # push WITHOUT type="message"/action_url="/chat/..", this logs
+                # is_message_push=False → hasNotifBlock=True and pinpoints the fix.
+                _data_only_dbg = is_call_push or is_silent_control or is_message_push
+                logger.info(
+                    "[MSG-PUSH] type=%s is_message_push=%s is_call_push=%s "
+                    "data_only=%s hasNotifBlock=%s title=%r action_url=%r channel_hint=%s",
+                    routing.get("type"),
+                    is_message_push,
+                    is_call_push,
+                    _data_only_dbg,
+                    (not _data_only_dbg),
+                    title,
+                    data.get("action_url"),
+                    data.get("channel_id"),
+                )
+
                 # iter-199: collapse Convex-trigger + caller-device call
                 # pushes into ONE ring per recipient (25 s window).
                 if is_call_push:

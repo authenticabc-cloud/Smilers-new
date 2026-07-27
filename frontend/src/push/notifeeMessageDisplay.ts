@@ -138,6 +138,19 @@ export async function displayGroupedMessageNotification(
   const channelId = isGroup ? GROUP_CHANNEL_ID : MESSAGE_CHANNEL_ID;
   const channelSound = isGroup ? GROUP_SOUND : MESSAGE_SOUND;
 
+  // sml-msgdiag: surface the resolved sender-name + channel/tone selection so a
+  // captured ADB (ReactNativeJS) log shows what the app-rendered notification
+  // used. If you see this line, the app's own (correct) rendering path ran —
+  // if you DON'T (but a notification still appeared), the FCM carried a
+  // notification block and Android auto-displayed it (wrong/universal tone).
+  try {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[MSG-NAME] notifee message render: title='${title}' isGroup=${isGroup} ` +
+        `channel='${channelId}' tone='${channelSound}' conversationId='${conversationId}'`,
+    );
+  } catch {}
+
   try {
     await ensureChannel(native, channelId, channelSound, isGroup ? 'Group messages' : 'Messages');
 

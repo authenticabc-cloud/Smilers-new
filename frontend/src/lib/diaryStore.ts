@@ -196,6 +196,71 @@ export async function clearDiary(userId: string | null | undefined): Promise<voi
 }
 
 /**
+ * sml-diary-recovery: migrate any entries stranded in the anonymous bucket
+ * into the authenticated user's bucket.
+ *
+ * ROOT CAUSE this recovers: when Convex was briefly unauthenticated (expired
+ * OIDC token on cold-start/resume, esp. on slow networks) `me?._id` resolved
+ * to null, so diary reads/writes fell back to the `__anon__` keyspace. Notes
+ * the user added during that window were saved under `__anon__` and vanished
+ * from view the moment `me` resolved to the real id — and never reached the
+ * cloud (the append was unauthenticated). This merges those orphaned notes
+ * into the real user's bucket (deduped) and clears the anon bucket so it only
+ * runs once. Safe/no-op when there's nothing to migrate.
+ *
+ * Returns the number of entries recovered.
+ */
+export async function migrateAnonDiaryEntries(
+  userId: string | null | undefined,
+): Promise<number> {
+  const safe = typeof userId === 'string' && userId.length > 0 ? userId : null;
+  if (!safe) return 0; // no authenticated user yet — nothing to migrate into
+  try {
+    const anonRaw = await AsyncStorage.getItem(keyFor(null)); // '__anon__' bucket
+    if (!anonRaw) return 0;
+    let anonEntries: DiaryEntry[] = [];
+    try {
+      const parsed = JSON.parse(anonRaw);
+      if (Array.isArray(parsed)) {
+        anonEntries = parsed.filter(
+          (e: any): e is DiaryEntry =>
+            e && typeof e === 'object' && typeof e._id === 'string' && typeof e._creationTime === 'number',
+        );
+      }
+    } catch {
+      anonEntries = [];
+    }
+    if (anonEntries.length === 0) {
+      // Nothing usable — drop the anon bucket so we don't re-check every mount.
+      await AsyncStorage.removeItem(keyFor(null)).catch(() => {});
+      return 0;
+    }
+    const existing = await readDiaryEntries(safe);
+    // Dedupe: skip anon entries that already exist by _id, or by
+    // (kind + text + creationTime) content match against an existing note.
+    const existingIds = new Set(existing.map((e) => e._id));
+    const contentKey = (e: DiaryEntry) => `${e.kind}|${e.text ?? ''}|${e._creationTime}`;
+    const existingContent = new Set(existing.map(contentKey));
+    const toMigrate = anonEntries.filter(
+      (e) => !existingIds.has(e._id) && !existingContent.has(contentKey(e)),
+    );
+    if (toMigrate.length > 0) {
+      // Newly-recovered entries were never flushed to cloud, so leave
+      // _flushedToCloud unset — the flush effect will push them up next.
+      const merged = [...existing, ...toMigrate].sort(
+        (a, b) => a._creationTime - b._creationTime,
+      );
+      await writeAll(safe, merged);
+    }
+    // Clear the anon bucket regardless so this migration is one-shot.
+    await AsyncStorage.removeItem(keyFor(null)).catch(() => {});
+    return toMigrate.length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Map a chat message (as the Convex `messages.list` query returns it) into
  * a DiaryEntry, used by the "Save to Diary" forward action so a forwarded
  * message keeps its attachment + text + provenance.
