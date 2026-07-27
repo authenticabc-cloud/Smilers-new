@@ -16,6 +16,7 @@ import {
   useSpeechRecognitionEvent,
 } from 'expo-speech-recognition';
 import { bcp47 } from './languages';
+import { callDebug } from '../callDebugLog';
 
 interface Args {
   active: boolean;
@@ -29,6 +30,13 @@ export function useSpeechCapture({ active, languageName, onUtterance }: Args) {
   const langRef = useRef(languageName);
   const utterRef = useRef(onUtterance);
   const lastSentRef = useRef<{ text: string; at: number } | null>(null);
+  // sml-interp: whether the device actually has an on-device recognizer for
+  // the requested locale. Many Android devices DON'T (the model isn't
+  // downloaded), and forcing requiresOnDeviceRecognition:true then makes
+  // start() throw / immediately error → the interpreter silently captured
+  // NOTHING ("interpreter not working"). We probe once and fall back to
+  // network recognition when on-device isn't available.
+  const onDeviceRef = useRef<boolean | null>(null);
 
   langRef.current = languageName;
   utterRef.current = onUtterance;
@@ -36,18 +44,23 @@ export function useSpeechCapture({ active, languageName, onUtterance }: Args) {
   const startEngine = () => {
     if (runningRef.current) return;
     if (Platform.OS === 'web') return;
+    const useOnDevice = onDeviceRef.current === true;
     try {
       ExpoSpeechRecognitionModule.start({
         lang: bcp47(langRef.current),
         interimResults: false,
         continuous: true,
-        requiresOnDeviceRecognition: true,
+        // Only force on-device when the device actually supports it; otherwise
+        // use the platform's network recognizer so capture works everywhere.
+        requiresOnDeviceRecognition: useOnDevice,
         addsPunctuation: true,
         // keep original remote/call audio unaffected — capture mic only
       } as any);
       runningRef.current = true;
-    } catch {
+      callDebug.push('INTERP', `STT start lang=${bcp47(langRef.current)} onDevice=${useOnDevice}`);
+    } catch (e: any) {
       runningRef.current = false;
+      callDebug.push('ERR', `INTERP STT start failed: ${String(e?.message || e).slice(0, 120)}`);
     }
   };
 
@@ -105,10 +118,27 @@ export function useSpeechCapture({ active, languageName, onUtterance }: Args) {
       (async () => {
         try {
           const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
-          if (cancelled || !perm?.granted) return;
+          if (cancelled || !perm?.granted) {
+            callDebug.push('INTERP', `STT permission not granted (granted=${perm?.granted})`);
+            return;
+          }
+          // Probe on-device availability once so startEngine can pick the
+          // right recognizer (fall back to network when unavailable).
+          if (onDeviceRef.current === null) {
+            let ok = false;
+            try {
+              const fn = (ExpoSpeechRecognitionModule as any).supportsOnDeviceRecognition;
+              ok = typeof fn === 'function' ? !!fn() : false;
+            } catch {
+              ok = false;
+            }
+            onDeviceRef.current = ok;
+            callDebug.push('INTERP', `STT on-device supported=${ok} → ${ok ? 'on-device' : 'network'} recognition`);
+          }
           shouldRunRef.current = true;
           startEngine();
-        } catch {
+        } catch (e: any) {
+          callDebug.push('ERR', `INTERP STT permission/start error: ${String(e?.message || e).slice(0, 120)}`);
           /* mic/speech permission denied — degrade silently */
         }
       })();

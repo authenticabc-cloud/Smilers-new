@@ -2999,7 +2999,7 @@ export function CallScreenInner() {
       {showVideo && mainVideoURL ? (
         <View style={styles.videoLayer}>
           <RTCViewImpl
-            key={`main-${pipSwapped ? 'local' : 'remote'}-${remoteVideoGen}`}
+            key={`main-${pipSwapped ? 'local' : `remote-${remoteVideoGen}`}`}
             streamURL={mainVideoURL}
             style={StyleSheet.absoluteFill}
             objectFit="cover"
@@ -3028,7 +3028,7 @@ export function CallScreenInner() {
                 </View>
               ) : (
                 <RTCViewImpl
-                  key={`self-${pipSwapped ? 'remote' : 'local'}-${remoteVideoGen}`}
+                  key={`self-${pipSwapped ? `remote-${remoteVideoGen}` : 'local'}`}
                   streamURL={selfViewURL}
                   style={StyleSheet.absoluteFill}
                   objectFit="cover"

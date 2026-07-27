@@ -10,7 +10,7 @@
  *                  api.callInterpreterAction.speakTranslation → play locally,
  *                  duck original per mode.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useMutation } from 'convex/react';
 import { api } from '../../convexApi';
@@ -25,6 +25,7 @@ import { InterpreterBanner } from './InterpreterBanner';
 import { InterpreterSettingsSheet } from './InterpreterSettingsSheet';
 import { SubtitlesOverlay } from './SubtitlesOverlay';
 import { CallAiMenu } from './CallAiMenu';
+import { callDebug } from '../../lib/callDebugLog';
 
 export function InterpreterLayer({
   callId,
@@ -50,13 +51,41 @@ export function InterpreterLayer({
   const captureActive =
     connected && interp.enabled && interp.voiceMode !== 'original' && !micMuted;
 
+  // sml-interp: diagnostics so a captured log reveals WHERE the interpreter
+  // breaks — whether the Convex interpreter functions responded (loading/
+  // participants), whether capture is active, and how many subtitles arrive.
+  const availLoggedRef = useRef(false);
+  useEffect(() => {
+    if (availLoggedRef.current) return;
+    availLoggedRef.current = true;
+    const hasGetForCall = Boolean((api as any).callInterpreter?.getForCall);
+    const hasAddUtterance = Boolean((api as any).callInterpreter?.addUtterance);
+    const hasSpeak = Boolean((api as any).callInterpreterAction?.speakTranslation);
+    callDebug.push(
+      'INTERP',
+      `layer mounted callId=${callId || '(none)'} convexFns{getForCall=${hasGetForCall} addUtterance=${hasAddUtterance} speak=${hasSpeak}}`,
+    );
+  }, [callId]);
+  useEffect(() => {
+    callDebug.push(
+      'INTERP',
+      `state enabled=${interp.enabled} mode=${interp.voiceMode} speak=${interp.speakingLanguage} listen=${interp.listeningLanguage} captureActive=${captureActive} loading=${interp.loading}`,
+    );
+  }, [interp.enabled, interp.voiceMode, interp.speakingLanguage, interp.listeningLanguage, captureActive, interp.loading]);
+  useEffect(() => {
+    callDebug.push('INTERP', `subtitles received: ${Array.isArray(subtitles) ? subtitles.length : 0}`);
+  }, [subtitles]);
+
   useSpeechCapture({
     active: captureActive,
     languageName: interp.speakingLanguage,
     onUtterance: (text) => {
       if (!callId) return;
+      callDebug.push('INTERP', `utterance → addUtterance: "${text.slice(0, 40)}"`);
       addUtterance({ callId, sourceLanguage: interp.speakingLanguage, text } as any).catch(
-        () => {},
+        (e: any) => {
+          callDebug.push('ERR', `INTERP addUtterance failed: ${String(e?.message || e).slice(0, 120)}`);
+        },
       );
     },
   });
