@@ -28,6 +28,7 @@ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src
 // support). Wired to the existing manual escape hatch from v2.1.83.
 import { forceConvexReconnect } from '../../src/providers/useConvexAutoReconnect';
 import { requestConvexReauth } from '../../src/providers/ConvexClientProvider';
+import { useAuth } from '../../src/providers/AuthProvider';
 // iter-221: connection-status banner + foreground-triggered auto-refresh.
 import ConnectionStatusBanner from '../../src/components/ConnectionStatusBanner';
 import { AppState } from 'react-native';
@@ -322,6 +323,31 @@ export default function ChatsScreen() {
     // sweet spot where it feels responsive but visible.
     setTimeout(() => setReconnecting(false), 1800);
   }, [reconnecting]);
+
+  // Dedicated recovery for the "No chats yet" empty state — this is the BROKEN
+  // state (signed in locally but Convex unauthenticated), so we do the full fix
+  // a manual sign-out/sign-in does: a SILENT re-login (mints a fresh token off
+  // the live SSO session, no wall) → push it to Convex → reconnect the socket.
+  const { trySilentReauth } = useAuth();
+  const handleEmptyReconnect = useCallback(async () => {
+    if (reconnecting || callHost.isActive()) return;
+    setReconnecting(true);
+    try {
+      let restored = false;
+      if (typeof trySilentReauth === 'function') {
+        try {
+          restored = await trySilentReauth();
+        } catch {
+          restored = false;
+        }
+      }
+      requestConvexReauth(restored ? 'empty-reconnect-post-silent' : 'empty-reconnect');
+      await forceConvexReconnect('chats-empty-reconnect');
+    } catch {
+      /* never let the recovery button crash the app */
+    }
+    setTimeout(() => setReconnecting(false), 1800);
+  }, [reconnecting, trySilentReauth]);
 
   // iter-221 D — auto pull-to-refresh on FOREGROUND (iter-380 HARDENED).
   //
@@ -910,7 +936,7 @@ export default function ChatsScreen() {
                     networks get a one-tap fix here too). */}
                 <TouchableOpacity
                   style={styles.reconnectBtn}
-                  onPress={handlePullToReconnect}
+                  onPress={handleEmptyReconnect}
                   activeOpacity={0.7}
                   disabled={reconnecting}
                   testID="chats-empty-reconnect"

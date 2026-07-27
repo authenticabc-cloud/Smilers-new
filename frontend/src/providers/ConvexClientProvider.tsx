@@ -205,12 +205,18 @@ const RECREATE_COOLDOWN_MS = 30_000;
 // amount of recreating helps — it just burns battery + spams push register.
 const MAX_CONSECUTIVE_RECREATES = 3;
 const RECREATE_HALT_MS = 5 * 60_000;
+// Silent full re-login cooldown. A silent re-login (OIDC prompt=none) mints a
+// BRAND-NEW token off the live SSO session — exactly what a manual sign-out/
+// sign-in does, which is the proven fix for the stale/rotated-token "No chats
+// yet" limbo. We gate it so a persistent mismatch can't reopen the auth flow
+// on every cycle.
+const SILENT_REAUTH_COOLDOWN_MS = 45_000;
 
 // Module-scoped governor so it SURVIVES the client-recreate remount.
-const recreateGov = { lastAt: 0, consecutive: 0, haltedUntil: 0 };
+const recreateGov = { lastAt: 0, consecutive: 0, haltedUntil: 0, lastSilentAt: 0 };
 
 function ConvexAuthWatchdog({ onRecreate }: { onRecreate: () => void }) {
-  const { isAuthenticated: localAuthed, sessionExpired } = useAuth();
+  const { isAuthenticated: localAuthed, sessionExpired, trySilentReauth } = useAuth();
   const { isLoading: convexAuthLoading, isAuthenticated: convexAuthed } = useConvexAuth();
 
   // True when we have a usable local session but Convex is NOT authenticated.
@@ -232,10 +238,36 @@ function ConvexAuthWatchdog({ onRecreate }: { onRecreate: () => void }) {
       const fired = requestConvexReauth('auth-watchdog-mismatch');
       callDebug.push('CONVEX', `auth-watchdog: stage1 reauth ${fired ? 'fired' : 'rate-limited'}`);
     }, MISMATCH_REAUTH_MS);
-    const recreateTimer = setTimeout(() => {
+    const recreateTimer = setTimeout(async () => {
       const now = Date.now();
+
+      // ── Stage 2a: SILENT full re-login (the real fix) ──
+      // A plain refresh (stage 1) reuses the possibly-dead refresh token; a
+      // silent re-login mints a fresh token off the SSO session, which is what
+      // manually signing out/in does. Try this BEFORE the nuclear recreate.
+      if (now - recreateGov.lastSilentAt >= SILENT_REAUTH_COOLDOWN_MS && typeof trySilentReauth === 'function') {
+        recreateGov.lastSilentAt = now;
+        callDebug.push('CONVEX', 'auth-watchdog: stage2 SILENT re-login (prompt=none) …');
+        let ok = false;
+        try {
+          ok = await trySilentReauth();
+        } catch {
+          ok = false;
+        }
+        if (ok) {
+          // Fresh token minted — push it to Convex (epoch bump re-runs setAuth).
+          requestConvexReauth('post-silent-reauth');
+          recreateGov.consecutive = 0;
+          recreateGov.haltedUntil = 0;
+          callDebug.push('CONVEX', 'auth-watchdog: silent re-login OK → fresh token pushed to Convex');
+          return;
+        }
+        callDebug.push('CONVEX', 'auth-watchdog: silent re-login did NOT recover — falling back to recreate');
+      }
+
+      // ── Stage 2b: recreate client (sync-desync fallback), governed ──
       if (now < recreateGov.haltedUntil) {
-        callDebug.push('CONVEX', 'auth-watchdog: stage2 recreate HALTED (backoff — token likely rejected server-side)');
+        callDebug.push('CONVEX', 'auth-watchdog: stage2 recreate HALTED (backoff)');
         return;
       }
       if (now - recreateGov.lastAt < RECREATE_COOLDOWN_MS) {
@@ -248,7 +280,7 @@ function ConvexAuthWatchdog({ onRecreate }: { onRecreate: () => void }) {
         recreateGov.haltedUntil = now + RECREATE_HALT_MS;
         callDebug.push(
           'CONVEX',
-          `auth-watchdog: recreate loop HALTED after ${recreateGov.consecutive} failed attempts — Convex is rejecting the token (check OIDC aud/iss vs Convex auth.config). Will retry on next foreground.`,
+          `auth-watchdog: recreate loop HALTED after ${recreateGov.consecutive} attempts — will retry on next foreground.`,
         );
       }
       callDebug.push('CONVEX', `auth-watchdog: stage2 recreating Convex client (attempt ${recreateGov.consecutive})`);
@@ -258,7 +290,7 @@ function ConvexAuthWatchdog({ onRecreate }: { onRecreate: () => void }) {
       clearTimeout(reauthTimer);
       clearTimeout(recreateTimer);
     };
-  }, [mismatch, onRecreate]);
+  }, [mismatch, onRecreate, trySilentReauth]);
 
   // Re-evaluate promptly on foreground: if we resume into a mismatch, clear any
   // recreate halt (fresh user attention) and kick a reauth immediately.
