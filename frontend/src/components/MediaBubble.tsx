@@ -2225,9 +2225,13 @@ function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e
   const onOpen = async () => {
     if (!src) {
       if (srcError) {
+        const reason = String(srcError).slice(0, 140);
+        // Surface the real reason so download/HTTP failures are distinguishable
+        // from decrypt/out-of-memory failures (large files) at a glance.
+        console.warn('[FileMessage] open blocked — srcError:', srcError, 'size:', msg?.fileSize);
         Alert.alert(
           'Couldn’t open file',
-          'This document failed to download or decrypt. Check your connection and try again.',
+          `This document failed to download or decrypt. Check your connection and try again.\n\n(${reason})`,
         );
       }
       return;
