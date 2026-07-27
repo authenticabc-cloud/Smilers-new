@@ -109,6 +109,7 @@ export function InterpreterLayer({
       <View style={[styles.bannerHost, { top: topOffset }]} pointerEvents="box-none">
         <InterpreterBanner
           enabled={interp.enabled}
+          listening={captureActive}
           speakingLanguage={interp.speakingLanguage}
           listeningLanguage={interp.listeningLanguage}
           onOpen={() => setShowSettings(true)}

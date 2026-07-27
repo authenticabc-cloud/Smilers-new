@@ -13,7 +13,7 @@
 
 import { ConvexReactClient } from 'convex/react';
 import { api } from '../convexApi';
-import { readStoredJson, writeStoredJson } from './settingsStorage';
+import { readStoredJson, writeStoredJson, removeStoredValue } from './settingsStorage';
 import { fetchWithRetryAfter } from './fetchWithRetryAfter';
 
 const TRANSCRIBE_ENDPOINT = `${process.env.EXPO_PUBLIC_BACKEND_URL || ''}/api/transcribe`;
@@ -96,6 +96,26 @@ async function setCachedTranscription(
   if (!storageId) return;
   try {
     await writeStoredJson(`${TRANSCRIPT_CACHE_PREFIX}${storageId}`, value);
+  } catch {
+    /* swallow */
+  }
+}
+
+/**
+ * Remove any locally-cached transcript for a message's audio.
+ *
+ * Used to honour the sender's "hide transcript" privacy toggle on the
+ * RECIPIENT side: when the sender hides a voice note's transcript the backend
+ * strips it from the recipient's read, but the recipient's phone may have
+ * ALREADY transcribed the audio on-device and cached it here — so we must
+ * purge that local copy too, otherwise the text would still be visible.
+ */
+export async function clearCachedTranscription(
+  storageId: string | null | undefined,
+): Promise<void> {
+  if (!storageId) return;
+  try {
+    await removeStoredValue(`${TRANSCRIPT_CACHE_PREFIX}${storageId}`);
   } catch {
     /* swallow */
   }

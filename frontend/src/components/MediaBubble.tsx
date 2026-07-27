@@ -42,7 +42,7 @@ import BubbleErrorBoundary from './BubbleErrorBoundary';
 import { getMessageDurationSec } from '../hooks/useResolvedStorageUrl';
 import { useDecryptedMediaUrl } from '../hooks/useDecryptedMediaUrl';
 import type { E2EEStatus } from '../hooks/useConversationE2EE';
-import { getCachedTranscription, type CachedTranscription, type TranscriptionSegment } from '../lib/triggerTranscription';
+import { getCachedTranscription, clearCachedTranscription, type CachedTranscription, type TranscriptionSegment } from '../lib/triggerTranscription';
 import { SharedContactBubble } from './chat/SharedContactBubble';
 import { getLanguageByCode } from '../lib/languages';
 import { getOrCreateVoiceTranslation, type VoiceTranslation } from '../lib/voiceTranslation';
@@ -1541,6 +1541,32 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
   useAutoDownloadMedia({ msg, isMine, src, mediaType: msg?.type === 'audio' ? 'audio' : 'voice' });
   const markConsumed = useMarkConsumedOnce(msg, isMine);
 
+  // sml-transcript-privacy: the SENDER can hide/show this voice note's
+  // transcript for recipients at any time (api.messages.setTranscriptHidden).
+  // When hidden the backend strips the transcript from recipients' reads; the
+  // sender keeps their own copy. We surface a small eye toggle on the sender's
+  // own bubble whenever a transcript exists.
+  const setTranscriptHidden = useMutation(api.messages.setTranscriptHidden);
+  const [togglingTranscript, setTogglingTranscript] = useState(false);
+  const transcriptHidden = !!msg?.transcriptHidden;
+  const hasTranscript =
+    (typeof msg?.transcript === 'string' && msg.transcript.trim().length > 0) ||
+    (typeof msg?.transcription === 'string' && msg.transcription.trim().length > 0);
+  const onToggleTranscript = async () => {
+    if (!isMine || !msg?._id || togglingTranscript) return;
+    setTogglingTranscript(true);
+    try {
+      await setTranscriptHidden({ messageId: msg._id, hidden: !transcriptHidden } as any);
+    } catch (e: any) {
+      Alert.alert(
+        'Could not update transcript',
+        String(e?.data?.message || e?.message || 'Please try again.'),
+      );
+    } finally {
+      setTogglingTranscript(false);
+    }
+  };
+
   // expo-audio: AudioPlayer instance for THIS voice bubble's playback.
   const playerRef = useRef<AudioPlayer | null>(null);
   const statusListenerRef = useRef<{ remove: () => void } | null>(null);
@@ -1717,6 +1743,32 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
       <View style={styles.voiceHeaderRow}>
         <Feather name="mic" size={12} color={Colors.primary} />
         <Text style={styles.voiceHeaderLabel}>Voice Message</Text>
+        {isMine && hasTranscript ? (
+          <>
+            <View style={{ flex: 1 }} />
+            <TouchableOpacity
+              onPress={onToggleTranscript}
+              disabled={togglingTranscript}
+              style={styles.transcriptEyeBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              testID={`transcript-eye-${msg._id}`}
+            >
+              <Feather
+                name={transcriptHidden ? 'eye-off' : 'eye'}
+                size={13}
+                color={transcriptHidden ? Colors.textMuted : Colors.primary}
+              />
+              <Text
+                style={[
+                  styles.transcriptEyeLabel,
+                  { color: transcriptHidden ? Colors.textMuted : Colors.primary },
+                ]}
+              >
+                {transcriptHidden ? 'Hidden' : 'Visible'}
+              </Text>
+            </TouchableOpacity>
+          </>
+        ) : null}
       </View>
       <View style={styles.voiceBody}>
         <TouchableOpacity onPress={toggle} style={styles.voicePlayBtn} testID="voice-play">
@@ -1732,7 +1784,7 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
         onForward={() => seekToSec(posSec + 5)}
         testIDPrefix="voice"
       />
-      <TranscriptionPill msg={msg} />
+      <TranscriptionPill msg={msg} isMine={isMine} />
       <VoiceTranslationPill msg={msg} />
     </View>
   );
@@ -1743,7 +1795,7 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
  * message carries a transcription. Mirrors the web app's design exactly:
  * a small language tag on top, then the transcribed text in a light card.
  */
-function TranscriptionPill({ msg }: { msg: any }) {
+function TranscriptionPill({ msg, isMine }: { msg: any; isMine?: boolean }) {
   // Local AsyncStorage cache fallback — keyed by storageId — guarantees the
   // pill renders even when the Convex `messages.setTranscription` mutation
   // hasn't been deployed yet (the mobile transcription pipeline still writes
@@ -1754,7 +1806,22 @@ function TranscriptionPill({ msg }: { msg: any }) {
     null;
   const [cached, setCached] = useState<CachedTranscription | null>(null);
 
+  // sml-transcript-privacy: when the SENDER hides this note's transcript, the
+  // backend strips it from the recipient's read — but the recipient's phone may
+  // have already transcribed the audio on-device and cached it. Purge that
+  // local copy and render nothing so "hidden" truly hides it for recipients.
+  // The sender always keeps their own transcript.
+  const transcriptHidden = !!msg?.transcriptHidden;
+  const suppressForRecipient = transcriptHidden && !isMine;
   useEffect(() => {
+    if (suppressForRecipient && storageId) {
+      void clearCachedTranscription(storageId);
+      setCached(null);
+    }
+  }, [suppressForRecipient, storageId]);
+
+  useEffect(() => {
+    if (suppressForRecipient) return undefined;
     let cancelled = false;
     const load = async () => {
       if (!storageId) return;
@@ -1772,7 +1839,10 @@ function TranscriptionPill({ msg }: { msg: any }) {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [storageId, cached?.status]);
+  }, [storageId, cached?.status, suppressForRecipient]);
+
+  // Recipient + hidden → show nothing at all.
+  if (suppressForRecipient) return null;
 
   const transcription: string =
     (typeof msg?.transcription === 'string' && msg.transcription.trim()) ||
@@ -1789,6 +1859,13 @@ function TranscriptionPill({ msg }: { msg: any }) {
 
   return (
     <View style={styles.transcriptPill} testID={`transcript-${msg?._id || ''}`}>
+      {/* Sender-side cue that recipients currently can't see this transcript. */}
+      {isMine && transcriptHidden ? (
+        <View style={styles.transcriptHiddenRow}>
+          <Feather name="eye-off" size={11} color={Colors.textMuted} />
+          <Text style={styles.transcriptHiddenText}>Hidden from recipients</Text>
+        </View>
+      ) : null}
       {isPending ? (
         <View style={styles.transcriptPendingRow}>
           <ActivityIndicator size="small" color={Colors.primary} />
@@ -2605,6 +2682,10 @@ const styles = StyleSheet.create({
   voiceWrap: { paddingVertical: 4, minWidth: 200 },
   voiceHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4 },
   voiceHeaderLabel: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.primary, letterSpacing: 0.5 },
+  transcriptEyeBtn: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingVertical: 2, paddingHorizontal: 4 },
+  transcriptEyeLabel: { fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.3 },
+  transcriptHiddenRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4 },
+  transcriptHiddenText: { fontSize: 10, fontStyle: 'italic', color: Colors.textMuted },
   voiceBody: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   voicePlayBtn: { width: 30, height: 30, borderRadius: 15, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
   voicePlayBtnLoading: { width: 30, height: 30, borderRadius: 15, backgroundColor: Colors.primaryLight, alignItems: 'center', justifyContent: 'center' },

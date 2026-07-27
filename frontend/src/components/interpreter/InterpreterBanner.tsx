@@ -11,6 +11,7 @@ import { flagFor } from '../../lib/interpreter/languages';
 
 export function InterpreterBanner({
   enabled,
+  listening,
   speakingLanguage,
   listeningLanguage,
   onOpen,
@@ -18,6 +19,7 @@ export function InterpreterBanner({
   onOpenAi,
 }: {
   enabled: boolean;
+  listening?: boolean;
   speakingLanguage: string;
   listeningLanguage: string;
   onOpen: () => void;
@@ -27,6 +29,14 @@ export function InterpreterBanner({
   return (
     <View style={styles.wrap} testID="interpreter-banner">
       <Pressable style={styles.pill} onPress={onOpen} hitSlop={6}>
+        {enabled ? (
+          <View style={styles.statusSeg} testID="interpreter-status">
+            <View style={[styles.statusDot, listening ? styles.statusDotLive : styles.statusDotIdle]} />
+            <Text style={styles.statusText} numberOfLines={1}>
+              {listening ? 'Listening' : 'Ready'}
+            </Text>
+          </View>
+        ) : null}
         <View style={styles.seg}>
           <Feather name="mic" size={12} color="#fff" />
           <Text style={styles.segText} numberOfLines={1}>
@@ -79,6 +89,11 @@ const styles = StyleSheet.create({
     maxWidth: '68%',
   },
   seg: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
+  statusSeg: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 0 },
+  statusDot: { width: 7, height: 7, borderRadius: 4 },
+  statusDotLive: { backgroundColor: '#3ddc84' },
+  statusDotIdle: { backgroundColor: '#8a8a8a' },
+  statusText: { color: '#fff', fontSize: 11, fontWeight: '700' },
   segText: { color: '#fff', fontSize: 12, fontWeight: '600', flexShrink: 1 },
   gear: { marginLeft: 2 },
   aiBtn: {
