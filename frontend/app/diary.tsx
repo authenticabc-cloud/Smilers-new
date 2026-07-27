@@ -48,6 +48,7 @@ import {
   Alert,
   FlatList,
   Image,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -164,6 +165,42 @@ function mergeEntries(cloud: DiaryEntry[], local: DiaryEntry[]): DiaryEntry[] {
   }
   return result.sort((a, b) => a._creationTime - b._creationTime);
 }
+
+// Detect URLs (http/https or bare www.) so diary notes with links become
+// tappable. Splits the text into plain + link segments.
+const DIARY_URL_REGEX = /((?:https?:\/\/|www\.)[^\s]+)/gi;
+const IS_DIARY_URL = (s: string) => /^(?:https?:\/\/|www\.)[^\s]+$/i.test(s);
+
+function DiaryNoteText({ text }: { text: string }) {
+  const parts = text.split(DIARY_URL_REGEX);
+  const openLink = (raw: string) => {
+    // Strip trailing punctuation that isn't part of the URL.
+    const cleaned = raw.replace(/[.,);!?]+$/, '');
+    const url = /^https?:\/\//i.test(cleaned) ? cleaned : `https://${cleaned}`;
+    Linking.openURL(url).catch(() => {
+      Alert.alert('Could not open link', cleaned);
+    });
+  };
+  return (
+    <Text style={styles.bubbleText}>
+      {parts.map((part, i) =>
+        IS_DIARY_URL(part) ? (
+          <Text
+            key={`lnk-${i}`}
+            style={styles.bubbleLink}
+            onPress={() => openLink(part)}
+            suppressHighlighting
+          >
+            {part}
+          </Text>
+        ) : (
+          <Text key={`txt-${i}`}>{part}</Text>
+        ),
+      )}
+    </Text>
+  );
+}
+
 
 export default function DiaryScreen() {
   const router = useRouter();
@@ -800,7 +837,7 @@ export default function DiaryScreen() {
               )}
             </View>
           ) : null}
-          {entry.text ? <Text style={styles.bubbleText}>{entry.text}</Text> : null}
+          {entry.text ? <DiaryNoteText text={entry.text} /> : null}
           <Text style={styles.bubbleTime}>{time}</Text>
         </View>
       </Pressable>
@@ -1247,6 +1284,7 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   bubbleText: { color: Colors.textPrimary, fontSize: FontSize.base, lineHeight: 22 },
+  bubbleLink: { color: Colors.primary, textDecorationLine: 'underline' },
   bubbleTime: { color: Colors.textMuted, fontSize: 11, marginTop: 4, alignSelf: 'flex-end' },
   forwardedHeader: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4 },
   forwardedHeaderText: { color: Colors.diaryDark, fontSize: 11, fontWeight: FontWeight.semibold, flex: 1 },

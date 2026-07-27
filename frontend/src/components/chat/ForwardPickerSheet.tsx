@@ -11,8 +11,10 @@ import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import {
   findSavedContactDisplayName,
   getConversationDisplayName,
+  getResolvedConversationDisplayName,
   getDisplayInitials,
 } from '../../lib/displayName';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../../lib/deviceContactIndex';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../theme';
 
 export function ForwardPickerSheet({
@@ -34,6 +36,11 @@ export function ForwardPickerSheet({
   onForwardTo: (conversationId: string) => void;
   onSaveToDiary: () => void;
 }) {
+  // iter: resolve names the SAME way the chats list does — device phone-contact
+  // name FIRST (so a number saved in the phone shows the user's own label),
+  // then saved Smilers contact, then the account name. Without this the picker
+  // fell straight through to the raw Convex/Google account name.
+  const deviceIndex = useDeviceContactIndex();
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.sheetBackdrop} onPress={onClose}>
@@ -73,10 +80,19 @@ export function ForwardPickerSheet({
               </TouchableOpacity>
             }
             renderItem={({ item }: any) => {
-              // Centralised display-name resolver — walks the members/
-              // otherUser/firstName chains, mirrors the chats list.
+              // Centralised display-name resolver — device contact first
+              // (mirrors the chats list), then saved Smilers contact, then the
+              // account name as a last resort.
+              const deviceName = getResolvedConversationDisplayName(
+                item,
+                myUserId,
+                deviceIndex,
+                lookupDeviceContactName,
+                '',
+              );
               const savedName = findSavedContactDisplayName(contacts, item, myUserId);
               const displayName =
+                deviceName ||
                 savedName ||
                 getConversationDisplayName(item, myUserId, 'Smilers user');
               // Sanitise the last-message preview — never expose an

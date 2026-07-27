@@ -826,6 +826,11 @@ export default function ChatScreen() {
   // calling the wrong name is why reactions returned a generic Convex
   // "Server Error" for so long, iter-320).
   const addReaction = useMutation(api.messages.addReaction);
+  // Cloud diary append — used when forwarding a message to Diary so the entry
+  // syncs to the web app (previously forward-to-Diary wrote LOCAL-ONLY, so those
+  // notes never appeared on the web/other devices).
+  const appendDiaryEntryCloud = useMutation((api as any).diary?.appendEntry);
+  const appendDiaryEntryCloudAvailable = Boolean((api as any).diary?.appendEntry);
   const deleteMessage = useMutation(api.messages.deleteMessage);
   // iter-323 "Receive once" 🔂: reveal a hidden duplicate for this viewer.
   const allowReceiptMutation = useMutation(api.messages.allowReceipt);
@@ -5238,8 +5243,29 @@ export default function ChatScreen() {
                 originalMessageId: m?._id || null,
                 originalCreationTime: m?._creationTime || null,
               });
-              // eslint-disable-next-line no-await-in-loop
-              await appendDiaryEntry(me?._id ? String(me._id) : null, entry);
+              // Cloud-first so the forwarded note syncs to the web app / other
+              // devices; fall back to the local store when the backend fn isn't
+              // available or the write fails (offline). The Diary screen's flush
+              // later pushes any local-only entries up and de-dupes.
+              let wroteToCloud = false;
+              if (appendDiaryEntryCloudAvailable && typeof appendDiaryEntryCloud === 'function') {
+                try {
+                  // eslint-disable-next-line no-await-in-loop
+                  await (appendDiaryEntryCloud as any)({
+                    kind: entry.kind,
+                    text: entry.text ?? undefined,
+                    attachment: entry.attachment ?? null,
+                    forwardedFrom: entry.forwardedFrom ?? null,
+                  });
+                  wroteToCloud = true;
+                } catch {
+                  /* fall back to local below */
+                }
+              }
+              if (!wroteToCloud) {
+                // eslint-disable-next-line no-await-in-loop
+                await appendDiaryEntry(me?._id ? String(me._id) : null, entry);
+              }
             }
             setShowForwardPicker(false);
             setMultiSelectIds(null);
