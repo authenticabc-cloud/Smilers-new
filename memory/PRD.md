@@ -1,5 +1,16 @@
 # Smilers Mobile App — PRD
 
+## iter-410 (Jun 2026): Fixed large (13 MB) E2EE document failing to open ("failed to download or decrypt")
+- **Reported:** a 13 MB web-sent encrypted `.txt` shows the red lock icon and "Couldn't open file"; user confirmed SMALL docs open fine, only the big one fails, and it was sent from the WEB app (so it's E2EE — the bubble's "PLAIN" is just the `text/plain` MIME).
+- **Root cause:** `useDecryptedMediaUrl` (a) eagerly fetch+decrypts EVERY encrypted message on render, and (b) downloaded ciphertext via `fetch(url).arrayBuffer()`. RN's fetch routes large bodies through a blob→base64→decode path that ~TRIPLES peak memory, so a 13 MB blob OOM'd/threw during the on-render decrypt (also a source of the "chat list freezes" symptom). Small files fit, so they worked.
+- **Fix (`src/hooks/useDecryptedMediaUrl.ts` + `src/components/MediaBubble.tsx`):**
+  1. Memory-safe download on native — `File.downloadFileAsync` streams ciphertext straight to disk, then `file.bytes()` reads it natively (no base64 tripling, ~1x peak). Falls back to the old `fetch` path on any FS error and on web.
+  2. LAZY decryption for large files (`type file/video` & `fileSize ≥ 3 MB`): they are NOT decrypted on render — the bubble shows a "download/tap-to-open" affordance; the first tap arms decryption (spinner + "Decrypting…"), and it auto-opens when ready. Prevents the on-render JS-thread block/OOM and chat-list freeze.
+  3. The error alert now surfaces the real underlying reason (HTTP vs decrypt) for future diagnosis.
+- Small/media files unchanged (still eager, still work). `useAutoDownloadMedia` already no-ops while `src` is null, so deferred files aren't eagerly fetched.
+- ⚠️ The 13 MB decrypt is device-only (native streaming path) — validate after APK rebuild: the big file should now show a download icon, and tapping shows "Decrypting…" then opens. If the pure-JS AES-GCM decrypt itself proves too slow/heavy at very large sizes, next step is a native crypto module.
+
+
 ## iter-409 (Jun 2026): Message notifications upgraded — WhatsApp-style MessagingStyle thread + inline REPLY (RemoteInput)
 - Builds on iter-408's native message rendering. New shared `MessageThreadStore.kt` keeps a short per-conversation history and posts each message as a `NotificationCompat.MessagingStyle` thread (sender Persons, group `conversationTitle`, "You" for own lines) with the Smilers message/group tone on channels `messages-native-v1`/`groups-native-v1`.
 - Added an inline **Reply** action (`RemoteInput`, `SEMANTIC_ACTION_REPLY`, MUTABLE PendingIntent) so users reply straight from the notification shade without opening the app.

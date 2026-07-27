@@ -19,7 +19,8 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { File, Paths } from 'expo-file-system';
+import { Platform } from 'react-native';
+import { File, Directory, Paths } from 'expo-file-system';
 import { decryptBytes } from '../lib/e2eeCrypto';
 import { getMessageMediaUrl } from './useResolvedStorageUrl';
 import type { E2EEStatus } from './useConversationE2EE';
@@ -28,7 +29,17 @@ export interface DecryptedMediaResult {
   url: string | null;
   loading: boolean;
   error: string | null;
+  /** True when decryption is intentionally deferred (large file) and hasn't
+   *  been triggered yet — the UI should show a "tap to open" affordance. */
+  deferred?: boolean;
+  /** Kicks off deferred decryption (no-op if already armed/decrypted). */
+  decrypt?: () => void;
 }
+
+// Files at/above this size are NOT auto-decrypted on render — decrypting a big
+// blob with pure-JS AES-GCM blocks the JS thread for seconds and can OOM (the
+// 13 MB document bug + chat-list freezes). They decrypt lazily on first open.
+const LAZY_DECRYPT_MIN_BYTES = 3 * 1024 * 1024; // 3 MB
 
 // Process-wide cache so the same encrypted message isn't fetched + decrypted
 // twice during a chat session (e.g. when the list re-renders).
@@ -78,6 +89,44 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 async function fetchEncryptedBytes(url: string): Promise<Uint8Array> {
+  // NATIVE (iter-410): stream the ciphertext straight to disk and read it back
+  // with the native `bytes()` reader. React Native's `fetch(...).arrayBuffer()`
+  // routes large bodies through a blob→base64→decode path that roughly TRIPLES
+  // peak memory, which OOMs / throws on big files (the user's 13 MB document
+  // failed here while small files worked). Streaming to disk keeps peak memory
+  // at ~1x and skips base64 entirely.
+  if (Platform.OS !== 'web') {
+    let temp: File | null = null;
+    try {
+      const dir = new Directory(Paths.cache, 'smilers-e2ee-dl');
+      try {
+        dir.create({ intermediates: true, idempotent: true });
+      } catch {
+        // directory already exists
+      }
+      // downloadFileAsync returns the File it wrote to (name derived from the
+      // URL / content-disposition). Stream to disk = ~1x peak memory.
+      temp = await File.downloadFileAsync(url, dir);
+      const bytes = await temp.bytes();
+      return bytes;
+    } catch (e: any) {
+      // Any FS/download error → fall back to the fetch path below so behaviour
+      // never regresses vs. the previous implementation.
+      console.warn(
+        '[useDecryptedMediaUrl] stream-to-disk download failed, falling back to fetch:',
+        e?.message || e
+      );
+    } finally {
+      if (temp) {
+        try {
+          temp.delete();
+        } catch {
+          // best-effort cleanup
+        }
+      }
+    }
+  }
+
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`Failed to download encrypted media (HTTP ${response.status})`);
@@ -123,6 +172,13 @@ export function useDecryptedMediaUrl(msg: any, e2ee: E2EEStatus | null | undefin
   const passphrase = e2ee?.passphrase || null;
   const salt = e2ee?.salt || null;
 
+  // Large documents/videos defer decryption until the user opens them.
+  const fileSize: number = typeof msg?.fileSize === 'number' ? msg.fileSize : 0;
+  const isLazy =
+    isEncrypted &&
+    (type === 'file' || type === 'video') &&
+    fileSize >= LAZY_DECRYPT_MIN_BYTES;
+
   const initialUrl = !isEncrypted
     ? rawUrl
     : messageId && decryptedCache.has(messageId)
@@ -130,8 +186,10 @@ export function useDecryptedMediaUrl(msg: any, e2ee: E2EEStatus | null | undefin
       : null;
 
   const [url, setUrl] = useState<string | null>(initialUrl);
-  const [loading, setLoading] = useState<boolean>(isEncrypted && !initialUrl);
+  const [loading, setLoading] = useState<boolean>(isEncrypted && !initialUrl && !isLazy);
   const [error, setError] = useState<string | null>(null);
+  // For lazy files: only decrypt once the user has armed it (tapped open).
+  const [armed, setArmed] = useState<boolean>(!isLazy);
   const cancelledRef = useRef(false);
 
   useEffect(() => {
@@ -150,6 +208,17 @@ export function useDecryptedMediaUrl(msg: any, e2ee: E2EEStatus | null | undefin
     // Encrypted but we already decrypted in this process — reuse it.
     if (messageId && decryptedCache.has(messageId)) {
       setUrl(decryptedCache.get(messageId)!);
+      setLoading(false);
+      setError(null);
+      return () => {
+        cancelledRef.current = true;
+      };
+    }
+
+    // Large file whose decryption hasn't been triggered yet — stay idle so the
+    // chat list never blocks/OOMs decrypting a big blob on render.
+    if (isLazy && !armed) {
+      setUrl(null);
       setLoading(false);
       setError(null);
       return () => {
@@ -209,9 +278,10 @@ export function useDecryptedMediaUrl(msg: any, e2ee: E2EEStatus | null | undefin
       cancelledRef.current = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isEncrypted, rawUrl, iv, passphrase, salt, messageId, type]);
+  }, [isEncrypted, rawUrl, iv, passphrase, salt, messageId, type, armed, isLazy]);
 
-  return { url, loading, error };
+  const decrypt = () => setArmed(true);
+  return { url, loading, error, deferred: isLazy && !url, decrypt };
 }
 
 /** Clear all on-disk decrypted media cache entries. Best-effort. */

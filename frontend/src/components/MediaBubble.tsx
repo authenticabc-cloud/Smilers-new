@@ -2212,7 +2212,7 @@ function PollMessage({ msg }: { msg: any }) {
 }
 
 function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e2eeStatus: E2EEStatus | null }) {
-  const { url: src, error: srcError } = useDecryptedMediaUrl(msg, e2eeStatus);
+  const { url: src, error: srcError, loading, deferred, decrypt } = useDecryptedMediaUrl(msg, e2eeStatus);
   useAutoDownloadMedia({ msg, isMine, src, mediaType: 'document' });
   const markConsumed = useMarkConsumedOnce(msg, isMine);
 
@@ -2222,8 +2222,55 @@ function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e
   const isApk = /\.apk$/i.test(msg.fileName || '');
   const showApkCaution = isApk && !isMine;
 
+  // iter-410: large encrypted files decrypt lazily (on first open) to avoid
+  // freezing/OOM on render. If the user tapped a deferred file, open it as
+  // soon as the decrypted URL is ready.
+  const wantOpenRef = useRef(false);
+
+  const openSrc = useCallback(async (uri: string) => {
+    markConsumed();
+    // Android blocks handing a raw file:// URI to another app (FileUriExposed),
+    // so decrypted/cached documents (file://) must be opened via the OS share
+    // sheet, which exposes a content:// URI through the FileProvider. Remote
+    // http(s) URLs still open directly. Falls back to Linking on any failure.
+    try {
+      if (uri.startsWith('file://')) {
+        const Sharing = await import('expo-sharing');
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(uri, {
+            mimeType: msg.mimeType || undefined,
+            dialogTitle: msg.fileName || 'Open document',
+            UTI: msg.mimeType || undefined,
+          });
+          return;
+        }
+      }
+      await Linking.openURL(uri);
+    } catch {
+      try {
+        await Linking.openURL(uri);
+      } catch {
+        Alert.alert('Couldn’t open file', 'No app is available to open this document.');
+      }
+    }
+  }, [markConsumed, msg.mimeType, msg.fileName]);
+
+  useEffect(() => {
+    if (src && wantOpenRef.current) {
+      wantOpenRef.current = false;
+      void openSrc(src);
+    }
+  }, [src, openSrc]);
+
   const onOpen = async () => {
     if (!src) {
+      if (loading) return; // decryption already in progress
+      if (deferred) {
+        // First tap on a large file — start decrypting and auto-open when ready.
+        wantOpenRef.current = true;
+        decrypt?.();
+        return;
+      }
       if (srcError) {
         const reason = String(srcError).slice(0, 140);
         // Surface the real reason so download/HTTP failures are distinguishable
@@ -2236,31 +2283,7 @@ function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e
       }
       return;
     }
-    markConsumed();
-    // Android blocks handing a raw file:// URI to another app (FileUriExposed),
-    // so decrypted/cached documents (file://) must be opened via the OS share
-    // sheet, which exposes a content:// URI through the FileProvider. Remote
-    // http(s) URLs still open directly. Falls back to Linking on any failure.
-    try {
-      if (src.startsWith('file://')) {
-        const Sharing = await import('expo-sharing');
-        if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(src, {
-            mimeType: msg.mimeType || undefined,
-            dialogTitle: msg.fileName || 'Open document',
-            UTI: msg.mimeType || undefined,
-          });
-          return;
-        }
-      }
-      await Linking.openURL(src);
-    } catch {
-      try {
-        await Linking.openURL(src);
-      } catch {
-        Alert.alert('Couldn’t open file', 'No app is available to open this document.');
-      }
-    }
+    void openSrc(src);
   };
 
   return (
@@ -2268,24 +2291,30 @@ function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e
       <TouchableOpacity
         style={styles.fileBody}
         onPress={onOpen}
-        disabled={!src && !srcError}
+        disabled={loading || (!src && !srcError && !deferred)}
         activeOpacity={0.7}
         testID={`file-open-${msg._id}`}
       >
-        <View style={[styles.fileIcon, isMine ? styles.fileIconMine : null, !src ? { opacity: 0.5 } : null]}>
+        <View style={[styles.fileIcon, isMine ? styles.fileIconMine : null, (!src && !deferred) ? { opacity: 0.5 } : null]}>
           <Feather name="file-text" size={22} color={isMine ? '#2C4129' : Colors.white} />
         </View>
         <View style={styles.flexOne}>
           <Text style={[styles.fileName, isMine ? styles.fileNameMine : null]} numberOfLines={2}>{msg.fileName || 'Document'}</Text>
           <Text style={[styles.fileMeta, isMine ? styles.fileMetaMine : null]}>
-            {[formatBytes(msg.fileSize), msg.mimeType?.split('/')?.pop()?.toUpperCase()].filter(Boolean).join(' · ') || 'File'}
+            {loading
+              ? 'Decrypting…'
+              : ([formatBytes(msg.fileSize), msg.mimeType?.split('/')?.pop()?.toUpperCase()].filter(Boolean).join(' · ') || 'File')}
           </Text>
         </View>
-        <Feather
-          name={srcError ? 'lock' : src ? 'download' : 'loader'}
-          size={20}
-          color={srcError ? Colors.danger : isMine ? '#F6FFF9' : Colors.primary}
-        />
+        {loading ? (
+          <ActivityIndicator size="small" color={isMine ? '#F6FFF9' : Colors.primary} />
+        ) : (
+          <Feather
+            name={srcError ? 'lock' : (src || deferred) ? 'download' : 'loader'}
+            size={20}
+            color={srcError ? Colors.danger : isMine ? '#F6FFF9' : Colors.primary}
+          />
+        )}
       </TouchableOpacity>
       {showApkCaution ? (
         <View style={styles.apkCaution} testID={`apk-caution-${msg._id}`}>
