@@ -640,6 +640,12 @@ export function CallScreenInner() {
   // (for display only).
   const [autoActiveProfile, setAutoActiveProfile] = useState<'sharp' | 'smooth'>('sharp');
   const [statusText, setStatusText] = useState('Connecting…');
+  // iter-405: connection watchdog — ends the "connecting forever" experience.
+  // `slowConnect` drives softer live feedback; `callFailed` flags an
+  // unanswered/unreachable outgoing call so we fail fast + auto-end (WhatsApp-style)
+  // instead of spinning indefinitely on a weak/expensive network.
+  const [slowConnect, setSlowConnect] = useState(false);
+  const [callFailed, setCallFailed] = useState(false);
   const [permissionDenied, setPermissionDenied] = useState(false);
   // iter-189: true once the WebRTC connection actually reaches 'connected'.
   // The screen-only sharer UI uses this to say "Waiting for the recipient
@@ -1121,12 +1127,34 @@ export function CallScreenInner() {
   // ====== Update status text based on state ======
   useEffect(() => {
     if (isIncoming) setStatusText('Incoming call…');
-    else if (isOutgoingRinging) setStatusText('Calling…');
     else if (isActive) setStatusText('Connected');
     else if (activeCall?.status === 'ended') setStatusText('Call ended');
     else if (activeCall?.status === 'declined') setStatusText('Declined');
+    else if (callFailed) setStatusText('No answer');
+    else if (slowConnect) setStatusText(isOutgoingRinging ? 'Still ringing…' : 'Connecting… weak network');
+    else if (isOutgoingRinging) setStatusText('Calling…');
     else setStatusText('Connecting…');
-  }, [isIncoming, isOutgoingRinging, isActive, activeCall?.status]);
+  }, [isIncoming, isOutgoingRinging, isActive, activeCall?.status, callFailed, slowConnect]);
+
+  // iter-405: watchdog timers for an OUTGOING call that hasn't connected yet.
+  // After SLOW_HINT_MS we soften the copy so the caller knows we're still
+  // trying (not frozen); after RING_TIMEOUT_MS we mark the call failed so it
+  // auto-ends rather than spinning forever. Does not touch incoming/active calls.
+  useEffect(() => {
+    setSlowConnect(false);
+    setCallFailed(false);
+    if (isIncoming || isActive) return;
+    const s = activeCall?.status;
+    if (s === 'ended' || s === 'declined') return;
+    const SLOW_HINT_MS = 10000;
+    const RING_TIMEOUT_MS = 45000;
+    const slowId = setTimeout(() => setSlowConnect(true), SLOW_HINT_MS);
+    const failId = setTimeout(() => setCallFailed(true), RING_TIMEOUT_MS);
+    return () => {
+      clearTimeout(slowId);
+      clearTimeout(failId);
+    };
+  }, [isIncoming, isActive, activeCall?.status, activeCall?._id]);
 
   // ====== Call duration timer ======
   useEffect(() => {
@@ -1790,6 +1818,18 @@ export function CallScreenInner() {
     callDebug.push('CALL', `local hangup → callHost.end() AppState=${AppState.currentState}`);
     callHost.end();
   }, [activeCall, callId, declineCall, endCall, router, callDurationSec, callType, engagement, isCaller, fetchedOtherUser, conversation, me, conversationId]);
+
+  // iter-405: when the watchdog marks an outgoing call failed (no answer /
+  // unreachable within the ring window), show "No answer" briefly then auto-end
+  // — so users on weak/expensive networks never sit on an endless spinner.
+  useEffect(() => {
+    if (!callFailed) return;
+    callDebug.push('CALL', 'watchdog: no answer within ring window → auto-ending');
+    const t = setTimeout(() => {
+      void handleHangup();
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [callFailed, handleHangup]);
 
   const handleDecline = useCallback(async () => {
     const id = callId || (activeCall as any)?._id || null;

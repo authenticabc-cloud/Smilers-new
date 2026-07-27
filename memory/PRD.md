@@ -1,5 +1,15 @@
 # Smilers Mobile App — PRD
 
+## iter-405 (Jun 2026): Low-data/call-quality — P0 "connecting forever" fix (user approved 1a,2a,4a)
+- **P0 (1a) — DONE:** the active 1:1 call screen (`app/call/[conversationId].tsx`) is WebRTC-based (CallSession + Convex signaling) and had NO caller-side ring timeout → "connecting for eternity" (the embarrassing incident vs WhatsApp). Added a surgical, additive watchdog: `slowConnect` (after 10s → "Still ringing…"/"Connecting… weak network") and `callFailed` (after 45s → "No answer" then auto-`handleHangup` after 2.5s). Reuses existing hangup; skips incoming/active calls; resets on status change. Fails fast + gives live feedback instead of an infinite spinner.
+- **Investigated TURN (relevant to the incident):** `src/lib/webrtc/iceServers.ts` already fetches ephemeral Twilio TURN creds from Convex `/turn-credentials` (+ metered.ca static fallback, Google STUN) — solid. So the incident was primarily (a) no timeout/feedback (now fixed) and (b) potential relay/codec tuning (P1 next).
+- **Deferred by design (protecting the user's imminent redeploy/rebuild test):**
+  - P1 (2a) low-bandwidth call tuning: cap the CAMERA video sender maxBitrate (~500kbps) + Opus DTX, WITHOUT touching screen-share (needs high bitrate for legibility). Requires a camera-vs-screen-safe insertion in `CallSession` — focused next round. Plus Stream dashboard: confirm TURN region coverage for Africa + adaptive bitrate.
+  - P4 (4a) offline resilience: message outbox that auto-sends on reconnect + cached content — standalone next round.
+  - #3 media auto-download: user wants it to REMAIN a user choice ("auto-download on WiFi only"); most African users have no WiFi → leave the existing setting as-is (no forced data-saver).
+- Lint clean; app boots. P0 is native-only → validate after APK rebuild.
+
+
 ## iter-404 (Jun 2026): Muted-bell indicator on chat list (potential improvement)
 - `ConversationRow` now shows a `bell-off` icon (right column, next to the unread pill) when a conversation is muted. New `muted` prop; imported `Feather`; new `rowRightBadges`/`mutedBell` styles.
 - `app/(tabs)/chats.tsx`: added `mutedIds` state loaded via `getMutedConversations()` on focus (so it reflects mutes toggled from a chat screen), passed `muted={mutedIds.has(item._id)}` to each row. Lint clean.
