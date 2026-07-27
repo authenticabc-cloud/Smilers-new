@@ -1,5 +1,11 @@
 # Smilers Mobile App — PRD
 
+## iter-404 (Jun 2026): Muted-bell indicator on chat list (potential improvement)
+- `ConversationRow` now shows a `bell-off` icon (right column, next to the unread pill) when a conversation is muted. New `muted` prop; imported `Feather`; new `rowRightBadges`/`mutedBell` styles.
+- `app/(tabs)/chats.tsx`: added `mutedIds` state loaded via `getMutedConversations()` on focus (so it reflects mutes toggled from a chat screen), passed `muted={mutedIds.has(item._id)}` to each row. Lint clean.
+- Complements iter-403 per-conversation mute.
+
+
 ## iter-403 (Jun 2026): Per-conversation MUTE — made the stub real (potential improvement)
 - The chat "Mute notifications" option existed but was a no-op stub (local `useState`, not persisted, didn't suppress anything). Made it fully functional & device-local:
   - New `src/lib/mutedConversations.ts` (AsyncStorage set: `getMutedConversations`/`isConversationMuted`/`setConversationMuted`).

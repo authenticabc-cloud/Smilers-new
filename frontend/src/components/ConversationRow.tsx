@@ -6,6 +6,7 @@
  */
 import React, { useEffect, useMemo } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Feather } from '@expo/vector-icons';
 import Avatar from './Avatar';
 import { useSafeConvexQuery } from '../hooks/useSafeConvexQuery';
 import {
@@ -65,6 +66,8 @@ type Props = {
   contacts?: any[];
   draft?: DraftPreview;
   unreadCount?: number;
+  /** iter-404: show a muted-bell indicator when this conversation is muted. */
+  muted?: boolean;
   onPress: () => void;
   /** When true, typing state comes from `typingLabel` (a single list-level
    * query) instead of this row opening its own Convex subscription. */
@@ -78,6 +81,7 @@ export default function ConversationRow({
   contacts,
   draft,
   unreadCount = 0,
+  muted = false,
   onPress,
   typingFromParent = false,
   typingLabel: typingLabelProp = null,
@@ -167,11 +171,22 @@ export default function ConversationRow({
         <Text style={[styles.rowTime, hasUnread && styles.rowTimeUnread]}>
           {relTime(item.lastMessageTime)}
         </Text>
-        {hasUnread ? (
-          <View style={styles.unreadPill} testID={`conv-unread-${item._id}`}>
-            <Text style={styles.unreadPillText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
-          </View>
-        ) : null}
+        <View style={styles.rowRightBadges}>
+          {muted ? (
+            <Feather
+              name="bell-off"
+              size={14}
+              color={Colors.textMuted}
+              style={styles.mutedBell}
+              testID={`conv-muted-${item._id}`}
+            />
+          ) : null}
+          {hasUnread ? (
+            <View style={styles.unreadPill} testID={`conv-unread-${item._id}`}>
+              <Text style={styles.unreadPillText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+            </View>
+          ) : null}
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -200,6 +215,8 @@ const styles = StyleSheet.create({
   rowTyping: { color: Colors.primary, fontStyle: 'italic' },
   draftPrefix: { color: Colors.danger, fontWeight: FontWeight.semibold },
   rowRightCol: { marginLeft: Spacing.sm, alignItems: 'flex-end', justifyContent: 'center', gap: 4 },
+  rowRightBadges: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  mutedBell: { opacity: 0.7 },
   rowTime: { fontSize: FontSize.xs, color: Colors.textMuted, marginLeft: Spacing.sm },
   rowTimeUnread: { color: Colors.tickRed, fontWeight: FontWeight.semibold, marginLeft: 0 },
   unreadPill: {

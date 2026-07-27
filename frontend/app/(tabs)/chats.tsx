@@ -18,6 +18,7 @@ import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { readCacheMeta, writeCache } from '../../src/lib/offlineCache';
 import { loadAllChatDrafts, type DraftPreview } from '../../src/lib/chatDrafts';
+import { getMutedConversations } from '../../src/lib/mutedConversations';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import OfflineBanner from '../../src/components/OfflineBanner';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
@@ -56,6 +57,7 @@ export default function ChatsScreen() {
   const router = useRouter();
   const [showMenu, setShowMenu] = useState(false);
   const [chatFilter, setChatFilter] = useState<'all' | 'unread'>('all');
+  const [mutedIds, setMutedIds] = useState<Set<string>>(new Set());
   const chatFilterLoaded = useRef(false);
   useEffect(() => {
     readStoredString(CHAT_FILTER_KEY)
@@ -142,6 +144,11 @@ export default function ChatsScreen() {
       let alive = true;
       void loadAllChatDrafts().then((map) => {
         if (alive) setDrafts(map);
+      });
+      // iter-404: refresh the muted-conversation set so the chat list shows the
+      // bell-off indicator (and reflects mutes toggled from a chat screen).
+      void getMutedConversations().then((ids) => {
+        if (alive) setMutedIds(new Set(ids));
       });
       return () => {
         alive = false;
@@ -850,6 +857,7 @@ export default function ChatsScreen() {
               contacts={contacts}
               draft={drafts[String(item._id)]}
               unreadCount={rowUnread}
+              muted={mutedIds.has(String(item._id))}
               typingFromParent={BATCH_TYPING_ENABLED}
               typingLabel={
                 BATCH_TYPING_ENABLED
