@@ -350,10 +350,38 @@ export class CallSession {
   }
 
   /**
-   * Switch the screen-share quality profile at runtime. Re-applies the
-   * encoder caps immediately if a screen capture is currently active.
+   * iter-406: cap the CAMERA video sender for low-bandwidth networks (e.g.
+   * expensive/scarce mobile data in Africa). A 1:1 camera call looks great at
+   * ~0.5 Mbps, but unconstrained WebRTC can push several Mbps — which stalls
+   * connection setup and burns data. We prioritise framerate (smooth motion)
+   * and let resolution scale down first. NEVER applied to screen-share, whose
+   * own (higher) caps in applyScreenEncodingParameters() keep text legible.
    */
-  async setScreenQuality(mode: 'sharp' | 'smooth' | 'auto'): Promise<void> {
+  async applyCameraEncodingParameters(): Promise<void> {
+    if (!this.pc || this.screenShareActive) return;
+    if (this.opts.callType !== 'video') return;
+    try {
+      const senders = (this.pc as any).getSenders ? (this.pc as any).getSenders() : [];
+      const videoSender = senders.find((s: any) => s?.track?.kind === 'video');
+      if (!videoSender || !videoSender.getParameters || !videoSender.setParameters) return;
+      const params = videoSender.getParameters();
+      if (!params.encodings || params.encodings.length === 0) {
+        params.encodings = [{ active: true }];
+      }
+      params.encodings.forEach((enc: any) => {
+        enc.active = true;
+        enc.maxBitrate = 500_000; // ~0.5 Mbps — plenty for a 1:1 camera
+        enc.maxFramerate = 24;
+        enc.scaleResolutionDownBy = 1.5; // gentle downscale to hold the bitrate
+      });
+      params.degradationPreference = 'maintain-framerate';
+      await videoSender.setParameters(params);
+      callDebug.push('PC', 'camera encode capped: 0.5Mbps / 24fps / maintain-framerate (low-data)');
+    } catch (e: any) {
+      callDebug.push('ERR', `applyCameraEncodingParameters failed: ${e?.message || e}`);
+    }
+  }
+
     this.screenQuality = mode;
     if (mode === 'auto') {
       this.startMotionMonitor();
@@ -703,6 +731,8 @@ export class CallSession {
     // too. No-op when sending the camera.
     if (this.screenShareActive) {
       await this.applyScreenEncodingParameters();
+    } else {
+      await this.applyCameraEncodingParameters();
     }
   }
   async handleRemoteOffer(payload: string): Promise<void> {
@@ -752,6 +782,12 @@ export class CallSession {
       type: 'answer',
       payload: JSON.stringify(answer),
     });
+    // iter-406: cap the callee's outgoing camera bitrate too (low-data).
+    if (this.screenShareActive) {
+      await this.applyScreenEncodingParameters();
+    } else {
+      await this.applyCameraEncodingParameters();
+    }
   }
 
   /** Caller: handle the answer from the callee. */

@@ -1,5 +1,11 @@
 # Smilers Mobile App — PRD
 
+## iter-406 (Jun 2026): P1 low-bandwidth call tuning + P4 offline resilience (verified existing)
+- **P1 (2a) — DONE:** added `applyCameraEncodingParameters()` to `src/lib/webrtc/CallSession.ts` — caps the CAMERA video sender to ~0.5 Mbps / 24fps / `degradationPreference: maintain-framerate` / gentle `scaleResolutionDownBy` so 1:1 video calls connect fast and stay smooth on expensive/scarce mobile data. Applied after createOffer AND createAnswer (both peers). Guarded by `!screenShareActive` + `callType==='video'` and wrapped in try/catch so it can NEVER break a call; screen-share keeps its own higher caps (legibility). Audio already Opus (~24-40kbps).
+- **P4 (4a) — ALREADY IMPLEMENTED (verified, not rebuilt):** `app/chat/[conversationId].tsx` already has a persistent AsyncStorage outbox (`src/lib/outbox.ts`): text messages that fail while offline queue with a RED dot and auto-flush on reconnect (NetInfo) + app-foreground (AppState); `src/lib/offlineCache.ts` caches content with a "showing saved messages" banner. Known limitation (by design): E2EE/media messages aren't queued (need live keys/upload). Left as-is.
+- Lint clean; app boots. Native-only → validate after APK rebuild.
+
+
 ## iter-405 (Jun 2026): Low-data/call-quality — P0 "connecting forever" fix (user approved 1a,2a,4a)
 - **P0 (1a) — DONE:** the active 1:1 call screen (`app/call/[conversationId].tsx`) is WebRTC-based (CallSession + Convex signaling) and had NO caller-side ring timeout → "connecting for eternity" (the embarrassing incident vs WhatsApp). Added a surgical, additive watchdog: `slowConnect` (after 10s → "Still ringing…"/"Connecting… weak network") and `callFailed` (after 45s → "No answer" then auto-`handleHangup` after 2.5s). Reuses existing hangup; skips incoming/active calls; resets on status change. Fails fast + gives live feedback instead of an infinite spinner.
 - **Investigated TURN (relevant to the incident):** `src/lib/webrtc/iceServers.ts` already fetches ephemeral Twilio TURN creds from Convex `/turn-credentials` (+ metered.ca static fallback, Google STUN) — solid. So the incident was primarily (a) no timeout/feedback (now fixed) and (b) potential relay/codec tuning (P1 next).
