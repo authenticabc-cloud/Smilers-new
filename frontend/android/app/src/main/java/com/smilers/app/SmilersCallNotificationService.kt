@@ -23,15 +23,8 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
         private const val TAG = "SmilersCall"
         private const val CALL_CHANNEL_ID = "incoming-call-native-v1"
         private const val MISSED_CALL_CHANNEL_ID = "missed-call-native-v1"
-        // Dedicated NATIVE message channels — fresh ids so Android creates them with the
-        // correct Smilers message/group tones (channel sound is immutable once created, so
-        // we avoid colliding with any JS-created messages-v*/groups-v* channel that an older
-        // build may have registered with the wrong/default sound).
-        private const val MSG_CHANNEL_ID = "messages-native-v1-message_notification"
-        private const val GROUP_MSG_CHANNEL_ID = "groups-native-v1-group_notification"
         private const val NOTIFICATION_ID_BASE = 0x53004C
         private const val MISSED_NOTIFICATION_ID_BASE = 0x53104C
-        private const val MSG_NOTIFICATION_ID_BASE = 0x53204C
         private const val RING_TIMEOUT_MS = 35_000L
         // 5-minute window: backend sends direct + relay missed-call FCMs up to 2 min apart,
         // and FCMs can arrive 7+ min after the call ends (backend delay). Both must be caught
@@ -1396,30 +1389,11 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
 
     // ─── Native MESSAGE notification rendering ───────────────────────────────
     // Renders chat/group message pushes ourselves (device-contact name + Smilers
-    // message/group tone) instead of delegating to Expo, which auto-displayed them
-    // on the generic fallback channel with the account name + universal tone.
-
-    private fun ensureMessageChannel(channelId: String, name: String, soundRes: String) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (mgr.getNotificationChannel(channelId) != null) return
-        try {
-            val soundUri = Uri.parse("android.resource://$packageName/raw/$soundRes")
-            val audioAttrs = AudioAttributes.Builder()
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-                .build()
-            val channel = NotificationChannel(channelId, name, NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Smilers message notifications"
-                setSound(soundUri, audioAttrs)
-                enableVibration(true)
-                vibrationPattern = longArrayOf(0, 250, 250, 250)
-                lockscreenVisibility = Notification.VISIBILITY_PRIVATE
-            }
-            mgr.createNotificationChannel(channel)
-            Log.d(TAG, "ensureMessageChannel: created $channelId sound=$soundRes")
-        } catch (e: Exception) { Log.e(TAG, "ensureMessageChannel FAILED: ${e.message}", e) }
-    }
+    // message/group tone + WhatsApp-style MessagingStyle thread + inline reply)
+    // instead of delegating to Expo, which auto-displayed them on the generic
+    // fallback channel with the account name + universal tone. The actual
+    // building/threading lives in MessageThreadStore so the inline-reply
+    // receiver can re-post the same thread.
 
     // Reads a value out of React Native AsyncStorage. Supports BOTH backends the
     // library may use: legacy (DB `RKStorage`, table `catalystLocalStorage`) and the
@@ -1507,59 +1481,35 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
 
         val accountName = listOf(data["title"], data["displayName"], data["senderName"])
             .firstOrNull { !it.isNullOrBlank() }?.trim() ?: ""
-        val messageText = (data["message"] ?: data["body"] ?: "").trim().ifBlank { "New message" }
+        var messageText = (data["message"] ?: data["body"] ?: "").trim().ifBlank { "New message" }
         val senderPhone = (data["senderPhone"] ?: data["callerPhone"] ?: "").trim()
         val deviceName = lookupContactNameByPhone(senderPhone)
+        if (readHideMessagePreviewNative()) messageText = "New message"
 
-        var title: String
-        var body: String
-        if (isGroup) {
-            val groupName = listOf(data["conversationName"], data["title"])
-                .firstOrNull { !it.isNullOrBlank() }?.trim() ?: "Group"
-            val senderName = deviceName ?: accountName.takeIf { it.isNotBlank() && it != groupName } ?: ""
-            title = groupName
-            body = if (senderName.isNotBlank()) "$senderName: $messageText" else messageText
-        } else {
-            // Direct: prefer the saved DEVICE-CONTACT name; never surface the generic
-            // account label "Smilers" as the title.
-            title = deviceName
-                ?: accountName.takeIf { it.isNotBlank() && !it.equals("Smilers", true) }
-                ?: "New message"
-            body = messageText
-        }
-        if (readHideMessagePreviewNative()) body = "New message"
+        // Sender/person label + group title. Never surface the generic account
+        // label "Smilers" as the person's name.
+        val groupTitle = if (isGroup)
+            (listOf(data["conversationName"], data["title"]).firstOrNull { !it.isNullOrBlank() }?.trim() ?: "Group")
+        else ""
+        val personName = deviceName
+            ?: accountName.takeIf { it.isNotBlank() && !it.equals("Smilers", true) && it != groupTitle }
+            ?: "New message"
 
-        val channelId = if (isGroup) GROUP_MSG_CHANNEL_ID else MSG_CHANNEL_ID
+        val channelId = if (isGroup) MessageThreadStore.GROUP_MSG_CHANNEL_ID else MessageThreadStore.MSG_CHANNEL_ID
         val soundRes = if (isGroup) "group_notification" else "message_notification"
-        ensureMessageChannel(channelId, if (isGroup) "Group messages" else "Messages", soundRes)
-
-        val notifKey = convId.ifEmpty { dedupeId }
-        val notifId = MSG_NOTIFICATION_ID_BASE + (notifKey.hashCode() and 0x0FFF)
-        val tapUrl = if (convId.isNotEmpty()) "smilers://chat/$convId" else "smilers://home"
-        val tapIntent = Intent(this, MainActivity::class.java).apply {
-            action = Intent.ACTION_VIEW
-            setData(Uri.parse(tapUrl))
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        }
-        val tapPi = PendingIntent.getActivity(this, notifId, tapIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val soundUri = Uri.parse("android.resource://$packageName/raw/$soundRes")
-        val notification = NotificationCompat.Builder(this, channelId)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .setContentIntent(tapPi)
-            .setAutoCancel(true)
-            .setOnlyAlertOnce(false)
-            .setSound(soundUri) // pre-O devices (O+ uses the channel sound)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-            .build()
-        NotificationManagerCompat.from(this).notify(notifId, notification)
-        Log.d(TAG, "handleMessageNotification: posted natively id=$notifId group=$isGroup " +
-            "channel=$channelId title='$title' deviceName=${deviceName ?: "(none)"} phone=$senderPhone")
+        val notifId = MessageThreadStore.notifIdFor(convId, dedupeId)
+        val meta = MessageThreadStore.Meta(
+            convId = convId.ifEmpty { dedupeId },
+            channelId = channelId,
+            soundRes = soundRes,
+            notifId = notifId,
+            isGroup = isGroup,
+            groupTitle = groupTitle,
+        )
+        MessageThreadStore.recordIncoming(meta.convId, personName, messageText, meta)
+        MessageThreadStore.post(this, meta.convId, alertOnce = false)
+        Log.d(TAG, "handleMessageNotification: posted thread id=$notifId group=$isGroup " +
+            "channel=$channelId person='$personName' deviceName=${deviceName ?: "(none)"} phone=$senderPhone")
         return true
     }
 }

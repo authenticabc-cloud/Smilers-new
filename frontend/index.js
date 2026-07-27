@@ -5,6 +5,10 @@
 // context, so anything registered only inside a hook would never execute).
 import './src/push/backgroundTaskSetup';
 
+// Registers the headless JS task that sends replies typed into the Android
+// notification's inline "Reply" box (RemoteInput) — works even when killed.
+import './src/push/messageReplyTask';
+
 // Task 4 — register the Stream iOS CallKit/VoIP push config BEFORE the app
 // component registers, so incoming Stream calls ring via native CallKit even
 // when the app is killed. No-op on Android/web (guarded internally).
