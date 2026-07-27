@@ -412,6 +412,17 @@ export const styles = StyleSheet.create({
     textShadowColor: 'rgba(0,0,0,0.6)',
     textShadowRadius: 4,
   },
+  // iter-407/408: "video paused — weak network" tappable note during adaptive
+  // audio-only fallback. Its own overlay so it stays interactive (the top
+  // info bar fades with pointerEvents="none").
+  weakNetOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    paddingTop: 56,
+  },
   // iter-407: "video paused — weak network" note during adaptive audio-only fallback.
   weakNetPill: {
     flexDirection: 'row',

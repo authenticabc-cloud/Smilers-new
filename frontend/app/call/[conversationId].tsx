@@ -3047,14 +3047,26 @@ export function CallScreenInner() {
                 {otherName}
               </Text>
               <Text style={styles.videoStatus}>{isActive ? durationLabel : statusText}</Text>
-              {isActive && videoAutoPaused ? (
-                <View style={styles.weakNetPill} testID="video-paused-weak-network">
-                  <Feather name="wifi-off" size={12} color="#FFF" />
-                  <Text style={styles.weakNetText}>Video paused · weak network</Text>
-                </View>
-              ) : null}
             </SafeAreaView>
           </RNAnimated.View>
+          {/* iter-408: adaptive audio-only note — its OWN interactive, non-fading
+              overlay so it stays visible and tappable while video is paused. */}
+          {isActive && videoAutoPaused ? (
+            <SafeAreaView edges={['top']} style={styles.weakNetOverlay} pointerEvents="box-none">
+              <TouchableOpacity
+                style={styles.weakNetPill}
+                activeOpacity={0.7}
+                onPress={() => {
+                  setVideoAutoPaused(false);
+                  void sessionRef.current?.resumeVideoManually?.();
+                }}
+                testID="video-paused-weak-network"
+              >
+                <Feather name="video" size={13} color="#FFF" />
+                <Text style={styles.weakNetText}>Video paused · weak network — tap to resume</Text>
+              </TouchableOpacity>
+            </SafeAreaView>
+          ) : null}
           {/* Bottom controls overlay (fades + auto-hides) */}
           <RNAnimated.View
             style={[styles.videoControlsOverlayAnim, { opacity: controlsOpacity }]}

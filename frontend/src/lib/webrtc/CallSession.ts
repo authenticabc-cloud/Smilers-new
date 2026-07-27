@@ -72,6 +72,9 @@ export class CallSession {
   private bwLowStreak = 0;
   private bwOkStreak = 0;
   private videoAutoPaused = false;
+  // iter-408: while set (epoch ms), the adaptive monitor won't auto-pause the
+  // camera again — honours a user's manual "tap to resume video" override.
+  private manualVideoOverrideUntil = 0;
 
   private closed = false;
   /** When true, this session has handed its `pc`/streams to the mesh engine
@@ -395,6 +398,12 @@ export class CallSession {
     }
   }
 
+  /**
+   * Set the screen-share quality profile ('sharp' | 'smooth' | 'auto').
+   * In 'auto' mode we run the motion monitor to switch profiles based on
+   * detected on-screen motion. Re-applies the encode cap if already sharing.
+   */
+  async setScreenQuality(mode: 'sharp' | 'smooth' | 'auto'): Promise<void> {
     this.screenQuality = mode;
     if (mode === 'auto') {
       this.startMotionMonitor();
@@ -517,6 +526,11 @@ export class CallSession {
         (availOut === undefined || availOut > 250_000) && fractionLost < 0.05;
 
       if (!this.videoAutoPaused && isLow) {
+        // Respect a recent manual "resume video" override — don't fight the user.
+        if (Date.now() < this.manualVideoOverrideUntil) {
+          this.bwLowStreak = 0;
+          return;
+        }
         this.bwLowStreak += 1;
         this.bwOkStreak = 0;
         if (this.bwLowStreak >= 2) await this.setCameraPaused(true);
@@ -557,6 +571,18 @@ export class CallSession {
     } catch (e: any) {
       callDebug.push('ERR', `setCameraPaused(${paused}) failed: ${e?.message || e}`);
     }
+  }
+
+  /**
+   * iter-408: user tapped "resume video" on the weak-network note. Force the
+   * camera back on and suppress auto-pause for a grace window so the monitor
+   * doesn't immediately re-pause it on a still-marginal connection.
+   */
+  async resumeVideoManually(graceMs: number = 30000): Promise<void> {
+    this.manualVideoOverrideUntil = Date.now() + graceMs;
+    this.bwLowStreak = 0;
+    this.bwOkStreak = 0;
+    await this.setCameraPaused(false);
   }
 
   /**
