@@ -987,9 +987,17 @@ export function CallScreenInner() {
   // / comes online mid-ring.
   useEffect(() => {
     if (Platform.OS === 'web' || isScreenOnly) return undefined;
-    if (!isOutgoingRinging || callerNotRinging) return undefined;
+    if (!isOutgoingRinging || callerNotRinging) {
+      callDebug.push(
+        'CALL',
+        `ringback NOT started: outgoingRinging=${isOutgoingRinging} callerNotRinging=${callerNotRinging} (calleeAck=${calleeRingingAcked} calleeOffline=${calleeKnownOffline})`,
+      );
+      return undefined;
+    }
+    callDebug.push('CALL', 'ringback START (_BUNDLE_)');
     InCallAudio.startRingback();
     return () => {
+      callDebug.push('CALL', 'ringback STOP');
       InCallAudio.stopRingback();
     };
   }, [isOutgoingRinging, isScreenOnly, callerNotRinging]);

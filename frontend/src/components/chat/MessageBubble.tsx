@@ -5,11 +5,51 @@
  * security scan. Logic unchanged from app/chat/[conversationId].tsx.
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Linking, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { scanMessage, explainScanResult, extractUrls, enrichScanWithRemoteAPI } from '../../lib/securityScanner';
 import { useTextScamScan, describeScamCategory } from '../../lib/textScamScan';
 import { Colors, FontSize, FontWeight, Radius, Shadow } from '../../theme';
+
+// iter: make URLs in chat text tappable. Safe messages already passed the
+// render-time security scan (malicious links are blocked/hidden above), so
+// here we just linkify + confirm before opening an external link.
+const CHAT_URL_REGEX = /((?:https?:\/\/|www\.)[^\s]+)/gi;
+const IS_CHAT_URL = (s: string) => /^(?:https?:\/\/|www\.)[^\s]+$/i.test(s);
+const HAS_URL = (s: string) => /(?:https?:\/\/|www\.)[^\s]+/i.test(s);
+
+function LinkifiedBubbleText({ text, style }: { text: string; style: any }) {
+  if (!text || !HAS_URL(text)) {
+    return <Text style={style}>{text}</Text>;
+  }
+  const parts = text.split(CHAT_URL_REGEX);
+  const openLink = (raw: string) => {
+    const cleaned = raw.replace(/[.,);!?]+$/, '');
+    const url = /^https?:\/\//i.test(cleaned) ? cleaned : `https://${cleaned}`;
+    Alert.alert('Open link?', cleaned, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Open',
+        onPress: () => {
+          Linking.openURL(url).catch(() => Alert.alert('Could not open link', cleaned));
+        },
+      },
+    ]);
+  };
+  return (
+    <Text style={style}>
+      {parts.map((part, i) =>
+        IS_CHAT_URL(part) ? (
+          <Text key={`l-${i}`} style={styles.linkText} onPress={() => openLink(part)} suppressHighlighting>
+            {part}
+          </Text>
+        ) : (
+          <Text key={`t-${i}`}>{part}</Text>
+        ),
+      )}
+    </Text>
+  );
+}
 
 export function ActionRow({
   icon,
@@ -283,7 +323,7 @@ export function MessageBubble({
           </View>
         ) : null}
 
-        <Text style={styles.bubbleText}>{text}</Text>
+        <LinkifiedBubbleText text={text} style={styles.bubbleText} />
         <View style={styles.bubbleMeta}>
           {msg.starred ? (
             <Feather name="star" size={11} color={Colors.tickYellow} style={styles.starIcon} />
@@ -373,6 +413,10 @@ const styles = StyleSheet.create({
   bubbleText: {
     fontSize: FontSize.base,
     color: Colors.textPrimary,
+  },
+  linkText: {
+    color: Colors.primary,
+    textDecorationLine: 'underline',
   },
   quoteBlock: {
     flexDirection: 'row',

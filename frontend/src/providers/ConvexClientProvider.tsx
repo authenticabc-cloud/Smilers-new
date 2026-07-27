@@ -137,6 +137,36 @@ function useAuthForConvex() {
         // stuck unauthenticated → empty chats / "No chats yet" until a manual
         // sign-out/in.
         const token = await getFreshIdToken(forceRefreshToken);
+        // sml-authdiag: log EXACTLY what we hand Convex so a captured log
+        // reveals WHY Convex rejects it (the "No chats yet" limbo). We only log
+        // non-sensitive JWT claims (iss/aud/exp/sub-prefix) — never the token.
+        try {
+          if (!token) {
+            callDebug.push('AUTH', `fetchAccessToken(force=${forceRefreshToken}) → NULL token`);
+          } else {
+            const parts = String(token).split('.');
+            if (parts.length === 3) {
+              const pad = (s: string) => s + '='.repeat((4 - (s.length % 4)) % 4);
+              const b64 = (s: string) => pad(s.replace(/-/g, '+').replace(/_/g, '/'));
+              const claims = JSON.parse(
+                typeof atob === 'function'
+                  ? atob(b64(parts[1]))
+                  : Buffer.from(b64(parts[1]), 'base64').toString('utf8'),
+              );
+              const exp = typeof claims.exp === 'number' ? claims.exp : 0;
+              const secsLeft = exp ? Math.round(exp - Date.now() / 1000) : 0;
+              callDebug.push(
+                'AUTH',
+                `token→Convex iss=${claims.iss || '(none)'} aud=${JSON.stringify(claims.aud) || '(none)'} ` +
+                  `sub=${String(claims.sub || '').slice(0, 10)} expIn=${secsLeft}s force=${forceRefreshToken}`,
+              );
+            } else {
+              callDebug.push('AUTH', `token→Convex NON-JWT (parts=${parts.length}) force=${forceRefreshToken}`);
+            }
+          }
+        } catch (e: any) {
+          callDebug.push('AUTH', `token decode failed: ${String(e?.message || e).slice(0, 60)}`);
+        }
         return token;
       },
     }),
@@ -167,15 +197,33 @@ function useAuthForConvex() {
 // ────────────────────────────────────────────────────────────────────────────
 const MISMATCH_REAUTH_MS = 4_000;
 const MISMATCH_RECREATE_MS = 12_000;
-const RECREATE_COOLDOWN_MS = 60_000;
+const RECREATE_COOLDOWN_MS = 30_000;
+// After this many consecutive recreates that DON'T restore auth, stop the
+// recreate loop for a long window. A recreate remounts this whole subtree
+// (so a per-component ref can't govern it) AND if Convex is rejecting the
+// token server-side (e.g. OIDC aud/iss mismatch after a backend migration) no
+// amount of recreating helps — it just burns battery + spams push register.
+const MAX_CONSECUTIVE_RECREATES = 3;
+const RECREATE_HALT_MS = 5 * 60_000;
+
+// Module-scoped governor so it SURVIVES the client-recreate remount.
+const recreateGov = { lastAt: 0, consecutive: 0, haltedUntil: 0 };
 
 function ConvexAuthWatchdog({ onRecreate }: { onRecreate: () => void }) {
   const { isAuthenticated: localAuthed, sessionExpired } = useAuth();
   const { isLoading: convexAuthLoading, isAuthenticated: convexAuthed } = useConvexAuth();
-  const lastRecreateAtRef = useRef(0);
 
   // True when we have a usable local session but Convex is NOT authenticated.
   const mismatch = !!localAuthed && !sessionExpired && !convexAuthLoading && !convexAuthed;
+
+  // Reset the recreate governor the moment Convex authenticates — recovery
+  // worked, so future blips get the full retry budget again.
+  useEffect(() => {
+    if (convexAuthed) {
+      recreateGov.consecutive = 0;
+      recreateGov.haltedUntil = 0;
+    }
+  }, [convexAuthed]);
 
   useEffect(() => {
     if (!mismatch) return undefined;
@@ -186,12 +234,24 @@ function ConvexAuthWatchdog({ onRecreate }: { onRecreate: () => void }) {
     }, MISMATCH_REAUTH_MS);
     const recreateTimer = setTimeout(() => {
       const now = Date.now();
-      if (now - lastRecreateAtRef.current < RECREATE_COOLDOWN_MS) {
+      if (now < recreateGov.haltedUntil) {
+        callDebug.push('CONVEX', 'auth-watchdog: stage2 recreate HALTED (backoff — token likely rejected server-side)');
+        return;
+      }
+      if (now - recreateGov.lastAt < RECREATE_COOLDOWN_MS) {
         callDebug.push('CONVEX', 'auth-watchdog: stage2 recreate skipped (cooldown)');
         return;
       }
-      lastRecreateAtRef.current = now;
-      callDebug.push('CONVEX', 'auth-watchdog: stage2 recreating Convex client (still unauthenticated)');
+      recreateGov.lastAt = now;
+      recreateGov.consecutive += 1;
+      if (recreateGov.consecutive >= MAX_CONSECUTIVE_RECREATES) {
+        recreateGov.haltedUntil = now + RECREATE_HALT_MS;
+        callDebug.push(
+          'CONVEX',
+          `auth-watchdog: recreate loop HALTED after ${recreateGov.consecutive} failed attempts — Convex is rejecting the token (check OIDC aud/iss vs Convex auth.config). Will retry on next foreground.`,
+        );
+      }
+      callDebug.push('CONVEX', `auth-watchdog: stage2 recreating Convex client (attempt ${recreateGov.consecutive})`);
       onRecreate();
     }, MISMATCH_RECREATE_MS);
     return () => {
@@ -200,12 +260,14 @@ function ConvexAuthWatchdog({ onRecreate }: { onRecreate: () => void }) {
     };
   }, [mismatch, onRecreate]);
 
-  // Re-evaluate promptly on foreground: if we resume into a mismatch, kick a
-  // reauth immediately (rate-limited) rather than waiting for the timer.
+  // Re-evaluate promptly on foreground: if we resume into a mismatch, clear any
+  // recreate halt (fresh user attention) and kick a reauth immediately.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
       if (next !== 'active') return;
       if (localAuthed && !sessionExpired && !convexAuthLoading && !convexAuthed) {
+        recreateGov.haltedUntil = 0;
+        recreateGov.consecutive = 0;
         requestConvexReauth('auth-watchdog-foreground');
       }
     });
