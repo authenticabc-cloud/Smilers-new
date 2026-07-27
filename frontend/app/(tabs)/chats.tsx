@@ -902,6 +902,29 @@ export default function ChatsScreen() {
                 </View>
                 <Text style={styles.emptyTitle}>No chats yet</Text>
                 <Text style={styles.emptySub}>Go to Contacts to start a new conversation</Text>
+                {/* Manual recovery escape hatch. On very poor networks the
+                    overnight token-refresh race can leave the app signed-in
+                    locally but Convex unauthenticated → chats look empty. This
+                    forces a fresh re-auth + socket reconnect on demand (the
+                    auto-watchdog also does this, but users on the worst
+                    networks get a one-tap fix here too). */}
+                <TouchableOpacity
+                  style={styles.reconnectBtn}
+                  onPress={handlePullToReconnect}
+                  activeOpacity={0.7}
+                  disabled={reconnecting}
+                  testID="chats-empty-reconnect"
+                >
+                  <Feather
+                    name="refresh-cw"
+                    size={15}
+                    color={Colors.primary}
+                    style={{ marginRight: 8 }}
+                  />
+                  <Text style={styles.reconnectBtnText}>
+                    {reconnecting ? 'Reconnecting…' : "Not seeing your chats? Reconnect"}
+                  </Text>
+                </TouchableOpacity>
               </View>
             )
           ) : null
@@ -1120,6 +1143,22 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     fontWeight: FontWeight.bold,
     color: Colors.white,
+  },
+  reconnectBtn: {
+    marginTop: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    backgroundColor: 'transparent',
+  },
+  reconnectBtnText: {
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.bold,
+    color: Colors.primary,
   },
   whatsNewCard: {
     flexDirection: 'row',
