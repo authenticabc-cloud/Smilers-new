@@ -30,6 +30,13 @@ export type CallSessionOptions = {
   /** Fired (in 'auto' screen-quality mode) when the auto-detector switches
    * the active profile based on detected motion. */
   onScreenAutoProfile?: (profile: 'sharp' | 'smooth') => void;
+  /**
+   * iter-407: fired when the adaptive monitor pauses the outgoing camera
+   * because bandwidth collapsed (paused=true) or restores it once the network
+   * recovers (paused=false). Lets the UI show a "video paused — weak network"
+   * note while keeping a crystal-clear voice call.
+   */
+  onLowBandwidthVideo?: (paused: boolean) => void;
 };
 
 /**
@@ -59,6 +66,12 @@ export class CallSession {
   private motionPrevBytes = 0;
   private motionPrevTs = 0;
   private motionStreak = 0;
+
+  // iter-407: adaptive audio-only fallback bookkeeping.
+  private bwTimer: ReturnType<typeof setInterval> | null = null;
+  private bwLowStreak = 0;
+  private bwOkStreak = 0;
+  private videoAutoPaused = false;
 
   private closed = false;
   /** When true, this session has handed its `pc`/streams to the mesh engine
@@ -459,6 +472,93 @@ export class CallSession {
     this.motionStreak = 0;
   }
 
+  // ─── iter-407: adaptive audio-only fallback ────────────────────────────
+  // On a video call, poll WebRTC stats. If bandwidth collapses (low available
+  // outgoing bitrate and/or sustained packet loss), PAUSE the outgoing camera
+  // so the scarce data budget goes entirely to keeping voice clear. When the
+  // network recovers, restore the camera. Hysteresis (streak counters) avoids
+  // flapping. Guarded end-to-end so it can never disrupt the call.
+  private startBandwidthMonitor(): void {
+    if (this.bwTimer || this.opts.callType !== 'video') return;
+    this.bwLowStreak = 0;
+    this.bwOkStreak = 0;
+    this.bwTimer = setInterval(() => {
+      void this.sampleBandwidth();
+    }, 3000);
+  }
+
+  private stopBandwidthMonitor(): void {
+    if (this.bwTimer) {
+      clearInterval(this.bwTimer);
+      this.bwTimer = null;
+    }
+    this.bwLowStreak = 0;
+    this.bwOkStreak = 0;
+  }
+
+  private async sampleBandwidth(): Promise<void> {
+    if (!this.pc || this.detached || this.screenShareActive) return;
+    try {
+      const stats: any = await (this.pc as any).getStats();
+      let availOut: number | undefined;
+      let fractionLost = 0;
+      stats.forEach((r: any) => {
+        if (r.type === 'candidate-pair' && (r.nominated || r.state === 'succeeded')) {
+          if (typeof r.availableOutgoingBitrate === 'number') availOut = r.availableOutgoingBitrate;
+        }
+        if (r.type === 'remote-inbound-rtp' && r.kind === 'video') {
+          if (typeof r.fractionLost === 'number') fractionLost = r.fractionLost;
+        }
+      });
+      // LOW when the pipe is tiny OR loss is heavy; OK when comfortably clear.
+      const isLow =
+        (typeof availOut === 'number' && availOut < 80_000) || fractionLost > 0.15;
+      const isOk =
+        (availOut === undefined || availOut > 250_000) && fractionLost < 0.05;
+
+      if (!this.videoAutoPaused && isLow) {
+        this.bwLowStreak += 1;
+        this.bwOkStreak = 0;
+        if (this.bwLowStreak >= 2) await this.setCameraPaused(true);
+      } else if (this.videoAutoPaused && isOk) {
+        this.bwOkStreak += 1;
+        this.bwLowStreak = 0;
+        if (this.bwOkStreak >= 2) await this.setCameraPaused(false);
+      } else {
+        this.bwLowStreak = 0;
+        this.bwOkStreak = 0;
+      }
+    } catch {
+      /* stats unavailable on this device — skip */
+    }
+  }
+
+  private async setCameraPaused(paused: boolean): Promise<void> {
+    if (this.videoAutoPaused === paused || !this.pc) return;
+    this.videoAutoPaused = paused;
+    try {
+      const senders = (this.pc as any).getSenders ? (this.pc as any).getSenders() : [];
+      const videoSender = senders.find((s: any) => s?.track?.kind === 'video');
+      if (videoSender?.getParameters && videoSender.setParameters) {
+        const params = videoSender.getParameters();
+        if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+        params.encodings.forEach((enc: any) => {
+          enc.active = !paused;
+        });
+        await videoSender.setParameters(params);
+      }
+      if (videoSender?.track) videoSender.track.enabled = !paused;
+      if (!paused) {
+        // Re-apply the low-bandwidth camera cap when resuming.
+        await this.applyCameraEncodingParameters();
+      }
+      callDebug.push('PC', `adaptive: camera ${paused ? 'PAUSED (weak network)' : 'RESUMED'}`);
+      this.opts.onLowBandwidthVideo?.(paused);
+    } catch (e: any) {
+      callDebug.push('ERR', `setCameraPaused(${paused}) failed: ${e?.message || e}`);
+    }
+  }
+
   /**
    * Stop screen sharing. If `cameraStream` is provided (video call), restore
    * the camera track. Otherwise just stop the screen track (voice call).
@@ -654,6 +754,14 @@ export class CallSession {
       if (state) {
         callDebug.push('PC', `state=${state}`);
         this.opts.onConnectionStateChange?.(state);
+        // iter-407: run the adaptive audio-only monitor only while connected.
+        if (state === 'connected' || state === 'completed') {
+          if (this.opts.callType === 'video' && !this.screenShareActive) {
+            this.startBandwidthMonitor();
+          }
+        } else {
+          this.stopBandwidthMonitor();
+        }
       }
     });
 
@@ -1115,6 +1223,7 @@ export class CallSession {
     this.closed = true;
 
     this.stopMotionMonitor();
+    this.stopBandwidthMonitor();
 
     // iter-128: cancel any pending ICE restart timer so it doesn't fire
     // after the call is torn down.

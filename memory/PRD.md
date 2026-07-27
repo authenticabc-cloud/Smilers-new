@@ -1,5 +1,11 @@
 # Smilers Mobile App — PRD
 
+## iter-407 (Jun 2026): Automatic audio-only fallback on weak networks (potential improvement)
+- Added an adaptive bandwidth monitor to the 1:1 WebRTC call (`src/lib/webrtc/CallSession.ts`): while a video call is `connected`, polls `getStats()` every 3s for `availableOutgoingBitrate` + video `fractionLost`. On sustained LOW (<80kbps or >15% loss, 2 samples) it PAUSES the outgoing camera (`encodings.active=false` + `track.enabled=false`) so the data budget keeps VOICE clear; on sustained recovery (>250kbps & <5% loss) it RESUMES the camera and re-applies the low-bandwidth cap. Hysteresis prevents flapping; all guarded in try/catch; started/stopped via connectionstatechange + `close()`; never runs for screen-share/audio-only.
+- New opt `onLowBandwidthVideo(paused)`; the call screen (`app/call/[conversationId].tsx`) shows a subtle "Video paused · weak network" pill (`weakNetPill`/`weakNetText` in `callScreenStyles.ts`) during fallback and clears it on recovery.
+- Lint clean; app boots. Native-only → validate after APK rebuild (simulate poor data mid video call → video auto-pauses with the note, voice stays clear, restores when network recovers).
+
+
 ## iter-406 (Jun 2026): P1 low-bandwidth call tuning + P4 offline resilience (verified existing)
 - **P1 (2a) — DONE:** added `applyCameraEncodingParameters()` to `src/lib/webrtc/CallSession.ts` — caps the CAMERA video sender to ~0.5 Mbps / 24fps / `degradationPreference: maintain-framerate` / gentle `scaleResolutionDownBy` so 1:1 video calls connect fast and stay smooth on expensive/scarce mobile data. Applied after createOffer AND createAnswer (both peers). Guarded by `!screenShareActive` + `callType==='video'` and wrapped in try/catch so it can NEVER break a call; screen-share keeps its own higher caps (legibility). Audio already Opus (~24-40kbps).
 - **P4 (4a) — ALREADY IMPLEMENTED (verified, not rebuilt):** `app/chat/[conversationId].tsx` already has a persistent AsyncStorage outbox (`src/lib/outbox.ts`): text messages that fail while offline queue with a RED dot and auto-flush on reconnect (NetInfo) + app-foreground (AppState); `src/lib/offlineCache.ts` caches content with a "showing saved messages" banner. Known limitation (by design): E2EE/media messages aren't queued (need live keys/upload). Left as-is.

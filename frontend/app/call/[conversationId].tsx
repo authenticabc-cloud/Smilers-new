@@ -646,6 +646,9 @@ export function CallScreenInner() {
   // instead of spinning indefinitely on a weak/expensive network.
   const [slowConnect, setSlowConnect] = useState(false);
   const [callFailed, setCallFailed] = useState(false);
+  // iter-407: true while the adaptive monitor has paused our camera to keep
+  // voice clear on a weak network. Drives a subtle "video paused" note.
+  const [videoAutoPaused, setVideoAutoPaused] = useState(false);
   const [permissionDenied, setPermissionDenied] = useState(false);
   // iter-189: true once the WebRTC connection actually reaches 'connected'.
   // The screen-only sharer UI uses this to say "Waiting for the recipient
@@ -1413,6 +1416,7 @@ export function CallScreenInner() {
         },
         onError: (err) => console.warn('[Call] error:', err?.message),
         onScreenAutoProfile: (profile) => setAutoActiveProfile(profile),
+        onLowBandwidthVideo: (paused) => setVideoAutoPaused(paused),
       });
 
       sessionRef.current = session;
@@ -3043,6 +3047,12 @@ export function CallScreenInner() {
                 {otherName}
               </Text>
               <Text style={styles.videoStatus}>{isActive ? durationLabel : statusText}</Text>
+              {isActive && videoAutoPaused ? (
+                <View style={styles.weakNetPill} testID="video-paused-weak-network">
+                  <Feather name="wifi-off" size={12} color="#FFF" />
+                  <Text style={styles.weakNetText}>Video paused · weak network</Text>
+                </View>
+              ) : null}
             </SafeAreaView>
           </RNAnimated.View>
           {/* Bottom controls overlay (fades + auto-hides) */}

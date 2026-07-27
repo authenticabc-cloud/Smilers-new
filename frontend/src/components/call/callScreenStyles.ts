@@ -412,4 +412,20 @@ export const styles = StyleSheet.create({
     textShadowColor: 'rgba(0,0,0,0.6)',
     textShadowRadius: 4,
   },
+  // iter-407: "video paused — weak network" note during adaptive audio-only fallback.
+  weakNetPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  weakNetText: {
+    color: '#FFFFFF',
+    fontSize: FontSize.xs,
+    fontWeight: '700',
+  },
 });
