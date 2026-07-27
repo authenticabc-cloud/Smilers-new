@@ -1,5 +1,6 @@
-import React, { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ConvexReactClient, ConvexProviderWithAuth } from 'convex/react';
+import React, { ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { AppState } from 'react-native';
+import { ConvexReactClient, ConvexProviderWithAuth, useConvexAuth } from 'convex/react';
 import { useAuth } from './AuthProvider';
 import { useConvexAutoReconnect } from './useConvexAutoReconnect';
 import { callDebug } from '../lib/callDebugLog';
@@ -8,6 +9,56 @@ function makeConvexClient() {
   return new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL!, {
     unsavedChangesWarning: false,
   });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// sml-auth-epoch — force ConvexProviderWithAuth to re-run `setAuth` (re-fetch a
+// fresh OIDC id_token) on demand, WITHOUT keying the auth memo on the raw token
+// string (which iter-316 proved causes an infinite re-auth loop, because
+// Hercules rotates the token on every refresh).
+//
+// The pattern (validated against Convex custom-auth docs): keep a monotonic
+// epoch that we bump ONLY when we detect the "logged-in locally but Convex
+// unauthenticated" limbo — this changes the memoised `fetchAccessToken`
+// identity exactly once per recovery, so Convex re-authenticates but does not
+// loop. This is the fix for the overnight/slow-network case where the id_token
+// expired, the cold-start token refresh lost the discovery race, and Convex
+// settled unauthenticated forever (empty chats, "?" avatar, no contacts) until
+// a full app restart.
+// ────────────────────────────────────────────────────────────────────────────
+let authEpoch = 0;
+const epochListeners = new Set<() => void>();
+let lastReauthAt = 0;
+const REAUTH_COOLDOWN_MS = 5_000;
+
+function subscribeEpoch(cb: () => void): () => void {
+  epochListeners.add(cb);
+  return () => {
+    epochListeners.delete(cb);
+  };
+}
+function getEpochSnapshot(): number {
+  return authEpoch;
+}
+
+/**
+ * Ask Convex to re-authenticate with a genuinely fresh token. Rate-limited so a
+ * flapping mismatch can't storm the OIDC endpoint. Returns true if a bump fired.
+ */
+export function requestConvexReauth(reason: string = 'manual'): boolean {
+  const now = Date.now();
+  if (now - lastReauthAt < REAUTH_COOLDOWN_MS) return false;
+  lastReauthAt = now;
+  authEpoch += 1;
+  try {
+    callDebug.push('CONVEX', `reauth epoch → ${authEpoch} (${reason})`);
+  } catch {}
+  epochListeners.forEach((l) => {
+    try {
+      l();
+    } catch {}
+  });
+  return true;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -71,6 +122,9 @@ function installFatalErrorWatcher() {
 
 function useAuthForConvex() {
   const { isLoading, isAuthenticated, getFreshIdToken } = useAuth();
+  // Subscribe to the reauth epoch. When it bumps we return a NEW memo identity
+  // so ConvexProviderWithAuth re-runs setAuth and re-fetches a fresh token.
+  const epoch = useSyncExternalStore(subscribeEpoch, getEpochSnapshot, getEpochSnapshot);
 
   return useMemo(
     () => ({
@@ -93,8 +147,76 @@ function useAuthForConvex() {
     // (device log showed AUTH "refresh OK force=true" + CONVEX hardReconnect
     // firing every 1-2s). Convex re-fetches the token on its OWN reconnect, so
     // this memo MUST stay stable across token rotations. Do NOT add idToken.
-    [isLoading, isAuthenticated, getFreshIdToken]
+    // `epoch` is safe (unlike idToken) because it bumps ONLY on explicit
+    // recovery (requestConvexReauth), never on every token rotation.
+    [isLoading, isAuthenticated, getFreshIdToken, epoch]
   );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// sml-auth-watchdog — self-heal the "logged-in locally but Convex
+// unauthenticated" limbo. Mounted INSIDE ConvexProviderWithAuth so useConvexAuth()
+// reports Convex's real auth state. When we hold a valid local session
+// (idToken present, not terminally expired) but Convex is settled
+// unauthenticated, escalate:
+//   1) after MISMATCH_REAUTH_MS  → requestConvexReauth() (fresh token, cheap)
+//   2) after MISMATCH_RECREATE_MS → recreate the client (re-subscribe + re-auth)
+// Timers reset the instant Convex authenticates. Rate-limited recreate so a
+// genuinely-dead refresh token (which routes to the sign-in wall via
+// sessionExpired) can't loop-recreate.
+// ────────────────────────────────────────────────────────────────────────────
+const MISMATCH_REAUTH_MS = 4_000;
+const MISMATCH_RECREATE_MS = 12_000;
+const RECREATE_COOLDOWN_MS = 60_000;
+
+function ConvexAuthWatchdog({ onRecreate }: { onRecreate: () => void }) {
+  const { isAuthenticated: localAuthed, sessionExpired } = useAuth();
+  const { isLoading: convexAuthLoading, isAuthenticated: convexAuthed } = useConvexAuth();
+  const lastRecreateAtRef = useRef(0);
+
+  // True when we have a usable local session but Convex is NOT authenticated.
+  const mismatch = !!localAuthed && !sessionExpired && !convexAuthLoading && !convexAuthed;
+
+  useEffect(() => {
+    if (!mismatch) return undefined;
+    callDebug.push('CONVEX', 'auth-watchdog: local session OK but Convex UNAUTHENTICATED — scheduling recovery');
+    const reauthTimer = setTimeout(() => {
+      const fired = requestConvexReauth('auth-watchdog-mismatch');
+      callDebug.push('CONVEX', `auth-watchdog: stage1 reauth ${fired ? 'fired' : 'rate-limited'}`);
+    }, MISMATCH_REAUTH_MS);
+    const recreateTimer = setTimeout(() => {
+      const now = Date.now();
+      if (now - lastRecreateAtRef.current < RECREATE_COOLDOWN_MS) {
+        callDebug.push('CONVEX', 'auth-watchdog: stage2 recreate skipped (cooldown)');
+        return;
+      }
+      lastRecreateAtRef.current = now;
+      callDebug.push('CONVEX', 'auth-watchdog: stage2 recreating Convex client (still unauthenticated)');
+      onRecreate();
+    }, MISMATCH_RECREATE_MS);
+    return () => {
+      clearTimeout(reauthTimer);
+      clearTimeout(recreateTimer);
+    };
+  }, [mismatch, onRecreate]);
+
+  // Re-evaluate promptly on foreground: if we resume into a mismatch, kick a
+  // reauth immediately (rate-limited) rather than waiting for the timer.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next !== 'active') return;
+      if (localAuthed && !sessionExpired && !convexAuthLoading && !convexAuthed) {
+        requestConvexReauth('auth-watchdog-foreground');
+      }
+    });
+    return () => {
+      try {
+        sub.remove();
+      } catch {}
+    };
+  }, [localAuthed, sessionExpired, convexAuthLoading, convexAuthed]);
+
+  return null;
 }
 
 /**
@@ -149,6 +271,7 @@ export function ConvexClientProvider({ children }: { children: ReactNode }) {
 
   return (
     <ConvexProviderWithAuth key={generation} client={client} useAuth={useAuthForConvex}>
+      <ConvexAuthWatchdog onRecreate={recreate} />
       <ConvexAutoReconnectBridge client={client}>{children}</ConvexAutoReconnectBridge>
     </ConvexProviderWithAuth>
   );

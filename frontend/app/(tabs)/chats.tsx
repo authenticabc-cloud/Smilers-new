@@ -27,6 +27,7 @@ import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src
 // silently died (the "ghost connection" pattern called out by Emergent
 // support). Wired to the existing manual escape hatch from v2.1.83.
 import { forceConvexReconnect } from '../../src/providers/useConvexAutoReconnect';
+import { requestConvexReauth } from '../../src/providers/ConvexClientProvider';
 // iter-221: connection-status banner + foreground-triggered auto-refresh.
 import ConnectionStatusBanner from '../../src/components/ConnectionStatusBanner';
 import { AppState } from 'react-native';
@@ -306,6 +307,12 @@ export default function ChatsScreen() {
     if (callHost.isActive()) return;
     setReconnecting(true);
     try {
+      // Force a fresh Convex re-authentication (rotate the OIDC id_token) in
+      // addition to the socket reconnect. On slow networks the overnight
+      // token-refresh race can leave Convex unauthenticated — a plain socket
+      // reconnect reuses the SAME rejected token, so we bump the auth epoch to
+      // actually mint a fresh one, then reconnect the socket.
+      requestConvexReauth('chats-pull-to-refresh');
       await forceConvexReconnect('chats-pull-to-refresh');
     } catch {
       /* never let pull-to-refresh crash the app */
@@ -423,6 +430,7 @@ export default function ChatsScreen() {
       if (!recoveredEmptyRef.current && now - lastEmptyRecoverAtRef.current > 30_000) {
         recoveredEmptyRef.current = true;
         lastEmptyRecoverAtRef.current = now;
+        requestConvexReauth('chats-empty-with-cache');
         void forceConvexReconnect('chats-empty-with-cache');
       }
     } else if (liveHasRows) {
