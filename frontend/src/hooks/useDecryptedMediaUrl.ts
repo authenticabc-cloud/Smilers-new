@@ -188,6 +188,53 @@ function writeDecryptedToCache(
   return file.uri;
 }
 
+// Persistent decrypted-file cache size cap. Large files can pile up on disk;
+// keep total under CACHE_CAP_BYTES, evicting the OLDEST files down to
+// CACHE_TARGET_BYTES (headroom) when exceeded.
+const CACHE_CAP_BYTES = 200 * 1024 * 1024; // 200 MB
+const CACHE_TARGET_BYTES = 150 * 1024 * 1024; // evict down to 150 MB
+let lastPruneAt = 0;
+
+/**
+ * Best-effort LRU eviction of the on-disk decrypted cache so large-file
+ * caching never bloats device storage. Throttled to run at most every 5 min.
+ */
+export async function pruneDecryptedCache(force = false): Promise<void> {
+  const now = Date.now();
+  if (!force && now - lastPruneAt < 5 * 60 * 1000) return;
+  lastPruneAt = now;
+  try {
+    const dir = new Directory(Paths.cache, 'smilers-e2ee');
+    if (!dir.exists) return;
+    const files = dir
+      .list()
+      .filter((e): e is File => e instanceof File)
+      .map((f) => ({ f, size: f.size ?? 0, mtime: f.modificationTime ?? 0 }));
+    let total = files.reduce((sum, x) => sum + x.size, 0);
+    if (total <= CACHE_CAP_BYTES) return;
+    files.sort((a, b) => a.mtime - b.mtime); // oldest first
+    const deletedUris: string[] = [];
+    for (const item of files) {
+      if (total <= CACHE_TARGET_BYTES) break;
+      try {
+        deletedUris.push(item.f.uri);
+        item.f.delete();
+        total -= item.size;
+      } catch {
+        // skip files we can't delete
+      }
+    }
+    // Drop any in-memory entries that pointed at evicted files so they get
+    // re-materialized on next open instead of returning a dead URI.
+    if (deletedUris.length) {
+      for (const [key, value] of decryptedCache) {
+        if (deletedUris.includes(value)) decryptedCache.delete(key);
+      }
+    }
+  } catch {
+    // best-effort — never throw from cache maintenance
+  }
+}
 // Returns the URI of a previously-decrypted cache file if it still exists on
 // disk (survives app restarts / in-memory cache clears), so re-opening a large
 // file is instant — no re-download, no re-decrypt. Uses the same deterministic
@@ -341,6 +388,9 @@ export function useDecryptedMediaUrl(msg: any, e2ee: E2EEStatus | null | undefin
         if (messageId) decryptedCache.set(messageId, materializedUrl);
         setUrl(materializedUrl);
         setLoading(false);
+        // Opportunistically keep the on-disk cache under its size cap (throttled
+        // internally). Only meaningful for the file-backed (non-image) path.
+        if (type !== 'image') void pruneDecryptedCache();
       } catch (errorValue: any) {
         if (cancelledRef.current) return;
         // eslint-disable-next-line no-console

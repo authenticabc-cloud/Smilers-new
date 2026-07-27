@@ -1,5 +1,10 @@
 # Smilers Mobile App — PRD
 
+## iter-413 (Jun 2026): Decrypted-cache size cap (LRU eviction)
+- Added `pruneDecryptedCache()` in `useDecryptedMediaUrl.ts`: scans the on-disk decrypted cache (`Paths.cache/smilers-e2ee`) and, when total > 200 MB, evicts the OLDEST files (by `modificationTime`) down to 150 MB (headroom). Also drops matching in-memory `decryptedCache` entries so an evicted file is re-materialized rather than returning a dead URI.
+- Runs opportunistically after each file-backed decrypt (throttled internally to at most once / 5 min), best-effort (never throws). Keeps the instant-reopen cache from bloating device storage.
+
+
 ## iter-412 (Jun 2026): Persistent decrypted-file cache + "Save to Files" shortcut
 - **Instant re-open:** `useDecryptedMediaUrl` now checks the on-disk decrypted cache (`Paths.cache/smilers-e2ee/<msgId>.<ext>`, via `existingDecryptedCacheUri`) BEFORE downloading/decrypting — so re-opening a large file (even after an app restart / in-memory cache clear) skips both the download and the AES-GCM decrypt. Images (data URIs) are skipped.
 - **Save to Files:** `FileMessage` now shows a "Save to Files" shortcut under the document row. It reuses the decrypt-then-act flow (`trigger('save')`) and opens the OS share sheet with a "Save to Files" title (the platform-correct save entry point). For lazy large files it decrypts first (with progress) then presents the sheet.
