@@ -2212,7 +2212,7 @@ function PollMessage({ msg }: { msg: any }) {
 }
 
 function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e2eeStatus: E2EEStatus | null }) {
-  const { url: src, error: srcError, loading, deferred, decrypt } = useDecryptedMediaUrl(msg, e2eeStatus);
+  const { url: src, error: srcError, loading, deferred, decrypt, progress } = useDecryptedMediaUrl(msg, e2eeStatus);
   useAutoDownloadMedia({ msg, isMine, src, mediaType: 'document' });
   const markConsumed = useMarkConsumedOnce(msg, isMine);
 
@@ -2302,9 +2302,22 @@ function FileMessage({ msg, isMine, e2eeStatus }: { msg: any; isMine: boolean; e
           <Text style={[styles.fileName, isMine ? styles.fileNameMine : null]} numberOfLines={2}>{msg.fileName || 'Document'}</Text>
           <Text style={[styles.fileMeta, isMine ? styles.fileMetaMine : null]}>
             {loading
-              ? 'Decrypting…'
+              ? (progress && progress.total > 0
+                  ? `Downloading… ${formatBytes(progress.received)} / ${formatBytes(progress.total)}`
+                  : 'Decrypting…')
               : ([formatBytes(msg.fileSize), msg.mimeType?.split('/')?.pop()?.toUpperCase()].filter(Boolean).join(' · ') || 'File')}
           </Text>
+          {loading && progress && progress.total > 0 ? (
+            <View style={[styles.fileProgressTrack, isMine ? styles.fileProgressTrackMine : null]}>
+              <View
+                style={[
+                  styles.fileProgressFill,
+                  isMine ? styles.fileProgressFillMine : null,
+                  { width: `${Math.min(100, Math.round((progress.received / progress.total) * 100))}%` },
+                ]}
+              />
+            </View>
+          ) : null}
         </View>
         {loading ? (
           <ActivityIndicator size="small" color={isMine ? '#F6FFF9' : Colors.primary} />
@@ -2761,6 +2774,16 @@ const styles = StyleSheet.create({
   },
   fileMeta: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
   fileMetaMine: { color: 'rgba(246,255,249,0.78)' },
+  fileProgressTrack: {
+    height: 4,
+    borderRadius: 2,
+    marginTop: 6,
+    backgroundColor: 'rgba(0,0,0,0.10)',
+    overflow: 'hidden',
+  },
+  fileProgressTrackMine: { backgroundColor: 'rgba(246,255,249,0.25)' },
+  fileProgressFill: { height: '100%', borderRadius: 2, backgroundColor: Colors.primary },
+  fileProgressFillMine: { backgroundColor: '#F6FFF9' },
   viewerWrap: { flex: 1, backgroundColor: '#000' },
   viewerBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   viewerImage: { width: '100%', height: '100%' },

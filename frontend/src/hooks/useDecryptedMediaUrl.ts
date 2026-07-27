@@ -21,6 +21,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { File, Directory, Paths } from 'expo-file-system';
+// Legacy module still exposes `createDownloadResumable` with byte-level progress
+// callbacks (the new File API has no progress hook).
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { decryptBytes } from '../lib/e2eeCrypto';
 import { getMessageMediaUrl } from './useResolvedStorageUrl';
 import type { E2EEStatus } from './useConversationE2EE';
@@ -34,6 +37,8 @@ export interface DecryptedMediaResult {
   deferred?: boolean;
   /** Kicks off deferred decryption (no-op if already armed/decrypted). */
   decrypt?: () => void;
+  /** Byte-level download progress while fetching a large encrypted blob. */
+  progress?: { received: number; total: number } | null;
 }
 
 // Files at/above this size are NOT auto-decrypted on render — decrypting a big
@@ -88,7 +93,10 @@ function bytesToBase64(bytes: Uint8Array): string {
     : '';
 }
 
-async function fetchEncryptedBytes(url: string): Promise<Uint8Array> {
+async function fetchEncryptedBytes(
+  url: string,
+  onProgress?: (received: number, total: number) => void
+): Promise<Uint8Array> {
   // NATIVE (iter-410): stream the ciphertext straight to disk and read it back
   // with the native `bytes()` reader. React Native's `fetch(...).arrayBuffer()`
   // routes large bodies through a blob→base64→decode path that roughly TRIPLES
@@ -96,7 +104,7 @@ async function fetchEncryptedBytes(url: string): Promise<Uint8Array> {
   // failed here while small files worked). Streaming to disk keeps peak memory
   // at ~1x and skips base64 entirely.
   if (Platform.OS !== 'web') {
-    let temp: File | null = null;
+    let outUri: string | null = null;
     try {
       const dir = new Directory(Paths.cache, 'smilers-e2ee-dl');
       try {
@@ -104,10 +112,40 @@ async function fetchEncryptedBytes(url: string): Promise<Uint8Array> {
       } catch {
         // directory already exists
       }
-      // downloadFileAsync returns the File it wrote to (name derived from the
-      // URL / content-disposition). Stream to disk = ~1x peak memory.
-      temp = await File.downloadFileAsync(url, dir);
-      const bytes = await temp.bytes();
+
+      const legacy: any = LegacyFileSystem;
+      const cacheBase: string | undefined = legacy?.cacheDirectory;
+      // Preferred: resumable download exposes byte-level progress (iter-411).
+      if (cacheBase && typeof legacy.createDownloadResumable === 'function') {
+        const destUri = `${cacheBase}smilers-e2ee-dl/dl_${Date.now()}_${Math.random()
+          .toString(36)
+          .slice(2, 8)}.bin`;
+        const task = legacy.createDownloadResumable(
+          url,
+          destUri,
+          {},
+          (p: any) => {
+            if (!onProgress) return;
+            const total = Number(p?.totalBytesExpectedToWrite) || 0;
+            const received = Number(p?.totalBytesWritten) || 0;
+            onProgress(received, total);
+          }
+        );
+        const res = await task.downloadAsync();
+        outUri = res?.uri || destUri;
+      } else {
+        // Fallback stream (no progress).
+        const temp = await File.downloadFileAsync(url, dir);
+        outUri = temp.uri;
+      }
+
+      const f = new File(outUri);
+      const bytes = await f.bytes();
+      try {
+        f.delete();
+      } catch {
+        // best-effort cleanup
+      }
       return bytes;
     } catch (e: any) {
       // Any FS/download error → fall back to the fetch path below so behaviour
@@ -116,14 +154,6 @@ async function fetchEncryptedBytes(url: string): Promise<Uint8Array> {
         '[useDecryptedMediaUrl] stream-to-disk download failed, falling back to fetch:',
         e?.message || e
       );
-    } finally {
-      if (temp) {
-        try {
-          temp.delete();
-        } catch {
-          // best-effort cleanup
-        }
-      }
     }
   }
 
@@ -190,7 +220,9 @@ export function useDecryptedMediaUrl(msg: any, e2ee: E2EEStatus | null | undefin
   const [error, setError] = useState<string | null>(null);
   // For lazy files: only decrypt once the user has armed it (tapped open).
   const [armed, setArmed] = useState<boolean>(!isLazy);
+  const [progress, setProgress] = useState<{ received: number; total: number } | null>(null);
   const cancelledRef = useRef(false);
+  const lastPctRef = useRef(0);
 
   useEffect(() => {
     cancelledRef.current = false;
@@ -241,8 +273,19 @@ export function useDecryptedMediaUrl(msg: any, e2ee: E2EEStatus | null | undefin
 
     (async () => {
       try {
-        const ciphertext = await fetchEncryptedBytes(rawUrl);
+        lastPctRef.current = 0;
+        const ciphertext = await fetchEncryptedBytes(rawUrl, (received, total) => {
+          if (cancelledRef.current) return;
+          // Throttle re-renders: only update when progress advances ≥2% (or on
+          // the final byte) to keep the chat list smooth.
+          const pct = total > 0 ? received / total : 0;
+          if (pct - lastPctRef.current >= 0.02 || (total > 0 && received >= total)) {
+            lastPctRef.current = pct;
+            setProgress({ received, total });
+          }
+        });
         if (cancelledRef.current) return;
+        setProgress(null);
         const plaintext = decryptBytes(ciphertext, iv, passphrase, salt);
         if (cancelledRef.current) return;
 
@@ -281,7 +324,7 @@ export function useDecryptedMediaUrl(msg: any, e2ee: E2EEStatus | null | undefin
   }, [isEncrypted, rawUrl, iv, passphrase, salt, messageId, type, armed, isLazy]);
 
   const decrypt = () => setArmed(true);
-  return { url, loading, error, deferred: isLazy && !url, decrypt };
+  return { url, loading, error, deferred: isLazy && !url, decrypt, progress };
 }
 
 /** Clear all on-disk decrypted media cache entries. Best-effort. */

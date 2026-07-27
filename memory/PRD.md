@@ -1,5 +1,10 @@
 # Smilers Mobile App — PRD
 
+## iter-411 (Jun 2026): Download progress bar for large encrypted files
+- Enhancement on iter-410's lazy large-file decrypt. `useDecryptedMediaUrl` now downloads big ciphertext via legacy `createDownloadResumable` (byte-level progress callback) → reads bytes with the new `File(uri).bytes()`. Falls back to `File.downloadFileAsync` (no progress) then `fetch`.
+- Exposes throttled `progress {received,total}` (updates only every ≥2%). `FileMessage` shows "Downloading… X.X / Y.Y MB" + a thin progress bar during the download phase, then "Decrypting…" during the JS AES-GCM step. Device-only (native streaming) — validate after APK rebuild.
+
+
 ## iter-410 (Jun 2026): Fixed large (13 MB) E2EE document failing to open ("failed to download or decrypt")
 - **Reported:** a 13 MB web-sent encrypted `.txt` shows the red lock icon and "Couldn't open file"; user confirmed SMALL docs open fine, only the big one fails, and it was sent from the WEB app (so it's E2EE — the bubble's "PLAIN" is just the `text/plain` MIME).
 - **Root cause:** `useDecryptedMediaUrl` (a) eagerly fetch+decrypts EVERY encrypted message on render, and (b) downloaded ciphertext via `fetch(url).arrayBuffer()`. RN's fetch routes large bodies through a blob→base64→decode path that ~TRIPLES peak memory, so a 13 MB blob OOM'd/threw during the on-render decrypt (also a source of the "chat list freezes" symptom). Small files fit, so they worked.
