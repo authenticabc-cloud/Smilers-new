@@ -86,6 +86,7 @@ import {
   markDiaryEntryFlushed,
   migrateAnonDiaryEntries,
   readDiaryEntries,
+  recoverDiaryEntries,
   type DiaryEntry,
 } from '../src/lib/diaryStore';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/theme';
@@ -668,6 +669,42 @@ export default function DiaryScreen() {
     );
   }, [myUserId, cloudReady, clearDiaryCloud]);
 
+  // ─── Recover lost entries (deep local scan + cloud re-sync) ────────
+  const [recovering, setRecovering] = useState(false);
+  const handleRecover = useCallback(async () => {
+    if (recovering || !myUserId) return;
+    setShowMenu(false);
+    setRecovering(true);
+    try {
+      // 1) Re-run the one-shot anon migration in case it hasn't yet.
+      try { await migrateAnonDiaryEntries(myUserId); } catch { /* best-effort */ }
+      // 2) Deep scan: pull anything from EVERY local diary bucket into ours.
+      const { recovered, scannedBuckets } = await recoverDiaryEntries(myUserId);
+      // 3) Reload local + allow the cloud flush to re-push recovered notes.
+      const data = await readDiaryEntries(myUserId);
+      setLocalEntries(data);
+      localFlushedRef.current = false;
+
+      if (recovered > 0) {
+        Alert.alert(
+          'Entries recovered',
+          `Found and restored ${recovered} note${recovered === 1 ? '' : 's'} from this device. ` +
+            (cloudReady ? 'They\u2019re syncing to the cloud now.' : ''),
+        );
+      } else {
+        Alert.alert(
+          'No local copies found',
+          `Scanned ${scannedBuckets} storage area${scannedBuckets === 1 ? '' : 's'} on this device but found no recoverable notes beyond what\u2019s already shown.\n\n` +
+            'If the entries were only saved on this phone and the app data was later cleared or reinstalled, they can\u2019t be recovered. If you wrote them on another device, open Diary there while signed into this same account so they sync up.',
+        );
+      }
+    } catch (e: any) {
+      Alert.alert('Recovery failed', String(e?.message || e));
+    } finally {
+      setRecovering(false);
+    }
+  }, [recovering, myUserId, cloudReady]);
+
   // ─── Export diary to a shareable text file (off-device backup) ─────
   const [exporting, setExporting] = useState(false);
   const handleExport = useCallback(async () => {
@@ -1126,6 +1163,14 @@ export default function DiaryScreen() {
                 <Feather name="share" size={16} color={Colors.diaryDark} />
               )}
               <Text style={[styles.menuItemText, { color: Colors.diaryDark }]}>Export my Diary</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.menuItem} onPress={handleRecover} disabled={recovering}>
+              {recovering ? (
+                <ActivityIndicator size="small" color={Colors.diaryDark} />
+              ) : (
+                <Feather name="rotate-ccw" size={16} color={Colors.diaryDark} />
+              )}
+              <Text style={[styles.menuItemText, { color: Colors.diaryDark }]}>Recover lost entries</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.menuItem} onPress={handleClearAll}>
               <Feather name="trash-2" size={16} color={Colors.danger} />

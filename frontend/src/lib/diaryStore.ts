@@ -261,6 +261,80 @@ export async function migrateAnonDiaryEntries(
 }
 
 /**
+ * sml-diary-recovery-2 (iter-414): USER-TRIGGERED deep recovery.
+ *
+ * Unlike the one-shot `migrateAnonDiaryEntries` (anon bucket only, clears after),
+ * this scans EVERY local Diary bucket on the device — the anon bucket AND any
+ * other `smilers.diary.<id>.entries.v1` keyspace left behind by a stale-auth
+ * window or a previous account/session — and merges any entries NOT already in
+ * the current user's bucket into it (deduped by _id + content). Recovered
+ * entries are marked `_flushedToCloud: false` so the Diary screen re-pushes them
+ * to the cloud (durable, cross-device). Source buckets are left intact
+ * (non-destructive) so nothing can be lost by running it.
+ *
+ * Returns how many entries were recovered and how many buckets were scanned.
+ */
+export async function recoverDiaryEntries(
+  userId: string | null | undefined,
+): Promise<{ recovered: number; scannedBuckets: number }> {
+  const safe = typeof userId === 'string' && userId.length > 0 ? userId : null;
+  if (!safe) return { recovered: 0, scannedBuckets: 0 };
+  try {
+    const allKeys = await AsyncStorage.getAllKeys();
+    const diaryKeys = (allKeys || []).filter(
+      (k) => typeof k === 'string' && k.startsWith(KEY_PREFIX) && k.endsWith(KEY_SUFFIX),
+    );
+    const myKey = keyFor(safe);
+
+    const existing = await readDiaryEntries(safe);
+    const existingIds = new Set(existing.map((e) => e._id));
+    const contentKey = (e: DiaryEntry) =>
+      `${e.kind}|${e.text ?? ''}|${e.attachment?.mediaUrl ?? e.attachment?.storageId ?? ''}|${e._creationTime}`;
+    const existingContent = new Set(existing.map(contentKey));
+
+    const recoveredEntries: DiaryEntry[] = [];
+    for (const key of diaryKeys) {
+      if (key === myKey) continue; // current bucket already loaded
+      let raw: string | null = null;
+      try {
+        raw = await AsyncStorage.getItem(key);
+      } catch {
+        raw = null;
+      }
+      if (!raw) continue;
+      let entries: DiaryEntry[] = [];
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          entries = parsed.filter(
+            (e: any): e is DiaryEntry =>
+              e && typeof e === 'object' && typeof e._id === 'string' && typeof e._creationTime === 'number',
+          );
+        }
+      } catch {
+        entries = [];
+      }
+      for (const e of entries) {
+        if (existingIds.has(e._id) || existingContent.has(contentKey(e))) continue;
+        existingIds.add(e._id);
+        existingContent.add(contentKey(e));
+        recoveredEntries.push({ ...e, _flushedToCloud: false });
+      }
+    }
+
+    if (recoveredEntries.length > 0) {
+      const merged = [...existing, ...recoveredEntries].sort(
+        (a, b) => a._creationTime - b._creationTime,
+      );
+      await writeAll(safe, merged);
+    }
+    return { recovered: recoveredEntries.length, scannedBuckets: diaryKeys.length };
+  } catch {
+    return { recovered: 0, scannedBuckets: 0 };
+  }
+}
+
+/**
  * Map a chat message (as the Convex `messages.list` query returns it) into
  * a DiaryEntry, used by the "Save to Diary" forward action so a forwarded
  * message keeps its attachment + text + provenance.

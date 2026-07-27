@@ -1,5 +1,12 @@
 # Smilers Mobile App — PRD
 
+## iter-414 (Jun 2026): Diary "Recover lost entries" (deep local scan + cloud re-sync)
+- User reported recent Diary entries missing while older ones remained (rules out the 500-cap trim, which removes oldest). Likely cause: recent notes stranded in a local bucket (anon/stale-auth) that never synced to cloud.
+- Added `recoverDiaryEntries(userId)` in `diaryStore.ts`: NON-DESTRUCTIVE scan of EVERY `smilers.diary.*.entries.v1` bucket via `AsyncStorage.getAllKeys()` (anon + any other user-id keyspace), merging entries missing from the current user's bucket (deduped by _id + content), marked `_flushedToCloud:false` so the Diary flush re-pushes them to cloud. Returns {recovered, scannedBuckets}. Source buckets left intact.
+- Wired a "Recover lost entries" item into the Diary header overflow menu (`app/diary.tsx`, `handleRecover`): re-runs anon migration → deep scan → reloads local → resets `localFlushedRef` to re-flush to cloud → shows an honest result alert (found N, or nothing recoverable + guidance that local-only notes wiped by reinstall/clear-data can't be restored, and to open Diary on the other device under the same account).
+- Lint clean; app bundles. Fully validated only on the user's device (scans their real local storage).
+
+
 ## iter-413 (Jun 2026): Decrypted-cache size cap (LRU eviction)
 - Added `pruneDecryptedCache()` in `useDecryptedMediaUrl.ts`: scans the on-disk decrypted cache (`Paths.cache/smilers-e2ee`) and, when total > 200 MB, evicts the OLDEST files (by `modificationTime`) down to 150 MB (headroom). Also drops matching in-memory `decryptedCache` entries so an evicted file is re-materialized rather than returning a dead URI.
 - Runs opportunistically after each file-backed decrypt (throttled internally to at most once / 5 min), best-effort (never throws). Keeps the instant-reopen cache from bloating device storage.
