@@ -933,7 +933,12 @@ export function CallScreenInner() {
       setIncomingLatched(false);
     }
   }, [isIncoming, activeCall]);
-  const isIncomingControls = isIncoming || (incomingLatched && !isActive);
+  // While the answer is being placed (answerCall in flight, before the backend
+  // flips status → 'active'), immediately drop the Accept/Decline row and show
+  // the in-call "Connecting…" view. This stops the reported double-accept: the
+  // notification "Answer" (or a manual tap) used to leave Accept/Decline on
+  // screen, so users tapped again → a second answerCall.
+  const isIncomingControls = (isIncoming || (incomingLatched && !isActive)) && !answering;
 
   // iter-187: keep the session-suppression ref in sync with the role.
   // While an incoming call rings we hold the native audio session back so
@@ -1386,8 +1391,21 @@ export function CallScreenInner() {
         },
         onLocalStream: (stream) => {
           try {
-            setLocalStreamURL((stream as any).toURL());
-          } catch {}
+            const url = (stream as any).toURL();
+            setLocalStreamURL(url);
+            // sml-selfdiag: confirm the self-view has a live local stream +
+            // video track. If self-view is blank, this tells us whether the
+            // stream/track exists (render issue) or not (capture issue).
+            const vids = (stream as any)?.getVideoTracks?.() || [];
+            const v0 = vids[0];
+            callDebug.push(
+              'CALL',
+              `onLocalStream: url=${url ? 'set' : 'NULL'} videoTracks=${vids.length} ` +
+                `enabled=${v0?.enabled} state=${v0?.readyState ?? 'n/a'}`,
+            );
+          } catch (e: any) {
+            callDebug.push('ERR', `onLocalStream failed: ${String(e?.message || e).slice(0, 80)}`);
+          }
         },
         onRemoteStream: (stream) => {
           try {
@@ -1411,6 +1429,7 @@ export function CallScreenInner() {
         },
         onConnectionStateChange: (state) => {
           console.log('[Call] connection state:', state);
+          callDebug.push('CALL', `pc connectionState=${state}`);
           if (state === 'connected') {
             setPeerConnected(true);
           }
@@ -1568,6 +1587,29 @@ export function CallScreenInner() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isCaller, isActive, callId, remoteResolved, CallSessionCtor]);
+
+  // sml-connectdiag: callee connect-hang watchdog. If we've answered (active)
+  // but the peer hasn't connected within 18s, log the live PC + remote-desc
+  // state. This pinpoints the reported "Connecting… forever" after answering
+  // from a notification — most likely the caller's OFFER never reached the
+  // callee (fresh Convex socket on cold-launch), so we sit with no remote
+  // description. The log makes that diagnosable from a device capture.
+  useEffect(() => {
+    if (isCaller || !isActive || peerConnected || isScreenOnly || isConferenceMode) return undefined;
+    const t = setTimeout(() => {
+      const s: any = sessionRef.current;
+      const pc: any = s?.pc;
+      callDebug.push(
+        'CALL',
+        `connect-watchdog(callee): still not connected after 18s — ` +
+          `pc=${pc ? 'yes' : 'NO'} connState=${pc?.connectionState ?? 'n/a'} ` +
+          `iceState=${pc?.iceConnectionState ?? 'n/a'} ` +
+          `remoteDesc=${pc?.remoteDescription ? 'set' : 'MISSING'} ` +
+          `localStream=${s?.localStream ? 'yes' : 'no'}`,
+      );
+    }, 18000);
+    return () => clearTimeout(t);
+  }, [isCaller, isActive, peerConnected, isScreenOnly, isConferenceMode]);
 
   // ====== Screen-only mode: bootstrap peer-connection directly ======
   //
@@ -2184,13 +2226,17 @@ export function CallScreenInner() {
   useEffect(() => {
     if (autoAnsweredRef.current) return;
     if (String(answerParam || '') !== '1') return;
-    if (!isIncoming) return;
+    // Fire as soon as we know this is an incoming call to answer. Accept the
+    // latched flag too so a one-frame `isIncoming` flicker on cold-launch (the
+    // notification "Answer" path, where reactive queries resolve out of order)
+    // doesn't stop the auto-answer — otherwise the user lands on Accept/Decline.
+    if (!isIncoming && !incomingLatched) return;
     const id = callId || (activeCall as any)?._id || null;
     if (!id) return;
     autoAnsweredRef.current = true;
-    callDebug.push('CALL', '[call-waiting] auto-answer via ?answer=1');
+    callDebug.push('CALL', '[notif] auto-answer via ?answer=1');
     void handleAnswer();
-  }, [answerParam, isIncoming, callId, activeCall, handleAnswer]);
+  }, [answerParam, isIncoming, incomingLatched, callId, activeCall, handleAnswer]);
   // ─────────────────────────────────────────────────────────────────────────
 
   // If remote ends the call, also tear down locally
