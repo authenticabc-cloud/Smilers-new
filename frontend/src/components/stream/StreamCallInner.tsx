@@ -145,9 +145,15 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   const call = useCall();
   const { mode } = useCallHost();
   const isMini = mode === 'mini';
-  const { useCallCallingState, useRemoteParticipants, useLocalParticipant, useParticipants, useHasOngoingScreenShare } =
+  const { useCallCallingState, useRemoteParticipants, useLocalParticipant, useParticipants, useHasOngoingScreenShare, useCameraState } =
     useCallStateHooks();
   const callingState = useCallCallingState();
+  // Live camera status ('enabled' | 'disabled' | ...) so we never issue a
+  // REDUNDANT camera.enable() while the camera is already on / mid-acquire.
+  // Redundant enables were tearing the Camera2 session down and re-running
+  // getUserMedia, which flickered the self-view and could drop our publish to
+  // the SFU (so the remote saw no video). See ensureCameraOn() below.
+  const cameraStatus = (useCameraState() as any)?.status as string | undefined;
   const remoteParticipants = useRemoteParticipants();
   const local = useLocalParticipant();
   const participants = useParticipants();
@@ -166,6 +172,26 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   const [seconds, setSeconds] = useState(0);
   const [callVideoHidden, setCallVideoHidden] = useState(false); // feature 3 (local hide)
   const wasConnectedRef = useRef(false);
+
+  // ── Guarded camera enable (fixes self-view flicker + dropped remote video) ──
+  // Multiple effects (connect re-assert, AppState resume, isVideo init) each
+  // used to call `call.camera.enable()`. Fired back-to-back — or again on every
+  // Stream reconnect — these piled up and forced the camera to fully re-acquire
+  // (Camera2 disconnect → new getUserMedia), which is exactly the self-view
+  // flicker seen in device logs and can drop the outgoing publish so the peer
+  // sees no video. `ensureCameraOn` makes the enable IDEMPOTENT: it no-ops when
+  // the camera is already enabled and coalesces rapid repeat calls (min gap).
+  const cameraStatusRef = useRef<string | undefined>(cameraStatus);
+  cameraStatusRef.current = cameraStatus;
+  const lastCamEnableRef = useRef(0);
+  const ensureCameraOn = useCallback(() => {
+    if (!call) return;
+    if (cameraStatusRef.current === 'enabled') return; // already on — don't churn
+    const now = Date.now();
+    if (now - lastCamEnableRef.current < 1200) return; // coalesce rapid repeats
+    lastCamEnableRef.current = now;
+    call.camera.enable().catch(() => {});
+  }, [call]);
 
   // #5: draggable self-view (local camera preview). Anchored top-right by
   // styles.selfView; we apply a translate on top so the user can move it
@@ -235,15 +261,17 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   useEffect(() => {
     if (!call || !connected || !(videoMode && camOn)) return;
     let cancelled = false;
-    call.camera.enable().catch(() => {});
+    ensureCameraOn();
+    // One delayed re-assert in case the camera was released during the SFU
+    // renegotiation right after join. ensureCameraOn() no-ops if already on.
     const t = setTimeout(() => {
-      if (!cancelled) call.camera.enable().catch(() => {});
-    }, 600);
+      if (!cancelled) ensureCameraOn();
+    }, 800);
     return () => {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [call, connected, videoMode, camOn]);
+  }, [call, connected, videoMode, camOn, ensureCameraOn]);
 
   useEffect(() => {
     if (!call) return;
@@ -251,11 +279,11 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
       if (next === 'active' && videoMode && camOn) {
         // Camera was likely released while backgrounded — re-acquire it so the
         // self-view (and our outgoing video) don't stay black on return.
-        setTimeout(() => call.camera.enable().catch(() => {}), 300);
+        setTimeout(() => ensureCameraOn(), 300);
       }
     });
     return () => sub.remove();
-  }, [call, videoMode, camOn]);
+  }, [call, videoMode, camOn, ensureCameraOn]);
 
   // Connection-quality (Stream exposes SfuModels.ConnectionQuality per
   // participant: 0 unknown, 1 poor, 2 good, 3 excellent). Surface the weaker of
@@ -270,11 +298,11 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
     (async () => {
       try {
         await call.microphone.enable();
-        if (isVideo) await call.camera.enable();
+        if (isVideo) ensureCameraOn();
         else await call.camera.disable();
       } catch {}
     })();
-  }, [call, isVideo]);
+  }, [call, isVideo, ensureCameraOn]);
 
   useEffect(() => {
     if (!connected) return;

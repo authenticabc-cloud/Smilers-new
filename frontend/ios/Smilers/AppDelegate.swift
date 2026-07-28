@@ -2,7 +2,6 @@ import Expo
 import React
 import ReactAppDependencyProvider
 import stream_io_noise_cancellation_react_native
-import stream_io_video_react_native
 
 @UIApplicationMain
 public class AppDelegate: ExpoAppDelegate {
@@ -25,7 +24,7 @@ public class AppDelegate: ExpoAppDelegate {
 
     // Stream Video noise / echo cancellation (Krisp) — register the audio
     // processor before any call joins so the SDK can attach it.
-    NoiseCancellationManager.sharedInstance.registerProcessor()
+    NoiseCancellationManager.getInstance().registerProcessor()
 
     // Task 4 — register for VoIP (PushKit) so Stream can ring incoming calls
     // through native CallKit even when the app is backgrounded/killed. Must run
