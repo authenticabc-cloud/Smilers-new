@@ -141,7 +141,23 @@ function buildCallRoute(data: any): string {
   const conversationId = String(data?.conversationId || '');
   if (!twilioOn) {
     const name = encodeURIComponent(String(data?.callerName || 'Smilers user'));
-    if (conversationId) return `/call/${conversationId}?displayName=${name}`;
+    // The user ALREADY tapped "Answer" on the full-screen notification, so the
+    // WebRTC/Stream call screen must AUTO-ACCEPT (answer=1) instead of showing
+    // Accept/Decline again — that missing flag was the "double-accept required"
+    // bug (first Answer just opened the screen; a second in-app tap was needed).
+    // Also carry the call type so a voice call never opens the camera.
+    const isVideoCall =
+      data?.isVideo === true ||
+      String(data?.twilio_is_video) === '1' ||
+      String(data?.is_video) === 'true' ||
+      String(data?.is_video) === '1' ||
+      String(data?.callType) === 'video';
+    if (conversationId) {
+      return (
+        `/call/${conversationId}?displayName=${name}` +
+        `&type=${isVideoCall ? 'video' : 'voice'}&answer=1`
+      );
+    }
     return String(data?.action_url || '/');
   }
   const room = String(data?.twilio_room_name || data?.twilioRoom || '');

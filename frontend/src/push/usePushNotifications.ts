@@ -1267,10 +1267,14 @@ export function usePushNotifications() {
           );
           return;
         }
+        // Legacy WebRTC / Stream 1:1 call (no twilio_room, no stream_room):
+        // tapping the ring notification IS the accept, so AUTO-ANSWER (answer=1)
+        // and carry the call type. Without answer=1 the call screen showed
+        // Accept/Decline again → the "double-accept required" bug.
+        const webrtcIsVideo = String((payload as any).twilio_is_video ?? '0') === '1' ? 'video' : 'voice';
         router.push(
-          displayName
-            ? (`/call/${conversationId}?displayName=${encodeURIComponent(displayName)}` as any)
-            : (`/call/${conversationId}` as any)
+          (`/call/${conversationId}?type=${webrtcIsVideo}&answer=1` +
+            (displayName ? `&displayName=${encodeURIComponent(displayName)}` : '')) as any
         );
         return;
       }

@@ -1,5 +1,13 @@
 # Smilers Mobile App — PRD
 
+## iter-416 (Jun 2026): P0 call "Answer → Connecting spin / double-accept required" — ROOT CAUSE FIXED
+- **Root cause (from the code + `EXPO_PUBLIC_USE_TWILIO=0`):** 1:1 calls run on the WebRTC/Stream stack (not Twilio). When the callee tapped **Answer** on the incoming-call notification, the deep-link builders dropped the `answer=1` flag, so the call screen opened showing **Accept/Decline again** — the user had to accept a SECOND time (the "double-accept"), and the first tap looked like an endless "Connecting" spin.
+  - `src/push/notifeeCallWake.ts` `buildCallRoute()` non-Twilio branch returned `/call/<id>?displayName=…` (no `answer=1`, no `type`). This is the native full-screen Notifee Answer button + cold-start path.
+  - `src/push/usePushNotifications.ts` Expo notification-response tap fell through to `/call/<id>?displayName=…` (no `answer=1`) for the legacy-WebRTC case.
+- **Fix:** both answer entry-points now route to `/call/<id>?type=<video|voice>&answer=1&displayName=…`. The `/call` shim forwards params into `callHost` → `StreamCallInner` reads `params.answer==='1'` → `accepted=true` → auto-joins immediately (no second in-app accept). Video flag read from FCM `twilio_is_video`/`is_video`. Lint clean (only pre-existing require()/unused warnings); app bundles.
+- ⚠️ NATIVE-only (push answer flow) — validate on APK rebuild: tapping Answer on the notification joins the call directly, no Accept/Decline reappears, no double-tap.
+
+
 ## iter-415 (Jun 2026): P0 iOS EAS build fix + Stream self-view/remote-video camera-churn fix
 - **P0 iOS build blocker FIXED (`no such module 'stream_io_video_react_native'` at AppDelegate.swift:5):** the previous agent's manual VoIP wiring used a WRONG Swift module name. The pod is `stream-video-react-native` (Swift module `stream_video_react_native`), and `StreamVideoReactNative` is an **Objective-C** class exposed via the bridging header — NOT importable as `stream_io_video_react_native`. Fix (matches the official `@stream-io/video-react-native-sdk` config plugin, keeping the current non-`use_frameworks` static linking so react-native-webrtc/Twilio/Stream-WebRTC aren't disturbed):
   1. `ios/Smilers/AppDelegate.swift`: removed the bogus `import stream_io_video_react_native` line; fixed `NoiseCancellationManager.sharedInstance` → `.getInstance()` (the real Swift API in `stream_io_noise_cancellation_react_native`).
