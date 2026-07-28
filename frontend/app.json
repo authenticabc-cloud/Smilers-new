@@ -3,7 +3,7 @@
     "name": "Smilers",
     "slug": "smilers",
     "owner": "abcsimplesend",
-    "version": "2.2.18",
+    "version": "2.2.20",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "smilers",
@@ -12,6 +12,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.smilers.app",
+      "buildNumber": "12",
       "infoPlist": {
         "NSCameraUsageDescription": "Take photos to send in chats and status",
         "NSPhotoLibraryUsageDescription": "Share photos from your gallery in chats",
@@ -23,8 +24,8 @@
         "NSPhotoLibraryAddUsageDescription": "Save photos and videos from chats to your gallery",
         "NSBluetoothAlwaysUsageDescription": "Pair panic buttons and wearables for emergency alerts",
         "NSBluetoothPeripheralUsageDescription": "Pair panic buttons and wearables for emergency alerts",
-        "NSCalendarsUsageDescription": "Add follow-ups from your calls to your calendar",
-        "NSCalendarsWriteOnlyAccessUsageDescription": "Add follow-ups from your calls to your calendar",
+        "NSCalendarsUsageDescription": "Smilers uses calendar access only when you choose to create or save events and reminders from conversations.",
+        "NSCalendarsWriteOnlyAccessUsageDescription": "Smilers uses calendar access only when you choose to create or save events and reminders from conversations.",
         "UIBackgroundModes": [
           "audio",
           "bluetooth-central",

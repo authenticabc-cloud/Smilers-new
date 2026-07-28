@@ -21,7 +21,7 @@
     <key>CFBundlePackageType</key>
     <string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
     <key>CFBundleShortVersionString</key>
-    <string>2.2.18</string>
+    <string>2.2.20</string>
     <key>CFBundleSignature</key>
     <string>????</string>
     <key>CFBundleURLTypes</key>
@@ -41,7 +41,7 @@
       </dict>
     </array>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>12</string>
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
     <key>LSRequiresIPhoneOS</key>
@@ -58,9 +58,9 @@
     <key>NSBluetoothPeripheralUsageDescription</key>
     <string>Pair panic buttons and wearables for emergency alerts</string>
     <key>NSCalendarsUsageDescription</key>
-    <string>Add follow-ups from your calls to your calendar</string>
+    <string>Smilers uses calendar access only when you choose to create or save events and reminders from conversations.</string>
     <key>NSCalendarsWriteOnlyAccessUsageDescription</key>
-    <string>Add follow-ups from your calls to your calendar</string>
+    <string>Smilers uses calendar access only when you choose to create or save events and reminders from conversations.</string>
     <key>NSCameraUsageDescription</key>
     <string>Take photos to send in chats and status</string>
     <key>NSContactsUsageDescription</key>
