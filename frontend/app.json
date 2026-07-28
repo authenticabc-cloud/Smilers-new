@@ -30,7 +30,9 @@
           "bluetooth-central",
           "remote-notification",
           "voip"
-        ]
+        ],
+        "UIFileSharingEnabled": true,
+        "LSSupportsOpeningDocumentsInPlace": true
       },
       "entitlements": {
         "com.apple.developer.pushkit.unrestricted-voip": true

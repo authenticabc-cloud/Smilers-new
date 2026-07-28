@@ -97,6 +97,7 @@ import {
   type EncryptedEnvelope,
 } from '../src/lib/e2eeCrypto';
 import { APP_LOCK_PIN_KEY, readStoredString } from '../src/lib/settingsStorage';
+import { getLatestAutoBackupUri, maybeRunWeeklyDiaryBackup } from '../src/lib/diaryAutoBackup';
 
 function formatTime(ms: number): string {
   try {
@@ -489,6 +490,18 @@ export default function DiaryScreen() {
     return () => { cancelled = true; };
   }, [myUserId]);
 
+  // ─── Silent weekly encrypted auto-backup ──────────────────────
+  // A few seconds after the screen settles, create a PIN-encrypted snapshot of
+  // the Diary to the device's persistent storage IF one is due (>= 7 days) and
+  // an App Lock PIN is set. Fully best-effort; never blocks or throws.
+  useEffect(() => {
+    if (!myUserId) return;
+    const t = setTimeout(() => {
+      void maybeRunWeeklyDiaryBackup(myUserId);
+    }, 4000);
+    return () => clearTimeout(t);
+  }, [myUserId]);
+
   // ─── Local-only-to-cloud flush ────────────────────────────────
   // Once cloud is ready AND we have local entries that aren't yet on
   // cloud, push them up so the user's offline notes don't get lost.
@@ -831,10 +844,84 @@ export default function DiaryScreen() {
   }, [exportingEnc, allEntries]);
 
   // ─── Restore from an encrypted backup (.smdiary.json) ─────────────
-  // Pick a file exported by "Export (encrypted)", decrypt it with the App Lock
-  // PIN, and merge the entries into the local Diary (deduped). Never deletes
-  // existing notes; restored notes then sync to the cloud like any other.
+  // Decrypt with the App Lock PIN and merge entries into the local Diary
+  // (deduped). Source can be a file the user picks OR the newest silent weekly
+  // auto-backup. Never deletes existing notes.
   const [restoring, setRestoring] = useState(false);
+  const restoreFromUri = useCallback(
+    async (uri: string, pin: string) => {
+      setRestoring(true);
+      try {
+        const raw = await LegacyFileSystem.readAsStringAsync(uri);
+        let file: any;
+        try {
+          file = JSON.parse(raw);
+        } catch {
+          throw new Error('This file is not a valid Smilers backup.');
+        }
+        if (file?.type !== 'diary-backup-encrypted' || !file?.ciphertext || !file?.salt || !file?.iv) {
+          throw new Error('This is not an encrypted Smilers Diary backup.');
+        }
+        const envelope: EncryptedEnvelope = {
+          v: file.v || 1,
+          alg: file.alg || 'AES-GCM-256',
+          kdf: file.kdf || 'PBKDF2-SHA256',
+          iterations: Number(file.iterations) || 100000,
+          salt: file.salt,
+          iv: file.iv,
+          ciphertext: file.ciphertext,
+        };
+        let plaintext: string;
+        try {
+          plaintext = await decryptEnvelopeWithPassphraseAsync(envelope, pin);
+        } catch {
+          throw new Error('Wrong PIN, or this backup was made with a different PIN.');
+        }
+        const payload = JSON.parse(plaintext);
+        const entries = Array.isArray(payload?.entries) ? payload.entries : [];
+        if (entries.length === 0) {
+          Alert.alert('Nothing to restore', 'This backup contained no entries.');
+          return;
+        }
+        const added = await importDiaryEntries(myUserId, entries);
+        setLocalEntries(await readDiaryEntries(myUserId));
+        Alert.alert(
+          'Restore complete',
+          added > 0
+            ? `Restored ${added} ${added === 1 ? 'entry' : 'entries'}. Any duplicates were skipped.`
+            : 'All entries from this backup were already in your Diary.'
+        );
+      } catch (errorValue: any) {
+        Alert.alert('Restore failed', String(errorValue?.message || errorValue));
+      } finally {
+        setRestoring(false);
+      }
+    },
+    [myUserId]
+  );
+
+  const pickAndRestore = useCallback(
+    async (pin: string) => {
+      let picked: any;
+      try {
+        const DocumentPicker = await import('expo-document-picker');
+        picked = await DocumentPicker.getDocumentAsync({
+          type: ['application/json', 'public.json', '*/*'],
+          copyToCacheDirectory: true,
+          multiple: false,
+        });
+      } catch (e: any) {
+        Alert.alert('Could not open file picker', String(e?.message || e));
+        return;
+      }
+      if (picked?.canceled) return;
+      const uri = picked?.assets?.[0]?.uri || picked?.uri;
+      if (!uri) return;
+      await restoreFromUri(uri, pin);
+    },
+    [restoreFromUri]
+  );
+
   const handleRestore = useCallback(async () => {
     if (restoring) return;
     const pin = (await readStoredString(APP_LOCK_PIN_KEY)) || '';
@@ -845,69 +932,18 @@ export default function DiaryScreen() {
       );
       return;
     }
-    let picked: any;
-    try {
-      const DocumentPicker = await import('expo-document-picker');
-      picked = await DocumentPicker.getDocumentAsync({
-        type: ['application/json', 'public.json', '*/*'],
-        copyToCacheDirectory: true,
-        multiple: false,
-      });
-    } catch (e: any) {
-      Alert.alert('Could not open file picker', String(e?.message || e));
+    setShowMenu(false);
+    const autoUri = await getLatestAutoBackupUri();
+    if (autoUri) {
+      Alert.alert('Restore Diary', 'Choose which backup to restore from.', [
+        { text: 'Latest automatic backup', onPress: () => void restoreFromUri(autoUri, pin) },
+        { text: 'Choose a file…', onPress: () => void pickAndRestore(pin) },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
       return;
     }
-    if (picked?.canceled) return;
-    const uri = picked?.assets?.[0]?.uri || picked?.uri;
-    if (!uri) return;
-    setRestoring(true);
-    setShowMenu(false);
-    try {
-      const raw = await LegacyFileSystem.readAsStringAsync(uri);
-      let file: any;
-      try {
-        file = JSON.parse(raw);
-      } catch {
-        throw new Error('This file is not a valid Smilers backup.');
-      }
-      if (file?.type !== 'diary-backup-encrypted' || !file?.ciphertext || !file?.salt || !file?.iv) {
-        throw new Error('This is not an encrypted Smilers Diary backup.');
-      }
-      const envelope: EncryptedEnvelope = {
-        v: file.v || 1,
-        alg: file.alg || 'AES-GCM-256',
-        kdf: file.kdf || 'PBKDF2-SHA256',
-        iterations: Number(file.iterations) || 100000,
-        salt: file.salt,
-        iv: file.iv,
-        ciphertext: file.ciphertext,
-      };
-      let plaintext: string;
-      try {
-        plaintext = await decryptEnvelopeWithPassphraseAsync(envelope, pin);
-      } catch {
-        throw new Error('Wrong PIN, or this backup was made with a different PIN.');
-      }
-      const payload = JSON.parse(plaintext);
-      const entries = Array.isArray(payload?.entries) ? payload.entries : [];
-      if (entries.length === 0) {
-        Alert.alert('Nothing to restore', 'This backup contained no entries.');
-        return;
-      }
-      const added = await importDiaryEntries(myUserId, entries);
-      setLocalEntries(await readDiaryEntries(myUserId));
-      Alert.alert(
-        'Restore complete',
-        added > 0
-          ? `Restored ${added} ${added === 1 ? 'entry' : 'entries'}. Any duplicates were skipped.`
-          : 'All entries from this backup were already in your Diary.'
-      );
-    } catch (errorValue: any) {
-      Alert.alert('Restore failed', String(errorValue?.message || errorValue));
-    } finally {
-      setRestoring(false);
-    }
-  }, [restoring, myUserId]);
+    await pickAndRestore(pin);
+  }, [restoring, restoreFromUri, pickAndRestore]);
 
   // ─── Copy an entry's content to clipboard ─────────────────────
   const handleCopy = useCallback(async (entry: DiaryEntry) => {
