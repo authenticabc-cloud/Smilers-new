@@ -122,13 +122,21 @@ async function pbkdf2Sha256Yielding(
   passphraseBytes: Uint8Array,
   salt: Uint8Array
 ): Promise<Uint8Array> {
+  // Feature-detect the (internal but long-stable) noble cloneable-hash API we
+  // rely on for the fast, incremental HMAC loop. If a future @noble/hashes
+  // version removes it, fall back to the public sync `pbkdf2` — correctness is
+  // preserved; only the one-time (SecureStore-persisted) derivation may block.
+  const probe: any = hmac.create(sha256, passphraseBytes);
+  if (typeof probe._cloneInto !== 'function' || typeof probe.digestInto !== 'function') {
+    return pbkdf2(sha256, passphraseBytes, salt, { c: PBKDF2_ITERATIONS, dkLen: KEY_LEN });
+  }
   const blockIndex = new Uint8Array(4);
   blockIndex[3] = 1; // INT_32_BE(1) — only one 32-byte block needed
   const u = new Uint8Array(KEY_LEN);
   const PRFSalt = hmac.create(sha256, passphraseBytes).update(salt);
-  PRFSalt._cloneInto().update(blockIndex).digestInto(u); // U1
+  (PRFSalt as any)._cloneInto().update(blockIndex).digestInto(u); // U1
   const T = u.slice();
-  const PRF = hmac.create(sha256, passphraseBytes);
+  const PRF: any = hmac.create(sha256, passphraseBytes);
   let prfW = PRF._cloneInto();
   for (let i = 1; i < PBKDF2_ITERATIONS; i++) {
     prfW = PRF._cloneInto(prfW);
