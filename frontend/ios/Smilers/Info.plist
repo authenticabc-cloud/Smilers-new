@@ -57,6 +57,10 @@
     <string>Pair panic buttons and wearables for emergency alerts</string>
     <key>NSBluetoothPeripheralUsageDescription</key>
     <string>Pair panic buttons and wearables for emergency alerts</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>Add follow-ups from your calls to your calendar</string>
+    <key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+    <string>Add follow-ups from your calls to your calendar</string>
     <key>NSCameraUsageDescription</key>
     <string>Take photos to send in chats and status</string>
     <key>NSContactsUsageDescription</key>
