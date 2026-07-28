@@ -28,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * Dedicated FRESH channel ids so Android creates them with the correct Smilers
  * message/group tones (a channel's sound is immutable once created, so we avoid
- * colliding with any JS-created messages-v*/groups-v* channel an older build may
+ * colliding with any JS-created messages-v(star)/groups-v(star) channel an older build may
  * have registered with the wrong/default sound).
  */
 internal object MessageThreadStore {
