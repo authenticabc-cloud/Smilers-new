@@ -1,114 +1,55 @@
-# Study Rooms — Convex Backend Fixes Needed
+# Study Rooms "Server Error" — Root Cause & Resolution
 
-These two failures are **server-side errors thrown inside your Convex functions**
-on `aware-newt-456.convex.cloud`. The mobile app calls them with correct
-arguments (verified below), so the fix must happen in the Convex backend code
-(not in the mobile app).
+## Verdict: it was a CLIENT-SIDE function-type mismatch (fixed in the mobile app). No backend change required.
 
-Give this document + the Request IDs to whoever maintains the Convex backend.
-Each Request ID maps 1:1 to a full server stack trace in the Convex dashboard →
-**Logs** (filter by the Request ID) — that trace will pinpoint the exact line.
+The Convex backend agent correctly reported that the `study.rooms.*` functions
+are healthy **queries/mutations** (not actions) and that **no handler failures
+are logged** for them. That is the key clue.
 
----
+### Why the client saw "Server Error" with nothing in backend logs
+The mobile client was invoking two `study.rooms` endpoints with the **wrong
+Convex function type**:
 
-## 1. `study/rooms:submitRoomQuizAttempt` — Server Error
-- **Request ID to look up in Convex logs:** `fd8fb242ef649181`
-- **Client call (correct):**
-  ```ts
-  submitRoomQuizAttempt({
-    roomQuizId: "<Id<'roomQuizzes'>>",
-    answers: [ { number: 1, given: "..." }, { number: 2, given: "..." }, ... ]
-  })
-  ```
-  `answers` is an array of `{ number: number, given: string }`, one per question,
-  in question order.
+| Function | Backend type | Client was calling it as | Result |
+|---|---|---|---|
+| `study.rooms.previewRoomByCode` | query/mutation | **action** (`useAction`) | rejected at routing → `[CONVEX A(...)] Server Error` |
+| `study.rooms.submitRoomQuizAttempt` | mutation | **action** (`useAction`) | rejected at routing → `[CONVEX A(...)] Server Error` |
 
-## 2. `study/rooms:previewRoomByCode` — Server Error
-- **Request ID to look up in Convex logs:** `d33a65b80f105c60`
-- **Client call (correct):**
-  ```ts
-  previewRoomByCode({ code: "ABC123" })   // 6-char, uppercased, [A-Z0-9]
-  ```
-  Expected to **return `null`** (not throw) when no room matches the code — the
-  mobile app already handles `null` by showing "Room not found". A thrown
-  `Server Error` is a backend bug.
+Note the **`A(`** prefix in the user's error screenshots
+(`[CONVEX A(study/rooms:previewRoomByCode)]`, `[CONVEX A(study/rooms:submitRoomQuizAttempt)]`)
+— Convex prefixes the invoked type: `Q(`=query, `M(`=mutation, `A(`=action.
+Both were invoked as **Actions**. When you run a query/mutation *as an action*,
+Convex rejects it **at the routing layer, before the handler executes** — which
+is exactly why the backend logs show **no handler failure**.
 
----
+### Exact info the Convex agent asked for
+- **Deployment the app connects to:** `https://aware-newt-456.convex.cloud`
+  (from `EXPO_PUBLIC_CONVEX_URL`) — this is your live deployment, not stale.
+- **Function paths called:** `api.study.rooms.previewRoomByCode`,
+  `api.study.rooms.submitRoomQuizAttempt` (accessed as
+  `(api as any).study.rooms.*`).
+- **Arguments sent:**
+  - `previewRoomByCode({ code })` — `code` is 6 chars, uppercased, `[A-Z0-9]`.
+  - `submitRoomQuizAttempt({ roomQuizId, answers })` — `answers` is
+    `Array<{ number: number, given: string }>`, one per question in order.
+- **How they were invoked (the bug):** both via `useAction`. Everything else in
+  `study.rooms.*` was already correctly `useQuery`/`useMutation`.
 
-## Most likely root cause (check this first)
+### Fix applied in the mobile app (`src/lib/study/useRooms.ts`)
+- `previewRoomByCode`: now invoked as an on-demand **query**
+  (`convex.query(...)`), not an action.
+- `submitRoomQuizAttempt`: now invoked as a **mutation**, not an action.
+- Both go through a small `callFlexible()` helper that tries the expected type
+  and, **only on a genuine function-type-mismatch error**, retries the other
+  type. A real handler "Server Error" is NOT retried — it propagates. This makes
+  the client resilient regardless of whether the backend registered
+  `previewRoomByCode` as a query or a mutation.
 
-Both functions are registered as **Convex `action`s** (the mobile client binds
-them with `useAction`, not `useQuery`/`useMutation`). Inside a Convex **action
-you cannot touch the database directly** — `ctx.db` is `undefined` there, and any
-`ctx.db.query(...)` / `ctx.db.get(...)` / `ctx.db.insert(...)` call throws an
-uncaught exception that surfaces to the client as exactly this "Server Error".
+### One thing for the Convex agent to CONFIRM (so we can drop the fallback later)
+Please confirm the exact registered type of these two so the mobile app can pin
+the correct single type:
+1. `study.rooms.previewRoomByCode` → **query** or **mutation**?
+2. `study.rooms.submitRoomQuizAttempt` → **mutation** (expected)?
 
-Fix pattern — actions must go through `ctx.runQuery` / `ctx.runMutation`:
-
-```ts
-// ❌ BROKEN inside an action:
-export const previewRoomByCode = action({
-  args: { code: v.string() },
-  handler: async (ctx, { code }) => {
-    const room = await ctx.db          // <-- ctx.db is undefined in an action → Server Error
-      .query("studyRooms")
-      .withIndex("by_code", q => q.eq("joinCode", code))
-      .unique();
-    return room;
-  },
-});
-
-// ✅ FIX A — move the lookup into an internalQuery and call it:
-export const _getRoomByCode = internalQuery({
-  args: { code: v.string() },
-  handler: async (ctx, { code }) =>
-    ctx.db.query("studyRooms")
-      .withIndex("by_code", q => q.eq("joinCode", code))
-      .unique(),        // returns null if not found (don't throw)
-});
-
-export const previewRoomByCode = action({
-  args: { code: v.string() },
-  handler: async (ctx, { code }) =>
-    ctx.runQuery(internal.study.rooms._getRoomByCode, { code }),
-});
-
-// ✅ FIX B (simpler, preferred if no external I/O is needed) —
-// if the function does NOT call any external API/LLM, just make it a
-// `query` instead of an `action`, then it can use ctx.db directly:
-export const previewRoomByCode = query({
-  args: { code: v.string() },
-  handler: async (ctx, { code }) =>
-    ctx.db.query("studyRooms")
-      .withIndex("by_code", q => q.eq("joinCode", code))
-      .unique(),
-});
-```
-> If you switch `previewRoomByCode`/`submitRoomQuizAttempt` from `action` →
-> `query`/`mutation`, tell me and I'll flip the mobile bindings from
-> `useAction` to `useQuery`/`useMutation` (one-line change each in
-> `src/lib/study/useRooms.ts`).
-
-For **`submitRoomQuizAttempt`**, apply the same rule: if it grades server-side
-and writes the attempt/leaderboard row, it should either be a **`mutation`**
-(so it can `ctx.db.insert(...)`), or an **`action`** that calls
-`ctx.runMutation(internal.study.rooms._recordAttempt, {...})`. Also confirm:
-- The `answers` array shape (`{ number, given }`) matches what the grader reads.
-- The stored quiz's questions have the expected `number`/`answer` fields to grade against.
-- If grading uses an LLM/external key, verify that env var is set on this deployment.
-
-## Other things to verify (if it is NOT the ctx.db issue)
-- **Missing DB index:** `by_code` (or whatever the joinCode index is) not defined
-  in `schema.ts` → `.withIndex` throws.
-- **Null deref:** grading reads `room.something` / `quiz.questions[i].answer`
-  where the doc/field is missing.
-- **Auth/identity:** the function reads `ctx.auth.getUserIdentity()` and derefs it
-  without a null check when the caller's identity is present but the user row
-  hasn't been provisioned.
-
-## How to confirm the fix
-1. Open the Convex dashboard → Logs → filter by the Request IDs above → read the
-   top frame of each stack trace (it names the exact file/line and error).
-2. After patching + `npx convex deploy`, retry from the mobile app:
-   - Join a room with a valid code (and an invalid one → should say "Room not found", not error).
-   - Submit a quiz → expect graded results + leaderboard update.
+Once confirmed, the mobile side can remove the type-fallback and call the exact
+type directly. No other backend action is needed.

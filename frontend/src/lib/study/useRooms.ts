@@ -9,10 +9,48 @@
  * while it's off throws FORBIDDEN.
  */
 import { useCallback, useMemo, useState } from 'react';
-import { useAction, useMutation } from 'convex/react';
+import { useAction, useConvex, useMutation } from 'convex/react';
 import { api } from '../../convexApi';
 import { useSafeConvexQuery } from '../../hooks/useSafeConvexQuery';
 import { useAuth } from '../../providers/AuthProvider';
+
+// iter-fork: some `study.rooms.*` entry points were historically invoked with
+// the WRONG Convex function type from the client (e.g. a read-only query bound
+// via `useAction`). Convex rejects a type-mismatched invocation at the routing
+// layer — BEFORE the handler runs — so it surfaces as a generic
+// "[CONVEX A(...)] Server Error" on the client while the backend logs show NO
+// handler failure. Because this repo only ships stubbed generated types (we
+// can't see whether a given fn is a query or mutation), call these on-demand
+// endpoints type-agnostically: try the expected type, then fall back to the
+// other ONLY on a function-TYPE mismatch (never on a genuine handler error).
+async function callFlexible(
+  convex: any,
+  ref: any,
+  args: any,
+  preferMutation: boolean,
+): Promise<any> {
+  const order: ('mutation' | 'query')[] = preferMutation
+    ? ['mutation', 'query']
+    : ['query', 'mutation'];
+  let lastError: any;
+  for (const kind of order) {
+    try {
+      return kind === 'mutation'
+        ? await convex.mutation(ref, args)
+        : await convex.query(ref, args);
+    } catch (errorValue: any) {
+      lastError = errorValue;
+      const msg = String(errorValue?.message || errorValue || '');
+      // Retry the other type ONLY when Convex reports a type mismatch, e.g.
+      // "...as Query, but it is defined as Mutation". A real handler error
+      // ("Server Error") does NOT match, so it propagates unchanged.
+      const isTypeMismatch =
+        /as Query|as Mutation|as Action|is defined as|not a (query|mutation|action)/i.test(msg);
+      if (!isTypeMismatch) throw errorValue;
+    }
+  }
+  throw lastError;
+}
 
 // iter-399: the deployed backend returns a WRAPPED shape — `getRoom` →
 // `{ room, myRole, members }` and `listMyRooms` → `[{ room, role, joinedAt }]`.
@@ -53,7 +91,17 @@ export function useMyRooms() {
   );
   const createRoom = useMutation((api as any).study.rooms.createRoom);
   const joinRoom = useMutation((api as any).study.rooms.joinRoom);
-  const previewRoomByCode = useAction((api as any).study.rooms.previewRoomByCode);
+  // iter-fork: `previewRoomByCode` is a read-only QUERY on the backend, but was
+  // historically invoked as an action (`useAction`) — Convex rejects a
+  // query-run-as-action at the routing layer BEFORE the handler runs, which
+  // surfaced as "[CONVEX A(study/rooms:previewRoomByCode)] Server Error" while
+  // the backend logs showed no handler failure. Invoke it as an imperative
+  // query instead (it's called on-demand with a dynamic code, not reactively).
+  const convex = useConvex();
+  const previewRoomByCode = useCallback(
+    (args: { code: string }) => callFlexible(convex, (api as any).study.rooms.previewRoomByCode, args, false),
+    [convex],
+  );
   return { rooms: flatRooms, loading, createRoom, joinRoom, previewRoomByCode };
 }
 
@@ -126,7 +174,16 @@ export function useRoomQuiz(roomQuizId: string | null) {
     null,
     !!roomQuizId,
   );
-  const submitRoomQuizAttempt = useAction((api as any).study.rooms.submitRoomQuizAttempt);
+  // iter-fork: `submitRoomQuizAttempt` WRITES the attempt + leaderboard row, so
+  // it's a mutation. It was wrongly bound as `useAction` → "[CONVEX A(...)]
+  // Server Error" with no backend failure logged. Invoke type-agnostically
+  // (prefer mutation) so it works regardless of the backend's exact registration.
+  const convex = useConvex();
+  const submitRoomQuizAttempt = useCallback(
+    (args: { roomQuizId: string; answers: any[] }) =>
+      callFlexible(convex, (api as any).study.rooms.submitRoomQuizAttempt, args, true),
+    [convex],
+  );
   return { data, loading, submitRoomQuizAttempt };
 }
 
