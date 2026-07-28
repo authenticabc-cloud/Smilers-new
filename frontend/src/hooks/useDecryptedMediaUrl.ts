@@ -235,6 +235,50 @@ export async function pruneDecryptedCache(force = false): Promise<void> {
     // best-effort — never throw from cache maintenance
   }
 }
+
+// Cache directories used for decrypted media (persistent) + in-flight
+// encrypted downloads (temporary). Both live under the OS cache dir.
+const CACHE_SUBDIRS = ['smilers-e2ee', 'smilers-e2ee-dl'];
+
+/** Total on-disk bytes of the decrypted-media cache (all subdirs). */
+export async function getDecryptedCacheSize(): Promise<number> {
+  if (Platform.OS === 'web') return 0;
+  let total = 0;
+  for (const sub of CACHE_SUBDIRS) {
+    try {
+      const dir = new Directory(Paths.cache, sub);
+      if (!dir.exists) continue;
+      for (const entry of dir.list()) {
+        if (entry instanceof File) total += entry.size ?? 0;
+      }
+    } catch {
+      // ignore unreadable dirs — best effort
+    }
+  }
+  return total;
+}
+
+/**
+ * Wipe the entire decrypted-media cache (both subdirs) and drop the in-memory
+ * URI map so nothing points at a deleted file. Media re-downloads/decrypts on
+ * next open. Returns the number of bytes freed.
+ */
+export async function clearDecryptedCache(): Promise<number> {
+  const freed = await getDecryptedCacheSize();
+  if (Platform.OS !== 'web') {
+    for (const sub of CACHE_SUBDIRS) {
+      try {
+        const dir = new Directory(Paths.cache, sub);
+        if (dir.exists) dir.delete();
+      } catch {
+        // best-effort
+      }
+    }
+  }
+  decryptedCache.clear();
+  lastPruneAt = 0;
+  return freed;
+}
 // Returns the URI of a previously-decrypted cache file if it still exists on
 // disk (survives app restarts / in-memory cache clears), so re-opening a large
 // file is instant — no re-download, no re-decrypt. Uses the same deterministic
