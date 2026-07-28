@@ -169,6 +169,48 @@ export async function deleteDiaryEntry(
 }
 
 /**
+ * Batch-import entries (e.g. from an encrypted backup file) into the user's
+ * local Diary. Deduped against existing entries by kind + text + creation time
+ * + attachment id, so re-importing the same backup never creates duplicates.
+ * Newly-imported entries are NOT marked flushed, so the normal cloud-sync path
+ * will push them up. Returns the number of entries actually added.
+ */
+export async function importDiaryEntries(
+  userId: string | null | undefined,
+  incoming: Array<Partial<DiaryEntry> & { _creationTime?: number; createdAt?: number }>,
+): Promise<number> {
+  const existing = await readDiaryEntries(userId);
+  const sig = (e: any) =>
+    [
+      e?.kind || 'text',
+      (e?.text || '').trim(),
+      Number(e?._creationTime ?? e?.createdAt ?? 0),
+      e?.attachment?.mediaUrl || e?.attachment?.fileName || '',
+    ].join('|');
+  const seen = new Set(existing.map(sig));
+  const added: DiaryEntry[] = [];
+  for (const raw of Array.isArray(incoming) ? incoming : []) {
+    const createdAt = Number(raw?._creationTime ?? raw?.createdAt ?? Date.now());
+    const candidate: DiaryEntry = {
+      _id: generateLocalId(),
+      _creationTime: Number.isFinite(createdAt) && createdAt > 0 ? createdAt : Date.now(),
+      kind: (raw?.kind as DiaryEntryKind) || 'text',
+      text: raw?.text ?? null,
+      attachment: raw?.attachment ?? null,
+      forwardedFrom: raw?.forwardedFrom ?? null,
+    };
+    const s = sig(candidate);
+    if (seen.has(s)) continue;
+    seen.add(s);
+    added.push(candidate);
+  }
+  if (added.length === 0) return 0;
+  const merged = [...existing, ...added].sort((a, b) => a._creationTime - b._creationTime);
+  await writeAll(userId, merged);
+  return added.length;
+}
+
+/**
  * iter-397: mark a local entry as flushed to the cloud WITHOUT deleting it.
  * Previously the flush deleted the local copy right after the cloud append
  * resolved; if that append didn't durably persist (older build / schema),

@@ -83,6 +83,7 @@ import {
   appendDiaryEntry,
   clearDiary,
   deleteDiaryEntry,
+  importDiaryEntries,
   markDiaryEntryFlushed,
   migrateAnonDiaryEntries,
   readDiaryEntries,
@@ -90,7 +91,11 @@ import {
   type DiaryEntry,
 } from '../src/lib/diaryStore';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/theme';
-import { encryptStringWithPassphraseAsync } from '../src/lib/e2eeCrypto';
+import {
+  decryptEnvelopeWithPassphraseAsync,
+  encryptStringWithPassphraseAsync,
+  type EncryptedEnvelope,
+} from '../src/lib/e2eeCrypto';
 import { APP_LOCK_PIN_KEY, readStoredString } from '../src/lib/settingsStorage';
 
 function formatTime(ms: number): string {
@@ -825,6 +830,85 @@ export default function DiaryScreen() {
     }
   }, [exportingEnc, allEntries]);
 
+  // ─── Restore from an encrypted backup (.smdiary.json) ─────────────
+  // Pick a file exported by "Export (encrypted)", decrypt it with the App Lock
+  // PIN, and merge the entries into the local Diary (deduped). Never deletes
+  // existing notes; restored notes then sync to the cloud like any other.
+  const [restoring, setRestoring] = useState(false);
+  const handleRestore = useCallback(async () => {
+    if (restoring) return;
+    const pin = (await readStoredString(APP_LOCK_PIN_KEY)) || '';
+    if (!pin) {
+      Alert.alert(
+        'Set your App Lock PIN first',
+        'Backups are locked with your App Lock PIN. Set the same PIN you used when exporting (Settings → App Lock), then restore.'
+      );
+      return;
+    }
+    let picked: any;
+    try {
+      const DocumentPicker = await import('expo-document-picker');
+      picked = await DocumentPicker.getDocumentAsync({
+        type: ['application/json', 'public.json', '*/*'],
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+    } catch (e: any) {
+      Alert.alert('Could not open file picker', String(e?.message || e));
+      return;
+    }
+    if (picked?.canceled) return;
+    const uri = picked?.assets?.[0]?.uri || picked?.uri;
+    if (!uri) return;
+    setRestoring(true);
+    setShowMenu(false);
+    try {
+      const raw = await LegacyFileSystem.readAsStringAsync(uri);
+      let file: any;
+      try {
+        file = JSON.parse(raw);
+      } catch {
+        throw new Error('This file is not a valid Smilers backup.');
+      }
+      if (file?.type !== 'diary-backup-encrypted' || !file?.ciphertext || !file?.salt || !file?.iv) {
+        throw new Error('This is not an encrypted Smilers Diary backup.');
+      }
+      const envelope: EncryptedEnvelope = {
+        v: file.v || 1,
+        alg: file.alg || 'AES-GCM-256',
+        kdf: file.kdf || 'PBKDF2-SHA256',
+        iterations: Number(file.iterations) || 100000,
+        salt: file.salt,
+        iv: file.iv,
+        ciphertext: file.ciphertext,
+      };
+      let plaintext: string;
+      try {
+        plaintext = await decryptEnvelopeWithPassphraseAsync(envelope, pin);
+      } catch {
+        throw new Error('Wrong PIN, or this backup was made with a different PIN.');
+      }
+      const payload = JSON.parse(plaintext);
+      const entries = Array.isArray(payload?.entries) ? payload.entries : [];
+      if (entries.length === 0) {
+        Alert.alert('Nothing to restore', 'This backup contained no entries.');
+        return;
+      }
+      const added = await importDiaryEntries(myUserId, entries);
+      setLocalEntries(await readDiaryEntries(myUserId));
+      Alert.alert(
+        'Restore complete',
+        added > 0
+          ? `Restored ${added} ${added === 1 ? 'entry' : 'entries'}. Any duplicates were skipped.`
+          : 'All entries from this backup were already in your Diary.'
+      );
+    } catch (errorValue: any) {
+      Alert.alert('Restore failed', String(errorValue?.message || errorValue));
+    } finally {
+      setRestoring(false);
+    }
+  }, [restoring, myUserId]);
+
   // ─── Copy an entry's content to clipboard ─────────────────────
   const handleCopy = useCallback(async (entry: DiaryEntry) => {
     try {
@@ -1246,6 +1330,14 @@ export default function DiaryScreen() {
                 <Feather name="lock" size={16} color={Colors.diaryDark} />
               )}
               <Text style={[styles.menuItemText, { color: Colors.diaryDark }]}>Export (encrypted)</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.menuItem} onPress={handleRestore} disabled={restoring}>
+              {restoring ? (
+                <ActivityIndicator size="small" color={Colors.diaryDark} />
+              ) : (
+                <Feather name="download-cloud" size={16} color={Colors.diaryDark} />
+              )}
+              <Text style={[styles.menuItemText, { color: Colors.diaryDark }]}>Restore from backup</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.menuItem} onPress={handleRecover} disabled={recovering}>
               {recovering ? (
