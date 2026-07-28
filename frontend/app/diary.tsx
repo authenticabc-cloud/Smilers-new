@@ -90,6 +90,8 @@ import {
   type DiaryEntry,
 } from '../src/lib/diaryStore';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../src/theme';
+import { encryptStringWithPassphraseAsync } from '../src/lib/e2eeCrypto';
+import { APP_LOCK_PIN_KEY, readStoredString } from '../src/lib/settingsStorage';
 
 function formatTime(ms: number): string {
   try {
@@ -750,6 +752,79 @@ export default function DiaryScreen() {
     }
   }, [exporting, allEntries]);
 
+  // ─── Encrypted export (AES-GCM, key = your App Lock PIN) ──────────
+  // Produces a portable, self-describing envelope so the backup is safe to
+  // store anywhere (Files, email, cloud drive) and can be decrypted later
+  // with the PIN. Falls back to sharing; never touches the server copy.
+  const [exportingEnc, setExportingEnc] = useState(false);
+  const handleExportEncrypted = useCallback(async () => {
+    if (exportingEnc) return;
+    if (!allEntries || allEntries.length === 0) {
+      Alert.alert('Nothing to export', 'Your Diary is empty.');
+      return;
+    }
+    const pin = (await readStoredString(APP_LOCK_PIN_KEY)) || '';
+    if (!pin) {
+      Alert.alert(
+        'Set an App Lock PIN first',
+        'The encrypted export is locked with your App Lock PIN. Set one in Settings → App Lock, then export.'
+      );
+      return;
+    }
+    setExportingEnc(true);
+    setShowMenu(false);
+    try {
+      // Structured, restorable payload (newest first).
+      const ordered = [...allEntries].sort((a, b) => b._creationTime - a._creationTime);
+      const payload = {
+        app: 'Smilers',
+        type: 'diary-backup',
+        exportedAt: new Date().toISOString(),
+        count: ordered.length,
+        entries: ordered.map((e) => ({
+          id: e._id,
+          kind: e.kind,
+          text: e.text ?? null,
+          createdAt: e._creationTime,
+          attachment: e.attachment ?? null,
+          forwardedFrom: e.forwardedFrom ?? null,
+        })),
+      };
+      const envelope = await encryptStringWithPassphraseAsync(JSON.stringify(payload), pin);
+      const fileBody = JSON.stringify(
+        {
+          app: 'Smilers',
+          type: 'diary-backup-encrypted',
+          note: 'Encrypted with your Smilers App Lock PIN (AES-GCM-256, PBKDF2-SHA256).',
+          exportedAt: payload.exportedAt,
+          count: payload.count,
+          ...envelope,
+        },
+        null,
+        2
+      );
+      const path = `${LegacyFileSystem.cacheDirectory}smilers-diary-encrypted-${Date.now()}.smdiary.json`;
+      await LegacyFileSystem.writeAsStringAsync(path, fileBody);
+      const Sharing = await import('expo-sharing');
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(path, {
+          mimeType: 'application/json',
+          dialogTitle: 'Export encrypted Diary',
+          UTI: 'public.json',
+        });
+      } else {
+        Alert.alert(
+          'Saved',
+          'Sharing is unavailable on this device, so the encrypted backup was written to the app cache.'
+        );
+      }
+    } catch (errorValue: any) {
+      Alert.alert('Export failed', String(errorValue?.message || errorValue));
+    } finally {
+      setExportingEnc(false);
+    }
+  }, [exportingEnc, allEntries]);
+
   // ─── Copy an entry's content to clipboard ─────────────────────
   const handleCopy = useCallback(async (entry: DiaryEntry) => {
     try {
@@ -1163,6 +1238,14 @@ export default function DiaryScreen() {
                 <Feather name="share" size={16} color={Colors.diaryDark} />
               )}
               <Text style={[styles.menuItemText, { color: Colors.diaryDark }]}>Export my Diary</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.menuItem} onPress={handleExportEncrypted} disabled={exportingEnc}>
+              {exportingEnc ? (
+                <ActivityIndicator size="small" color={Colors.diaryDark} />
+              ) : (
+                <Feather name="lock" size={16} color={Colors.diaryDark} />
+              )}
+              <Text style={[styles.menuItemText, { color: Colors.diaryDark }]}>Export (encrypted)</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.menuItem} onPress={handleRecover} disabled={recovering}>
               {recovering ? (

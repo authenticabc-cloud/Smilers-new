@@ -15,6 +15,7 @@ import { pbkdf2 } from '@noble/hashes/pbkdf2.js';
 import { hmac } from '@noble/hashes/hmac.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import * as SecureStore from 'expo-secure-store';
+import * as Crypto from 'expo-crypto';
 
 const PBKDF2_ITERATIONS = 100_000;
 const KEY_LEN = 32; // 256 bits
@@ -247,4 +248,60 @@ export function decryptBytes(
 /** Clears the derived-key cache (call on sign-out for hygiene). */
 export function clearE2EEKeyCache() {
   keyCache.clear();
+}
+
+/**
+ * Self-describing envelope for a passphrase-encrypted backup blob (e.g. the
+ * encrypted Diary export). Contains everything needed to decrypt given the
+ * passphrase, so the file is portable and future-restorable.
+ */
+export interface EncryptedEnvelope {
+  v: 1;
+  alg: 'AES-GCM-256';
+  kdf: 'PBKDF2-SHA256';
+  iterations: number;
+  salt: string; // base64
+  iv: string; // base64
+  ciphertext: string; // base64
+}
+
+/**
+ * Encrypt a UTF-8 string with a user passphrase into a portable envelope.
+ * Fresh random salt + IV per call; key derivation uses the same non-blocking
+ * (macrotask-yielding) PBKDF2 as the rest of the app so a big export never
+ * freezes the UI. Not persisted to SecureStore (the salt is one-off).
+ */
+export async function encryptStringWithPassphraseAsync(
+  plaintext: string,
+  passphrase: string
+): Promise<EncryptedEnvelope> {
+  const salt = Crypto.getRandomBytes(16);
+  const iv = Crypto.getRandomBytes(12);
+  const key = await pbkdf2Sha256Yielding(new TextEncoder().encode(passphrase), salt);
+  const ciphertext = gcm(key, iv).encrypt(new TextEncoder().encode(plaintext));
+  return {
+    v: 1,
+    alg: 'AES-GCM-256',
+    kdf: 'PBKDF2-SHA256',
+    iterations: PBKDF2_ITERATIONS,
+    salt: bytesToBase64(salt),
+    iv: bytesToBase64(iv),
+    ciphertext: bytesToBase64(ciphertext),
+  };
+}
+
+/**
+ * Decrypt an {@link EncryptedEnvelope} produced by
+ * `encryptStringWithPassphraseAsync` back into the original UTF-8 string.
+ * Throws if the passphrase is wrong or the blob is tampered.
+ */
+export async function decryptEnvelopeWithPassphraseAsync(
+  envelope: EncryptedEnvelope,
+  passphrase: string
+): Promise<string> {
+  const salt = base64ToBytes(envelope.salt);
+  const iv = base64ToBytes(envelope.iv);
+  const ciphertext = base64ToBytes(envelope.ciphertext);
+  const key = await pbkdf2Sha256Yielding(new TextEncoder().encode(passphrase), salt);
+  return bytesToUtf8(gcm(key, iv).decrypt(ciphertext));
 }
