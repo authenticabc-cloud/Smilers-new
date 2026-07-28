@@ -1139,10 +1139,20 @@ export default function ChatScreen() {
   const e2eeStatus = useConversationE2EE(conversationId || null);
   const decryptedMessages = useMemo(() => {
     if (!messagesForRender.length) return messagesForRender;
-    if (!e2eeStatus.enabled || !e2eeStatus.passphrase || !e2eeStatus.salt) {
-      // E2EE not active for this conversation OR key not yet fetched.
-      // Returning the raw messages means encrypted ones will still show as
-      // base64 until the key arrives (next render).
+    const keyExpected =
+      e2eeStatus.enabled && !!e2eeStatus.passphrase && !!e2eeStatus.salt;
+    if (keyExpected && !e2eeStatus.keyReady) {
+      // Key is deriving asynchronously (never on the render thread). Show a
+      // brief placeholder for encrypted text instead of raw base64. This memo
+      // re-runs the instant `keyReady` flips and messages decrypt (AES only).
+      return messagesForRender.map((msg: any) =>
+        msg?.encrypted && typeof msg.text === 'string' && msg.text.length > 0 && msg.iv
+          ? { ...msg, text: '🔒 Decrypting…', _wasEncrypted: true, _decrypting: true }
+          : msg
+      );
+    }
+    if (!keyExpected) {
+      // E2EE not active for this conversation.
       return messagesForRender;
     }
     return messagesForRender.map((msg: any) => {
@@ -1166,7 +1176,7 @@ export default function ChatScreen() {
       }
       return msg;
     });
-  }, [e2eeStatus.enabled, e2eeStatus.passphrase, e2eeStatus.salt, messagesForRender]);
+  }, [e2eeStatus.enabled, e2eeStatus.passphrase, e2eeStatus.salt, e2eeStatus.keyReady, messagesForRender]);
 
   // #4: ordered media list (chronological, matching on-screen order) that
   // powers the swipe-between-photos/videos gallery. Each media bubble opens the

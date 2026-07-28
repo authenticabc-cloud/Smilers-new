@@ -1,11 +1,19 @@
 import { useConvex } from 'convex/react';
 import { useEffect, useState } from 'react';
 import { api } from '../convexApi';
+import { deriveKeyAsync, hasDerivedKey } from '../lib/e2eeCrypto';
 
 export interface E2EEStatus {
   enabled: boolean;
   salt: string | null;
   passphrase: string | null;
+  /**
+   * True when the derived AES key is cached and ready for synchronous
+   * decryption. While false (enabled convos only), callers must NOT decrypt —
+   * doing so would trigger a blocking PBKDF2 on the JS thread. The key derives
+   * asynchronously in the background; this flips to true when it's ready.
+   */
+  keyReady: boolean;
 }
 
 /**
@@ -23,12 +31,12 @@ export function useConversationE2EE(conversationId: string | null | undefined): 
     if (conversationId && inMemoryCache.has(conversationId)) {
       return inMemoryCache.get(conversationId)!;
     }
-    return { enabled: false, salt: null, passphrase: null };
+    return { enabled: false, salt: null, passphrase: null, keyReady: true };
   });
 
   useEffect(() => {
     if (!conversationId) {
-      setStatus({ enabled: false, salt: null, passphrase: null });
+      setStatus({ enabled: false, salt: null, passphrase: null, keyReady: true });
       return;
     }
     // Use cached entry immediately if we have one
@@ -43,13 +51,34 @@ export function useConversationE2EE(conversationId: string | null | undefined): 
           conversationId,
         });
         if (cancelled) return;
-        const next: E2EEStatus = {
-          enabled: !!(result && result.enabled),
-          salt: result?.salt || null,
-          passphrase: result?.passphrase || null,
-        };
+        const enabled = !!(result && result.enabled);
+        const salt = result?.salt || null;
+        const passphrase = result?.passphrase || null;
+        const needsKey = enabled && !!passphrase && !!salt;
+        // keyReady is true immediately when no decryption is needed OR the key
+        // is already cached from an earlier open this session. Otherwise it's
+        // false until the async PBKDF2 finishes (never blocks the UI).
+        const ready = needsKey ? hasDerivedKey(passphrase, salt) : true;
+        const next: E2EEStatus = { enabled, salt, passphrase, keyReady: ready };
         inMemoryCache.set(conversationId, next);
         setStatus(next);
+        if (needsKey && !ready) {
+          deriveKeyAsync(passphrase, salt)
+            .then(() => {
+              if (cancelled) return;
+              const done: E2EEStatus = { ...next, keyReady: true };
+              inMemoryCache.set(conversationId, done);
+              setStatus(done);
+            })
+            .catch((errorValue: any) => {
+              if (!cancelled) {
+                console.warn(
+                  '[useConversationE2EE] key derivation failed:',
+                  errorValue?.message || errorValue
+                );
+              }
+            });
+        }
       } catch (errorValue: any) {
         if (!cancelled) {
           console.warn(
