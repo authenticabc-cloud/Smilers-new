@@ -82,6 +82,26 @@ function ChatMessageRowBase({
 }: ChatMessageRowProps) {
   const previous = index > 0 ? timeline[index - 1] : null;
   const showDayChip = !previous || !isSameCalendarDay(item?._creationTime, previous?._creationTime);
+  // "Group created" system message (WhatsApp-style) — always the first row of
+  // a group timeline when the full history is loaded. Shows a centered pill.
+  if (item?.__kind === 'groupCreated') {
+    return (
+      <>
+        {showDayChip ? (
+          <View style={styles.dayChipWrap} testID={`chat-day-chip-${item._id}`}>
+            <Text style={styles.dayChipText}>{formatChatDayChip(item?._creationTime)}</Text>
+          </View>
+        ) : null}
+        <View style={styles.systemPillWrap} testID="chat-group-created">
+          <Text style={styles.systemPillText}>
+            {item.creatorName
+              ? `${item.creatorName} created the group${item.groupName ? ` "${item.groupName}"` : ''}`
+              : 'This group was created'}
+          </Text>
+        </View>
+      </>
+    );
+  }
   // Call-log pill branch (iter 156, web parity).
   if (item?.__kind === 'call') {
     return (

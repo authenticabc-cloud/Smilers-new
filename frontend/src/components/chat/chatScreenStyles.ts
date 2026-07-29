@@ -334,6 +334,22 @@ export const styles = StyleSheet.create({
     borderRadius: 14,
     overflow: 'hidden',
   },
+  systemPillWrap: {
+    alignItems: 'center',
+    marginVertical: 6,
+    paddingHorizontal: 32,
+  },
+  systemPillText: {
+    fontSize: 12,
+    color: '#5C5346',
+    backgroundColor: 'rgba(247, 241, 224, 0.95)',
+    paddingHorizontal: 16,
+    paddingVertical: 7,
+    borderRadius: 14,
+    overflow: 'hidden',
+    textAlign: 'center',
+    lineHeight: 17,
+  },
   empty: {
     alignItems: 'center',
     paddingTop: 60,

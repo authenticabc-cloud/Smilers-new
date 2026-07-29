@@ -1374,6 +1374,45 @@ export default function ChatScreen() {
     [translatedMessageMap, searchFilteredMessages],
   );
 
+  // "Group created by X" system row (WhatsApp-style) shown at the very top of
+  // the timeline — ONLY for groups AND once the full message history is loaded
+  // (messagesPage.isDone), so the banner truly sits above the FIRST message.
+  // Creator resolves to the viewer's device-saved contact name; falls back to
+  // the chief admin when the backend doesn't expose an explicit creator field.
+  const groupCreatedHeader = useMemo(() => {
+    if (!isGroupChat) return null;
+    if ((messagesPage as any)?.isDone !== true) return null;
+    const raw =
+      (conversation as any)?._creationTime ??
+      (conversation as any)?.createdAt ??
+      (conversation as any)?.created_at;
+    const createdAtMs = typeof raw === 'number' ? raw : Date.parse(String(raw || ''));
+    if (!Number.isFinite(createdAtMs) || createdAtMs <= 0) return null;
+    const creatorId = String(
+      (conversation as any)?.createdBy ||
+        (conversation as any)?.creatorId ||
+        (conversation as any)?.createdByUserId ||
+        (conversation as any)?.creator ||
+        (conversation as any)?.ownerId ||
+        (groupAdminInfo as any)?.chiefAdmin ||
+        '',
+    );
+    let creatorName = '';
+    if (creatorId) {
+      creatorName =
+        me?._id && creatorId === String(me._id)
+          ? 'You'
+          : resolveSenderName(creatorId) || '';
+    }
+    return {
+      __kind: 'groupCreated' as const,
+      _id: 'group-created',
+      _creationTime: createdAtMs,
+      creatorName,
+      groupName: (conversation as any)?.name || '',
+    };
+  }, [isGroupChat, messagesPage, conversation, groupAdminInfo, me?._id, resolveSenderName]);
+
   // iter 156: merge call-log pills into the timeline (per Smilers web parity).
   // Each call-log row is rendered as a centered system pill with outcome label,
   // duration, and a "Recorded" badge if applicable. Tagged with __kind:'call'
@@ -1383,10 +1422,14 @@ export default function ChatScreen() {
     // their queued messages inline in the timeline. They carry a Date.now()
     // _creationTime so they naturally sort to the bottom.
     const outbox = outboxMsgs;
+    const withHeader = (arr: any[]) =>
+      groupCreatedHeader ? [groupCreatedHeader, ...arr] : arr;
     if (!Array.isArray(callLogsForConvo) || callLogsForConvo.length === 0) {
-      if (outbox.length === 0) return displayMessages;
-      return [...displayMessages, ...outbox].sort(
-        (a: any, b: any) => Number(a?._creationTime || 0) - Number(b?._creationTime || 0),
+      if (outbox.length === 0) return withHeader(displayMessages);
+      return withHeader(
+        [...displayMessages, ...outbox].sort(
+          (a: any, b: any) => Number(a?._creationTime || 0) - Number(b?._creationTime || 0),
+        ),
       );
     }
     const myId = me?._id ? String(me._id) : '';
@@ -1423,10 +1466,12 @@ export default function ChatScreen() {
         isConference: !!c?.isConference,
       };
     });
-    return [...displayMessages, ...pills, ...outbox].sort(
-      (a: any, b: any) => Number(a?._creationTime || 0) - Number(b?._creationTime || 0),
+    return withHeader(
+      [...displayMessages, ...pills, ...outbox].sort(
+        (a: any, b: any) => Number(a?._creationTime || 0) - Number(b?._creationTime || 0),
+      ),
     );
-  }, [displayMessages, callLogsForConvo, me?._id, outboxMsgs]);
+  }, [displayMessages, callLogsForConvo, me?._id, outboxMsgs, groupCreatedHeader]);
 
   const msgById = useMemo(() => {
     const map = new Map<string, any>();
