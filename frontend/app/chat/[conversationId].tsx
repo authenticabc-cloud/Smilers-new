@@ -83,6 +83,7 @@ import { notifyEventPush, previewForMessageType } from '../../src/lib/notifyPush
 import { reportConvexUserIdForPush } from '../../src/push/useEmergentPush';
 import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName, getResolvedDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
+import { getSystemPayload } from '../../src/lib/chat/systemMessage';
 import { cacheUserName } from '../../src/push/notificationNameCache';
 import { getLanguageByCode } from '../../src/lib/languages';
 import {
@@ -1382,6 +1383,12 @@ export default function ChatScreen() {
   const groupCreatedHeader = useMemo(() => {
     if (!isGroupChat) return null;
     if ((messagesPage as any)?.isDone !== true) return null;
+    // If the backend already emits a `group_created` system message, prefer it
+    // (rendered inline like any other system row) and skip the synthetic one.
+    const hasServerCreatedEvent = (Array.isArray(messages) ? messages : []).some(
+      (m: any) => getSystemPayload(m)?.action === 'group_created',
+    );
+    if (hasServerCreatedEvent) return null;
     const raw =
       (conversation as any)?._creationTime ??
       (conversation as any)?.createdAt ??
@@ -1411,7 +1418,7 @@ export default function ChatScreen() {
       creatorName,
       groupName: (conversation as any)?.name || '',
     };
-  }, [isGroupChat, messagesPage, conversation, groupAdminInfo, me?._id, resolveSenderName]);
+  }, [isGroupChat, messagesPage, conversation, groupAdminInfo, me?._id, resolveSenderName, messages]);
 
   // iter 156: merge call-log pills into the timeline (per Smilers web parity).
   // Each call-log row is rendered as a centered system pill with outcome label,

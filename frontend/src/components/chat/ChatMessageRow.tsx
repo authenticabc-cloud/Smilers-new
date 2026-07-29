@@ -5,6 +5,7 @@ import { SwipeToReply } from './SwipeToReply';
 import MediaBubble from '../MediaBubble';
 import { startCall } from '../../lib/twilio/startCall';
 import { formatChatDayChip, isSameCalendarDay } from '../../lib/chatFormat';
+import { formatSystemMessage, getSystemPayload } from '../../lib/chat/systemMessage';
 import { styles } from './chatScreenStyles';
 
 /**
@@ -82,6 +83,27 @@ function ChatMessageRowBase({
 }: ChatMessageRowProps) {
   const previous = index > 0 ? timeline[index - 1] : null;
   const showDayChip = !previous || !isSameCalendarDay(item?._creationTime, previous?._creationTime);
+  // Backend-emitted group system events ("X added Y", "X left", renamed, etc.).
+  if (getSystemPayload(item)) {
+    const text = formatSystemMessage(item, {
+      myId: effectiveMe?._id ? String(effectiveMe._id) : me?._id ? String(me._id) : null,
+      resolveName: (id: string) => resolveSenderName(id),
+      groupName: title,
+    });
+    if (!text) return null;
+    return (
+      <>
+        {showDayChip ? (
+          <View style={styles.dayChipWrap} testID={`chat-day-chip-${item._id}`}>
+            <Text style={styles.dayChipText}>{formatChatDayChip(item?._creationTime)}</Text>
+          </View>
+        ) : null}
+        <View style={styles.systemPillWrap} testID={`chat-system-${item._id}`}>
+          <Text style={styles.systemPillText}>{text}</Text>
+        </View>
+      </>
+    );
+  }
   // "Group created" system message (WhatsApp-style) — always the first row of
   // a group timeline when the full history is loaded. Shows a centered pill.
   if (item?.__kind === 'groupCreated') {
