@@ -316,7 +316,18 @@ export async function isWiredHeadsetPluggedIn(): Promise<boolean> {
 export function startNativeRingback() {
   const native = getNative();
   if (!native || typeof native.startRingback !== 'function') return;
-  safeCall(() => native.startRingback!('_BUNDLE_'), 'startRingback');
+  safeCall(() => {
+    // CRITICAL: the Stream call screen never starts an InCallManager session
+    // (Stream owns its own WebRTC audio), so `startRingback` had no initialised
+    // native audio manager and produced NO sound — the "caller hears nothing
+    // while it says Ringing…" bug. Initialise the session first (idempotent —
+    // safe to call when already running). Ringback then plays on the VOICE-CALL
+    // stream, which stays audible during MODE_IN_COMMUNICATION.
+    try {
+      native.start({ media: 'audio', auto: false });
+    } catch {}
+    native.startRingback!('_BUNDLE_');
+  }, 'startRingback');
 }
 
 export function stopNativeRingback() {
