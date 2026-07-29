@@ -224,6 +224,11 @@ export default function ConversationRow({
               testID={`conv-muted-${item._id}`}
             />
           ) : null}
+          {systemPreview.involvesMe ? (
+            <View style={styles.youPill} testID={`conv-you-${item._id}`}>
+              <Text style={styles.youPillText}>You</Text>
+            </View>
+          ) : null}
           {hasUnread ? (
             <View style={styles.unreadPill} testID={`conv-unread-${item._id}`}>
               <Text style={styles.unreadPillText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
@@ -256,6 +261,18 @@ const styles = StyleSheet.create({
   rowSubtitle: { fontSize: FontSize.sm, color: Colors.textSecondary },
   rowSubtitleUnread: { color: Colors.textPrimary, fontWeight: FontWeight.medium },
   rowTyping: { color: Colors.primary, fontStyle: 'italic' },
+  youPill: {
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 999,
+  },
+  youPillText: {
+    color: Colors.white,
+    fontSize: 10,
+    fontWeight: FontWeight.bold,
+    letterSpacing: 0.2,
+  },
   draftPrefix: { color: Colors.danger, fontWeight: FontWeight.semibold },
   rowRightCol: { marginLeft: Spacing.sm, alignItems: 'flex-end', justifyContent: 'center', gap: 4 },
   rowRightBadges: { flexDirection: 'row', alignItems: 'center', gap: 6 },
