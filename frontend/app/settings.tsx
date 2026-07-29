@@ -43,11 +43,9 @@ const ITEMS: Row[] = [
   { key: 'face-id', route: '/face-id', title: 'Face ID', sub: 'Verify identity on new devices', icon: 'face-recognition', lib: 'mc', premium: true },
   { key: 'desktop-login', route: '/approve-login', title: 'Approve Desktop Login', sub: 'Approve or scan a sign-in on your computer', icon: 'monitor-lock', lib: 'mc' },
   { key: 'notifications', route: '/notifications', title: 'Notifications', sub: 'Message, group, and call alerts', icon: 'notifications-outline', lib: 'ion' },
-  // iter-fork: re-listed to triage the message-notification duplicate. The
-  // MSG-PUSH log rows show whether incoming message pushes still carry a
-  // notification block (stale relay) — tap Copy and paste back to support.
-  { key: 'diagnostic-logs', route: '/diagnostic-logs', title: 'Diagnostic Logs', sub: 'Push & crash logs — copy to share with support', icon: 'file-document-outline', lib: 'mc' },
-  { key: 'call-diagnostics', route: '/call-diagnostics', title: 'Call Diagnostics', sub: 'Check call readiness & why calls may not ring', icon: 'phone-check', lib: 'mc' },
+  // 2026-07-29 (user request): 'Diagnostic Logs' and 'Call Diagnostics' rows
+  // hidden from Settings. The /diagnostic-logs and /call-diagnostics routes
+  // still exist and can be reached directly or re-listed here later if needed.
   { key: 'call-recording', route: '/call-recording', title: 'Call Recording', sub: 'Auto-record voice & video calls with exceptions', icon: 'record-rec', lib: 'mc' },
   { key: 'call-audio', route: '/call-audio', title: 'Call Audio', sub: 'Noise cancellation for voice & video calls', icon: 'waveform', lib: 'mc' },
   { key: 'admin', route: '/admin', title: 'Admin Dashboard', sub: 'Manage users, reports, and app data', icon: 'crown-outline', lib: 'mc', adminOnly: true },
