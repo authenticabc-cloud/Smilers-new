@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   ScrollView,
   Platform,
+  Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -35,6 +36,25 @@ import { Colors, FontSize, FontWeight, Spacing, Radius } from '../theme';
  * show an empty sheet.
  */
 const LAST_SEEN_KEY = 'whatsNew:lastSeenVersion';
+
+const ANDROID_PACKAGE = 'com.smilers.app';
+const IOS_APP_ID = '6791345253';
+
+// Opens the store listing on the "leave a review" surface where supported.
+function openRateApp() {
+  const url =
+    Platform.OS === 'ios'
+      ? `https://apps.apple.com/app/id${IOS_APP_ID}?action=write-review`
+      : `market://details?id=${ANDROID_PACKAGE}`;
+  Linking.openURL(url).catch(() => {
+    // Fallback to the web store page if the native store app can't handle it.
+    const web =
+      Platform.OS === 'ios'
+        ? `https://apps.apple.com/app/id${IOS_APP_ID}`
+        : `https://play.google.com/store/apps/details?id=${ANDROID_PACKAGE}`;
+    Linking.openURL(web).catch(() => {});
+  });
+}
 
 export default function WhatsNewModal() {
   const insets = useSafeAreaInsets();
@@ -128,6 +148,19 @@ export default function WhatsNewModal() {
           >
             <Text style={styles.buttonText}>Got it</Text>
           </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.rateBtn}
+            onPress={() => {
+              openRateApp();
+              setVisible(false);
+            }}
+            activeOpacity={0.7}
+            testID="whats-new-rate"
+          >
+            <Ionicons name="star" size={16} color={Colors.primaryDark} />
+            <Text style={styles.rateText}>Rate Smilers</Text>
+          </TouchableOpacity>
         </View>
       </View>
     </Modal>
@@ -217,5 +250,18 @@ const styles = StyleSheet.create({
     color: Colors.white,
     fontSize: FontSize.base,
     fontWeight: FontWeight.bold,
+  },
+  rateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: Spacing.md,
+    paddingVertical: 8,
+  },
+  rateText: {
+    color: Colors.primaryDark,
+    fontSize: FontSize.sm,
+    fontWeight: FontWeight.semibold,
   },
 });

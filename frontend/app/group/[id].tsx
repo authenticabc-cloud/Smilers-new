@@ -292,6 +292,52 @@ function GroupInfoInner() {
 
   const groupName = conversation?.name || 'Group';
 
+  // Group creator (resolved to each viewer's device-saved contact name) +
+  // creation date — shown to ALL members. The Convex conversation doc carries
+  // `_creationTime` (ms epoch). The creator's userId is read from whichever
+  // field the backend exposes, falling back to the chief admin (the creator is
+  // the chief admin unless it was later transferred).
+  const creationDate = useMemo(() => {
+    const raw =
+      (conversation as any)?._creationTime ??
+      (conversation as any)?.createdAt ??
+      (conversation as any)?.created_at;
+    if (raw == null) return '';
+    const d = typeof raw === 'number' ? new Date(raw) : new Date(String(raw));
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+  }, [conversation]);
+
+  const creatorName = useMemo(() => {
+    const creatorId = String(
+      (conversation as any)?.createdBy ||
+        (conversation as any)?.creatorId ||
+        (conversation as any)?.createdByUserId ||
+        (conversation as any)?.creator ||
+        (conversation as any)?.ownerId ||
+        chiefAdminId ||
+        '',
+    );
+    if (!creatorId) return '';
+    if (myId && creatorId === String(myId)) return 'You';
+    const memberRec =
+      (Array.isArray(members) ? members : []).find(
+        (m: any) => String(m?.userId || m?._id || m?.user?._id || '') === creatorId,
+      ) || null;
+    const full = getSavedContactRecord(myContacts, { userId: creatorId }) || memberRec;
+    if (!full) return '';
+    return getResolvedDisplayName(
+      full,
+      deviceIndex,
+      lookupDeviceContactName,
+      memberRec?.name || memberRec?.displayName || 'Group creator',
+    );
+  }, [conversation, chiefAdminId, members, myContacts, deviceIndex, myId]);
+
   // Build sorted members list: Me first, then chief, then admins, then rest by name
   const sortedMembers = useMemo(() => {
     const list = Array.isArray(members) ? [...members] : [];
@@ -592,6 +638,16 @@ function GroupInfoInner() {
           <Text style={styles.adminCapLine}>
             Admins: {currentAdminCount}/{maxAdmins} (1 per {adminRatio})
           </Text>
+          {creatorName ? (
+            <Text style={styles.metaLine} testID="group-created-by">
+              Created by {creatorName}
+            </Text>
+          ) : null}
+          {creationDate ? (
+            <Text style={styles.metaLine} testID="group-created-on">
+              Created on {creationDate}
+            </Text>
+          ) : null}
         </View>
 
         {/* ADMIN ACTIONS (only if admin) */}
@@ -1156,6 +1212,7 @@ const styles = StyleSheet.create({
   groupName: { fontSize: 22, fontWeight: FontWeight.bold, color: Colors.textPrimary },
   memberCountLine: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
   adminCapLine: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2 },
+  metaLine: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2, textAlign: 'center' },
   section: { marginTop: Spacing.lg, backgroundColor: Colors.surface, paddingVertical: Spacing.sm },
   sectionLabel: {
     fontSize: FontSize.xs,
