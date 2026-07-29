@@ -4288,7 +4288,7 @@ def _parse_scan_text_verdict(raw: str) -> ScanTextResponse:
 #   - SMILERS_RELEASE_NOTES    : short changelog shown in the banner
 _ANDROID_PACKAGE = "com.smilers.app"
 APP_VERSION_CONFIG = {
-    "latestVersion": os.environ.get("SMILERS_LATEST_VERSION", "2.2.17"),
+    "latestVersion": os.environ.get("SMILERS_LATEST_VERSION", "2.2.20"),
     "minSupportedVersion": os.environ.get("SMILERS_MIN_VERSION", "0.0.0"),
     "androidUrl": os.environ.get(
         "SMILERS_ANDROID_URL",

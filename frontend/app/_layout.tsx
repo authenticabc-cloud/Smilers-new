@@ -21,6 +21,7 @@ import { ConvexClientProvider } from '../src/providers/ConvexClientProvider';
 import { useMessageNotificationSound } from '../src/lib/notification/useMessageNotificationSound';
 import { usePushNotifications } from '../src/push/usePushNotifications';
 import { useEmergentPush } from '../src/push/useEmergentPush';
+import { useInAppUpdates } from '../src/hooks/useInAppUpdates';
 import AppLockGate from '../src/components/AppLockGate';
 import VoiceCommandLauncher from '../src/components/VoiceCommandLauncher';
 import DriveModeController from '../src/components/DriveModeController';
@@ -193,6 +194,9 @@ function GlobalNotificationServices() {
   // backend agent disables the Convex pipeline, this hook becomes the
   // sole registration path.
   useEmergentPush();
+  // Google Play native in-app updates (Android). Auto-detects the latest
+  // published version from the store — no manual backend version bump needed.
+  useInAppUpdates();
   return null;
 }
 
@@ -552,7 +556,9 @@ export default function RootLayout() {
             <IncomingScreenShareModal />
             <CallHost />
             <CallReturnBanner />
-            <UpdateBanner />
+            {/* Android uses Google Play native in-app updates (useInAppUpdates);
+                the store-check banner is kept for iOS only to avoid a double prompt. */}
+            {Platform.OS === 'ios' && <UpdateBanner />}
             <InAppMessageBanner />
             <EmergencyActiveBanner />
               </View>

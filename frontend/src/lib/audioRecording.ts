@@ -21,6 +21,11 @@ export const VOICE_RECORDING_OPTIONS: RecordingOptions = {
     ...RecordingPresets.HIGH_QUALITY.android,
     outputFormat: 'mpeg4',
     audioEncoder: 'aac',
+    // NOISE CANCELLATION: 'voice_communication' selects the platform's VoIP
+    // capture path, which applies hardware/system echo cancellation, noise
+    // suppression, and automatic gain control when the device supports it —
+    // the same class of processing used for calls, now for voice notes.
+    audioSource: 'voice_communication',
   },
   ios: {
     ...RecordingPresets.HIGH_QUALITY.ios,
