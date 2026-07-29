@@ -3507,6 +3507,15 @@ export default function ChatScreen() {
         // the destination conversation. Parallel sends would race the
         // _creationTime stamps.
         for (const msg of msgsToForward) {
+          // Forward via send() with lineage args so the backend increments the
+          // global forward counter and stamps this copy (isForwarded +
+          // forwardCount). This keeps E2EE intact (we re-send/encrypt for the
+          // target conversation) while the server owns the FW<n> counting.
+          const fwd = {
+            isForwarded: true as const,
+            forwardOfMessageId: msg._id,
+            ...(msg.fileHash ? { fileHash: msg.fileHash } : {}),
+          };
           await sendMessage(
             msg.type === 'image' && msg.storageId
               ? {
@@ -3516,6 +3525,7 @@ export default function ChatScreen() {
                   storageId: msg.storageId,
                   ...(msg.mimeType ? { mimeType: msg.mimeType } : {}),
                   ...(msg.duration ? { duration: msg.duration } : {}),
+                  ...fwd,
                 }
               : {
                   conversationId: targetConversationId,
@@ -3527,6 +3537,7 @@ export default function ChatScreen() {
                   ...(msg.fileName ? { fileName: msg.fileName } : {}),
                   ...(msg.fileSize ? { fileSize: msg.fileSize } : {}),
                   ...(msg.duration ? { duration: msg.duration } : {}),
+                  ...fwd,
                 }
           );
         }

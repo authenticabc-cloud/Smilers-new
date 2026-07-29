@@ -44,6 +44,7 @@ import { useDecryptedMediaUrl } from '../hooks/useDecryptedMediaUrl';
 import type { E2EEStatus } from '../hooks/useConversationE2EE';
 import { getCachedTranscription, clearCachedTranscription, type CachedTranscription, type TranscriptionSegment } from '../lib/triggerTranscription';
 import { SharedContactBubble } from './chat/SharedContactBubble';
+import { ForwardedTag } from './chat/ForwardedTag';
 import { getLanguageByCode } from '../lib/languages';
 import { getOrCreateVoiceTranslation, type VoiceTranslation } from '../lib/voiceTranslation';
 import { ensureVoicePlaybackMode } from '../lib/audio/voicePlaybackMode';
@@ -437,6 +438,8 @@ export default function MediaBubble({
           <Ionicons name="shield-checkmark-outline" size={12} color={isOutgoing ? '#F6FFF9' : Colors.primary} />
           <Text style={[styles.encryptedText, { color: isOutgoing ? '#F6FFF9' : Colors.primary }]}>Encrypted</Text>
         </View>
+
+        <ForwardedTag msg={msg} color={isOutgoing ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.5)'} />
 
         {/* iter-337: group sender name — only on incoming bubbles when the
             parent resolved a name (device-contact name first, else Google). */}

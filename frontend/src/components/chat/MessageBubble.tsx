@@ -10,6 +10,7 @@ import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { scanMessage, explainScanResult, extractUrls, enrichScanWithRemoteAPI } from '../../lib/securityScanner';
 import { useTextScamScan, describeScamCategory } from '../../lib/textScamScan';
 import { Colors, FontSize, FontWeight, Radius, Shadow } from '../../theme';
+import { ForwardedTag } from './ForwardedTag';
 
 // iter: make URLs in chat text tappable. Safe messages already passed the
 // render-time security scan (malicious links are blocked/hidden above), so
@@ -302,6 +303,7 @@ export function MessageBubble({
           isMine ? styles.bubbleMine : styles.bubbleOther,
         ]}
       >
+        <ForwardedTag msg={msg} color={isMine ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.5)'} />
         {parentMsg ? (
           <View style={styles.quoteBlock}>
             <View style={styles.quoteAccent} />
