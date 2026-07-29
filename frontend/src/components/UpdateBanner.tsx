@@ -17,7 +17,7 @@ import { useUpdateBanner } from '../lib/appVersion';
  */
 export default function UpdateBanner() {
   const insets = useSafeAreaInsets();
-  const { visible, forceUpdate, latestVersion, storeUrl, releaseNotes, dismiss } =
+  const { visible, forceUpdate, latestVersion, storeUrl, releaseNotes, dismiss, acknowledgeUpdate } =
     useUpdateBanner();
 
   if (!visible) return null;
@@ -25,6 +25,12 @@ export default function UpdateBanner() {
   const openStore = () => {
     if (storeUrl) {
       Linking.openURL(storeUrl).catch(() => {});
+    }
+    // Tapping "Update now" hides the banner immediately and keeps it hidden
+    // until a newer version ships. A forced update stays until the app is
+    // actually updated (version changes), so we don't acknowledge it away.
+    if (!forceUpdate) {
+      acknowledgeUpdate();
     }
   };
 

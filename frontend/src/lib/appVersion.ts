@@ -12,8 +12,13 @@
 import { useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/$/, '');
+
+// Persisted key: the latest version the user has "acknowledged" by tapping
+// Update now. The banner stays hidden until a NEWER version is published.
+const ACK_KEY = 'updateBanner:acknowledgedVersion';
 
 export type AppVersionInfo = {
   latestVersion: string;
@@ -78,16 +83,21 @@ export type UpdateBannerState = {
   releaseNotes: string;
   storeUrl: string;
   dismiss: () => void;
+  acknowledgeUpdate: () => void;
 };
 
 /**
  * useUpdateBanner — drives the root <UpdateBanner/>. Fetches once on mount,
- * decides whether an update banner should show, and exposes a session-scoped
- * dismiss handler. Fails silent (never blocks the app) when offline.
+ * decides whether an update banner should show, and exposes two handlers:
+ *   • dismiss()          — "Later": session-scoped, reappears next cold start.
+ *   • acknowledgeUpdate()— "Update now": persisted per-version, stays hidden
+ *                          until a NEWER version is published.
+ * Fails silent (never blocks the app) when offline.
  */
 export function useUpdateBanner(): UpdateBannerState {
   const [info, setInfo] = useState<AppVersionInfo | null>(null);
   const [dismissed, setDismissed] = useState(dismissedThisSession);
+  const [ackVersion, setAckVersion] = useState<string | null>(null);
   const currentVersion = getCurrentAppVersion();
 
   useEffect(() => {
@@ -95,6 +105,9 @@ export function useUpdateBanner(): UpdateBannerState {
     void fetchAppVersion(controller.signal).then((data) => {
       if (data) setInfo(data);
     });
+    AsyncStorage.getItem(ACK_KEY)
+      .then((v) => setAckVersion(v))
+      .catch(() => {});
     return () => controller.abort();
   }, []);
 
@@ -110,10 +123,28 @@ export function useUpdateBanner(): UpdateBannerState {
     !!info &&
     (info.forceUpdate ||
       compareVersions(currentVersion, info.minSupportedVersion) < 0);
-  // A forced update can't be dismissed.
-  const visible = updateAvailable && (!dismissed || forceUpdate);
+  // Persisted acknowledgement covers the current latest version (or newer):
+  // the user already tapped "Update now" for it, so keep the banner hidden
+  // until an even newer version ships.
+  const acknowledgedForLatest =
+    !!info && !!ackVersion && compareVersions(ackVersion, info.latestVersion) >= 0;
+  // A forced update can't be dismissed/acknowledged away.
+  const visible =
+    updateAvailable && (forceUpdate || (!dismissed && !acknowledgedForLatest));
 
   const dismiss = () => {
+    dismissedThisSession = true;
+    setDismissed(true);
+  };
+
+  // "Update now": persist that this version was acknowledged so the banner
+  // won't reappear until a newer version is published, and hide it now.
+  const acknowledgeUpdate = () => {
+    const v = info?.latestVersion || currentVersion;
+    if (v) {
+      setAckVersion(v);
+      AsyncStorage.setItem(ACK_KEY, v).catch(() => {});
+    }
     dismissedThisSession = true;
     setDismissed(true);
   };
@@ -126,5 +157,6 @@ export function useUpdateBanner(): UpdateBannerState {
     releaseNotes: info?.releaseNotes || '',
     storeUrl,
     dismiss,
+    acknowledgeUpdate,
   };
 }
