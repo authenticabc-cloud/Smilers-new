@@ -156,7 +156,7 @@ export default function ConversationRow({
   const systemPreview = useMemo(() => {
     const sys = item?.lastSystem || item?.lastMessageSystem;
     const isSys = !!sys || item?.lastMessageType === 'system';
-    if (!isSys) return '';
+    if (!isSys) return { text: '', involvesMe: false };
     const resolveName = (uid: string): string => {
       const rec = getSavedContactRecord(contacts, { userId: uid });
       if (!rec) return '';
@@ -169,12 +169,25 @@ export default function ConversationRow({
         ) || ''
       );
     };
-    return formatSystemMessage(
+    const text = formatSystemMessage(
       { type: 'system', system: sys, senderId: sys?.actorId, text: item?.lastMessageText },
       { myId: currentUserId, resolveName, groupName: name },
     );
+    // Emphasise (bold) when the event targets ME and I didn't perform it —
+    // e.g. "Kojo added you", "Kojo made you an admin".
+    const targetIds: string[] = Array.isArray(sys?.targetIds)
+      ? sys.targetIds.map((t: any) => String(t))
+      : sys?.targetId
+      ? [String(sys.targetId)]
+      : [];
+    const involvesMe =
+      !!currentUserId &&
+      targetIds.includes(String(currentUserId)) &&
+      String(sys?.actorId || '') !== String(currentUserId);
+    return { text, involvesMe };
   }, [item, contacts, deviceIndex, currentUserId, name]);
-  const previewText = systemPreview || item.lastMessageText || 'Start chatting…';
+  const previewText = systemPreview.text || item.lastMessageText || 'Start chatting…';
+  const emphasisePreview = hasUnread || systemPreview.involvesMe;
   return (
     <TouchableOpacity onPress={onPress} style={styles.row} activeOpacity={0.7} testID={`conv-${item._id}`}>
       <Avatar name={name} size={52} uri={photoUri} online={peerIsOnline(item)} />
@@ -192,7 +205,7 @@ export default function ConversationRow({
             {draft.text || (draft.hasImages ? '📷 Photo' : '')}
           </Text>
         ) : (
-          <Text style={[styles.rowSubtitle, hasUnread && styles.rowSubtitleUnread]} numberOfLines={1}>
+          <Text style={[styles.rowSubtitle, emphasisePreview && styles.rowSubtitleUnread]} numberOfLines={1}>
             {previewText}
           </Text>
         )}
