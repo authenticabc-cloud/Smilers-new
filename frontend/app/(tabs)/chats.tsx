@@ -898,7 +898,25 @@ export default function ChatsScreen() {
                   ? formatTypingLabel((typingMap as any)?.[String(item._id)] || [], me?._id)
                   : null
               }
-              onPress={() => router.push(`/chat/${item._id}` as any)}
+              onPress={() => {
+                // Jump straight to the system message when this row's latest
+                // activity is a group event that involves you (e.g. "Kojo
+                // added you"). Requires the backend to expose the message id
+                // (`lastMessageId`) + `lastSystem` on the conversation row.
+                const sys = (item as any)?.lastSystem || (item as any)?.lastMessageSystem;
+                const targetIds: string[] = Array.isArray(sys?.targetIds)
+                  ? sys.targetIds.map((t: any) => String(t))
+                  : sys?.targetId
+                  ? [String(sys.targetId)]
+                  : [];
+                const involvesMe =
+                  !!me?._id &&
+                  targetIds.includes(String(me._id)) &&
+                  String(sys?.actorId || '') !== String(me._id);
+                const jumpId = (item as any)?.lastMessageId || sys?.messageId;
+                const suffix = involvesMe && jumpId ? `?jump=${jumpId}` : '';
+                router.push(`/chat/${item._id}${suffix}` as any);
+              }}
             />
           </ChatSwipeRow>
           );

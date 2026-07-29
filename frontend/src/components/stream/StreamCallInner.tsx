@@ -52,6 +52,7 @@ import { getRingDelivery, subscribeRingDelivery } from '../../lib/call/ringDeliv
 import { getAddRequest, subscribeAddRequest, clearAddRequest, type PendingAddRequest } from '../../lib/call/callAddRequestStore';
 import { ControlBtn, AudioOutputMenu } from '../call/CallScreenComponents';
 import { useRingtonePlayer } from '../../lib/ringtone/useRingtonePlayer';
+import { useRingbackPlayer } from '../../lib/ringtone/useRingbackPlayer';
 import { addStreamParticipant, fetchCallParticipants, removeStreamParticipant, groupCallAgain, reportParticipantStatus, requestAddParticipant, declineAddRequest, adminKickParticipant, type CallRosterEntry } from '../../lib/twilio/twilioApi';
 import type { AudioOutputRoute } from '../call/callTypes';
 import * as Haptics from 'expo-haptics';
@@ -1636,21 +1637,16 @@ export default function StreamCallInner() {
   // missing (the callee saw Accept/Decline but heard nothing).
   useRingtonePlayer(isIncomingPending, { vibrate: isIncomingPending });
 
-  // #5 FIX (caller hears no ringing): the old WebRTC screen played the bundled
-  // Smilers ringback tone to the CALLER while waiting for the callee to answer;
-  // the Stream screen never wired it, so the caller only *saw* "ringing" with
-  // silence. `InCallAudio.startRingback()` plays on Android's VOICE-CALL stream
-  // (survives the in-call audio session). Play it while our outgoing call is
-  // still ringing and stop the moment we connect / the call ends.
+  // #5 FIX (caller hears no ringing): the Stream screen never starts an
+  // InCallManager audio session, so `InCallAudio.startRingback('_BUNDLE_')`
+  // had no initialised native audio manager and produced NO sound. We now play
+  // the Smilers theme via the SAME expo-audio path that already works for the
+  // callee's incoming ring (see useRingbackPlayer). It plays while our outgoing
+  // call is ringing (callee reachable) and stops the instant we connect / the
+  // call ends — silent when the call is not in the ringing state.
   const isOutgoingRinging =
     activeCallReady && iAmCaller && !accepted && convStatus === 'ringing';
-  useEffect(() => {
-    if (!isOutgoingRinging) return;
-    InCallAudio.startRingback?.();
-    return () => {
-      InCallAudio.stopRingback?.();
-    };
-  }, [isOutgoingRinging]);
+  useRingbackPlayer(isOutgoingRinging);
 
   // #3: the caller hung up WHILE it was still ringing → the Convex record flips
   // to ended/declined (or disappears). Close the callee's incoming UI instead

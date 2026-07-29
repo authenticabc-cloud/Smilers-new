@@ -103,13 +103,16 @@ client reads `system` / `text` directly and does not attempt AES on system rows.
   {
     // ...existing conversation fields...
     "lastMessageType": "system",
+    "lastMessageId": "<messages doc _id of the last system message>",
     "lastSystem": { "action": "member_added", "actorId": "<userId>", "targetIds": ["<userId>"], "value": "" }
   }
   ```
   The mobile client formats this with each viewer's device-saved names (same as
   in-timeline). If you only set the plain `lastMessageText` (account names),
   that is still rendered as a fallback — but `lastSystem` is preferred so the
-  preview matches the viewer's phone book.
+  preview matches the viewer's phone book. **`lastMessageId`** additionally lets
+  the app deep-link straight to that system message when the user taps a row
+  whose event involves them ("Kojo added you").
 
 ### 2.7 `messages.list` must return them
 No special work if they're normal `messages` rows — just confirm `messages.list`

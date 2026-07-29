@@ -194,10 +194,11 @@ export default function ChatScreen() {
   const router = useRouter();
   const convex = useConvex();
   const insets = useSafeAreaInsets();
-  const { conversationId, q: initialSearchQ, mid: initialSearchMid } = useLocalSearchParams<{
+  const { conversationId, q: initialSearchQ, mid: initialSearchMid, jump: jumpParam } = useLocalSearchParams<{
     conversationId: string;
     q?: string;
     mid?: string;
+    jump?: string;
   }>();
   const { isAuthenticated } = useAuth();
   // iter-134 security hardening: chats contain end-to-end-encrypted
@@ -1595,6 +1596,20 @@ export default function ChatScreen() {
     },
     [timeline],
   );
+
+  // Deep-link jump: when opened from the chats list with `?jump=<messageId>`
+  // (e.g. tapping a group row where a system event involves you), scroll to
+  // and briefly highlight that message once it's present in the timeline.
+  const didJumpRef = useRef(false);
+  useEffect(() => {
+    const target = typeof jumpParam === 'string' ? jumpParam : '';
+    if (!target || didJumpRef.current) return;
+    const idx = timeline.findIndex((it: any) => String(it?._id) === String(target));
+    if (idx < 0) return; // not loaded into the current window yet
+    didJumpRef.current = true;
+    const t = setTimeout(() => jumpToMessage(target), 350);
+    return () => clearTimeout(t);
+  }, [jumpParam, timeline, jumpToMessage]);
 
   // iter-323 "Receive once" 🔂: tapping the "file deleted for multiple
   // receipt" footprint offers to jump to the ORIGINAL copy of the file (in
