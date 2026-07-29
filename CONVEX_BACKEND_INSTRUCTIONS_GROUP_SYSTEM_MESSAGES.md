@@ -96,8 +96,20 @@ client reads `system` / `text` directly and does not attempt AES on system rows.
 - System messages should **not** increment unread counts and should **not**
   trigger a user-facing push notification (silent). If your `messages.send`
   path always pushes, add a branch to skip push when `type === "system"`.
-- They **may** update the conversation's `lastMessage`/preview if you want the
-  chat list to show e.g. "Kojo added Ama" — optional.
+- **Chats-list preview:** to make the group row show e.g. "Kojo added Ama" as
+  the last activity, expose the last message's **structured** system payload on
+  each conversation row returned by `listConversations`:
+  ```jsonc
+  {
+    // ...existing conversation fields...
+    "lastMessageType": "system",
+    "lastSystem": { "action": "member_added", "actorId": "<userId>", "targetIds": ["<userId>"], "value": "" }
+  }
+  ```
+  The mobile client formats this with each viewer's device-saved names (same as
+  in-timeline). If you only set the plain `lastMessageText` (account names),
+  that is still rendered as a fallback — but `lastSystem` is preferred so the
+  preview matches the viewer's phone book.
 
 ### 2.7 `messages.list` must return them
 No special work if they're normal `messages` rows — just confirm `messages.list`
@@ -113,6 +125,7 @@ No special work if they're normal `messages` rows — just confirm `messages.lis
 - [ ] `promoteToAdmin` / `demoteFromAdmin` / `transferChiefAdmin` emit their events.
 - [ ] `updateGroup` emits `group_renamed` / `group_icon_changed` / `group_description_changed` as applicable.
 - [ ] System messages are `type:"system"`, unencrypted (or decryptable), returned by `messages.list`, and do **not** push or bump unread.
+- [ ] `listConversations` exposes `lastMessageType:"system"` + structured `lastSystem` on the row for the chats-list preview.
 - [ ] Backfill `createdBy` for existing groups (best-effort from earliest membership / chief admin).
 
 Once Part 1 lands, Group Info shows creator + date immediately. Once Part 2

@@ -13,8 +13,11 @@ import {
   findSavedContactDisplayName,
   getConversationDisplayName,
   getResolvedConversationDisplayName,
+  getResolvedDisplayName,
+  getSavedContactRecord,
 } from '../lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../lib/deviceContactIndex';
+import { formatSystemMessage } from '../lib/chat/systemMessage';
 import { cacheConversationName, cacheUserName } from '../push/notificationNameCache';
 import { type DraftPreview } from '../lib/chatDrafts';
 import { api } from '../convexApi';
@@ -145,6 +148,33 @@ export default function ConversationRow({
     [typingFromParent, typingLabelProp, rowTypingRaw, currentUserId],
   );
   const hasUnread = unreadCount > 0;
+  // Chats-list preview for group system events ("Kojo added Ama", "You left").
+  // When the backend exposes the last message's structured system payload on
+  // the conversation row (`lastSystem` / `lastMessageType === 'system'`), we
+  // format it here with each viewer's device-saved names. Falls back to the
+  // backend's plain `lastMessageText` when no structured payload is present.
+  const systemPreview = useMemo(() => {
+    const sys = item?.lastSystem || item?.lastMessageSystem;
+    const isSys = !!sys || item?.lastMessageType === 'system';
+    if (!isSys) return '';
+    const resolveName = (uid: string): string => {
+      const rec = getSavedContactRecord(contacts, { userId: uid });
+      if (!rec) return '';
+      return (
+        getResolvedDisplayName(
+          rec,
+          deviceIndex,
+          lookupDeviceContactName,
+          rec.name || rec.displayName || '',
+        ) || ''
+      );
+    };
+    return formatSystemMessage(
+      { type: 'system', system: sys, senderId: sys?.actorId, text: item?.lastMessageText },
+      { myId: currentUserId, resolveName, groupName: name },
+    );
+  }, [item, contacts, deviceIndex, currentUserId, name]);
+  const previewText = systemPreview || item.lastMessageText || 'Start chatting…';
   return (
     <TouchableOpacity onPress={onPress} style={styles.row} activeOpacity={0.7} testID={`conv-${item._id}`}>
       <Avatar name={name} size={52} uri={photoUri} online={peerIsOnline(item)} />
@@ -163,7 +193,7 @@ export default function ConversationRow({
           </Text>
         ) : (
           <Text style={[styles.rowSubtitle, hasUnread && styles.rowSubtitleUnread]} numberOfLines={1}>
-            {item.lastMessageText || 'Start chatting…'}
+            {previewText}
           </Text>
         )}
       </View>
