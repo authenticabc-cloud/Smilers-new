@@ -901,19 +901,19 @@ export default function ChatsScreen() {
               onPress={() => {
                 // Jump straight to the system message when this row's latest
                 // activity is a group event that involves you (e.g. "Kojo
-                // added you"). Requires the backend to expose the message id
-                // (`lastMessageId`) + `lastSystem` on the conversation row.
-                const sys = (item as any)?.lastSystem || (item as any)?.lastMessageSystem;
-                const targetIds: string[] = Array.isArray(sys?.targetIds)
-                  ? sys.targetIds.map((t: any) => String(t))
-                  : sys?.targetId
-                  ? [String(sys.targetId)]
+                // added you"). Requires the backend to expose `lastMessageId`
+                // + `lastSystemKind`/`lastSystemMeta` on the conversation row.
+                const meta = (item as any)?.lastSystemMeta || {};
+                const targetIds: string[] = Array.isArray(meta.targetIds)
+                  ? meta.targetIds.map((t: any) => String(t))
+                  : meta.targetId
+                  ? [String(meta.targetId)]
                   : [];
                 const involvesMe =
                   !!me?._id &&
                   targetIds.includes(String(me._id)) &&
-                  String(sys?.actorId || '') !== String(me._id);
-                const jumpId = (item as any)?.lastMessageId || sys?.messageId;
+                  String(meta.actorId || '') !== String(me._id);
+                const jumpId = (item as any)?.lastMessageId;
                 const suffix = involvesMe && jumpId ? `?jump=${jumpId}` : '';
                 router.push(`/chat/${item._id}${suffix}` as any);
               }}

@@ -17,7 +17,7 @@ import {
   getSavedContactRecord,
 } from '../lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../lib/deviceContactIndex';
-import { formatSystemMessage } from '../lib/chat/systemMessage';
+import { formatSystemMessage, getSystemPayload } from '../lib/chat/systemMessage';
 import { cacheConversationName, cacheUserName } from '../push/notificationNameCache';
 import { type DraftPreview } from '../lib/chatDrafts';
 import { api } from '../convexApi';
@@ -154,8 +154,7 @@ export default function ConversationRow({
   // format it here with each viewer's device-saved names. Falls back to the
   // backend's plain `lastMessageText` when no structured payload is present.
   const systemPreview = useMemo(() => {
-    const sys = item?.lastSystem || item?.lastMessageSystem;
-    const isSys = !!sys || item?.lastMessageType === 'system';
+    const isSys = !!item?.lastSystemKind || !!item?.lastSystem || item?.lastMessageType === 'system';
     if (!isSys) return { text: '', involvesMe: false };
     const resolveName = (uid: string): string => {
       const rec = getSavedContactRecord(contacts, { userId: uid });
@@ -169,21 +168,15 @@ export default function ConversationRow({
         ) || ''
       );
     };
-    const text = formatSystemMessage(
-      { type: 'system', system: sys, senderId: sys?.actorId, text: item?.lastMessageText },
-      { myId: currentUserId, resolveName, groupName: name },
-    );
-    // Emphasise (bold) when the event targets ME and I didn't perform it —
-    // e.g. "Kojo added you", "Kojo made you an admin".
-    const targetIds: string[] = Array.isArray(sys?.targetIds)
-      ? sys.targetIds.map((t: any) => String(t))
-      : sys?.targetId
-      ? [String(sys.targetId)]
-      : [];
+    const payload = getSystemPayload(item);
+    const text = formatSystemMessage(item, { myId: currentUserId, resolveName, groupName: name });
+    // Emphasise (bold + "You" pill) when the event targets ME and I didn't
+    // perform it — e.g. "Kojo added you", "Kojo made you an admin".
     const involvesMe =
       !!currentUserId &&
-      targetIds.includes(String(currentUserId)) &&
-      String(sys?.actorId || '') !== String(currentUserId);
+      !!payload &&
+      payload.targetIds.includes(String(currentUserId)) &&
+      payload.actorId !== String(currentUserId);
     return { text, involvesMe };
   }, [item, contacts, deviceIndex, currentUserId, name]);
   const previewText = systemPreview.text || item.lastMessageText || 'Start chatting…';

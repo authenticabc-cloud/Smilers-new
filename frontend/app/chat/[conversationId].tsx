@@ -83,7 +83,7 @@ import { notifyEventPush, previewForMessageType } from '../../src/lib/notifyPush
 import { reportConvexUserIdForPush } from '../../src/push/useEmergentPush';
 import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName, getResolvedDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
-import { getSystemPayload } from '../../src/lib/chat/systemMessage';
+import { isSystemAction } from '../../src/lib/chat/systemMessage';
 import { cacheUserName } from '../../src/push/notificationNameCache';
 import { getLanguageByCode } from '../../src/lib/languages';
 import {
@@ -1387,7 +1387,7 @@ export default function ChatScreen() {
     // If the backend already emits a `group_created` system message, prefer it
     // (rendered inline like any other system row) and skip the synthetic one.
     const hasServerCreatedEvent = (Array.isArray(messages) ? messages : []).some(
-      (m: any) => getSystemPayload(m)?.action === 'group_created',
+      (m: any) => isSystemAction(m, 'groupCreated'),
     );
     if (hasServerCreatedEvent) return null;
     const raw =
