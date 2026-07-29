@@ -8,6 +8,7 @@ import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
 import { useAuth } from '../src/providers/AuthProvider';
 import { useServerStatus } from '../src/hooks/useServerStatus';
+import { getCurrentAppVersion } from '../src/lib/appVersion';
 import { Colors, FontSize, FontWeight, Spacing } from '../src/theme';
 
 type IconLib = 'ion' | 'mc';
@@ -68,6 +69,7 @@ const ITEMS: Row[] = [
   { key: 'chat-once', route: '/chat-once', title: 'Chat Once', sub: 'Temporary anonymous conversations', icon: 'message-circle', lib: 'mc', premium: true },
   { key: 'help', route: '/help', title: 'Help & Support', sub: 'FAQs, contact support team', icon: 'help-circle-outline', lib: 'ion' },
   { key: 'server-status', route: '/server-status', title: 'Server Status', sub: 'Backend health, version & integrations', icon: 'pulse-outline', lib: 'ion' },
+  { key: 'app-updates', route: '/app-updates', title: 'App Version & Updates', sub: 'Check for the latest version', icon: 'rocket-outline', lib: 'ion' },
   { key: 'account', route: '/account', title: 'Account', sub: 'Sign out, delete account', icon: 'lock-closed-outline', lib: 'ion', danger: true },
 ];
 
@@ -135,7 +137,7 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         ))}
         <View style={styles.footer}>
-          <Text style={styles.footerVersion}>Smilers v1.0</Text>
+          <Text style={styles.footerVersion}>Smilers v{getCurrentAppVersion() || '—'}</Text>
           <Text style={styles.footerTag}>Built with love</Text>
         </View>
       </ScrollView>
