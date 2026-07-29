@@ -4296,7 +4296,13 @@ APP_VERSION_CONFIG = {
     ),
     "iosUrl": os.environ.get("SMILERS_IOS_URL", ""),
     "forceUpdate": os.environ.get("SMILERS_FORCE_UPDATE", "0") == "1",
-    "releaseNotes": os.environ.get("SMILERS_RELEASE_NOTES", ""),
+    "releaseNotes": os.environ.get(
+        "SMILERS_RELEASE_NOTES",
+        "Google Play in-app updates so you're always on the latest version\n"
+        "Noise cancellation for voice note recordings\n"
+        "New App Version & Updates screen with manual update check\n"
+        "Performance and stability improvements",
+    ),
 }
 
 

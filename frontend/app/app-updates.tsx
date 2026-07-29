@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -16,7 +16,7 @@ import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
 import * as InAppUpdates from 'expo-in-app-updates';
 import Header from '../src/components/Header';
-import { getCurrentAppVersion } from '../src/lib/appVersion';
+import { getCurrentAppVersion, fetchAppVersion, type AppVersionInfo } from '../src/lib/appVersion';
 import { Colors, FontSize, FontWeight, Spacing, Radius } from '../src/theme';
 
 // The app's public App Store listing (Apple ID 6791345253) — used for the
@@ -35,8 +35,24 @@ type CheckState = 'idle' | 'checking' | 'uptodate' | 'available';
 export default function AppUpdatesScreen() {
   const router = useRouter();
   const [state, setState] = useState<CheckState>('idle');
+  const [info, setInfo] = useState<AppVersionInfo | null>(null);
   const version = getCurrentAppVersion() || '—';
   const build = getBuildNumber();
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchAppVersion(controller.signal).then((data) => {
+      if (data) setInfo(data);
+    });
+    return () => controller.abort();
+  }, []);
+
+  // Split release notes into individual bullet lines (supports newline- or
+  // bullet-separated strings from the backend).
+  const noteLines = (info?.releaseNotes || '')
+    .split(/\r?\n|•/)
+    .map((l) => l.trim())
+    .filter(Boolean);
 
   const checkForUpdates = async () => {
     setState('checking');
@@ -129,6 +145,23 @@ export default function AppUpdatesScreen() {
             ? 'Updates for iOS are delivered through the App Store.'
             : 'Smilers checks Google Play automatically on launch. You can also check manually here anytime.'}
         </Text>
+
+        {noteLines.length > 0 ? (
+          <View style={styles.notesCard} testID="app-updates-whatsnew">
+            <View style={styles.notesHeader}>
+              <Ionicons name="sparkles-outline" size={16} color={Colors.primaryDark} />
+              <Text style={styles.notesTitle}>
+                What&apos;s New{info?.latestVersion ? ` in v${info.latestVersion}` : ''}
+              </Text>
+            </View>
+            {noteLines.map((line, i) => (
+              <View key={i} style={styles.noteRow}>
+                <Text style={styles.noteBullet}>•</Text>
+                <Text style={styles.noteText}>{line}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
@@ -190,6 +223,43 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     textAlign: 'center',
     marginTop: Spacing.lg,
+    lineHeight: 20,
+  },
+  notesCard: {
+    alignSelf: 'stretch',
+    marginTop: Spacing.xl,
+    padding: Spacing.base,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.white,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(60, 40, 0, 0.12)',
+  },
+  notesHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: Spacing.sm,
+  },
+  notesTitle: {
+    fontSize: FontSize.base,
+    fontWeight: FontWeight.bold,
+    color: Colors.textPrimary,
+  },
+  noteRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginTop: 4,
+  },
+  noteBullet: {
+    fontSize: FontSize.base,
+    color: Colors.primary,
+    lineHeight: 20,
+  },
+  noteText: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
     lineHeight: 20,
   },
 });

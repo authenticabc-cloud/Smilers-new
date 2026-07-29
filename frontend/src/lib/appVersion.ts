@@ -54,7 +54,7 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-async function fetchAppVersion(signal?: AbortSignal): Promise<AppVersionInfo | null> {
+export async function fetchAppVersion(signal?: AbortSignal): Promise<AppVersionInfo | null> {
   if (!BACKEND_URL) return null;
   try {
     const res = await fetch(`${BACKEND_URL}/api/app-version`, { signal });
