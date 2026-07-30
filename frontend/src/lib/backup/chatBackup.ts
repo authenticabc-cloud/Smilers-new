@@ -263,9 +263,10 @@ export interface LocalBackupFile {
   uri: string;
   name: string;
   ts: number;
+  size: number;
 }
 
-/** All local chat backups, newest first. */
+/** All local chat backups, newest first (with on-disk size). */
 export async function listLocalChatBackups(): Promise<LocalBackupFile[]> {
   try {
     if (!LegacyFileSystem.documentDirectory) return [];
@@ -274,15 +275,33 @@ export async function listLocalChatBackups(): Promise<LocalBackupFile[]> {
     const files = (await LegacyFileSystem.readDirectoryAsync(CHAT_BACKUP_DIR)).filter((f) =>
       f.startsWith(CHAT_BACKUP_PREFIX),
     );
-    return files
-      .map((name) => {
+    const out = await Promise.all(
+      files.map(async (name) => {
         const m = name.match(/(\d{10,})/);
         const ts = m ? Number(m[1]) : 0;
-        return { uri: CHAT_BACKUP_DIR + name, name, ts };
-      })
-      .sort((a, b) => b.ts - a.ts);
+        const uri = CHAT_BACKUP_DIR + name;
+        let size = 0;
+        try {
+          const fi = await LegacyFileSystem.getInfoAsync(uri, { size: true });
+          size = (fi as any)?.size || 0;
+        } catch {
+          size = 0;
+        }
+        return { uri, name, ts, size };
+      }),
+    );
+    return out.sort((a, b) => b.ts - a.ts);
   } catch {
     return [];
+  }
+}
+
+/** Delete a single local backup file. Best-effort. */
+export async function deleteChatBackup(uri: string): Promise<void> {
+  try {
+    await LegacyFileSystem.deleteAsync(uri, { idempotent: true });
+  } catch {
+    /* best-effort */
   }
 }
 

@@ -29,9 +29,12 @@ import {
   buildChatBackupPayload,
   chatBackupToReadableText,
   decryptChatBackup,
+  deleteChatBackup,
   getLatestChatBackupUri,
+  listLocalChatBackups,
   stampAutoBackupNow,
   writeEncryptedChatBackup,
+  type LocalBackupFile,
 } from '../src/lib/backup/chatBackup';
 import { safeMutation } from '../src/lib/safeMutation';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
@@ -168,6 +171,7 @@ export default function BackupScreen() {
   const [backupProgress, setBackupProgress] = useState('');
   const [restoring, setRestoring] = useState(false);
   const [lastLocalTs, setLastLocalTs] = useState(0);
+  const [backupList, setBackupList] = useState<LocalBackupFile[]>([]);
   const [clearing, setClearing] = useState(false);
   const [storage, setStorage] = useState<StorageInfo>(INITIAL_STORAGE);
 
@@ -253,21 +257,42 @@ export default function BackupScreen() {
   };
 
   // Reflect the newest ACTUAL local backup file (auto-backups run outside this
-  // screen and only stamp AsyncStorage), so "Last backup" is always truthful.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const uri = await getLatestChatBackupUri();
-        if (cancelled || !uri) return;
-        const m = uri.match(/(\d{10,})/);
-        if (m) setLastLocalTs(Number(m[1]));
-      } catch {}
-    })();
-    return () => {
-      cancelled = true;
-    };
+  // screen and only stamp AsyncStorage), so "Last backup" is always truthful,
+  // and load the full list for the "Your backups" section.
+  const loadBackups = useCallback(async () => {
+    try {
+      const list = await listLocalChatBackups();
+      setBackupList(list);
+      setLastLocalTs(list.length ? list[0].ts : 0);
+    } catch {
+      setBackupList([]);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadBackups();
+  }, [loadBackups]);
+
+  const onDeleteBackup = useCallback(
+    (file: LocalBackupFile) => {
+      Alert.alert(
+        'Delete this backup?',
+        'This removes the backup file from this device. Your chats and other backups are not affected.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: async () => {
+              await deleteChatBackup(file.uri);
+              await loadBackups();
+            },
+          },
+        ],
+      );
+    },
+    [loadBackups],
+  );
 
   const onBackupNow = useCallback(() => {
     if (backingUp) return;
@@ -306,6 +331,7 @@ export default function BackupScreen() {
               await stampAutoBackupNow(me?._id);
               setLastLocalTs(now);
               await persist({ ...settings, lastBackupAt: now }, true);
+              await loadBackups();
               setBackupProgress('');
               try {
                 const Sharing = await import('expo-sharing');
@@ -344,12 +370,55 @@ export default function BackupScreen() {
         },
       ],
     );
-  }, [backingUp, persist, settings, convex, me?._id]);
+  }, [backingUp, persist, settings, convex, me?._id, loadBackups]);
 
   // Decrypt a backup and offer a readable archive. Note: chats live on the
   // external Convex backend and can't be re-injected there, so "restore"
   // recovers a portable READABLE copy of your history (openable on any device
   // with the same PIN) rather than re-populating the live chat threads.
+  const restoreFromUri = useCallback(async (uri: string) => {
+    const pin = (await readStoredString(APP_LOCK_PIN_KEY)) || '';
+    if (!pin) {
+      Alert.alert(
+        'Set your App Lock PIN first',
+        'Backups are locked with your App Lock PIN. Set the same PIN you used when backing up (Settings → App Lock), then restore.',
+      );
+      return;
+    }
+    setRestoring(true);
+    try {
+      const payload = await decryptChatBackup(uri, pin);
+      const text = chatBackupToReadableText(payload);
+      const path = `${LegacyFileSystem.cacheDirectory}smilers-chat-archive-${Date.now()}.txt`;
+      await LegacyFileSystem.writeAsStringAsync(path, text);
+      const Sharing = await import('expo-sharing');
+      Alert.alert(
+        'Backup opened',
+        `This backup has ${payload.messageCount} messages and ${payload.callLogCount} call logs across ${payload.conversationCount} chats. Save a readable copy?`,
+        [
+          { text: 'Done', style: 'cancel' },
+          {
+            text: 'Save readable copy',
+            onPress: async () => {
+              try {
+                if (await Sharing.isAvailableAsync()) {
+                  await Sharing.shareAsync(path, {
+                    mimeType: 'text/plain',
+                    dialogTitle: 'Smilers chat archive',
+                  });
+                }
+              } catch {}
+            },
+          },
+        ],
+      );
+    } catch (errorValue: any) {
+      Alert.alert('Restore failed', String(errorValue?.message || errorValue));
+    } finally {
+      setRestoring(false);
+    }
+  }, []);
+
   const onRestore = useCallback(async () => {
     if (restoring) return;
     const pin = (await readStoredString(APP_LOCK_PIN_KEY)) || '';
@@ -360,40 +429,6 @@ export default function BackupScreen() {
       );
       return;
     }
-    const doRestore = async (uri: string) => {
-      setRestoring(true);
-      try {
-        const payload = await decryptChatBackup(uri, pin);
-        const text = chatBackupToReadableText(payload);
-        const path = `${LegacyFileSystem.cacheDirectory}smilers-chat-archive-${Date.now()}.txt`;
-        await LegacyFileSystem.writeAsStringAsync(path, text);
-        const Sharing = await import('expo-sharing');
-        Alert.alert(
-          'Backup opened',
-          `This backup has ${payload.messageCount} messages and ${payload.callLogCount} call logs across ${payload.conversationCount} chats. Save a readable copy?`,
-          [
-            { text: 'Done', style: 'cancel' },
-            {
-              text: 'Save readable copy',
-              onPress: async () => {
-                try {
-                  if (await Sharing.isAvailableAsync()) {
-                    await Sharing.shareAsync(path, {
-                      mimeType: 'text/plain',
-                      dialogTitle: 'Smilers chat archive',
-                    });
-                  }
-                } catch {}
-              },
-            },
-          ],
-        );
-      } catch (errorValue: any) {
-        Alert.alert('Restore failed', String(errorValue?.message || errorValue));
-      } finally {
-        setRestoring(false);
-      }
-    };
     const pickFile = async () => {
       try {
         const DocumentPicker = await import('expo-document-picker');
@@ -404,7 +439,7 @@ export default function BackupScreen() {
         });
         if (picked?.canceled) return;
         const uri = picked?.assets?.[0]?.uri || (picked as any)?.uri;
-        if (uri) await doRestore(uri);
+        if (uri) await restoreFromUri(uri);
       } catch (errorValue: any) {
         Alert.alert('Could not open file picker', String(errorValue?.message || errorValue));
       }
@@ -412,14 +447,14 @@ export default function BackupScreen() {
     const latest = await getLatestChatBackupUri();
     if (latest) {
       Alert.alert('Restore backup', 'Open your latest local backup, or choose a file?', [
-        { text: 'Latest backup', onPress: () => void doRestore(latest) },
+        { text: 'Latest backup', onPress: () => void restoreFromUri(latest) },
         { text: 'Choose a file…', onPress: () => void pickFile() },
         { text: 'Cancel', style: 'cancel' },
       ]);
     } else {
       await pickFile();
     }
-  }, [restoring]);
+  }, [restoring, restoreFromUri]);
 
   const onClearCache = useCallback(() => {
     if (clearing) return;
@@ -521,6 +556,41 @@ export default function BackupScreen() {
             )}
           </TouchableOpacity>
         </View>
+
+        {/* ── YOUR BACKUPS ─────────────────────────────── */}
+        {backupList.length > 0 ? (
+          <>
+            <Text style={styles.sectionLabel}>Your backups</Text>
+            <View style={styles.card}>
+              {backupList.map((f, idx) => (
+                <View key={f.uri}>
+                  {idx > 0 ? <View style={styles.divider} /> : null}
+                  <View style={styles.row}>
+                    <Ionicons name="archive-outline" size={22} color={Colors.primary} />
+                    <TouchableOpacity
+                      style={styles.rowMid}
+                      onPress={() => void restoreFromUri(f.uri)}
+                      disabled={restoring}
+                      activeOpacity={0.7}
+                      testID={`backup-item-${idx}`}
+                    >
+                      <Text style={styles.rowTitle}>{new Date(f.ts).toLocaleString()}</Text>
+                      <Text style={styles.rowSub}>{formatBytes(f.size)} · tap to restore</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => onDeleteBackup(f)}
+                      hitSlop={8}
+                      style={styles.deleteBackupBtn}
+                      testID={`backup-delete-${idx}`}
+                    >
+                      <Ionicons name="trash-outline" size={20} color={Colors.danger} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </>
+        ) : null}
 
         {/* ── AUTO BACKUP ──────────────────────────────── */}
         <Text style={styles.sectionLabel}>Auto backup</Text>
@@ -803,6 +873,12 @@ const styles = StyleSheet.create({
     color: Colors.primary,
     fontWeight: FontWeight.bold,
     fontSize: FontSize.base,
+  },
+  deleteBackupBtn: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   sectionLabel: {

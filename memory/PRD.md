@@ -1,5 +1,11 @@
 # Smilers Mobile App — PRD
 
+## iter-419 (Jun 2026): Backup screen — "Your backups" list (multiple restore points)
+- Added a "Your backups" section to `app/backup.tsx` listing every local encrypted backup newest-first (date + on-disk size), each row tap-to-restore, with a trash button to delete a single backup (confirm dialog). Refreshes after a manual "Back up now" and after delete.
+- `chatBackup.ts`: `listLocalChatBackups()` now returns on-disk `size` (via `getInfoAsync({size:true})`); added `deleteChatBackup(uri)`. `restoreBackupFromUri` extracted to a reusable component-level callback shared by the button + list rows. Lint clean; app boots.
+
+
+
 ## iter-418 (Jun 2026): P0 data-loss root cause — chat message pagination + REAL encrypted chat backup engine
 - **Issue #2 "messages/call logs before <date> gone" — ROOT CAUSE FOUND & FIXED:** `app/chat/[conversationId].tsx` fetched ONLY the newest 50 messages (`api.messages.list` with `numItems:50, cursor:null`) and had NO "load older" path — so any chat with >50 messages/events silently hid everything older (exactly the user's "before 22 July gone" report + a second user's). The older messages still live on the backend; the app just never asked. Fix: a GROWABLE load window — `messageWindow` state (starts 50, resets on conversation switch), and a "Load earlier messages" `ListHeaderComponent` button (testID `chat-load-earlier`, shown while `messagesPage.isDone !== true`) that adds +100 older messages per tap. Styles `loadEarlierBtn/Text` in `chatScreenStyles.ts`. ⚠️ Device-validate with a >50-message chat; if still missing after tapping, the data was deleted server-side (external Convex retention — user's web/Convex team).
 - **Issue #1 "auto backup never runs" — the `/backup` screen was a PLACEBO; now REAL (user chose 1a):** the old `onBackupNow` just waited 1.2s and wrote a fake `lastBackupAt`; nothing was backed up and there was NO scheduler.
