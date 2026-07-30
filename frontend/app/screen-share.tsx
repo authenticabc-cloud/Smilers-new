@@ -10,7 +10,7 @@
  * request/accept Convex contract this screen targets.
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -56,6 +56,10 @@ function normalizeContact(record: any): ContactRow | null {
   };
 }
 
+// Session statuses that mean the request was NOT accepted (drop back to idle).
+const DECLINED_STATUSES = ['declined', 'rejected', 'ended', 'cancelled', 'canceled', 'expired'];
+
+
 export default function ScreenShareSenderScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -70,6 +74,14 @@ export default function ScreenShareSenderScreen() {
       : null,
   );
   const [submitting, setSubmitting] = useState(false);
+  // Two-phase screen-share gate: after sending the request we WAIT here (button
+  // disabled) until the recipient accepts; only then does the button turn green
+  // and the sharer proceeds into the call screen (which triggers the OS capture
+  // dialog). Previously we navigated immediately, so tapping the system "Start"
+  // before the recipient accepted did nothing.
+  const [waiting, setWaiting] = useState(false);
+  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
+  const [pendingConversationId, setPendingConversationId] = useState<string | null>(null);
 
   const getOrCreateDirect = useMutation(api.conversations.getOrCreateDirect);
   const requestScreenShare = useMutation((api as any).screenSharing.requestScreenShare);
@@ -87,6 +99,24 @@ export default function ScreenShareSenderScreen() {
     null,
     isAuthenticated,
   );
+
+  // Poll the session while waiting for the recipient to accept.
+  const { data: pendingSession } = useSafeConvexQuery<any>(
+    (api as any).screenSharing?.getActiveSession,
+    waiting && pendingConversationId ? { conversationId: pendingConversationId } : 'skip',
+    null,
+    waiting && !!pendingConversationId,
+  );
+  const shareStatus = String(pendingSession?.status || '').toLowerCase();
+  const accepted = useMemo(() => {
+    if (!pendingSession) return false;
+    if (DECLINED_STATUSES.includes(shareStatus)) return false;
+    return (
+      ['accepted', 'active', 'sharing', 'approved', 'connected', 'live'].includes(shareStatus) ||
+      !!pendingSession?.acceptedAt ||
+      pendingSession?.accepted === true
+    );
+  }, [pendingSession, shareStatus]);
 
   // iter-188: prefer the name saved in the user's own phone address book
   // over the Convex profile name (which is the Google-account name or a
@@ -116,7 +146,7 @@ export default function ScreenShareSenderScreen() {
     return contactRows.find((c) => c.id === selectedId) || null;
   }, [contactRows, selectedId]);
 
-  const handleStart = async () => {
+  const handleRequest = async () => {
     if (!selectedId) {
       Alert.alert('Pick a recipient', 'Choose someone to share your screen with.');
       return;
@@ -130,9 +160,9 @@ export default function ScreenShareSenderScreen() {
     try {
       // Screen-share is its own request/accept flow (NOT a call). We:
       //   1. resolve/create the direct conversation with the recipient,
-      //   2. create a `screenSharingSessions` row via
-      //      api.screenSharing.requestScreenShare (status "requesting"),
-      //   3. open the screen-only WebRTC view as the SHARER.
+      //   2. create a `screenSharingSessions` row via requestScreenShare
+      //      (status "requesting"),
+      //   3. WAIT on this screen (button disabled) until the recipient accepts.
       // The recipient is notified via IncomingScreenShareModal (polls
       // screenSharing.listIncoming) + a backend push — NO ringtone, no call.
       const convResult: any = await getOrCreateDirect({ otherUserId: selectedId });
@@ -155,10 +185,11 @@ export default function ScreenShareSenderScreen() {
         throw new Error('Could not start the screen-share session.');
       }
 
-      const audio = includeAudio ? 1 : 0;
-      router.replace(
-        `/call/${sessionId}?type=screen&screenOnly=1&audio=${audio}&role=sharer&convId=${conversationId}&peerUserId=${selectedId}` as any,
-      );
+      // Enter the WAITING state — do NOT navigate yet. The button becomes green
+      // and tappable once `accepted` flips true from the polled session.
+      setPendingConversationId(conversationId);
+      setPendingSessionId(sessionId);
+      setWaiting(true);
     } catch (errorValue: any) {
       Alert.alert(
         'Could not share screen',
@@ -168,6 +199,34 @@ export default function ScreenShareSenderScreen() {
       setSubmitting(false);
     }
   };
+
+  // The recipient accepted → sharer taps the green button to open the
+  // screen-only WebRTC view as the SHARER (where the OS capture dialog appears).
+  const handleGo = () => {
+    if (!accepted || !pendingSessionId || !pendingConversationId) return;
+    const audio = includeAudio ? 1 : 0;
+    router.replace(
+      `/call/${pendingSessionId}?type=screen&screenOnly=1&audio=${audio}&role=sharer&convId=${pendingConversationId}&peerUserId=${selectedId}` as any,
+    );
+  };
+
+  const resetWaiting = () => {
+    setWaiting(false);
+    setPendingSessionId(null);
+    setPendingConversationId(null);
+  };
+
+  // Recipient declined / session ended before acceptance → drop back to idle.
+  useEffect(() => {
+    if (waiting && shareStatus && DECLINED_STATUSES.includes(shareStatus)) {
+      resetWaiting();
+      Alert.alert(
+        'Request declined',
+        `${selected?.displayName || 'They'} declined the screen-share request.`,
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shareStatus, waiting]);
 
   const headerSubtitle = selected
     ? `Sharing with ${selected.displayName}`
@@ -300,15 +359,30 @@ export default function ScreenShareSenderScreen() {
         <TouchableOpacity
           style={[
             styles.startBtn,
-            !selectedId || submitting ? styles.startBtnDisabled : null,
+            accepted ? styles.startBtnAccepted : null,
+            (!selectedId || submitting || (waiting && !accepted)) ? styles.startBtnDisabled : null,
           ]}
-          onPress={handleStart}
-          disabled={!selectedId || submitting}
+          onPress={accepted ? handleGo : waiting ? undefined : handleRequest}
+          disabled={!selectedId || submitting || (waiting && !accepted)}
           activeOpacity={0.85}
           testID="screen-share-start-btn"
         >
-          {submitting ? (
-            <ActivityIndicator color="#3D2A00" />
+          {submitting || (waiting && !accepted) ? (
+            <>
+              <ActivityIndicator color={accepted ? '#FFFFFF' : '#3D2A00'} />
+              <Text style={styles.startBtnText}>
+                {submitting
+                  ? 'Sending request…'
+                  : `Waiting for ${selected?.displayName || 'them'} to accept…`}
+              </Text>
+            </>
+          ) : accepted ? (
+            <>
+              <MaterialCommunityIcons name="check-circle" size={20} color="#FFFFFF" />
+              <Text style={[styles.startBtnText, styles.startBtnTextAccepted]}>
+                Accepted — Start sharing
+              </Text>
+            </>
           ) : (
             <>
               <MaterialCommunityIcons name="monitor-share" size={20} color="#3D2A00" />
@@ -316,6 +390,17 @@ export default function ScreenShareSenderScreen() {
             </>
           )}
         </TouchableOpacity>
+
+        {waiting && !accepted ? (
+          <TouchableOpacity
+            style={styles.cancelWaitBtn}
+            onPress={resetWaiting}
+            activeOpacity={0.7}
+            testID="screen-share-cancel-btn"
+          >
+            <Text style={styles.cancelWaitText}>Cancel request</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
     </View>
   );
@@ -439,5 +524,9 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   startBtnDisabled: { opacity: 0.5 },
+  startBtnAccepted: { backgroundColor: '#16A34A' },
   startBtnText: { fontSize: FontSize.base, fontWeight: FontWeight.bold, color: '#3D2A00' },
+  startBtnTextAccepted: { color: '#FFFFFF' },
+  cancelWaitBtn: { alignItems: 'center', paddingVertical: 12, marginTop: 4 },
+  cancelWaitText: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textMuted },
 });
