@@ -36,7 +36,8 @@ import { AppState } from 'react-native';
 import { callHost } from '../../src/lib/call/callHost';
 import * as Haptics from 'expo-haptics';
 import UndoSnackbar from '../../src/components/UndoSnackbar';
-import { readStoredString, writeStoredString } from '../../src/lib/settingsStorage';
+import { readStoredString, writeStoredString, readStoredJson, APP_LOCK_PIN_KEY } from '../../src/lib/settingsStorage';
+import { maybeRunAutoChatBackup } from '../../src/lib/backup/chatBackup';
 import ConversationRow, { formatTypingLabel } from '../../src/components/ConversationRow';
 import {
   findSavedContactDisplayName,
@@ -168,6 +169,28 @@ export default function ChatsScreen() {
   // carries no isArchived flag, so we fetch the archived id set and
   // filter client-side — exactly how the web app does it.
   const convex = useConvex();
+  // Opportunistic automatic chat backup — runs on app open when a backup is
+  // DUE per the user's Backup settings (daily/weekly/monthly + Wi-Fi rule).
+  // Deferred 9s so it never competes with the initial chat-list load; all the
+  // due-time / network / PIN guards live inside `maybeRunAutoChatBackup`.
+  const autoBackupRanRef = useRef(false);
+  useEffect(() => {
+    if (!me?._id || autoBackupRanRef.current) return;
+    autoBackupRanRef.current = true;
+    const t = setTimeout(async () => {
+      try {
+        const settings = (await readStoredJson('smilers_backup_settings', null)) as any;
+        if (!settings?.autoBackup) return;
+        const pin = (await readStoredString(APP_LOCK_PIN_KEY)) || '';
+        if (!pin) return;
+        await maybeRunAutoChatBackup(convex, me._id, settings, pin);
+      } catch {
+        /* background maintenance — never surface */
+      }
+    }, 9000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me?._id]);
   const archivedIds = useQuery((api as any).archives.getArchivedIds, {}) as string[] | undefined;
 
   // Per-conversation unread counts { convId: count } — drives the "Mark all as
