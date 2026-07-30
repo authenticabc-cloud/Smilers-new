@@ -416,11 +416,29 @@ export default function ChatScreen() {
     canQueryConversation &&
     conversationList === undefined &&
     conversationDirect === undefined;
+  // Growable load window. Previously this was HARD-CODED to the newest 50
+  // messages with `cursor: null` and NO way to fetch older pages — so any
+  // conversation with >50 messages/events silently hid everything older (the
+  // "my messages before <date> are gone" report). Older messages still live
+  // on the backend; we just never asked for them. We now grow `numItems` on
+  // demand via the "Load earlier messages" header button, and reset to 50 on
+  // each conversation switch so a fresh open stays fast.
+  const [messageWindow, setMessageWindow] = useState(50);
+  useEffect(() => {
+    setMessageWindow(50);
+  }, [conversationId]);
   const messagesPage = useQuery(
     api.messages.list,
-    canQueryConversation ? { conversationId, paginationOpts: { numItems: 50, cursor: null } } : 'skip'
+    canQueryConversation
+      ? { conversationId, paginationOpts: { numItems: messageWindow, cursor: null } }
+      : 'skip'
   ) as any;
   const messagesLoading = canQueryConversation && messagesPage === undefined;
+  // True while a wider window is still resolving (user tapped "Load earlier").
+  const hasMoreOlder = !!messagesPage && (messagesPage as any)?.isDone !== true;
+  const loadEarlierMessages = useCallback(() => {
+    setMessageWindow((w) => w + 100);
+  }, []);
   // iter-336: group pinned post. Admins (chief/admin/creator) pin or unpin;
   // banner is visible to ALL members. Direct 1:1 chats — either person can
   // pin. Canonical contract: conversations.pinMessage({ conversationId,
@@ -4518,6 +4536,19 @@ export default function ChatScreen() {
             data={timeline}
             keyExtractor={(item: any) => item._id}
             contentContainerStyle={styles.listContent}
+            ListHeaderComponent={
+              hasMoreOlder ? (
+                <TouchableOpacity
+                  style={styles.loadEarlierBtn}
+                  onPress={loadEarlierMessages}
+                  activeOpacity={0.7}
+                  testID="chat-load-earlier"
+                >
+                  <Feather name="chevron-up" size={16} color={Colors.primary} />
+                  <Text style={styles.loadEarlierText}>Load earlier messages</Text>
+                </TouchableOpacity>
+              ) : null
+            }
             renderItem={({ item, index }) => (
               <ChatMessageRow
                 item={item}
