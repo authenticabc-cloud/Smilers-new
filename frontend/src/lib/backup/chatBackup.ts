@@ -252,7 +252,12 @@ export async function writeEncryptedChatBackup(
   });
   onProgress?.({ phase: 'writing', current: 0, total: 0, label: 'Saving…' });
   await ensureBackupDir();
-  const path = `${CHAT_BACKUP_DIR}${CHAT_BACKUP_PREFIX}${Date.now()}.smchat.json`;
+  // Encode auto/manual + counts in the filename so the "Your backups" list can
+  // show a badge + message/chat count WITHOUT reading/parsing each file. The
+  // 13-digit ms timestamp stays the first 10+ digit run so the ts parser still
+  // works; the c<n>/m<n> suffixes carry the counts.
+  const tag = auto ? 'a' : 'm';
+  const path = `${CHAT_BACKUP_DIR}${CHAT_BACKUP_PREFIX}${Date.now()}-${tag}-c${payload.conversationCount}-m${payload.messageCount}.smchat.json`;
   await LegacyFileSystem.writeAsStringAsync(path, fileBody);
   await pruneOldBackups();
   onProgress?.({ phase: 'done', current: 1, total: 1 });
@@ -264,9 +269,13 @@ export interface LocalBackupFile {
   name: string;
   ts: number;
   size: number;
+  /** Parsed from the filename tag; undefined for legacy backups. */
+  auto?: boolean;
+  conversationCount?: number;
+  messageCount?: number;
 }
 
-/** All local chat backups, newest first (with on-disk size). */
+/** All local chat backups, newest first (with on-disk size + parsed metadata). */
 export async function listLocalChatBackups(): Promise<LocalBackupFile[]> {
   try {
     if (!LegacyFileSystem.documentDirectory) return [];
@@ -277,8 +286,12 @@ export async function listLocalChatBackups(): Promise<LocalBackupFile[]> {
     );
     const out = await Promise.all(
       files.map(async (name) => {
-        const m = name.match(/(\d{10,})/);
-        const ts = m ? Number(m[1]) : 0;
+        const tsMatch = name.match(/(\d{10,})/);
+        const ts = tsMatch ? Number(tsMatch[1]) : 0;
+        const tagMatch = name.match(/-([am])-c(\d+)-m(\d+)/);
+        const auto = tagMatch ? tagMatch[1] === 'a' : undefined;
+        const conversationCount = tagMatch ? Number(tagMatch[2]) : undefined;
+        const messageCount = tagMatch ? Number(tagMatch[3]) : undefined;
         const uri = CHAT_BACKUP_DIR + name;
         let size = 0;
         try {
@@ -287,7 +300,7 @@ export async function listLocalChatBackups(): Promise<LocalBackupFile[]> {
         } catch {
           size = 0;
         }
-        return { uri, name, ts, size };
+        return { uri, name, ts, size, auto, conversationCount, messageCount };
       }),
     );
     return out.sort((a, b) => b.ts - a.ts);

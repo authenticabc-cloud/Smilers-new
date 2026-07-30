@@ -574,8 +574,31 @@ export default function BackupScreen() {
                       activeOpacity={0.7}
                       testID={`backup-item-${idx}`}
                     >
-                      <Text style={styles.rowTitle}>{new Date(f.ts).toLocaleString()}</Text>
-                      <Text style={styles.rowSub}>{formatBytes(f.size)} · tap to restore</Text>
+                      <View style={styles.backupTitleRow}>
+                        <Text style={styles.rowTitle}>{new Date(f.ts).toLocaleString()}</Text>
+                        {f.auto !== undefined ? (
+                          <View
+                            style={[
+                              styles.backupBadge,
+                              f.auto ? styles.backupBadgeAuto : styles.backupBadgeManual,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.backupBadgeText,
+                                f.auto ? styles.backupBadgeTextAuto : styles.backupBadgeTextManual,
+                              ]}
+                            >
+                              {f.auto ? 'Auto' : 'Manual'}
+                            </Text>
+                          </View>
+                        ) : null}
+                      </View>
+                      <Text style={styles.rowSub}>
+                        {f.messageCount !== undefined
+                          ? `${f.messageCount} msg · ${f.conversationCount} chats · ${formatBytes(f.size)} · tap to restore`
+                          : `${formatBytes(f.size)} · tap to restore`}
+                      </Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                       onPress={() => onDeleteBackup(f)}
@@ -880,6 +903,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  backupTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  backupBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+  },
+  backupBadgeAuto: { backgroundColor: '#DCFCE7' },
+  backupBadgeManual: { backgroundColor: Colors.primaryLight },
+  backupBadgeText: {
+    fontSize: 10,
+    fontWeight: FontWeight.bold,
+    letterSpacing: 0.3,
+  },
+  backupBadgeTextAuto: { color: '#16A34A' },
+  backupBadgeTextManual: { color: Colors.primaryDark },
 
   sectionLabel: {
     fontSize: FontSize.xs,

@@ -1,5 +1,11 @@
 # Smilers Mobile App — PRD
 
+## iter-420 (Jun 2026): Backup list — Auto/Manual badge + message/chat counts
+- `chatBackup.ts`: backup filename now encodes `-a|m-c<conv>-m<msg>` so the list reads the auto/manual flag + counts CHEAPLY from the filename (no per-file parse). `LocalBackupFile` gained `auto?/conversationCount?/messageCount?`; `listLocalChatBackups` parses them (legacy files without the tag just omit the badge/counts).
+- `app/backup.tsx`: each "Your backups" row shows a green **Auto** / gold **Manual** pill next to the date, and the subtitle reads "N msg · M chats · <size> · tap to restore". Lint clean; app boots.
+
+
+
 ## iter-419 (Jun 2026): Backup screen — "Your backups" list (multiple restore points)
 - Added a "Your backups" section to `app/backup.tsx` listing every local encrypted backup newest-first (date + on-disk size), each row tap-to-restore, with a trash button to delete a single backup (confirm dialog). Refreshes after a manual "Back up now" and after delete.
 - `chatBackup.ts`: `listLocalChatBackups()` now returns on-disk `size` (via `getInfoAsync({size:true})`); added `deleteChatBackup(uri)`. `restoreBackupFromUri` extracted to a reusable component-level callback shared by the button + list rows. Lint clean; app boots.
