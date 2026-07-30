@@ -2,7 +2,6 @@ import React, { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   ScrollView,
@@ -12,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -346,7 +346,7 @@ export default function TrusteesScreen() {
       </ScrollView>
 
       <Modal visible={modalOpen} transparent animationType="slide" onRequestClose={closeModal}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalBackdrop}>
+        <KeyboardAvoidingView behavior="padding" style={styles.modalBackdrop}>
           <TouchableOpacity style={styles.modalScrim} activeOpacity={1} onPress={closeModal} testID="trustees-modal-scrim" />
           <View style={styles.modalSheet} testID="trustees-modal-sheet">
             <View style={styles.modalHeader}>

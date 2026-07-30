@@ -130,6 +130,10 @@ type CallUIProps = {
   isGroupAdmin: boolean;
   adminIdentities: string[];
   conversationName: string;
+  /** Reports Stream media-connected state up so the caller's ringback can stop
+   * the instant the callee actually joins (not merely when the ring record
+   * changes). */
+  onConnectedChange?: (connected: boolean) => void;
 };
 
 // Visual mapping for group-call member statuses shown in the live waiting
@@ -142,7 +146,7 @@ const GROUP_STATUS_META: Record<string, { label: string; color: string }> = {
 };
 
 /** In-call UI (inside StreamCall context). */
-function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acceptedAt, room, myId, myName, myPhone, conversationId, isGroupCall, isGroupAdmin, adminIdentities, conversationName }: CallUIProps) {
+function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acceptedAt, room, myId, myName, myPhone, conversationId, isGroupCall, isGroupAdmin, adminIdentities, conversationName, onConnectedChange }: CallUIProps) {
   const call = useCall();
   const { mode } = useCallHost();
   const isMini = mode === 'mini';
@@ -249,6 +253,11 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
 
   const remote = remoteParticipants[0];
   const connected = callingState === CallingState.JOINED && !!remote;
+  // Report media-connected up to the parent so the caller's ringback stops the
+  // instant the callee truly joins (see ringback gate in StreamCallInner).
+  useEffect(() => {
+    onConnectedChange?.(connected);
+  }, [connected, onConnectedChange]);
   const remoteHasVideo = !!(remote && ((remote as any).videoStream || (remote as any).publishedTracks?.includes?.(2)));
   const showVideo = (videoMode || remoteHasVideo) && !callVideoHidden;
 
@@ -1637,15 +1646,17 @@ export default function StreamCallInner() {
   // missing (the callee saw Accept/Decline but heard nothing).
   useRingtonePlayer(isIncomingPending, { vibrate: isIncomingPending });
 
-  // #5 FIX (caller hears no ringing): the Stream screen never starts an
-  // InCallManager audio session, so `InCallAudio.startRingback('_BUNDLE_')`
-  // had no initialised native audio manager and produced NO sound. We now play
-  // the Smilers theme via the SAME expo-audio path that already works for the
-  // callee's incoming ring (see useRingbackPlayer). It plays while our outgoing
-  // call is ringing (callee reachable) and stops the instant we connect / the
-  // call ends — silent when the call is not in the ringing state.
+  // #5 FIX (caller hears no ringing): the REAL root cause was the gate below —
+  // `!accepted` is ALWAYS false for the caller (accepted = iAmCaller || …), so
+  // `isOutgoingRinging` could never be true and the ringback never started. The
+  // caller therefore heard silence until the callee answered. The correct
+  // "still ringing" signal is: I'm the caller, the ring record still says
+  // 'ringing', and the callee has NOT yet media-connected (lifted up from
+  // CallUI via onConnectedChange). Ringback then plays for the whole outgoing
+  // ring window and stops the instant we connect / the call ends.
+  const [remoteConnected, setRemoteConnected] = useState(false);
   const isOutgoingRinging =
-    activeCallReady && iAmCaller && !accepted && convStatus === 'ringing';
+    activeCallReady && iAmCaller && convStatus === 'ringing' && !remoteConnected;
   useRingbackPlayer(isOutgoingRinging);
 
   // #3: the caller hung up WHILE it was still ringing → the Convex record flips
@@ -2032,6 +2043,7 @@ export default function StreamCallInner() {
             isGroupAdmin={isGroupAdmin}
             adminIdentities={adminIdentities}
             conversationName={conversationName}
+            onConnectedChange={setRemoteConnected}
           />
           {waitingBanner}
         </NoiseCancellationProvider>
