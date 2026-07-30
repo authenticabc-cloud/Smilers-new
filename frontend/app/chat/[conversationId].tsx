@@ -341,6 +341,11 @@ export default function ChatScreen() {
   // iter-231: track whether the user is near the bottom so we only auto-scroll
   // to the latest message when appropriate (not while they're reading history).
   const isNearBottomRef = useRef(true);
+  // Guards the initial "open at the newest message" scroll. Until this is set,
+  // onContentSizeChange force-snaps to the bottom on every frame (needed
+  // because a non-inverted virtualized list renders rows incrementally, so a
+  // single scrollToEnd lands partway). See the initial-scroll effect below.
+  const initialScrollDoneRef = useRef(false);
   // iter-274: true while the user is actively dragging/flinging the list.
   // The auto-snap-to-bottom in onContentSizeChange must NOT fire during an
   // active scroll — virtualization + media loading change contentSize on
@@ -1614,6 +1619,39 @@ export default function ChatScreen() {
     const t = setTimeout(() => jumpToMessage(target), 350);
     return () => clearTimeout(t);
   }, [jumpParam, timeline, jumpToMessage]);
+
+  // Open at the NEWEST message (bottom) on entry — whether opened directly or
+  // from a notification. A non-inverted virtualized list renders rows in
+  // batches, so one scrollToEnd lands partway; we retry a few times until the
+  // real bottom is reached, then hand control back to the near-bottom logic.
+  // Skipped when deep-linking to a specific message (jump / search mid).
+  useEffect(() => {
+    if (initialScrollDoneRef.current) return;
+    if (timeline.length === 0) return;
+    const wantsJump =
+      (typeof jumpParam === 'string' && !!jumpParam) ||
+      (typeof initialSearchMid === 'string' && !!initialSearchMid);
+    if (wantsJump) {
+      initialScrollDoneRef.current = true; // jump effects own positioning
+      return;
+    }
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+      try {
+        listRef.current?.scrollToEnd({ animated: false });
+      } catch {}
+      attempts += 1;
+      if (attempts < 6) {
+        timer = setTimeout(tick, 130);
+      } else {
+        initialScrollDoneRef.current = true;
+      }
+    };
+    timer = setTimeout(tick, 60);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeline.length]);
 
   // iter-323 "Receive once" 🔂: tapping the "file deleted for multiple
   // receipt" footprint offers to jump to the ORIGINAL copy of the file (in
@@ -4538,17 +4576,18 @@ export default function ChatScreen() {
               isUserScrollingRef.current = false;
             }}
             onContentSizeChange={() => {
-              // iter-274: only snap to the bottom when the user is NEAR the
-              // bottom AND is NOT actively scrolling. Virtualization + media
-              // loading fire onContentSizeChange on nearly every frame while
-              // the list scrolls; snapping to end each time yanked the view
-              // back and produced the rapid up/down jitter the user reported.
-              // Search owns scrolling when active, so skip then.
-              if (
-                chatSearchQuery === null &&
-                isNearBottomRef.current &&
-                !isUserScrollingRef.current
-              ) {
+              // Search owns scrolling when active.
+              if (chatSearchQuery !== null) return;
+              // During the initial open, force-snap to the newest message on
+              // every render batch until the real bottom is reached.
+              if (!initialScrollDoneRef.current) {
+                listRef.current?.scrollToEnd({ animated: false });
+                return;
+              }
+              // iter-274: afterwards, only snap when the user is NEAR the
+              // bottom AND is NOT actively scrolling (avoids the jitter that
+              // yanked the view back during virtualized media loading).
+              if (isNearBottomRef.current && !isUserScrollingRef.current) {
                 listRef.current?.scrollToEnd({ animated: false });
               }
             }}

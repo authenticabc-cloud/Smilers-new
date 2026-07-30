@@ -1280,7 +1280,14 @@ export function usePushNotifications() {
       }
 
       if (type === 'message' && conversationId) {
-        router.push(`/chat/${conversationId}` as any);
+        // Deep-link to the specific message when the push carries a messageId,
+        // so tapping a message notification lands on that exact message
+        // (highlighted). Falls back to opening the conversation (which opens at
+        // the newest message).
+        const msgId = toNonEmptyString(payload.messageId);
+        router.push(
+          (`/chat/${conversationId}${msgId ? `?jump=${encodeURIComponent(msgId)}` : ''}`) as any,
+        );
         return;
       }
 
