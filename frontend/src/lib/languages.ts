@@ -124,3 +124,43 @@ export const LANGUAGES: LanguageItem[] = [
 export function getLanguageByCode(code: string): LanguageItem | undefined {
   return LANGUAGES.find((item) => item.code === code);
 }
+
+/**
+ * Best-effort device language code (e.g. "en", "it"), constrained to a code we
+ * actually support, else "en". Uses the built-in Intl locale (Hermes supports
+ * it) — no extra native dependency required.
+ */
+export function getDeviceLanguageCode(): string {
+  try {
+    const locale =
+      (typeof Intl !== 'undefined' &&
+        Intl.DateTimeFormat().resolvedOptions().locale) ||
+      '';
+    const code = String(locale).split(/[-_]/)[0].trim().toLowerCase();
+    if (code && getLanguageByCode(code)) return code;
+  } catch {
+    // ignore — fall through to English
+  }
+  return 'en';
+}
+
+/**
+ * The receiver's EFFECTIVE translation target language code: their saved
+ * `preferredLanguage`, else English — **matching exactly what the Languages
+ * screen displays** as the default (it also falls back to "English").
+ *
+ * WHY: the Languages screen shows "Default: English" via a display-only
+ * `|| 'en'` fallback, so a user whose `preferredLanguage` was never persisted
+ * SEES English yet has an empty stored value — and the chat/voice translation
+ * paths (which require a non-empty target) silently do nothing. Routing both
+ * paths through this helper makes translation work out-of-the-box and keeps the
+ * behaviour consistent with what the settings screen shows. (We deliberately
+ * fall back to English rather than the device locale so the target never
+ * diverges from the displayed default — e.g. an Italian-locale phone must still
+ * translate INTO English, as shown.)
+ */
+export function getEffectivePreferredLanguage(me: any): string {
+  const saved =
+    typeof me?.preferredLanguage === 'string' ? me.preferredLanguage.trim() : '';
+  return saved || 'en';
+}

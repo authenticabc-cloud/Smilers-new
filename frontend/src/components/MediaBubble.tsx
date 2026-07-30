@@ -45,7 +45,7 @@ import type { E2EEStatus } from '../hooks/useConversationE2EE';
 import { getCachedTranscription, clearCachedTranscription, type CachedTranscription, type TranscriptionSegment } from '../lib/triggerTranscription';
 import { SharedContactBubble } from './chat/SharedContactBubble';
 import { ForwardedTag } from './chat/ForwardedTag';
-import { getLanguageByCode } from '../lib/languages';
+import { getLanguageByCode, getEffectivePreferredLanguage } from '../lib/languages';
 import { getOrCreateVoiceTranslation, type VoiceTranslation } from '../lib/voiceTranslation';
 import { ensureVoicePlaybackMode } from '../lib/audio/voicePlaybackMode';
 import {
@@ -1938,7 +1938,7 @@ function VoiceTranslationPill({ msg }: { msg: any }) {
     (cached?.language || '');
 
   // Receiver's preferred language + the set of languages they understand.
-  const targetCode = (me?.preferredLanguage || '').trim();
+  const targetCode = getEffectivePreferredLanguage(me);
   const targetName = getLanguageByCode(targetCode)?.name || '';
   const skipCodes = useMemo<string[]>(() => {
     if (Array.isArray(me?.skipTranslationLanguages)) return me.skipTranslationLanguages;

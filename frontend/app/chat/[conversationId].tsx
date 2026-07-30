@@ -86,6 +86,7 @@ import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/de
 import { isSystemAction } from '../../src/lib/chat/systemMessage';
 import { cacheUserName } from '../../src/push/notificationNameCache';
 import { getLanguageByCode } from '../../src/lib/languages';
+import { getEffectivePreferredLanguage } from '../../src/lib/languages';
 import {
   applyDraftFormatting,
   applyInlineColor,
@@ -1265,7 +1266,10 @@ export default function ChatScreen() {
   // downstream displayMessages/timeline pipeline.
   const searchFilteredMessages = visibleMessages;
 
-  const preferredLanguage = typeof me?.preferredLanguage === 'string' ? me.preferredLanguage : '';
+  // Effective target language: saved preferredLanguage → device locale → English.
+  // (Empty preferredLanguage previously disabled translation even though the
+  // Languages screen showed "Default: English".)
+  const preferredLanguage = getEffectivePreferredLanguage(me);
   const preferredLanguageLabel = getLanguageByCode(preferredLanguage)?.name || preferredLanguage;
   const skipTranslationLanguages = useMemo(() => {
     const values = new Set<string>();
