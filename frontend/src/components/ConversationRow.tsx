@@ -78,7 +78,7 @@ type Props = {
   typingLabel?: string | null;
 };
 
-export default function ConversationRow({
+function ConversationRow({
   item,
   currentUserId,
   contacts,
@@ -232,6 +232,45 @@ export default function ConversationRow({
     </TouchableOpacity>
   );
 }
+
+/**
+ * Perf: memoize the row so parent (ChatsScreen) re-renders — which happen
+ * frequently (unread counts, local-read overlay, drafts, presence ticks) —
+ * don't re-render every mounted row. `onPress` is intentionally IGNORED in the
+ * comparison: it's an inline closure recreated on every parent render, but its
+ * captured values (router, me._id) are effectively stable, and any item change
+ * that would affect navigation (lastMessageTime/id) already forces a re-render.
+ */
+function rowPropsEqual(prev: Props, next: Props): boolean {
+  if (prev.unreadCount !== next.unreadCount) return false;
+  if (prev.muted !== next.muted) return false;
+  if (prev.currentUserId !== next.currentUserId) return false;
+  if (prev.contacts !== next.contacts) return false;
+  if (prev.typingFromParent !== next.typingFromParent) return false;
+  if ((prev.typingLabel || null) !== (next.typingLabel || null)) return false;
+  const da = prev.draft;
+  const db = next.draft;
+  if ((da?.text || '') !== (db?.text || '') || !!da?.hasImages !== !!db?.hasImages) return false;
+  const a = prev.item;
+  const b = next.item;
+  if (a === b) return true;
+  if (String(a?._id) !== String(b?._id)) return false;
+  if (a?.lastMessageTime !== b?.lastMessageTime) return false;
+  if (a?.lastMessageText !== b?.lastMessageText) return false;
+  if (a?.lastMessageType !== b?.lastMessageType) return false;
+  if (a?.lastSystemKind !== b?.lastSystemKind) return false;
+  const pa = a?.otherUser || a?.otherParticipant || a;
+  const pb = b?.otherUser || b?.otherParticipant || b;
+  if ((pa?.isOnline ?? pa?.online) !== (pb?.isOnline ?? pb?.online)) return false;
+  if ((pa?.lastSeen ?? a?.lastSeen) !== (pb?.lastSeen ?? b?.lastSeen)) return false;
+  if (
+    (a?.avatar || a?.avatarUrl || a?.photo) !== (b?.avatar || b?.avatarUrl || b?.photo)
+  )
+    return false;
+  return true;
+}
+
+export default React.memo(ConversationRow, rowPropsEqual);
 
 const styles = StyleSheet.create({
   row: {

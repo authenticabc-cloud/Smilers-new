@@ -720,6 +720,18 @@ export default function ChatsScreen() {
         data={filteredList}
         keyExtractor={(item: any) => item._id}
         contentContainerStyle={styles.listContent}
+        // Perf: bound the render window so only the visible rows mount. This is
+        // the fix for the chat-list freeze — without these, EVERY conversation
+        // row mounted at once, and each row opens its own live Convex typing
+        // subscription (BATCH_TYPING_ENABLED is off by default), so a long list
+        // spun up dozens of simultaneous subscriptions + re-rendered them all on
+        // any parent state change. Virtualization keeps mounted rows (and their
+        // subscriptions) to ~one screenful; off-screen rows unmount and close.
+        initialNumToRender={10}
+        maxToRenderPerBatch={8}
+        updateCellsBatchingPeriod={50}
+        windowSize={9}
+        removeClippedSubviews
         ListHeaderComponent={
           <>
             <View style={styles.filterChipsRow}>

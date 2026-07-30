@@ -1,5 +1,16 @@
 # Smilers Mobile App — PRD
 
+## iter-417 (Jun 2026): Chat-list freeze/slowness FIXED (P1) + Storage & Diary-encrypted-backup confirmed already shipped
+- **P1 chat-list freeze — ROOT CAUSE + fix:** `app/(tabs)/chats.tsx` rendered its `FlatList` with NO virtualization limits, so EVERY conversation row mounted at once. Each `ConversationRow` opens its own LIVE Convex `typing.getTypingUsers` subscription (via `useSafeConvexQuery`→`watchQuery`; `BATCH_TYPING_ENABLED` is off by default), so a long chat list spun up dozens of simultaneous subscriptions AND re-rendered every one of them on any parent state change (unread counts, local-read overlay, drafts, presence ticks) → JS-thread freeze / sluggish scroll.
+  - Fix #1 (`chats.tsx`): added FlatList virtualization — `initialNumToRender={10}`, `maxToRenderPerBatch={8}`, `updateCellsBatchingPeriod={50}`, `windowSize={9}`, `removeClippedSubviews`. Only ~one screenful of rows mount at a time; off-screen rows unmount and CLOSE their typing subscriptions.
+  - Fix #2 (`src/components/ConversationRow.tsx`): wrapped the row in `React.memo(ConversationRow, rowPropsEqual)` with a field-level comparator (item id/lastMessageTime/lastMessageText/system kind/presence/avatar + unreadCount/muted/draft/typingLabel/contacts). `onPress` is intentionally ignored in the compare (inline closure, but its captured router/me._id are stable). Parent re-renders no longer re-render every mounted row.
+  - Lint clean on both files; app bundles & boots to Sign In. ⚠️ The freeze itself is only observable on a device with a long chat list — validate on the APK rebuild.
+- **Storage settings screen (task b) — ALREADY SHIPPED (verified):** `app/storage.tsx` exists, wired from Settings (`/storage` row), shows cached-media size via `getDecryptedCacheSize()` and one-tap `clearDecryptedCache()`. No work needed.
+- **Diary encrypted backup/export/import (task c) — ALREADY SHIPPED (verified):** `app/diary.tsx` has `handleExportEncrypted` (AES-GCM-256 + PBKDF2-SHA256 envelope keyed by App Lock PIN, via `e2eeCrypto.ts`), `handleRestore`/`restoreFromUri`/`pickAndRestore` (decrypt + `importDiaryEntries` deduped merge), plus weekly silent auto-backup (`diaryAutoBackup.ts`) and `handleRecover`. Crypto lib + imports resolve. No work needed.
+- **Study Room errors (task d):** client bindings (`src/lib/study/useRooms.ts`) are already correct/defensive — flatten wrapped→flat shape, correct action/mutation/query bindings, `useSafeConvexQuery` graceful degradation. Any remaining errors are on the EXTERNAL Convex backend (owned by the user) — needs a concrete error message / their Convex team.
+
+
+
 ## iter-416 (Jun 2026): P0 call "Answer → Connecting spin / double-accept required" — ROOT CAUSE FIXED
 - **Root cause (from the code + `EXPO_PUBLIC_USE_TWILIO=0`):** 1:1 calls run on the WebRTC/Stream stack (not Twilio). When the callee tapped **Answer** on the incoming-call notification, the deep-link builders dropped the `answer=1` flag, so the call screen opened showing **Accept/Decline again** — the user had to accept a SECOND time (the "double-accept"), and the first tap looked like an endless "Connecting" spin.
   - `src/push/notifeeCallWake.ts` `buildCallRoute()` non-Twilio branch returned `/call/<id>?displayName=…` (no `answer=1`, no `type`). This is the native full-screen Notifee Answer button + cold-start path.
