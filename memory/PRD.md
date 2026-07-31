@@ -1,5 +1,12 @@
 # Smilers Mobile App — PRD
 
+## iter-423 (Jun 2026): "Never connects" ROOT CAUSE FIXED — deterministic conversationId-derived Stream room
+- Backend team confirmed the ring contract: the FCM payload carries `twilio_room_name = "smilers_conv_<conversationId>"` (derived from CONVERSATION id), and `callId` is a reference only — NOT the room key. The native client was resolving the Stream room from `callId`/`createdCallId` (the Convex call-record id), which depends on the short-TTL ring query resolving and could differ from the caller's room → callee joined a DIFFERENT room ("answered but never connects").
+- Fix (`StreamCallInner.tsx`): `streamCallId` now = `streamRoomParam || \`smilers_conv_${conversationId}\` || pinnedRoom || callId || createdCallId`. Both devices derive the SAME room from conversationId IMMEDIATELY (no query/TTL race, no mid-call teardown). Explicit `streamRoom` param (group add-participant) still overrides; call-record ids kept only as last-resort fallbacks.
+- Verified safe: ALL teardown paths use `call.leave()` (never `call.end()`), so the per-conversation room stays rejoinable for the next call (no dead-ended-call issue); `startStreamCall`/random-room path is unused in the active flow (no competing room). Lint clean; app boots. ⚠️ Native — validate caller↔callee connect on APK.
+
+
+
 ## iter-422 (Jun 2026): Call connect recovery — Retry fallback + callee auto-rejoin (no dead-end)
 - `StreamCallInner.tsx`: added a safe, mostly user-driven recovery so a rare failed join never freezes on "Connecting…". New `rejoinNonce` (re-runs the join effect with a FRESH Stream call object → new SFU edge) + `joinFailed` (set when both watchdog attempts miss). `retryJoin()` drops the stuck call and bumps the nonce.
 - Loading screen now shows "Taking longer than usual…" + a **Retry** pill (testID `call-retry`) once `joinFailed` or after a stuck threshold (caller 30s — an unanswered ring is normal; callee 12s). 

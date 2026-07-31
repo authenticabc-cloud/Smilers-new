@@ -1585,13 +1585,18 @@ export default function StreamCallInner() {
   const isCaller = !!(me && callerId && callerId === me._id);
   const convStatus: string | undefined = activeCall?.status;
   const callId: string | undefined = activeCall?._id;
-  // Unique-per-call Stream room id (NOT the conversationId) so every call is a
-  // fresh room with no lingering "ghost" participants from a previous call.
-  // PINNED once known: the Convex ring record has a ~60s TTL and disappears
-  // after it's answered/expires; without pinning, `callId` would flip to
-  // undefined mid-call and tear down the (live) Stream session — this was the
-  // real cause of calls dropping ~1 minute in. Reset when the conversation
-  // changes (e.g. accepting a call-waiting call).
+  // Canonical Stream room — DETERMINISTIC from the conversationId, per the
+  // confirmed backend contract (the FCM ring payload carries
+  // `twilio_room_name = "smilers_conv_<conversationId>"`; the web caller joins
+  // that exact room). The room is NOT keyed to the call-record id (`callId`) —
+  // using `callId` was the mismatch that left the callee joining a different
+  // room than the caller ("answered but never connects"). Deriving from
+  // conversationId means BOTH devices land in the same room immediately, with
+  // no dependency on the short-TTL Convex ring record resolving first (which
+  // also caused mid-call teardown). An explicit `streamRoom` param (group
+  // add-participant flow) still overrides; the old call-record ids stay only as
+  // last-resort fallbacks.
+  const canonicalRoom = conversationId ? `smilers_conv_${conversationId}` : undefined;
   const [pinnedRoom, setPinnedRoom] = useState<string | null>(null);
   useEffect(() => {
     setPinnedRoom(null);
@@ -1604,7 +1609,8 @@ export default function StreamCallInner() {
   useEffect(() => {
     if (callId) liveCallIdRef.current = String(callId);
   }, [callId]);
-  const streamCallId: string | undefined = streamRoomParam || pinnedRoom || callId || createdCallId || undefined;
+  const streamCallId: string | undefined =
+    streamRoomParam || canonicalRoom || pinnedRoom || callId || createdCallId || undefined;
 
   // Role resolution. The foreground listener routes an in-app incoming call to
   // /call/<id> WITHOUT answer=1, so we must show Accept/Decline here (the old
