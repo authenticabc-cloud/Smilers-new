@@ -41,6 +41,7 @@ import { buildAdjustMatrix, applyColorMatrixToImage, AdjustParams } from '../../
 const ColorMatrixPreview = React.lazy(() => import('./ColorMatrixPreview'));
 
 const PREFS_KEY = 'smilers.photoeditor.prefs.v1';
+const LOOK_KEY = 'smilers.photoeditor.customlook.v1';
 
 type Tool = 'draw' | 'text' | 'sticker' | 'crop' | 'filter' | 'blur' | 'adjust' | null;
 
@@ -145,6 +146,7 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [filter, setFilter] = useState('none');
   const [adjust, setAdjust] = useState<Required<AdjustParams>>(ADJUST_DEFAULT);
+  const [customLook, setCustomLook] = useState<Required<AdjustParams> | null>(null);
   const [eraser, setEraser] = useState(false);
   const [color, setColor] = useState('#FF3B30');
   const [brush, setBrush] = useState(8);
@@ -177,6 +179,27 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
     if (!prefsLoaded.current) return;
     AsyncStorage.setItem(PREFS_KEY, JSON.stringify({ color, brush })).catch(() => {});
   }, [color, brush]);
+
+  // Load the user's saved custom "My look" adjustment preset.
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(LOOK_KEY);
+        if (raw) {
+          const p = JSON.parse(raw);
+          if (typeof p?.contrast === 'number' && typeof p?.saturation === 'number') {
+            setCustomLook({ grayscale: p.grayscale ?? 0, contrast: p.contrast, saturation: p.saturation, brightness: p.brightness ?? 0 });
+          }
+        }
+      } catch {}
+    })();
+  }, []);
+
+  const saveCustomLook = useCallback(() => {
+    const look = { ...adjust };
+    setCustomLook(look);
+    AsyncStorage.setItem(LOOK_KEY, JSON.stringify(look)).catch(() => {});
+  }, [adjust]);
 
   useEffect(() => {
     setBaseUri(imageUri);
@@ -739,6 +762,28 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
                     </TouchableOpacity>
                   );
                 })}
+                {customLook ? (
+                  (() => {
+                    const sel =
+                      adjust.grayscale === customLook.grayscale &&
+                      adjust.contrast === customLook.contrast &&
+                      adjust.saturation === customLook.saturation;
+                    return (
+                      <TouchableOpacity
+                        onPress={() => setAdjust(customLook)}
+                        style={[styles.presetChip, sel && styles.presetChipSel]}
+                        testID="pe-adjust-preset-mylook"
+                      >
+                        <Ionicons name="bookmark" size={12} color={sel ? '#0A84FF' : '#FFCC00'} />
+                        <Text style={[styles.presetLabel, sel && { color: '#0A84FF' }, { marginLeft: 4 }]}>My look</Text>
+                      </TouchableOpacity>
+                    );
+                  })()
+                ) : null}
+                <TouchableOpacity onPress={saveCustomLook} style={[styles.presetChip, styles.presetSaveChip]} testID="pe-adjust-save-look">
+                  <Ionicons name="bookmark-outline" size={12} color="#fff" />
+                  <Text style={[styles.presetLabel, { marginLeft: 4 }]}>{customLook ? 'Update look' : 'Save look'}</Text>
+                </TouchableOpacity>
               </ScrollView>
               <AdjustSlider
                 label="Grayscale"
@@ -1149,8 +1194,9 @@ const styles = StyleSheet.create({
   resetText: { color: '#fff', fontWeight: '600' },
   adjustPanel: { paddingHorizontal: 14, paddingTop: 4, paddingBottom: 4 },
   presetRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingBottom: 6 },
-  presetChip: { paddingHorizontal: 14, height: 30, borderRadius: 15, backgroundColor: '#222', justifyContent: 'center' },
+  presetChip: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, height: 30, borderRadius: 15, backgroundColor: '#222', justifyContent: 'center' },
   presetChipSel: { backgroundColor: 'rgba(10,132,255,0.2)', borderWidth: 1, borderColor: '#0A84FF' },
+  presetSaveChip: { backgroundColor: '#0A84FF' },
   presetLabel: { color: '#fff', fontSize: 12, fontWeight: '600' },
   adjustSliderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   adjustLabel: { color: '#fff', fontSize: 13, width: 78 },

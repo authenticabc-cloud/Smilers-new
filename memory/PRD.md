@@ -1,6 +1,10 @@
 # Smilers Mobile App — PRD
 
-## iter-434 (Jun 2026): Two enhancements — Adjust presets (Photo Editor) + Voice-emoji cheat-sheet
+## iter-435 (Jun 2026): Photo Editor — save a custom "My look" Adjust preset
+- Added a **Save look / Update look** chip in the Adjust preset row that stores the current Grayscale/Contrast/Saturation values as the user's personal preset (persisted in AsyncStorage `smilers.photoeditor.customlook.v1`, loaded on mount). Once saved, a **"My look"** chip (bookmark) appears alongside the built-ins and re-applies those values (highlighted when active); tapping "Update look" overwrites it.
+- Lint clean; app boots to Sign In. Native-only Adjust flow (Skia) — validate on an APK/TestFlight build.
+
+
 - **Photo Editor Adjust presets:** one-tap chips above the Grayscale/Contrast/Saturation sliders — **Original, Vivid, Punch, Muted, B&W** — each sets the slider values (highlighted when active) and drives the live Skia preview; "Apply" bakes as usual. Toolbar height bumped so the preset row + sliders fit.
 - **Voice-typing cheat-sheet:** `spokenToEmoji.ts` now exports `EMOJI_PHRASE_LIST` / `EMOJI_TRIGGER_WORDS`; the voice-typing language sheet gets an ⓘ button opening a "Voice emoji commands" sheet — a 2-column list of supported phrases (“smiley face” 🙂, “thumbs up” 👍, …) plus a footer showing the "emoji <word>" trigger examples. Helps users discover the feature.
 - Lint clean; app boots to Sign In. (Photo Editor adjust = native-only Skia; voice cheat-sheet is plain RN UI.)
