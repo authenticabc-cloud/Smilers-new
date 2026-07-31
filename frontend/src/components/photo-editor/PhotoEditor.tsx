@@ -240,7 +240,7 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
   }, [tool, eraser]);
 
   useEffect(() => {
-    if (tool !== 'adjust' && comparing) setComparing(false);
+    if (tool !== 'adjust' && tool !== 'filter' && comparing) setComparing(false);
   }, [tool, comparing]);
 
   const HEADER_H = 52 + insets.top;
@@ -568,8 +568,9 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
               </Suspense>
             ) : null}
 
-            {/* filter tint overlay (sits directly on the photo) */}
-            {filter !== 'none'
+            {/* filter tint overlay (sits directly on the photo).
+                Hidden while press-and-hold "compare" reveals the original. */}
+            {filter !== 'none' && !(comparing && tool === 'filter')
               ? (() => {
                   const f = FILTERS.find((x) => x.key === filter);
                   if (!f) return null;
@@ -741,6 +742,17 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
                   <Text style={[styles.filterLabel, filter === f.key && { color: '#0A84FF' }]}>{f.label}</Text>
                 </TouchableOpacity>
               ))}
+              {filter !== 'none' ? (
+                <TouchableOpacity
+                  onPressIn={() => setComparing(true)}
+                  onPressOut={() => setComparing(false)}
+                  style={[styles.filterCompareChip, comparing && styles.compareBtnActive]}
+                  testID="pe-filter-compare"
+                >
+                  <Ionicons name={comparing ? 'eye-off' : 'eye'} size={16} color="#fff" />
+                  <Text style={styles.compareText}>{comparing ? 'Original' : 'Compare'}</Text>
+                </TouchableOpacity>
+              ) : null}
             </ScrollView>
           ) : null}
 
@@ -1215,6 +1227,7 @@ const styles = StyleSheet.create({
   compareBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, height: 40, borderRadius: 20, backgroundColor: '#333' },
   compareBtnActive: { backgroundColor: '#0A84FF' },
   compareText: { color: '#fff', fontWeight: '600', fontSize: 12 },
+  filterCompareChip: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, height: 40, borderRadius: 20, backgroundColor: '#333', marginLeft: 4, alignSelf: 'center' },
   adjustPanel: { paddingHorizontal: 14, paddingTop: 4, paddingBottom: 4 },
   presetRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingBottom: 6 },
   presetChip: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, height: 30, borderRadius: 15, backgroundColor: '#222', justifyContent: 'center' },

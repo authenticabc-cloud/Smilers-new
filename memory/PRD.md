@@ -1,6 +1,10 @@
 # Smilers Mobile App — PRD
 
-## iter-437 (Jun 2026): Photo Editor — press-and-hold before/after compare in Adjust
+## iter-438 (Jun 2026): Photo Editor — press-and-hold compare extended to tint Filters
+- Added a **Compare** chip (press-and-hold) at the end of the Filter chip row (shown when a filter is active): while held it hides the tint overlay to reveal the original photo, snapping back on release. Shares the same `comparing` state/gesture as the Adjust compare (reset effect now covers both `adjust` + `filter` tools). Consistent "peek original" gesture across the editor.
+- Lint clean; app boots to Sign In.
+
+
 - Added a **"Hold to compare"** button in the Adjust panel: while pressed (`onPressIn`/`onPressOut`), the live Skia preview is hidden so the user sees the ORIGINAL photo, then it snaps back to the adjusted look on release (button label flips to "Original", eye icon toggles). Auto-resets when leaving the Adjust tool.
 - Lint clean; app boots to Sign In. Native-only Adjust flow (Skia) — validate on an APK/TestFlight build.
 
