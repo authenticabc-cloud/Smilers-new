@@ -15,14 +15,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import GroupSwipeRow from '../../src/components/GroupSwipeRow';
 import { formatTypingLabel } from '../../src/components/ConversationRow';
+import { GroupApprovalBadge } from '../../src/components/GroupApprovalBadge';
 import DraggableFlatList, { ScaleDecorator, type RenderItemParams } from 'react-native-draggable-flatlist';
 import UndoSnackbar from '../../src/components/UndoSnackbar';
 import * as Haptics from 'expo-haptics';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
-import { api } from '../../src/convexApi';
-import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
+import { api } from '../../src/convexApi';import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { useReactiveSafeConvexQuery } from '../../src/hooks/useReactiveSafeConvexQuery';
 import { readStoredString, writeStoredString } from '../../src/lib/settingsStorage';
 import { useLocalReadMap } from '../../src/hooks/useLocalReadMap';
@@ -704,6 +704,9 @@ export default function GroupsScreen() {
                   <Text style={[styles.rowName, rowUnread > 0 && styles.rowNameUnread]} numberOfLines={1}>
                     {item.name || 'Group'}
                   </Text>
+                  {isGroupsTab && itemId ? (
+                    <GroupApprovalBadge conversationId={itemId} />
+                  ) : null}
                 </View>
                 <Text
                   style={[styles.rowSub, rowTyping ? styles.rowTyping : rowUnread > 0 && styles.rowSubUnread]}
