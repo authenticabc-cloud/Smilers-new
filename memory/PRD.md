@@ -1,6 +1,10 @@
 # Smilers Mobile App — PRD
 
-## iter-436 (Jun 2026): Photo Editor — "My look" auto-applies as the default on open
+## iter-437 (Jun 2026): Photo Editor — press-and-hold before/after compare in Adjust
+- Added a **"Hold to compare"** button in the Adjust panel: while pressed (`onPressIn`/`onPressOut`), the live Skia preview is hidden so the user sees the ORIGINAL photo, then it snaps back to the adjusted look on release (button label flips to "Original", eye icon toggles). Auto-resets when leaving the Adjust tool.
+- Lint clean; app boots to Sign In. Native-only Adjust flow (Skia) — validate on an APK/TestFlight build.
+
+
 - The saved custom **"My look"** now pre-fills the Adjust sliders automatically every time the editor opens (via `defaultLookRef`, updated when the look loads/saves). So the user's signature style is already dialed in — one tap (Apply) away — and the "My look" chip shows as selected. Falls back to neutral when no look is saved. After baking, sliders reset to neutral for the already-adjusted image.
 - Lint clean; app boots to Sign In. Native-only Adjust flow (Skia) — validate on an APK/TestFlight build.
 

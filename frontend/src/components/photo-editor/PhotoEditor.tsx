@@ -147,6 +147,7 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
   const [filter, setFilter] = useState('none');
   const [adjust, setAdjust] = useState<Required<AdjustParams>>(ADJUST_DEFAULT);
   const [customLook, setCustomLook] = useState<Required<AdjustParams> | null>(null);
+  const [comparing, setComparing] = useState(false);
   // Preferred default Adjust values applied whenever the editor opens.
   const defaultLookRef = useRef<Required<AdjustParams>>(ADJUST_DEFAULT);
   const [eraser, setEraser] = useState(false);
@@ -237,6 +238,10 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
   useEffect(() => {
     if (tool !== 'draw' && eraser) setEraser(false);
   }, [tool, eraser]);
+
+  useEffect(() => {
+    if (tool !== 'adjust' && comparing) setComparing(false);
+  }, [tool, comparing]);
 
   const HEADER_H = 52 + insets.top;
   const TOOLBAR_H = (tool === 'adjust' ? 288 : 132) + insets.bottom;
@@ -555,8 +560,9 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
               <Image source={{ uri: baseUri }} style={{ width: cw, height: ch }} resizeMode="contain" />
             ) : null}
 
-            {/* live Skia adjust preview (native only) — overlays the photo */}
-            {tool === 'adjust' && baseUri && Platform.OS !== 'web' ? (
+            {/* live Skia adjust preview (native only) — overlays the photo.
+                Hidden while press-and-hold "compare" reveals the original. */}
+            {tool === 'adjust' && baseUri && Platform.OS !== 'web' && !comparing ? (
               <Suspense fallback={null}>
                 <ColorMatrixPreview uri={baseUri} width={cw} height={ch} matrix={buildAdjustMatrix(adjust)} />
               </Suspense>
@@ -821,6 +827,15 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
                 </TouchableOpacity>
                 <TouchableOpacity onPress={() => setAdjust(ADJUST_DEFAULT)} style={styles.resetBtn} testID="pe-adjust-reset">
                   <Text style={styles.resetText}>Reset</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPressIn={() => setComparing(true)}
+                  onPressOut={() => setComparing(false)}
+                  style={[styles.compareBtn, comparing && styles.compareBtnActive]}
+                  testID="pe-adjust-compare"
+                >
+                  <Ionicons name={comparing ? 'eye-off' : 'eye'} size={16} color="#fff" />
+                  <Text style={styles.compareText}>{comparing ? 'Original' : 'Hold to compare'}</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1197,6 +1212,9 @@ const styles = StyleSheet.create({
   applyText: { color: '#fff', fontWeight: '700' },
   resetBtn: { paddingHorizontal: 16, height: 40, borderRadius: 20, backgroundColor: '#333', justifyContent: 'center' },
   resetText: { color: '#fff', fontWeight: '600' },
+  compareBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, height: 40, borderRadius: 20, backgroundColor: '#333' },
+  compareBtnActive: { backgroundColor: '#0A84FF' },
+  compareText: { color: '#fff', fontWeight: '600', fontSize: 12 },
   adjustPanel: { paddingHorizontal: 14, paddingTop: 4, paddingBottom: 4 },
   presetRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingBottom: 6 },
   presetChip: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, height: 30, borderRadius: 15, backgroundColor: '#222', justifyContent: 'center' },
