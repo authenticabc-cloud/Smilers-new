@@ -368,7 +368,7 @@ export function stopNativeRingback() {
  */
 function playInCallTone(name: string, label: string) {
   const smilers = (NativeModules as any)?.SmilersCallModule;
-  const hasAppModule = Platform.OS === 'android' && typeof smilers?.playCallTone === 'function';
+  const hasAppModule = typeof smilers?.playCallTone === 'function';
   const native = getNative();
   const hasPatch = !!native && typeof native.playInCallSound === 'function';
   recordDiagnostic({

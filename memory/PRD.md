@@ -1,5 +1,15 @@
 # Smilers Mobile App — PRD
 
+## iter-449 (Jun 2026): Ported call tones to app-owned module on iOS too
+- Mirrored the Android fix on iOS so the tones no longer depend on the (unreliable) node_modules patch. Added a committed native module:
+  - `ios/Smilers/SmilersCallModule.swift` — `@objc(SmilersCallModule)` with `playCallTone(name, resolve, reject)` that plays the bundled `ios/Smilers/<name>.mp3` (already in Copy Bundle Resources) via `AVAudioPlayer` at full volume, mixing into the AVAudioSession the Stream/WebRTC call configured.
+  - `ios/Smilers/SmilersCallModule.m` — `RCT_EXTERN_MODULE` + `RCT_EXTERN_METHOD` bridge so JS `NativeModules.SmilersCallModule.playCallTone` resolves on iOS.
+  - `Smilers-Bridging-Header.h` — added `#import <React/RCTBridgeModule.h>` so Swift sees `RCTPromiseResolveBlock/RejectBlock`.
+  - Registered both files in `Smilers.xcodeproj/project.pbxproj` (PBXBuildFile + PBXFileReference + Smilers group + Sources build phase), UUIDs AA01CA11…A1/A2/B1/B2; braces/parens balanced, ref counts verified.
+- `src/lib/webrtc/inCallManager.ts`: `hasAppModule` no longer gated to Android — both platforms now use the app-owned `playCallTone` as PRIMARY, patch as fallback.
+- ⚠️ NATIVE-ONLY: needs a fresh iOS build; if that build fails, suspect the new pbxproj entries. Lint clean (JS).
+
+
 ## iter-448 (Jun 2026): Ciao now plays on BOTH sides in 1:1 (was only the ender)
 - User confirmed iter-447 works: "Connected" audible on both sides; "Ciaooo" only played for the side that tapped End.
 - ROOT CAUSE: `hangup()` gated the end-tone on the LIVE `remoteConnected`. For the NON-initiator, the remote leaves first → CallUI's `onConnectedChange(false)` flips `remoteConnected` → false BEFORE their auto-end `hangup()` runs (400ms later) → gate failed → no Ciao.
