@@ -1568,6 +1568,12 @@ export default function StreamCallInner() {
   const [didInitiate, setDidInitiate] = useState(false);
   const [locallyAccepted, setLocallyAccepted] = useState(false);
   const [createdCallId, setCreatedCallId] = useState<string | null>(null);
+  // Retry / recovery state so a rare failed join never dead-ends on a frozen
+  // "Connecting…" screen. `rejoinNonce` re-runs the join effect with a FRESH
+  // call object (often lands on a healthy SFU edge instantly); `joinFailed`
+  // flips when both watchdog attempts miss so the UI can offer a Retry.
+  const [rejoinNonce, setRejoinNonce] = useState(0);
+  const [joinFailed, setJoinFailed] = useState(false);
   const initiatedRef = useRef(false);
   const answeredRef = useRef(false);
   const ringingMarkedRef = useRef(false);
@@ -1747,6 +1753,7 @@ export default function StreamCallInner() {
     if (!streamCallId || !accepted) return;
     let mounted = true;
     let joined: any = null;
+    setJoinFailed(false);
     (async () => {
       try {
         const t0 = acceptedAtRef.current || Date.now();
@@ -1807,6 +1814,7 @@ export default function StreamCallInner() {
           try {
             streamCall?.leave();
           } catch {}
+          if (mounted) setJoinFailed(true);
           return;
         }
         joined = streamCall;
@@ -1817,7 +1825,8 @@ export default function StreamCallInner() {
           source: 'streamTiming',
           message: `join-fail callId=${streamCallId} err=${e?.message || e}`,
         });
-        /* both attempts failed — screen shows Connecting…; user can hang up */
+        if (mounted) setJoinFailed(true);
+        /* both attempts failed — screen now offers a Retry (see loading UI) */
       }
     })();
     return () => {
@@ -1826,7 +1835,57 @@ export default function StreamCallInner() {
         joined?.leave();
       } catch {}
     };
-  }, [streamCallId, accepted, isVideo]);
+  }, [streamCallId, accepted, isVideo, rejoinNonce]);
+
+  // User-driven recovery: drop the stuck call object and re-run the join effect
+  // with a fresh Stream call (new SFU edge). Safe — it never fires on its own
+  // during a legitimate ring; it's triggered by the Retry button, or by the
+  // callee-only watchdog below (the callee has already answered, so there's no
+  // ring to disturb).
+  const retryJoin = useCallback(() => {
+    setJoinFailed(false);
+    setCall(null);
+    setRejoinNonce((n) => n + 1);
+  }, []);
+
+  // "Still connecting…" affordance: surface a Retry after 15s of not being
+  // media-connected (or immediately once a join has failed). Timer restarts on
+  // each rejoin and stops the moment we connect.
+  const [connectElapsed, setConnectElapsed] = useState(0);
+  useEffect(() => {
+    if (remoteConnected) {
+      setConnectElapsed(0);
+      return;
+    }
+    const start = Date.now();
+    const iv = setInterval(() => setConnectElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
+    return () => clearInterval(iv);
+  }, [remoteConnected, rejoinNonce]);
+  // Caller gets a longer threshold (an unanswered ring is normal); the callee
+  // has answered, so being stuck past ~12s means something is wrong.
+  const showRetry = joinFailed || connectElapsed >= (iAmCaller ? 30 : 12);
+
+  // Callee-only auto-recovery: if we joined the room but the caller never shows
+  // up within 18s (a stalled SFU negotiation — the "I answered but it stays
+  // Connecting forever / never connects" report), do ONE automatic fresh
+  // rejoin. Caller is excluded because their "no remote yet" is just a normal
+  // unanswered ring, which must not be churned.
+  const autoRejoinedRef = useRef(false);
+  useEffect(() => {
+    if (iAmCaller || remoteConnected || !call || autoRejoinedRef.current) return;
+    const t = setTimeout(() => {
+      if (!remoteConnected && !autoRejoinedRef.current) {
+        autoRejoinedRef.current = true;
+        recordDiagnostic({
+          tag: 'CALL',
+          source: 'streamTiming',
+          message: `auto-rejoin callee joined-but-no-remote-18s callId=${streamCallId || '∅'}`,
+        });
+        retryJoin();
+      }
+    }, 18000);
+    return () => clearTimeout(t);
+  }, [iAmCaller, remoteConnected, call, retryJoin, streamCallId]);
 
   const acceptIncoming = useCallback(() => {
     setLocallyAccepted(true);
@@ -2009,6 +2068,15 @@ export default function StreamCallInner() {
         <Text style={styles.loadingName} numberOfLines={1}>
           {resolvedPeerName}
         </Text>
+        {showRetry ? (
+          <>
+            <Text style={styles.loadingHint}>Taking longer than usual…</Text>
+            <TouchableOpacity style={styles.retryPill} onPress={retryJoin} testID="call-retry">
+              <Ionicons name="refresh" size={18} color={Colors.white} />
+              <Text style={styles.retryPillText}>Retry</Text>
+            </TouchableOpacity>
+          </>
+        ) : null}
         <TouchableOpacity style={styles.loadingEnd} onPress={hangup}>
           <Ionicons
             name="call"
@@ -2109,6 +2177,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  loadingHint: { color: '#9CA3AF', fontSize: 14, marginTop: 18 },
+  retryPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 14,
+    paddingHorizontal: 22,
+    paddingVertical: 12,
+    borderRadius: 999,
+    backgroundColor: Colors.primary,
+    minHeight: 44,
+  },
+  retryPillText: { color: Colors.white, fontSize: 16, fontWeight: '700' },
 
   callRoot: { flex: 1, backgroundColor: '#000' },
   waitingWrap: {

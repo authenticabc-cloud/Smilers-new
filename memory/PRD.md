@@ -1,5 +1,13 @@
 # Smilers Mobile App — PRD
 
+## iter-422 (Jun 2026): Call connect recovery — Retry fallback + callee auto-rejoin (no dead-end)
+- `StreamCallInner.tsx`: added a safe, mostly user-driven recovery so a rare failed join never freezes on "Connecting…". New `rejoinNonce` (re-runs the join effect with a FRESH Stream call object → new SFU edge) + `joinFailed` (set when both watchdog attempts miss). `retryJoin()` drops the stuck call and bumps the nonce.
+- Loading screen now shows "Taking longer than usual…" + a **Retry** pill (testID `call-retry`) once `joinFailed` or after a stuck threshold (caller 30s — an unanswered ring is normal; callee 12s). 
+- **Callee-only auto-recovery:** if the callee joined but the caller never appears within 18s (the "I answered but it's stuck Connecting / never connects" report), does ONE automatic fresh rejoin. Caller excluded so a normal unanswered ring is never churned. Reuses the `remoteConnected` signal lifted in iter-421.
+- Lint clean; app boots. ⚠️ Native — validate on APK.
+
+
+
 ## iter-421 (Jun 2026): App-wide keyboard fix + caller ringback root-cause fix; call "connecting" analysis
 - **Issue #1 (typed message hidden behind keyboard) — FIXED app-wide:** chat composer used RN's `KeyboardAvoidingView` with `behavior='height'` on Android (an anti-pattern → overlap). Switched the chat to `react-native-keyboard-controller`'s `KeyboardAvoidingView` with `behavior="translate-with-padding"` (`KeyboardProvider` was already at root). Swept the remaining 5 screens still on RN's KAV (`trustees`, `ad-clicks-payment`, `conference/[conferenceId]/room` → translate-with-padding, `community-create`, `mobile-money`) to KC's KAV with `behavior="padding"`. All other typing screens were already migrated in earlier iters. Lint clean.
 - **Issue #2a (no caller ringback) — ROOT CAUSE FOUND & FIXED:** the gate `isOutgoingRinging = … && !accepted && …` could NEVER be true because `accepted = iAmCaller || …` is always true for the caller → `useRingbackPlayer` always got `false`, so the InCallManager ringback never started (silence until answer). Fixed the gate to `activeCallReady && iAmCaller && convStatus === 'ringing' && !remoteConnected`. Lifted a real media-connected signal from `CallUI` to the parent via a new `onConnectedChange` prop (+`remoteConnected` state) so ringback stops the instant the callee truly joins (not just when the ring record changes/expires). Ringback asset confirmed present in android res/raw + iOS bundle (pbxproj refs ×4). ⚠️ Device-validate on APK.
