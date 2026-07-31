@@ -212,6 +212,10 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   const SELF_H = 160;
   const { width: winW, height: winH } = Dimensions.get('window');
   const selfPan = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
+  // Double-tap the self-view tile to flip the camera (front ⇄ rear). Kept in a
+  // ref so the pan responder (created once) always calls the latest flipCam.
+  const flipCamRef = useRef<() => void>(() => {});
+  const lastSelfTapRef = useRef(0);
   const selfPanResponder = useMemo(
     () =>
       PanResponder.create({
@@ -223,8 +227,22 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
         onPanResponderMove: Animated.event([null, { dx: selfPan.x, dy: selfPan.y }], {
           useNativeDriver: false,
         }),
-        onPanResponderRelease: () => {
+        onPanResponderRelease: (_e, g) => {
           selfPan.flattenOffset();
+          // A near-stationary release is a TAP, not a drag → detect a double-tap
+          // (two taps within 300ms) and flip the camera.
+          const wasTap = Math.abs(g.dx) < 6 && Math.abs(g.dy) < 6;
+          if (wasTap) {
+            const now = Date.now();
+            if (now - lastSelfTapRef.current < 300) {
+              lastSelfTapRef.current = 0;
+              try {
+                flipCamRef.current?.();
+              } catch {}
+            } else {
+              lastSelfTapRef.current = now;
+            }
+          }
           // Default anchor is top:60 right:16 → translate range keeps it on-screen.
           const defaultLeft = winW - 16 - SELF_W;
           const defaultTop = 60;
@@ -420,6 +438,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
       await call.camera.flip();
     } catch {}
   }, [call]);
+  flipCamRef.current = flipCam;
 
   // Audio output routing. Stream RN does NOT manage audio routing itself, so we
   // drive the native AudioManager via InCallAudio (same as the WebRTC screen).

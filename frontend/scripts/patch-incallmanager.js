@@ -79,6 +79,7 @@ function patchAndroid() {
             player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
                 @Override
                 public void onPrepared(MediaPlayer mp) {
+                    try { mp.setVolume(1.0f, 1.0f); } catch (Exception ignored) {}
                     try { mp.start(); } catch (Exception ignored) {}
                 }
             });
@@ -171,6 +172,7 @@ RCT_EXPORT_METHOD(playInCallSound:(NSString *)bundleName)
         }
         _smilersTone = [[AVAudioPlayer alloc] initWithContentsOfURL:uri error:nil];
         _smilersTone.numberOfLoops = 0;
+        _smilersTone.volume = 1.0;
         [_smilersTone prepareToPlay];
         [_smilersTone play];
     } @catch (NSException *e) {

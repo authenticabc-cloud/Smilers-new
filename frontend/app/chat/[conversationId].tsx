@@ -1659,12 +1659,20 @@ export default function ChatScreen() {
     let attempts = 0;
     let timer: ReturnType<typeof setTimeout>;
     const tick = () => {
+      // Stop fighting the user the moment they start scrolling themselves.
+      if (isUserScrollingRef.current) {
+        initialScrollDoneRef.current = true;
+        return;
+      }
       try {
         listRef.current?.scrollToEnd({ animated: false });
       } catch {}
       attempts += 1;
-      if (attempts < 6) {
-        timer = setTimeout(tick, 130);
+      // Retry for ~2.5s: a virtualized, non-inverted list keeps growing as
+      // batches (and async-loading media rows) render below, so a short window
+      // lands partway and the user has to scroll the last bit manually.
+      if (attempts < 16) {
+        timer = setTimeout(tick, 150);
       } else {
         initialScrollDoneRef.current = true;
       }
@@ -1673,6 +1681,13 @@ export default function ChatScreen() {
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeline.length]);
+
+  // Re-arm the open-at-newest behavior whenever the conversation changes (e.g.
+  // navigating between chats without a full remount, or a notification tap that
+  // reuses this screen with a different conversationId).
+  useEffect(() => {
+    initialScrollDoneRef.current = false;
+  }, [conversationId]);
 
   // iter-323 "Receive once" 🔂: tapping the "file deleted for multiple
   // receipt" footprint offers to jump to the ORIGINAL copy of the file (in
