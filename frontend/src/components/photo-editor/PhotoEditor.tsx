@@ -147,6 +147,8 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
   const [filter, setFilter] = useState('none');
   const [adjust, setAdjust] = useState<Required<AdjustParams>>(ADJUST_DEFAULT);
   const [customLook, setCustomLook] = useState<Required<AdjustParams> | null>(null);
+  // Preferred default Adjust values applied whenever the editor opens.
+  const defaultLookRef = useRef<Required<AdjustParams>>(ADJUST_DEFAULT);
   const [eraser, setEraser] = useState(false);
   const [color, setColor] = useState('#FF3B30');
   const [brush, setBrush] = useState(8);
@@ -188,7 +190,9 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
         if (raw) {
           const p = JSON.parse(raw);
           if (typeof p?.contrast === 'number' && typeof p?.saturation === 'number') {
-            setCustomLook({ grayscale: p.grayscale ?? 0, contrast: p.contrast, saturation: p.saturation, brightness: p.brightness ?? 0 });
+            const look = { grayscale: p.grayscale ?? 0, contrast: p.contrast, saturation: p.saturation, brightness: p.brightness ?? 0 };
+            setCustomLook(look);
+            defaultLookRef.current = look; // pre-fill the editor with the user's signature look
           }
         }
       } catch {}
@@ -198,6 +202,7 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
   const saveCustomLook = useCallback(() => {
     const look = { ...adjust };
     setCustomLook(look);
+    defaultLookRef.current = look;
     AsyncStorage.setItem(LOOK_KEY, JSON.stringify(look)).catch(() => {});
   }, [adjust]);
 
@@ -209,7 +214,7 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
     setBlurs([]);
     setSelectedId(null);
     setFilter('none');
-    setAdjust(ADJUST_DEFAULT);
+    setAdjust(defaultLookRef.current);
     setTool(null);
   }, [imageUri]);
 

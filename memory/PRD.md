@@ -1,6 +1,10 @@
 # Smilers Mobile App — PRD
 
-## iter-435 (Jun 2026): Photo Editor — save a custom "My look" Adjust preset
+## iter-436 (Jun 2026): Photo Editor — "My look" auto-applies as the default on open
+- The saved custom **"My look"** now pre-fills the Adjust sliders automatically every time the editor opens (via `defaultLookRef`, updated when the look loads/saves). So the user's signature style is already dialed in — one tap (Apply) away — and the "My look" chip shows as selected. Falls back to neutral when no look is saved. After baking, sliders reset to neutral for the already-adjusted image.
+- Lint clean; app boots to Sign In. Native-only Adjust flow (Skia) — validate on an APK/TestFlight build.
+
+
 - Added a **Save look / Update look** chip in the Adjust preset row that stores the current Grayscale/Contrast/Saturation values as the user's personal preset (persisted in AsyncStorage `smilers.photoeditor.customlook.v1`, loaded on mount). Once saved, a **"My look"** chip (bookmark) appears alongside the built-ins and re-applies those values (highlighted when active); tapping "Update look" overwrites it.
 - Lint clean; app boots to Sign In. Native-only Adjust flow (Skia) — validate on an APK/TestFlight build.
 
