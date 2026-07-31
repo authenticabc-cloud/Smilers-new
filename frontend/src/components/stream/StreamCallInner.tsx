@@ -158,7 +158,13 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   // Redundant enables were tearing the Camera2 session down and re-running
   // getUserMedia, which flickered the self-view and could drop our publish to
   // the SFU (so the remote saw no video). See ensureCameraOn() below.
-  const cameraStatus = (useCameraState() as any)?.status as string | undefined;
+  const camState = useCameraState() as any;
+  const cameraStatus = camState?.status as string | undefined;
+  // Preferred camera direction ('front' | 'back'). Front camera video is
+  // mirrored (selfie-style) — the rear camera is NOT — matching the legacy
+  // WebRTC self-view and standard call UX.
+  const cameraDirection = camState?.direction as string | undefined;
+  const selfMirror = cameraDirection !== 'back';
   const remoteParticipants = useRemoteParticipants();
   const local = useLocalParticipant();
   const participants = useParticipants();
@@ -935,6 +941,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
             style={StyleSheet.absoluteFill as any}
             ParticipantLabel={null}
             ParticipantVideoFallback={null}
+            videoZOrder={0}
           />
         ) : (
           <View style={styles.centerFill}>
@@ -977,7 +984,14 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
           style={[styles.selfView, { transform: selfPan.getTranslateTransform() }]}
           {...selfPanResponder.panHandlers}
         >
-          <ParticipantView participant={local} style={StyleSheet.absoluteFill as any} />
+          <ParticipantView
+            participant={local}
+            style={StyleSheet.absoluteFill as any}
+            ParticipantLabel={null}
+            ParticipantVideoFallback={null}
+            videoZOrder={1}
+            mirror={selfMirror}
+          />
         </Animated.View>
       ) : null}
 
