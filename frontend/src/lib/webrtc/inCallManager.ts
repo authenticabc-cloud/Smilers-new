@@ -14,7 +14,7 @@
 // All exported functions are no-ops on web and swallow every native error
 // (defensive — never let a missing native module crash the call screen).
 
-import { Platform } from 'react-native';
+import { Platform, NativeModules } from 'react-native';
 import { recordDiagnostic } from '../diagnostics';
 
 type StartOptions = {
@@ -353,28 +353,49 @@ export function stopNativeRingback() {
  * AVAudioPlayer runs natively so it keeps playing after the RN call screen
  * unmounts/navigates away. Fully defensive + native-only.
  */
-export function playCallEndTone() {
+/**
+ * Plays a short in-call tone by name from the native res/raw bundle.
+ *
+ * PRIMARY path (Android): the app-OWNED `SmilersCallModule.playCallTone` — this
+ * lives in committed native source so it is ALWAYS compiled into the build.
+ * (The older `react-native-incall-manager` node_modules patch that added
+ * `playInCallSound` was NOT making it into release builds — on-device
+ * diagnostics showed `nativeMethod=false` — so we no longer rely on it as the
+ * primary path.) Both play on the VOICE-COMMUNICATION SIGNALLING stream so the
+ * tone mixes with the live Stream/WebRTC voice session instead of being muted.
+ *
+ * FALLBACK: the patched InCallManager.playInCallSound (used on iOS / if present).
+ */
+function playInCallTone(name: string, label: string) {
+  const smilers = (NativeModules as any)?.SmilersCallModule;
+  const hasAppModule = Platform.OS === 'android' && typeof smilers?.playCallTone === 'function';
   const native = getNative();
-  const hasMethod = !!native && typeof native.playInCallSound === 'function';
+  const hasPatch = !!native && typeof native.playInCallSound === 'function';
   recordDiagnostic({
     tag: 'TONE',
-    message: `playCallEndTone called · nativeMethod=${hasMethod}`,
+    message: `${label} · appModule=${hasAppModule} patchMethod=${hasPatch}`,
     source: 'inCallManager',
   });
-  if (!hasMethod) return;
-  safeCall(() => native!.playInCallSound!('incallmanager_busytone'), 'playCallEndTone');
+  if (hasAppModule) {
+    try {
+      const r = smilers.playCallTone(name);
+      if (r && typeof r.then === 'function') r.then(() => {}).catch(() => {});
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
+  if (hasPatch) {
+    safeCall(() => native!.playInCallSound!(name), label);
+  }
+}
+
+export function playCallEndTone() {
+  playInCallTone('incallmanager_busytone', 'playCallEndTone');
 }
 
 export function playCallConnectedTone() {
-  const native = getNative();
-  const hasMethod = !!native && typeof native.playInCallSound === 'function';
-  recordDiagnostic({
-    tag: 'TONE',
-    message: `playCallConnectedTone called · nativeMethod=${hasMethod}`,
-    source: 'inCallManager',
-  });
-  if (!hasMethod) return;
-  safeCall(() => native!.playInCallSound!('incallmanager_connected'), 'playCallConnectedTone');
+  playInCallTone('incallmanager_connected', 'playCallConnectedTone');
 }
 
 /**

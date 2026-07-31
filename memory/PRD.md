@@ -1,5 +1,12 @@
 # Smilers Mobile App — PRD
 
+## iter-447 (Jun 2026): Call tones ROOT CAUSE found + moved to app-owned native module
+- On-device TONE diagnostics (Android 36, v2.3.54) showed both triggers fire correctly BUT `nativeMethod=false` → the `react-native-incall-manager` node_modules patch (`playInCallSound`) is NOT compiled into release builds (Emergent build doesn't apply/recompile the node_modules patch). The JS was calling a method that doesn't exist → silent. (Also confirmed the connect/end TRIGGER logic is correct, matching the ciao contract.)
+- **FIX — stop relying on the node_modules patch; use the app's OWN committed native module:** added `playCallTone(name, promise)` to `android/app/src/main/java/com/smilers/app/SmilersCallModule.kt` (already registered via `SmilersPackage`, ALWAYS compiled from committed source). It plays `res/raw/<name>` via `MediaPlayer` with `USAGE_VOICE_COMMUNICATION_SIGNALLING` + `CONTENT_TYPE_SONIFICATION` at full volume — the stream that MIXES with the live Stream/WebRTC voice session (expo-audio is ducked/muted during MODE_IN_COMMUNICATION; built-in InCallManager `startRingback` is hardcoded to the ringback file only).
+- `src/lib/webrtc/inCallManager.ts`: `playCallConnectedTone`/`playCallEndTone` now go through `playInCallTone(name,label)` → PRIMARY `NativeModules.SmilersCallModule.playCallTone` (Android), FALLBACK the old `playInCallSound` patch (iOS/if present). Diagnostics now log `appModule=<bool> patchMethod=<bool>`.
+- ⚠️ NATIVE-ONLY: requires a fresh Android rebuild (the new Kotlin @ReactMethod). iOS still uses the patch path (no on-device iOS diagnostics yet). Lint clean.
+
+
 ## iter-446 (Jun 2026): Received web team's `native-call-end-ciao-contract.json` — native ALREADY conforms
 - Saved the contract to `/app/native-call-end-ciao-contract.json` (behavior contract only — NO web→native signal; each client plays locally on its own active→ended transition).
 - Audited our end-tone logic (`StreamCallInner.tsx`) against every rule — it MATCHES:

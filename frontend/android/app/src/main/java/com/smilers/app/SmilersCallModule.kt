@@ -2,6 +2,9 @@ package com.smilers.app
 
 import android.app.NotificationManager
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.MediaPlayer
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationManagerCompat
 import com.facebook.react.bridge.Promise
@@ -124,6 +127,51 @@ class SmilersCallModule(private val reactContext: ReactApplicationContext) :
             promise.resolve(cancelled)
         } catch (e: Exception) {
             promise.reject("CANCEL_DECLINE_FALLBACK_FAILED", e.message ?: "unknown", e)
+        }
+    }
+
+    /**
+     * Plays a short in-call tone (the "Connected" / "Ciaooo" call chimes) from
+     * res/raw on the VOICE-COMMUNICATION SIGNALLING stream, so it MIXES with the
+     * ongoing WebRTC (Stream) voice session instead of being ducked/muted like
+     * media-stream playback (expo-audio). Lives in the app's OWN native module
+     * (always compiled from committed source) — NOT a node_modules patch, which
+     * was not making it into release builds.
+     *
+     * @param name res/raw resource name, e.g. "incallmanager_connected" / "incallmanager_busytone".
+     * Resolves true if playback started, false if the resource is missing.
+     */
+    @ReactMethod
+    fun playCallTone(name: String, promise: Promise) {
+        try {
+            val resId = reactContext.resources.getIdentifier(name, "raw", reactContext.packageName)
+            if (resId == 0) {
+                promise.resolve(false)
+                return
+            }
+            val uri = Uri.parse("android.resource://" + reactContext.packageName + "/" + resId)
+            val mp = MediaPlayer()
+            val attrs = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION_SIGNALLING)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            mp.setAudioAttributes(attrs)
+            mp.setDataSource(reactContext, uri)
+            mp.setOnPreparedListener { player ->
+                try { player.setVolume(1.0f, 1.0f) } catch (_: Exception) {}
+                try { player.start() } catch (_: Exception) {}
+            }
+            mp.setOnCompletionListener { player ->
+                try { player.release() } catch (_: Exception) {}
+            }
+            mp.setOnErrorListener { player, _, _ ->
+                try { player.release() } catch (_: Exception) {}
+                true
+            }
+            mp.prepareAsync()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("PLAY_TONE_FAILED", e.message ?: "unknown", e)
         }
     }
 }
