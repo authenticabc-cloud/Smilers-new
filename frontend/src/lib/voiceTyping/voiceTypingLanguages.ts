@@ -35,12 +35,20 @@ export const VOICE_TYPING_LANGUAGES: VoiceTypingLang[] = [
 ];
 
 export function labelForCode(code: string): string {
+  if (code === AUTO_CODE) return 'Auto-detect';
   return VOICE_TYPING_LANGUAGES.find((l) => l.code === code)?.label || code;
 }
 
 export function flagForCode(code: string): string {
+  if (code === AUTO_CODE) return '🌐';
   return VOICE_TYPING_LANGUAGES.find((l) => l.code === code)?.flag || '🌐';
 }
+
+/** Sentinel for automatic (Android) language detection. */
+export const AUTO_CODE = 'auto';
+
+/** All curated BCP-47 codes — used to constrain Android auto-detect/switch. */
+export const ALL_VOICE_TYPING_CODES = VOICE_TYPING_LANGUAGES.map((l) => l.code);
 
 function deviceLocale(): string {
   try {

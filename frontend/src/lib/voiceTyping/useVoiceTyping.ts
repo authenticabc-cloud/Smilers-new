@@ -15,6 +15,7 @@ import { Platform } from 'react-native';
 import {
   ExpoSpeechRecognitionModule,
   useSpeechRecognitionEvent,
+  RecognizerIntentEnableLanguageSwitch,
 } from 'expo-speech-recognition';
 
 interface Args {
@@ -23,21 +24,42 @@ interface Args {
   onFinalText: (text: string) => void;
   onSilence: () => void;
   silenceMs?: number;
+  /** Android-only: detect & switch the spoken language automatically. */
+  autoDetect?: boolean;
+  /** Constrain auto-detect/switch to these BCP-47 codes. */
+  allowedLanguages?: string[];
+  /** Fired (Android) with the detected BCP-47 code while auto-detecting. */
+  onDetectLanguage?: (code: string) => void;
 }
 
-export function useVoiceTyping({ listening, languageCode, onFinalText, onSilence, silenceMs = 5000 }: Args) {
+export function useVoiceTyping({
+  listening,
+  languageCode,
+  onFinalText,
+  onSilence,
+  silenceMs = 5000,
+  autoDetect = false,
+  allowedLanguages,
+  onDetectLanguage,
+}: Args) {
   const [partial, setPartial] = useState('');
   const runningRef = useRef(false);
   const wantRef = useRef(false);
   const langRef = useRef(languageCode);
   const finalRef = useRef(onFinalText);
   const silenceCbRef = useRef(onSilence);
+  const detectCbRef = useRef(onDetectLanguage);
+  const autoRef = useRef(autoDetect);
+  const allowedRef = useRef(allowedLanguages);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firedSilenceRef = useRef(false);
 
   langRef.current = languageCode;
   finalRef.current = onFinalText;
   silenceCbRef.current = onSilence;
+  detectCbRef.current = onDetectLanguage;
+  autoRef.current = autoDetect;
+  allowedRef.current = allowedLanguages;
 
   const clearTimer = () => {
     if (timerRef.current) {
@@ -63,12 +85,28 @@ export function useVoiceTyping({ listening, languageCode, onFinalText, onSilence
   const start = useCallback(() => {
     if (runningRef.current || Platform.OS === 'web') return;
     try {
+      const useAuto = autoRef.current && Platform.OS === 'android';
+      const allowed = allowedRef.current && allowedRef.current.length > 0 ? allowedRef.current : undefined;
       ExpoSpeechRecognitionModule.start({
         lang: langRef.current,
         interimResults: true,
         continuous: true,
         addsPunctuation: true,
         requiresOnDeviceRecognition: false,
+        ...(useAuto
+          ? {
+              androidIntentOptions: {
+                EXTRA_ENABLE_LANGUAGE_DETECTION: true,
+                EXTRA_ENABLE_LANGUAGE_SWITCH: RecognizerIntentEnableLanguageSwitch.LANGUAGE_SWITCH_BALANCED,
+                ...(allowed
+                  ? {
+                      EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES: allowed,
+                      EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES: allowed,
+                    }
+                  : {}),
+              },
+            }
+          : {}),
       } as any);
       runningRef.current = true;
       armTimer();
@@ -123,6 +161,19 @@ export function useVoiceTyping({ listening, languageCode, onFinalText, onSilence
       setTimeout(() => {
         if (wantRef.current) start();
       }, 600);
+    }
+  });
+
+  // Android auto-detect: surface the language the recognizer switched to.
+  useSpeechRecognitionEvent('languagedetection', (event: any) => {
+    if (!wantRef.current || !autoRef.current) return;
+    const code = String(event?.detectedLanguage || '').trim();
+    if (code) {
+      try {
+        detectCbRef.current?.(code);
+      } catch {
+        /* ignore */
+      }
     }
   });
 

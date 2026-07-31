@@ -11,6 +11,7 @@ import {
   Animated,
   FlatList,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -23,6 +24,8 @@ import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../the
 import { useVoiceTyping } from '../../lib/voiceTyping/useVoiceTyping';
 import {
   VOICE_TYPING_LANGUAGES,
+  ALL_VOICE_TYPING_CODES,
+  AUTO_CODE,
   defaultVoiceTypingCode,
   labelForCode,
   flagForCode,
@@ -43,14 +46,22 @@ export function VoiceTypingButton({
   const [listening, setListening] = useState(false);
   const [showLang, setShowLang] = useState(false);
   const [pausePrompt, setPausePrompt] = useState(false);
+  const [detectedLang, setDetectedLang] = useState<string | null>(null);
   const dictatedRef = useRef(false); // any speech captured this session?
+
+  const isAuto = languageCode === AUTO_CODE;
+  // On iOS the recognizer can't auto-detect, so "Auto" falls back to the
+  // device's default supported language.
+  const baseLang = isAuto ? defaultVoiceTypingCode() : languageCode;
 
   // Load the persisted language once.
   useEffect(() => {
     (async () => {
       try {
         const saved = await AsyncStorage.getItem(LANG_KEY);
-        if (saved && VOICE_TYPING_LANGUAGES.some((l) => l.code === saved)) setLanguageCode(saved);
+        if (saved && (saved === AUTO_CODE || VOICE_TYPING_LANGUAGES.some((l) => l.code === saved))) {
+          setLanguageCode(saved);
+        }
       } catch {
         /* ignore */
       }
@@ -74,17 +85,23 @@ export function VoiceTypingButton({
 
   const { partial } = useVoiceTyping({
     listening,
-    languageCode,
+    languageCode: baseLang,
     onFinalText: handleFinalText,
     onSilence: handleSilence,
     silenceMs: 5000,
+    autoDetect: isAuto,
+    allowedLanguages: ALL_VOICE_TYPING_CODES,
+    onDetectLanguage: (c) => setDetectedLang(c),
   });
 
   const toggle = useCallback(() => {
     if (disabled) return;
     setPausePrompt(false);
     setListening((v) => {
-      if (!v) dictatedRef.current = false;
+      if (!v) {
+        dictatedRef.current = false;
+        setDetectedLang(null);
+      }
       return !v;
     });
   }, [disabled]);
@@ -157,7 +174,12 @@ export function VoiceTypingButton({
             <View style={styles.recDot} />
             <View style={styles.flexOne}>
               <Text style={styles.bannerTitle}>
-                Listening · {flagForCode(languageCode)} {labelForCode(languageCode)}
+                Listening ·{' '}
+                {isAuto
+                  ? detectedLang
+                    ? `Auto · ${flagForCode(detectedLang)} ${labelForCode(detectedLang)}`
+                    : 'Auto-detect'
+                  : `${flagForCode(languageCode)} ${labelForCode(languageCode)}`}
               </Text>
               <Text style={styles.bannerPartial} numberOfLines={2}>
                 {partial ? partial : 'Speak now… pause to send'}
@@ -200,6 +222,22 @@ export function VoiceTypingButton({
             <FlatList
               data={VOICE_TYPING_LANGUAGES}
               keyExtractor={(l) => l.code}
+              ListHeaderComponent={
+                <TouchableOpacity
+                  style={[styles.langRow, isAuto && styles.langRowActive]}
+                  onPress={() => pickLanguage(AUTO_CODE)}
+                  testID="voice-typing-lang-auto"
+                >
+                  <Text style={styles.langFlag}>🌐</Text>
+                  <View style={styles.flexOne}>
+                    <Text style={[styles.langLabel, isAuto && styles.langLabelActive]}>Auto-detect</Text>
+                    <Text style={styles.langNote}>
+                      {Platform.OS === 'ios' ? 'Falls back to your device language on iOS' : 'Detects & switches language as you speak'}
+                    </Text>
+                  </View>
+                  {isAuto ? <Feather name="check" size={18} color={Colors.primary} /> : null}
+                </TouchableOpacity>
+              }
               renderItem={({ item }) => {
                 const active = item.code === languageCode;
                 return (
@@ -303,6 +341,7 @@ const styles = StyleSheet.create({
   langFlag: { fontSize: 22 },
   langLabel: { flex: 1, fontSize: FontSize.base, color: Colors.textPrimary },
   langLabelActive: { color: Colors.primary, fontWeight: FontWeight.bold },
+  langNote: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2 },
 });
 
 export default VoiceTypingButton;
