@@ -366,6 +366,28 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
     }
   };
 
+  const applyEnhance = async () => {
+    if (!baseUri || busy) return;
+    setBusy(true);
+    try {
+      const flat = (await flatten()) || baseUri;
+      const { autoEnhanceImage } = await import('../../lib/photo/autoEnhance');
+      const enhanced = await autoEnhanceImage(flat);
+      if (enhanced) {
+        clearAnnotations();
+        setFilter('none');
+        setNatW(0);
+        setNatH(0);
+        setBaseUri(enhanced);
+      }
+    } catch (err) {
+      console.log('[PhotoEditor] enhance failed', err);
+    } finally {
+      setBusy(false);
+      setTool(null);
+    }
+  };
+
   const applyCrop = async () => {
     if (!baseUri || busy || !natW) return;
     setBusy(true);
@@ -667,6 +689,7 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
             <ToolBtn icon="text" label="Text" active={tool === 'text'} onPress={() => setTool(tool === 'text' ? null : 'text')} />
             <ToolBtn icon="happy-outline" label="Sticker" active={tool === 'sticker'} onPress={() => setTool(tool === 'sticker' ? null : 'sticker')} />
             <ToolBtn icon="color-filter" label="Filter" active={tool === 'filter'} onPress={() => setTool(tool === 'filter' ? null : 'filter')} />
+            <ToolBtn icon="sparkles" label="Enhance" active={false} onPress={applyEnhance} />
             <ToolBtn icon="eye-off" label="Blur" active={tool === 'blur'} onPress={() => setTool(tool === 'blur' ? null : 'blur')} />
             <ToolBtn icon="crop" label="Crop" active={inCrop} onPress={() => setTool(inCrop ? null : 'crop')} />
             <ToolBtn icon="refresh" label="Rotate" active={false} onPress={applyRotate} />

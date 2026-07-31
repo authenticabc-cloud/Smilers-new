@@ -19,6 +19,7 @@
 		7CA22E7163E249EDB39B9653 /* smilers_never_cry_3.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = DC7A954AF51F4886B38609E7 /* smilers_never_cry_3.mp3 */; };
 		1D7FFCECD0AC4D1389CDA3E6 /* smilers_notification.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = DCD4978E32B343D4AFD10594 /* smilers_notification.mp3 */; };
 		C18CE7FBD1C4489F9158F6D8 /* incallmanager_ringback.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = 6D041CFC777D4893920AB6CC /* incallmanager_ringback.mp3 */; };
+		104E855D68844EF6B1E64CB2 /* incallmanager_busytone.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = D7B8A1C6173FAD33007B3A1A /* incallmanager_busytone.mp3 */; };
 		C390F4ECC59243E89108B34D /* message_notification_beep.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = 53CB98F792324A469C60468F /* message_notification_beep.mp3 */; };
 		A267579083524E9EBBA7AB67 /* message_notification_followup.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = 5755C3584FE34202BE7DC915 /* message_notification_followup.mp3 */; };
 /* End PBXBuildFile section */
@@ -40,6 +41,7 @@
 		DC7A954AF51F4886B38609E7 /* smilers_never_cry_3.mp3 */ = {isa = PBXFileReference; name = "smilers_never_cry_3.mp3"; path = "Smilers/smilers_never_cry_3.mp3"; sourceTree = "<group>"; fileEncoding = undefined; lastKnownFileType = unknown; explicitFileType = undefined; includeInIndex = 0; };
 		DCD4978E32B343D4AFD10594 /* smilers_notification.mp3 */ = {isa = PBXFileReference; name = "smilers_notification.mp3"; path = "Smilers/smilers_notification.mp3"; sourceTree = "<group>"; fileEncoding = undefined; lastKnownFileType = unknown; explicitFileType = undefined; includeInIndex = 0; };
 		6D041CFC777D4893920AB6CC /* incallmanager_ringback.mp3 */ = {isa = PBXFileReference; name = "incallmanager_ringback.mp3"; path = "Smilers/incallmanager_ringback.mp3"; sourceTree = "<group>"; fileEncoding = undefined; lastKnownFileType = unknown; explicitFileType = undefined; includeInIndex = 0; };
+		D7B8A1C6173FAD33007B3A1A /* incallmanager_busytone.mp3 */ = {isa = PBXFileReference; name = "incallmanager_busytone.mp3"; path = "Smilers/incallmanager_busytone.mp3"; sourceTree = "<group>"; fileEncoding = undefined; lastKnownFileType = unknown; explicitFileType = undefined; includeInIndex = 0; };
 		53CB98F792324A469C60468F /* message_notification_beep.mp3 */ = {isa = PBXFileReference; name = "message_notification_beep.mp3"; path = "Smilers/message_notification_beep.mp3"; sourceTree = "<group>"; fileEncoding = undefined; lastKnownFileType = unknown; explicitFileType = undefined; includeInIndex = 0; };
 		5755C3584FE34202BE7DC915 /* message_notification_followup.mp3 */ = {isa = PBXFileReference; name = "message_notification_followup.mp3"; path = "Smilers/message_notification_followup.mp3"; sourceTree = "<group>"; fileEncoding = undefined; lastKnownFileType = unknown; explicitFileType = undefined; includeInIndex = 0; };
 /* End PBXFileReference section */
@@ -72,6 +74,7 @@
 				DC7A954AF51F4886B38609E7 /* smilers_never_cry_3.mp3 */,
 				DCD4978E32B343D4AFD10594 /* smilers_notification.mp3 */,
 				6D041CFC777D4893920AB6CC /* incallmanager_ringback.mp3 */,
+				D7B8A1C6173FAD33007B3A1A /* incallmanager_busytone.mp3 */,
 				53CB98F792324A469C60468F /* message_notification_beep.mp3 */,
 				5755C3584FE34202BE7DC915 /* message_notification_followup.mp3 */,
 			);
@@ -193,6 +196,7 @@
 				7CA22E7163E249EDB39B9653 /* smilers_never_cry_3.mp3 in Resources */,
 				1D7FFCECD0AC4D1389CDA3E6 /* smilers_notification.mp3 in Resources */,
 				C18CE7FBD1C4489F9158F6D8 /* incallmanager_ringback.mp3 in Resources */,
+				104E855D68844EF6B1E64CB2 /* incallmanager_busytone.mp3 in Resources */,
 				C390F4ECC59243E89108B34D /* message_notification_beep.mp3 in Resources */,
 				A267579083524E9EBBA7AB67 /* message_notification_followup.mp3 in Resources */,
 			);

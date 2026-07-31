@@ -1918,13 +1918,18 @@ export default function StreamCallInner() {
   const hangup = useCallback(() => {
     if (endedRef.current) return;
     endedRef.current = true;
+    // iter-427: play the "Ciaooo" call-end tone to the leaving participant.
+    // 1:1 → both sides run hangup (local End, or remote-ended via CallUI's
+    // onHangup) so both hear it; group → only the member who leaves runs it.
+    // Gated on remoteConnected so an unanswered/cancelled ring stays silent.
+    if (remoteConnected) InCallAudio.playCallEndTone?.();
     const cid = liveCallIdRef.current || callId;
     if (cid) void endCall({ callId: String(cid) }).catch(() => {});
     try {
       call?.leave();
     } catch {}
     callHost.end();
-  }, [callId, call, endCall]);
+  }, [callId, call, endCall, remoteConnected]);
 
   // ── Call-waiting: surface a SECOND ringing call during an active call ──────
   const connectedNow = !!client && !!call;

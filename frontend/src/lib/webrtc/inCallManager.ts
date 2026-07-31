@@ -337,6 +337,26 @@ export function stopNativeRingback() {
 }
 
 /**
+ * iter-427 CALL-END "Ciaooo" tone. Plays the bundled `incallmanager_busytone.mp3`
+ * (a warm, drawn-out "Ciaooo") the moment a participant LEAVES a call.
+ *
+ * WHY the busytone bundle (not expo-audio): during an active call the WebRTC
+ * audio session runs in MODE_IN_COMMUNICATION which DUCKS/MUTES expo-audio's
+ * media stream. InCallManager's busytone plays on the native VOICE-CALL stream
+ * (audible during the call & its teardown), and the library auto-stops the
+ * session once the tone finishes (onCompletion → stop()). The MediaPlayer runs
+ * NATIVELY so it keeps playing even after the RN call screen unmounts/navigates
+ * away. Fully defensive + native-only (no-op on web / if the module is missing).
+ */
+export function playCallEndTone() {
+  const native = getNative();
+  if (!native || typeof native.stop !== 'function') return;
+  safeCall(() => {
+    native.stop({ busytone: '_BUNDLE_' });
+  }, 'playCallEndTone');
+}
+
+/**
  * iter-329 CALL WAITING tone. Plays a short WhatsApp-style DOUBLE-BEEP over
  * the ongoing call when a second call arrives. We use InCallManager's DTMF
  * ringback because it plays on Android's VOICE-CALL stream, which is NOT muted
@@ -411,5 +431,6 @@ export const InCallAudio = {
   addAudioDeviceChangedListener,
   startRingback: startNativeRingback,
   stopRingback: stopNativeRingback,
+  playCallEndTone,
   playCallWaitingTone,
 };
