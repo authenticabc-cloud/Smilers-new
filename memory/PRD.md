@@ -1,6 +1,11 @@
 # Smilers Mobile App — PRD
 
-## iter-433 (Jun 2026): Photo Editor Phase 2.1 — true Grayscale / Contrast / Saturation sliders (Skia)
+## iter-434 (Jun 2026): Two enhancements — Adjust presets (Photo Editor) + Voice-emoji cheat-sheet
+- **Photo Editor Adjust presets:** one-tap chips above the Grayscale/Contrast/Saturation sliders — **Original, Vivid, Punch, Muted, B&W** — each sets the slider values (highlighted when active) and drives the live Skia preview; "Apply" bakes as usual. Toolbar height bumped so the preset row + sliders fit.
+- **Voice-typing cheat-sheet:** `spokenToEmoji.ts` now exports `EMOJI_PHRASE_LIST` / `EMOJI_TRIGGER_WORDS`; the voice-typing language sheet gets an ⓘ button opening a "Voice emoji commands" sheet — a 2-column list of supported phrases (“smiley face” 🙂, “thumbs up” 👍, …) plus a footer showing the "emoji <word>" trigger examples. Helps users discover the feature.
+- Lint clean; app boots to Sign In. (Photo Editor adjust = native-only Skia; voice cheat-sheet is plain RN UI.)
+
+
 - New **Adjust** tool (`options` icon) in the Photo Editor with three sliders: **Grayscale (0–100%), Contrast (50–150%), Saturation (0–200%)**.
 - `src/lib/photo/colorMatrix.ts`: `buildAdjustMatrix()` composes saturation (grayscale folds in as effectiveSaturation) × contrast + brightness into one 4×5 RGBA matrix; `applyColorMatrixToImage(uri, matrix)` bakes it via a Skia offscreen surface → JPEG. `autoEnhance.ts` refactored to reuse these (its preset unchanged).
 - **Live preview:** `ColorMatrixPreview.tsx` renders the photo through a Skia `<Canvas>` + `<ColorMatrix>` while dragging sliders (lazy-loaded via `React.lazy`, native-only so Skia stays out of the web bundle's eager path). "Apply" bakes the matrix into the base photo ONLY (annotations untouched, matching the preview); "Reset" restores neutral. Toolbar height expands while adjusting so nothing clips.

@@ -46,6 +46,15 @@ type Tool = 'draw' | 'text' | 'sticker' | 'crop' | 'filter' | 'blur' | 'adjust' 
 
 const ADJUST_DEFAULT: Required<AdjustParams> = { grayscale: 0, contrast: 1, saturation: 1, brightness: 0 };
 
+/** One-tap looks built on the Adjust sliders. */
+const ADJUST_PRESETS: { key: string; label: string; params: Required<AdjustParams> }[] = [
+  { key: 'original', label: 'Original', params: { grayscale: 0, contrast: 1, saturation: 1, brightness: 0 } },
+  { key: 'vivid', label: 'Vivid', params: { grayscale: 0, contrast: 1.18, saturation: 1.5, brightness: 0.02 } },
+  { key: 'punch', label: 'Punch', params: { grayscale: 0, contrast: 1.32, saturation: 1.3, brightness: 0 } },
+  { key: 'muted', label: 'Muted', params: { grayscale: 0, contrast: 0.95, saturation: 0.6, brightness: 0.02 } },
+  { key: 'bw', label: 'B&W', params: { grayscale: 1, contrast: 1.12, saturation: 0, brightness: 0 } },
+];
+
 interface Stroke {
   d: string;
   color: string;
@@ -202,7 +211,7 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
   }, [tool, eraser]);
 
   const HEADER_H = 52 + insets.top;
-  const TOOLBAR_H = (tool === 'adjust' ? 244 : 132) + insets.bottom;
+  const TOOLBAR_H = (tool === 'adjust' ? 288 : 132) + insets.bottom;
   const areaW = screen.width;
   const areaH = screen.height - HEADER_H - TOOLBAR_H;
 
@@ -713,6 +722,24 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
 
           {tool === 'adjust' ? (
             <View style={styles.adjustPanel}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.presetRow}>
+                {ADJUST_PRESETS.map((p) => {
+                  const sel =
+                    adjust.grayscale === p.params.grayscale &&
+                    adjust.contrast === p.params.contrast &&
+                    adjust.saturation === p.params.saturation;
+                  return (
+                    <TouchableOpacity
+                      key={p.key}
+                      onPress={() => setAdjust(p.params)}
+                      style={[styles.presetChip, sel && styles.presetChipSel]}
+                      testID={`pe-adjust-preset-${p.key}`}
+                    >
+                      <Text style={[styles.presetLabel, sel && { color: '#0A84FF' }]}>{p.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
               <AdjustSlider
                 label="Grayscale"
                 value={adjust.grayscale}
@@ -1121,6 +1148,10 @@ const styles = StyleSheet.create({
   resetBtn: { paddingHorizontal: 16, height: 40, borderRadius: 20, backgroundColor: '#333', justifyContent: 'center' },
   resetText: { color: '#fff', fontWeight: '600' },
   adjustPanel: { paddingHorizontal: 14, paddingTop: 4, paddingBottom: 4 },
+  presetRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingBottom: 6 },
+  presetChip: { paddingHorizontal: 14, height: 30, borderRadius: 15, backgroundColor: '#222', justifyContent: 'center' },
+  presetChipSel: { backgroundColor: 'rgba(10,132,255,0.2)', borderWidth: 1, borderColor: '#0A84FF' },
+  presetLabel: { color: '#fff', fontSize: 12, fontWeight: '600' },
   adjustSliderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   adjustLabel: { color: '#fff', fontSize: 13, width: 78 },
   adjustSlider: { flex: 1, height: 34 },

@@ -71,6 +71,16 @@ const SINGLE: Record<string, string> = {
 
 const PHRASES_SORTED = Object.keys(PHRASES).sort((a, b) => b.length - a.length);
 
+/** Curated list for the in-app "voice emoji commands" cheat-sheet. */
+export const EMOJI_PHRASE_LIST: { phrase: string; emoji: string }[] = Object.entries(PHRASES).map(
+  ([phrase, emoji]) => ({ phrase, emoji }),
+);
+
+/** Single words usable via the "emoji <word>" trigger. */
+export const EMOJI_TRIGGER_WORDS: { word: string; emoji: string }[] = Object.entries(SINGLE).map(
+  ([word, emoji]) => ({ word, emoji }),
+);
+
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

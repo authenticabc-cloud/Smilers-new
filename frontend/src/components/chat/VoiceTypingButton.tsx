@@ -23,6 +23,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../theme';
 import { useVoiceTyping } from '../../lib/voiceTyping/useVoiceTyping';
 import { spokenToEmoji } from '../../lib/voiceTyping/spokenToEmoji';
+import { EMOJI_PHRASE_LIST, EMOJI_TRIGGER_WORDS } from '../../lib/voiceTyping/spokenToEmoji';
 import {
   VOICE_TYPING_LANGUAGES,
   ALL_VOICE_TYPING_CODES,
@@ -48,6 +49,7 @@ export function VoiceTypingButton({
   const [showLang, setShowLang] = useState(false);
   const [pausePrompt, setPausePrompt] = useState(false);
   const [detectedLang, setDetectedLang] = useState<string | null>(null);
+  const [showCheat, setShowCheat] = useState(false);
   const dictatedRef = useRef(false); // any speech captured this session?
 
   const isAuto = languageCode === AUTO_CODE;
@@ -218,7 +220,12 @@ export function VoiceTypingButton({
       <Modal visible={showLang} transparent animationType="slide" onRequestClose={() => setShowLang(false)}>
         <Pressable style={styles.sheetBackdrop} onPress={() => setShowLang(false)}>
           <Pressable style={styles.langSheet} onPress={() => {}} testID="voice-typing-lang-sheet">
-            <Text style={styles.langTitle}>Voice typing language</Text>
+            <View style={styles.langHeaderRow}>
+              <Text style={styles.langTitle}>Voice typing language</Text>
+              <TouchableOpacity onPress={() => setShowCheat(true)} hitSlop={10} testID="voice-typing-cheat-open">
+                <Feather name="info" size={20} color={Colors.primary} />
+              </TouchableOpacity>
+            </View>
             <Text style={styles.langHint}>Only high-accuracy languages are available.</Text>
             <FlatList
               data={VOICE_TYPING_LANGUAGES}
@@ -253,6 +260,36 @@ export function VoiceTypingButton({
                   </TouchableOpacity>
                 );
               }}
+            />
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Voice emoji commands cheat-sheet */}
+      <Modal visible={showCheat} transparent animationType="slide" onRequestClose={() => setShowCheat(false)}>
+        <Pressable style={styles.sheetBackdrop} onPress={() => setShowCheat(false)}>
+          <Pressable style={styles.langSheet} onPress={() => {}} testID="voice-typing-cheat-sheet">
+            <Text style={styles.langTitle}>Voice emoji commands</Text>
+            <Text style={styles.langHint}>Say a phrase and it turns into an emoji (English).</Text>
+            <FlatList
+              data={EMOJI_PHRASE_LIST}
+              keyExtractor={(i) => i.phrase}
+              numColumns={2}
+              columnWrapperStyle={styles.cheatCol}
+              ListFooterComponent={
+                <View style={styles.cheatFooter}>
+                  <Text style={styles.cheatFooterTitle}>Tip: say “emoji …”</Text>
+                  <Text style={styles.cheatFooterSub}>
+                    {EMOJI_TRIGGER_WORDS.slice(0, 8).map((t) => `${t.emoji} ${t.word}`).join('   ')}
+                  </Text>
+                </View>
+              }
+              renderItem={({ item }) => (
+                <View style={styles.cheatRow}>
+                  <Text style={styles.cheatEmoji}>{item.emoji}</Text>
+                  <Text style={styles.cheatPhrase} numberOfLines={1}>“{item.phrase}”</Text>
+                </View>
+              )}
             />
           </Pressable>
         </Pressable>
@@ -329,7 +366,25 @@ const styles = StyleSheet.create({
     ...Shadow.lg,
   },
   langTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary, textAlign: 'center' },
+  langHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   langHint: { fontSize: FontSize.sm, color: Colors.textMuted, textAlign: 'center', marginTop: 2, marginBottom: 8 },
+  cheatCol: { gap: 10 },
+  cheatRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.primaryLight,
+    marginBottom: 8,
+  },
+  cheatEmoji: { fontSize: 20 },
+  cheatPhrase: { flex: 1, fontSize: FontSize.sm, color: Colors.textPrimary },
+  cheatFooter: { marginTop: 6, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: Colors.border },
+  cheatFooterTitle: { fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  cheatFooterSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 4, lineHeight: 22 },
   langRow: {
     flexDirection: 'row',
     alignItems: 'center',
