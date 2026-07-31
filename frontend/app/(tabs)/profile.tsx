@@ -22,6 +22,7 @@ import { useRouter } from 'expo-router';
 import { useConvex, useMutation, useQuery } from 'convex/react';
 import * as ImagePicker from 'expo-image-picker';
 import { pickImageLibrary, pickCamera } from '../../src/lib/nativePickers';
+import PhotoEditor from '../../src/components/photo-editor/PhotoEditor';
 import * as MediaLibrary from 'expo-media-library';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import Header from '../../src/components/Header';
@@ -92,6 +93,7 @@ export default function ProfileScreen() {
   // iter-224: tap profile photo → full-screen viewer with download.
   const [viewerOpen, setViewerOpen] = useState(false);
   const [savingPhoto, setSavingPhoto] = useState(false);
+  const [photoToEdit, setPhotoToEdit] = useState<string | null>(null);
 
   const name = safeString(me?.name ?? userInfo?.name, 'Smilers');
   const email = safeString(me?.email ?? userInfo?.email, '');
@@ -209,8 +211,8 @@ export default function ProfileScreen() {
     });
     if (result.canceled || !result.assets || !result.assets[0]) return;
     const asset = result.assets[0];
-    await performUpload(asset.uri, asset.mimeType || 'image/jpeg');
-  }, [performUpload]);
+    setPhotoToEdit(asset.uri);
+  }, []);
 
   const pickFromCamera = useCallback(async () => {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
@@ -230,8 +232,8 @@ export default function ProfileScreen() {
     });
     if (result.canceled || !result.assets || !result.assets[0]) return;
     const asset = result.assets[0];
-    await performUpload(asset.uri, asset.mimeType || 'image/jpeg');
-  }, [performUpload]);
+    setPhotoToEdit(asset.uri);
+  }, []);
 
   const onPressCameraBadge = useCallback(() => {
     if (uploading) return;
@@ -544,6 +546,16 @@ export default function ProfileScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+      <PhotoEditor
+        visible={!!photoToEdit}
+        imageUri={photoToEdit}
+        contextLabel="profile photo"
+        onCancel={() => setPhotoToEdit(null)}
+        onDone={(uri) => {
+          setPhotoToEdit(null);
+          void performUpload(uri, 'image/jpeg');
+        }}
+      />
     </SafeAreaView>
   );
 }

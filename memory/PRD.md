@@ -1,5 +1,13 @@
 # Smilers Mobile App — PRD
 
+## iter-425 (Jun 2026): Photo Editor — Phase 1 (draw/color, text, emoji stickers, crop, rotate)
+- New reusable `src/components/photo-editor/PhotoEditor.tsx` (full-screen controlled `<Modal>`): freehand DRAW (10-color palette + 3 brush sizes) via `react-native-svg`; TEXT overlays (color + 3 sizes, draggable, TextInput modal); EMOJI/STICKER overlays (30 emojis, draggable); CROP (movable + 4-corner-resizable rect → `expo-image-manipulator` crop); 90° ROTATE; Undo; Cancel/Done. Crop & rotate bake current annotations first (view-shot flatten) so nothing is lost. Save flattens via `react-native-view-shot` → re-encodes to JPEG (≤1600px, q0.85) → `onDone(uri)`.
+- Installed `react-native-view-shot@4.0.3` + `expo-image-manipulator@14.0.8` (autolink, NO prebuild). Native modules lazy-imported so the bundle/web preview is unaffected.
+- Wired into 3 flows: (1) Chat pending-image preview — new ✎ edit button per thumb (`pending-image-edit-<i>`), edited uri replaces the pending image; (2) Profile photo (`profile.tsx`) — picker → editor → upload; (3) Diary attach (`diary.tsx`) — images route through editor before upload (other file types upload directly; extracted `uploadDiaryMedia` helper).
+- Lint clean; app boots to Sign In. ⚠️ view-shot + image-manipulator need a NATIVE BUILD — validate on APK (won't work in Expo Go / web preview). Phase 2 = color filters + blur.
+
+
+
 ## iter-424 (Jun 2026): Web⇄Native Stream call interop spec (no code change needed)
 - Clarified architecture: normal 1:1 calls render `StreamCallInner` (Stream) via `CallHost.tsx` (`useStream = !screenOnly && !conference`); screen-share/conference use legacy WebRTC. So native 1:1 = Stream (user was correct). The `EXPO_PUBLIC_USE_TWILIO=0` flag only affects the push-routing layer, not the Stream media path. No Twilio switch performed.
 - Root cause of native↔web failure = web app not yet on the same Stream app/room/identity (migration WebRTC→Stream still in progress on web).

@@ -77,6 +77,7 @@ import {
 import { api } from '../src/convexApi';
 import { uploadFile } from '../src/lib/uploadFile';
 import DiaryAudioBubble from '../src/components/diary/DiaryAudioBubble';
+import PhotoEditor from '../src/components/photo-editor/PhotoEditor';
 import Avatar from '../src/components/Avatar';
 import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
 import {
@@ -286,6 +287,7 @@ export default function DiaryScreen() {
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(audioRecorder, 250);
   const [uploading, setUploading] = useState(false);
+  const [diaryPhoto, setDiaryPhoto] = useState<{ uri: string; name: string } | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const recStartRef = useRef(0);
 
@@ -330,6 +332,28 @@ export default function DiaryScreen() {
     [diarySendAvailable, diarySendCloud, appendEntryAvailable, appendEntryCloud],
   );
 
+  const uploadDiaryMedia = useCallback(
+    async (uri: string, mime: string, fileName: string, fileSize: number | null) => {
+      const type = mime.startsWith('image/')
+        ? 'image'
+        : mime.startsWith('video/')
+          ? 'video'
+          : mime.startsWith('audio/')
+            ? 'audio'
+            : 'file';
+      try {
+        setUploading(true);
+        const storageId = await uploadFile(convex, uri, mime, diaryUploadUrl);
+        await persistMedia({ type, storageId, fileName, fileSize, mimeType: mime });
+      } catch (e: any) {
+        Alert.alert('Attachment failed', e?.message || 'Could not attach file.');
+      } finally {
+        setUploading(false);
+      }
+    },
+    [convex, diaryUploadUrl, persistMedia],
+  );
+
   const handleAttach = useCallback(async () => {
     if (uploading || isRecording) return;
     try {
@@ -341,28 +365,17 @@ export default function DiaryScreen() {
       if (res.canceled || !res.assets?.[0]) return;
       const asset = res.assets[0];
       const mime = asset.mimeType || 'application/octet-stream';
-      const type = mime.startsWith('image/')
-        ? 'image'
-        : mime.startsWith('video/')
-          ? 'video'
-          : mime.startsWith('audio/')
-            ? 'audio'
-            : 'file';
-      setUploading(true);
-      const storageId = await uploadFile(convex, asset.uri, mime, diaryUploadUrl);
-      await persistMedia({
-        type,
-        storageId,
-        fileName: asset.name || 'file',
-        fileSize: asset.size ?? null,
-        mimeType: mime,
-      });
+      // Images go through the photo editor first (draw / text / stickers /
+      // crop / rotate); other file types upload directly.
+      if (mime.startsWith('image/')) {
+        setDiaryPhoto({ uri: asset.uri, name: asset.name || 'photo.jpg' });
+        return;
+      }
+      await uploadDiaryMedia(asset.uri, mime, asset.name || 'file', asset.size ?? null);
     } catch (e: any) {
       Alert.alert('Attachment failed', e?.message || 'Could not attach file.');
-    } finally {
-      setUploading(false);
     }
-  }, [uploading, isRecording, convex, diaryUploadUrl, persistMedia]);
+  }, [uploading, isRecording, uploadDiaryMedia]);
 
   const startRec = useCallback(async () => {
     try {
@@ -1444,6 +1457,16 @@ export default function DiaryScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+      <PhotoEditor
+        visible={!!diaryPhoto}
+        imageUri={diaryPhoto?.uri ?? null}
+        onCancel={() => setDiaryPhoto(null)}
+        onDone={(uri) => {
+          const name = diaryPhoto?.name || 'photo.jpg';
+          setDiaryPhoto(null);
+          void uploadDiaryMedia(uri, 'image/jpeg', name, null);
+        }}
+      />
     </SafeAreaView>
   );
 }

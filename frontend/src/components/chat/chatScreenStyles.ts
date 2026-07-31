@@ -490,6 +490,17 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  pendingThumbEdit: {
+    position: 'absolute',
+    bottom: -7,
+    left: -7,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(10,132,255,0.9)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   pendingThumbCaptionDot: {
     position: 'absolute',
     bottom: 3,

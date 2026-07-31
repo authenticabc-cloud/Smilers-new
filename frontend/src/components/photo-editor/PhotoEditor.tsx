@@ -1,0 +1,702 @@
+/**
+ * PhotoEditor — reusable full-screen photo editor (Phase 1).
+ *
+ * Tools: freehand DRAW (color + brush size), TEXT (color + size, draggable),
+ * EMOJI/STICKERS (draggable, resizable), CROP (movable/resizable rect) and
+ * 90° ROTATE. The base image + SVG strokes + draggable overlays are composited
+ * with `react-native-view-shot` on Save; crop/rotate bake the current result
+ * first (via `expo-image-manipulator`) so annotations are preserved & correctly
+ * transformed. Filters & blur are Phase 2.
+ *
+ * Native only: view-shot + image-manipulator require a native build — the
+ * modules are lazy-imported so the rest of the app (and web preview) is
+ * unaffected. Use as a controlled <Modal>: pass `imageUri`, get `onDone(uri)`.
+ */
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Dimensions,
+  Image,
+  Modal,
+  PanResponder,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Path } from 'react-native-svg';
+
+type Tool = 'draw' | 'text' | 'sticker' | 'crop' | null;
+
+interface Stroke {
+  d: string;
+  color: string;
+  width: number;
+}
+interface TextItem {
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+  color: string;
+  fontSize: number;
+}
+interface StickerItem {
+  id: string;
+  emoji: string;
+  x: number;
+  y: number;
+  fontSize: number;
+}
+
+const PALETTE = [
+  '#FFFFFF',
+  '#000000',
+  '#FF3B30',
+  '#FF9500',
+  '#FFCC00',
+  '#34C759',
+  '#00C7BE',
+  '#0A84FF',
+  '#5856D6',
+  '#FF2D92',
+];
+const BRUSHES = [4, 8, 14];
+const TEXT_SIZES = [20, 28, 40];
+const EMOJIS = [
+  '😀', '😂', '🥰', '😍', '😎', '🤩', '😭', '😡', '👍', '👏',
+  '🙏', '🔥', '❤️', '💯', '🎉', '⭐', '✨', '💫', '🌈', '☀️',
+  '🎂', '🎁', '💐', '🌹', '⚡', '💦', '👀', '💀', '🤝', '✅',
+];
+
+export interface PhotoEditorProps {
+  visible: boolean;
+  imageUri: string | null;
+  onCancel: () => void;
+  onDone: (uri: string) => void;
+  /** Optional hint (e.g. "profile") — currently only used for the title. */
+  contextLabel?: string;
+}
+
+export default function PhotoEditor({ visible, imageUri, onCancel, onDone, contextLabel }: PhotoEditorProps) {
+  const insets = useSafeAreaInsets();
+  const screen = Dimensions.get('window');
+
+  const [baseUri, setBaseUri] = useState<string | null>(imageUri);
+  const [natW, setNatW] = useState(0);
+  const [natH, setNatH] = useState(0);
+  const [tool, setTool] = useState<Tool>(null);
+  const [strokes, setStrokes] = useState<Stroke[]>([]);
+  const [currentPath, setCurrentPath] = useState('');
+  const [texts, setTexts] = useState<TextItem[]>([]);
+  const [stickers, setStickers] = useState<StickerItem[]>([]);
+  const [color, setColor] = useState('#FF3B30');
+  const [brush, setBrush] = useState(8);
+  const [textSize, setTextSize] = useState(28);
+  const [busy, setBusy] = useState(false);
+
+  // text input modal
+  const [textDraft, setTextDraft] = useState('');
+  const [textModal, setTextModal] = useState(false);
+
+  const canvasRef = useRef<View>(null);
+  const pathRef = useRef('');
+
+  useEffect(() => {
+    setBaseUri(imageUri);
+    setStrokes([]);
+    setTexts([]);
+    setStickers([]);
+    setTool(null);
+  }, [imageUri]);
+
+  // Measure the natural size to compute a fitted canvas box.
+  useEffect(() => {
+    if (!baseUri) return;
+    Image.getSize(
+      baseUri,
+      (w, h) => {
+        setNatW(w);
+        setNatH(h);
+      },
+      () => {
+        setNatW(1);
+        setNatH(1);
+      },
+    );
+  }, [baseUri]);
+
+  const HEADER_H = 52 + insets.top;
+  const TOOLBAR_H = 132 + insets.bottom;
+  const areaW = screen.width;
+  const areaH = screen.height - HEADER_H - TOOLBAR_H;
+
+  const { cw, ch } = useMemo(() => {
+    if (!natW || !natH) return { cw: areaW, ch: areaH };
+    const scale = Math.min(areaW / natW, areaH / natH);
+    return { cw: Math.max(1, Math.round(natW * scale)), ch: Math.max(1, Math.round(natH * scale)) };
+  }, [natW, natH, areaW, areaH]);
+
+  // crop rect (display coords, relative to the canvas box)
+  const [crop, setCrop] = useState({ x: 0, y: 0, w: 0, h: 0 });
+  useEffect(() => {
+    setCrop({ x: 0, y: 0, w: cw, h: ch });
+  }, [cw, ch]);
+
+  // ── Drawing capture (only mounted when tool === 'draw') ──────────────────
+  const drawResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: (e) => {
+          const { locationX, locationY } = e.nativeEvent;
+          pathRef.current = `M ${locationX.toFixed(1)} ${locationY.toFixed(1)}`;
+          setCurrentPath(pathRef.current);
+        },
+        onPanResponderMove: (e) => {
+          const { locationX, locationY } = e.nativeEvent;
+          pathRef.current += ` L ${locationX.toFixed(1)} ${locationY.toFixed(1)}`;
+          setCurrentPath(pathRef.current);
+        },
+        onPanResponderRelease: () => {
+          if (pathRef.current.includes('L')) {
+            const d = pathRef.current;
+            setStrokes((prev) => [...prev, { d, color, width: brush }]);
+          }
+          pathRef.current = '';
+          setCurrentPath('');
+        },
+      }),
+    [color, brush],
+  );
+
+  // ── Draggable overlay factory ────────────────────────────────────────────
+  const makeDragResponder = useCallback(
+    (getPos: () => { x: number; y: number }, setPos: (x: number, y: number) => void) => {
+      let start = { x: 0, y: 0 };
+      return PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: () => {
+          start = getPos();
+        },
+        onPanResponderMove: (_e, g) => {
+          setPos(start.x + g.dx, start.y + g.dy);
+        },
+      });
+    },
+    [],
+  );
+
+  const addText = () => {
+    setTextDraft('');
+    setTextModal(true);
+  };
+  const commitText = () => {
+    const t = textDraft.trim();
+    setTextModal(false);
+    if (!t) return;
+    setTexts((prev) => [
+      ...prev,
+      { id: `t_${Date.now()}`, text: t, x: cw / 2 - 40, y: ch / 2 - textSize, color, fontSize: textSize },
+    ]);
+    setTool(null);
+  };
+
+  const addSticker = (emoji: string) => {
+    setStickers((prev) => [
+      ...prev,
+      { id: `s_${Date.now()}`, emoji, x: cw / 2 - 24, y: ch / 2 - 24, fontSize: 48 },
+    ]);
+    setTool(null);
+  };
+
+  const undo = () => {
+    if (strokes.length) {
+      setStrokes((p) => p.slice(0, -1));
+    } else if (stickers.length) {
+      setStickers((p) => p.slice(0, -1));
+    } else if (texts.length) {
+      setTexts((p) => p.slice(0, -1));
+    }
+  };
+
+  // Flatten current canvas (image + annotations) → temp png uri.
+  const flatten = useCallback(async (): Promise<string | null> => {
+    try {
+      const { captureRef } = await import('react-native-view-shot');
+      const uri = await captureRef(canvasRef, { format: 'png', quality: 1, result: 'tmpfile' });
+      return uri as string;
+    } catch (err) {
+      console.log('[PhotoEditor] capture failed', err);
+      return null;
+    }
+  }, []);
+
+  const clearAnnotations = () => {
+    setStrokes([]);
+    setTexts([]);
+    setStickers([]);
+    setCurrentPath('');
+  };
+
+  const applyRotate = async () => {
+    if (!baseUri || busy) return;
+    setBusy(true);
+    try {
+      const flat = (await flatten()) || baseUri;
+      const IM = await import('expo-image-manipulator');
+      const res = await IM.manipulateAsync(flat, [{ rotate: 90 }], {
+        compress: 1,
+        format: IM.SaveFormat.PNG,
+      });
+      clearAnnotations();
+      setNatW(0);
+      setNatH(0);
+      setBaseUri(res.uri);
+    } catch (err) {
+      console.log('[PhotoEditor] rotate failed', err);
+    } finally {
+      setBusy(false);
+      setTool(null);
+    }
+  };
+
+  const applyCrop = async () => {
+    if (!baseUri || busy || !natW) return;
+    setBusy(true);
+    try {
+      const flat = (await flatten()) || baseUri;
+      // map crop rect (display) → source pixels of the flattened image (== cw×ch scaled to natW×natH)
+      const sx = natW / cw;
+      const sy = natH / ch;
+      const IM = await import('expo-image-manipulator');
+      const res = await IM.manipulateAsync(
+        flat,
+        [
+          {
+            crop: {
+              originX: Math.max(0, Math.round(crop.x * sx)),
+              originY: Math.max(0, Math.round(crop.y * sy)),
+              width: Math.max(1, Math.round(crop.w * sx)),
+              height: Math.max(1, Math.round(crop.h * sy)),
+            },
+          },
+        ],
+        { compress: 1, format: IM.SaveFormat.PNG },
+      );
+      clearAnnotations();
+      setNatW(0);
+      setNatH(0);
+      setBaseUri(res.uri);
+    } catch (err) {
+      console.log('[PhotoEditor] crop failed', err);
+    } finally {
+      setBusy(false);
+      setTool(null);
+    }
+  };
+
+  const save = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const flat = await flatten();
+      if (!flat) {
+        onCancel();
+        return;
+      }
+      // Re-encode to a reasonably sized JPEG for sending/storage.
+      const IM = await import('expo-image-manipulator');
+      const longest = Math.max(natW || cw, natH || ch);
+      const actions: any[] = [];
+      if (longest > 1600) {
+        actions.push({ resize: natW >= natH ? { width: 1600 } : { height: 1600 } });
+      }
+      const res = await IM.manipulateAsync(flat, actions, {
+        compress: 0.85,
+        format: IM.SaveFormat.JPEG,
+      });
+      onDone(res.uri);
+    } catch (err) {
+      console.log('[PhotoEditor] save failed', err);
+      onCancel();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!visible) return null;
+
+  const inCrop = tool === 'crop';
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onCancel} statusBarTranslucent>
+      <View style={styles.root}>
+        {/* Header */}
+        <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
+          <TouchableOpacity onPress={onCancel} hitSlop={10} style={styles.headerBtn} testID="pe-cancel">
+            <Ionicons name="close" size={26} color="#fff" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>{contextLabel ? `Edit ${contextLabel}` : 'Edit photo'}</Text>
+          <TouchableOpacity onPress={save} hitSlop={10} style={styles.headerBtn} disabled={busy} testID="pe-save">
+            {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.doneText}>Done</Text>}
+          </TouchableOpacity>
+        </View>
+
+        {/* Canvas area */}
+        <View style={[styles.area, { height: areaH }]}>
+          <View
+            ref={canvasRef}
+            collapsable={false}
+            style={{ width: cw, height: ch, backgroundColor: '#000' }}
+          >
+            {baseUri ? (
+              <Image source={{ uri: baseUri }} style={{ width: cw, height: ch }} resizeMode="contain" />
+            ) : null}
+
+            {/* strokes */}
+            <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
+              {strokes.map((s, i) => (
+                <Path
+                  key={i}
+                  d={s.d}
+                  stroke={s.color}
+                  strokeWidth={s.width}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  fill="none"
+                />
+              ))}
+              {currentPath ? (
+                <Path
+                  d={currentPath}
+                  stroke={color}
+                  strokeWidth={brush}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  fill="none"
+                />
+              ) : null}
+            </Svg>
+
+            {/* text overlays */}
+            {texts.map((t) => {
+              const resp = makeDragResponder(
+                () => ({ x: t.x, y: t.y }),
+                (x, y) => setTexts((prev) => prev.map((p) => (p.id === t.id ? { ...p, x, y } : p))),
+              );
+              return (
+                <View
+                  key={t.id}
+                  {...resp.panHandlers}
+                  style={[styles.overlay, { left: t.x, top: t.y }]}
+                  pointerEvents={tool === 'draw' || inCrop ? 'none' : 'auto'}
+                >
+                  <Text style={{ color: t.color, fontSize: t.fontSize, fontWeight: '700' }}>{t.text}</Text>
+                </View>
+              );
+            })}
+
+            {/* sticker overlays */}
+            {stickers.map((s) => {
+              const resp = makeDragResponder(
+                () => ({ x: s.x, y: s.y }),
+                (x, y) => setStickers((prev) => prev.map((p) => (p.id === s.id ? { ...p, x, y } : p))),
+              );
+              return (
+                <View
+                  key={s.id}
+                  {...resp.panHandlers}
+                  style={[styles.overlay, { left: s.x, top: s.y }]}
+                  pointerEvents={tool === 'draw' || inCrop ? 'none' : 'auto'}
+                >
+                  <Text style={{ fontSize: s.fontSize }}>{s.emoji}</Text>
+                </View>
+              );
+            })}
+
+            {/* draw capture layer */}
+            {tool === 'draw' ? (
+              <View style={StyleSheet.absoluteFill} {...drawResponder.panHandlers} testID="pe-draw-layer" />
+            ) : null}
+
+            {/* crop overlay */}
+            {inCrop ? <CropOverlay cw={cw} ch={ch} crop={crop} setCrop={setCrop} /> : null}
+          </View>
+        </View>
+
+        {/* Toolbar */}
+        <View style={[styles.toolbar, { paddingBottom: insets.bottom + 8 }]}>
+          {/* contextual controls */}
+          {tool === 'draw' || tool === 'text' ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.rowPad}>
+              {PALETTE.map((c) => (
+                <TouchableOpacity
+                  key={c}
+                  onPress={() => setColor(c)}
+                  style={[styles.swatch, { backgroundColor: c }, color === c && styles.swatchSel]}
+                />
+              ))}
+              <View style={styles.sizeGroup}>
+                {(tool === 'draw' ? BRUSHES : TEXT_SIZES).map((sz) => {
+                  const sel = tool === 'draw' ? brush === sz : textSize === sz;
+                  return (
+                    <TouchableOpacity
+                      key={sz}
+                      onPress={() => (tool === 'draw' ? setBrush(sz) : setTextSize(sz))}
+                      style={[styles.sizeBtn, sel && styles.sizeBtnSel]}
+                    >
+                      <View style={{ width: sz, height: sz, borderRadius: sz / 2, backgroundColor: '#fff' }} />
+                    </TouchableOpacity>
+                  );
+                })}
+                {tool === 'text' ? (
+                  <TouchableOpacity onPress={addText} style={styles.addTextBtn}>
+                    <Text style={styles.addTextLabel}>+ Add text</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            </ScrollView>
+          ) : null}
+
+          {tool === 'sticker' ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.rowPad}>
+              {EMOJIS.map((e) => (
+                <TouchableOpacity key={e} onPress={() => addSticker(e)} style={styles.emojiBtn}>
+                  <Text style={{ fontSize: 28 }}>{e}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          ) : null}
+
+          {inCrop ? (
+            <View style={styles.rowPad}>
+              <TouchableOpacity onPress={applyCrop} style={styles.applyBtn} disabled={busy}>
+                <Ionicons name="checkmark" size={18} color="#fff" />
+                <Text style={styles.applyText}>Apply crop</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setCrop({ x: 0, y: 0, w: cw, h: ch })} style={styles.resetBtn}>
+                <Text style={styles.resetText}>Reset</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {/* main tool row */}
+          <View style={styles.tools}>
+            <ToolBtn icon="brush" label="Draw" active={tool === 'draw'} onPress={() => setTool(tool === 'draw' ? null : 'draw')} />
+            <ToolBtn icon="text" label="Text" active={tool === 'text'} onPress={() => setTool(tool === 'text' ? null : 'text')} />
+            <ToolBtn icon="happy-outline" label="Sticker" active={tool === 'sticker'} onPress={() => setTool(tool === 'sticker' ? null : 'sticker')} />
+            <ToolBtn icon="crop" label="Crop" active={inCrop} onPress={() => setTool(inCrop ? null : 'crop')} />
+            <ToolBtn icon="refresh" label="Rotate" active={false} onPress={applyRotate} />
+            <ToolBtn icon="arrow-undo" label="Undo" active={false} onPress={undo} />
+          </View>
+        </View>
+
+        {/* text entry modal */}
+        <Modal visible={textModal} transparent animationType="fade" onRequestClose={() => setTextModal(false)}>
+          <View style={styles.textModalBg}>
+            <View style={styles.textModalCard}>
+              <TextInput
+                value={textDraft}
+                onChangeText={setTextDraft}
+                placeholder="Type text…"
+                placeholderTextColor="#888"
+                style={styles.textInput}
+                autoFocus
+                multiline
+              />
+              <View style={styles.textModalRow}>
+                <TouchableOpacity onPress={() => setTextModal(false)}>
+                  <Text style={styles.textModalCancel}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={commitText}>
+                  <Text style={styles.textModalAdd}>Add</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      </View>
+    </Modal>
+  );
+}
+
+function ToolBtn({
+  icon,
+  label,
+  active,
+  onPress,
+}: {
+  icon: any;
+  label: string;
+  active: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity style={styles.toolBtn} onPress={onPress} testID={`pe-tool-${label.toLowerCase()}`}>
+      <Ionicons name={icon} size={24} color={active ? '#0A84FF' : '#fff'} />
+      <Text style={[styles.toolLabel, active && { color: '#0A84FF' }]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+/** Movable + corner-resizable crop rectangle with a dimmed surround. */
+function CropOverlay({
+  cw,
+  ch,
+  crop,
+  setCrop,
+}: {
+  cw: number;
+  ch: number;
+  crop: { x: number; y: number; w: number; h: number };
+  setCrop: (c: { x: number; y: number; w: number; h: number }) => void;
+}) {
+  const cropRef = useRef(crop);
+  cropRef.current = crop;
+  const MIN = 48;
+
+  const moveResp = useMemo(() => {
+    let s = { x: 0, y: 0 };
+    return PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        s = { x: cropRef.current.x, y: cropRef.current.y };
+      },
+      onPanResponderMove: (_e, g) => {
+        const c = cropRef.current;
+        const nx = Math.min(Math.max(0, s.x + g.dx), cw - c.w);
+        const ny = Math.min(Math.max(0, s.y + g.dy), ch - c.h);
+        setCrop({ ...c, x: nx, y: ny });
+      },
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cw, ch]);
+
+  const cornerResp = (corner: 'tl' | 'tr' | 'bl' | 'br') =>
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        (cornerResp as any)._s = { ...cropRef.current };
+      },
+      onPanResponderMove: (_e, g) => {
+        const s = (cornerResp as any)._s || cropRef.current;
+        let { x, y, w, h } = s;
+        if (corner === 'tl') {
+          x = Math.min(s.x + g.dx, s.x + s.w - MIN);
+          y = Math.min(s.y + g.dy, s.y + s.h - MIN);
+          x = Math.max(0, x);
+          y = Math.max(0, y);
+          w = s.x + s.w - x;
+          h = s.y + s.h - y;
+        } else if (corner === 'tr') {
+          y = Math.max(0, Math.min(s.y + g.dy, s.y + s.h - MIN));
+          w = Math.min(cw - s.x, Math.max(MIN, s.w + g.dx));
+          h = s.y + s.h - y;
+        } else if (corner === 'bl') {
+          x = Math.max(0, Math.min(s.x + g.dx, s.x + s.w - MIN));
+          w = s.x + s.w - x;
+          h = Math.min(ch - s.y, Math.max(MIN, s.h + g.dy));
+        } else {
+          w = Math.min(cw - s.x, Math.max(MIN, s.w + g.dx));
+          h = Math.min(ch - s.y, Math.max(MIN, s.h + g.dy));
+        }
+        setCrop({ x, y, w, h });
+      },
+    });
+
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+      {/* dim surrounds */}
+      <View style={[styles.dim, { left: 0, top: 0, width: cw, height: crop.y }]} pointerEvents="none" />
+      <View style={[styles.dim, { left: 0, top: crop.y + crop.h, width: cw, height: ch - crop.y - crop.h }]} pointerEvents="none" />
+      <View style={[styles.dim, { left: 0, top: crop.y, width: crop.x, height: crop.h }]} pointerEvents="none" />
+      <View style={[styles.dim, { left: crop.x + crop.w, top: crop.y, width: cw - crop.x - crop.w, height: crop.h }]} pointerEvents="none" />
+      {/* crop box */}
+      <View
+        {...moveResp.panHandlers}
+        style={[styles.cropBox, { left: crop.x, top: crop.y, width: crop.w, height: crop.h }]}
+      >
+        <View {...cornerResp('tl').panHandlers} style={[styles.corner, styles.tl]} />
+        <View {...cornerResp('tr').panHandlers} style={[styles.corner, styles.tr]} />
+        <View {...cornerResp('bl').panHandlers} style={[styles.corner, styles.bl]} />
+        <View {...cornerResp('br').panHandlers} style={[styles.corner, styles.br]} />
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: '#000' },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingBottom: 8,
+  },
+  headerBtn: { minWidth: 60, height: 40, justifyContent: 'center' },
+  headerTitle: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  doneText: { color: '#0A84FF', fontSize: 17, fontWeight: '700', textAlign: 'right' },
+  area: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  overlay: { position: 'absolute', padding: 4 },
+  toolbar: { backgroundColor: '#111', paddingTop: 8 },
+  rowPad: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, gap: 8 },
+  swatch: { width: 30, height: 30, borderRadius: 15, marginRight: 8, borderWidth: 2, borderColor: 'transparent' },
+  swatchSel: { borderColor: '#fff', transform: [{ scale: 1.15 }] },
+  sizeGroup: { flexDirection: 'row', alignItems: 'center', marginLeft: 8, gap: 8 },
+  sizeBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#222',
+  },
+  sizeBtnSel: { backgroundColor: '#0A84FF' },
+  addTextBtn: { paddingHorizontal: 14, height: 40, borderRadius: 20, backgroundColor: '#0A84FF', justifyContent: 'center' },
+  addTextLabel: { color: '#fff', fontWeight: '700' },
+  emojiBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  tools: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingTop: 8,
+    paddingHorizontal: 6,
+  },
+  toolBtn: { alignItems: 'center', justifyContent: 'center', paddingVertical: 6, minWidth: 48 },
+  toolLabel: { color: '#fff', fontSize: 11, marginTop: 2 },
+  applyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#34C759',
+    paddingHorizontal: 16,
+    height: 40,
+    borderRadius: 20,
+  },
+  applyText: { color: '#fff', fontWeight: '700' },
+  resetBtn: { paddingHorizontal: 16, height: 40, borderRadius: 20, backgroundColor: '#333', justifyContent: 'center' },
+  resetText: { color: '#fff', fontWeight: '600' },
+  textModalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 24 },
+  textModalCard: { backgroundColor: '#1c1c1e', borderRadius: 16, padding: 16 },
+  textInput: { color: '#fff', fontSize: 20, minHeight: 60, textAlignVertical: 'top' },
+  textModalRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 },
+  textModalCancel: { color: '#888', fontSize: 16, fontWeight: '600' },
+  textModalAdd: { color: '#0A84FF', fontSize: 16, fontWeight: '700' },
+  dim: { position: 'absolute', backgroundColor: 'rgba(0,0,0,0.5)' },
+  cropBox: { position: 'absolute', borderWidth: 2, borderColor: '#fff' },
+  corner: { position: 'absolute', width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  tl: { left: -22, top: -22, borderTopWidth: 4, borderLeftWidth: 4, borderColor: '#fff' },
+  tr: { right: -22, top: -22, borderTopWidth: 4, borderRightWidth: 4, borderColor: '#fff' },
+  bl: { left: -22, bottom: -22, borderBottomWidth: 4, borderLeftWidth: 4, borderColor: '#fff' },
+  br: { right: -22, bottom: -22, borderBottomWidth: 4, borderRightWidth: 4, borderColor: '#fff' },
+});

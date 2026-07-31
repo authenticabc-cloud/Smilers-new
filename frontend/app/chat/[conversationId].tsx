@@ -29,6 +29,7 @@ import { requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer, us
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { pickImageLibrary, pickCamera, pickDocument } from '../../src/lib/nativePickers';
+import PhotoEditor from '../../src/components/photo-editor/PhotoEditor';
 import MediaGalleryModal from '../../src/components/chat/MediaGalleryModal';
 import * as Location from 'expo-location';
 import AttachmentSheet from '../../src/components/AttachmentSheet';
@@ -269,6 +270,7 @@ export default function ChatScreen() {
   // staged. (Single-photo behaviour is unchanged — it's just length 1.)
   const [pendingImages, setPendingImages] = useState<{ uri: string; mimeType: string; caption: string }[]>([]);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
+  const [editorIndex, setEditorIndex] = useState<number | null>(null);
   const setActiveCaption = useCallback(
     (caption: string) =>
       setPendingImages((prev) => prev.map((im, i) => (i === activeImageIndex ? { ...im, caption } : im))),
@@ -4763,6 +4765,14 @@ export default function ChatScreen() {
                     <Image source={{ uri: im.uri }} style={styles.pendingImageThumb} />
                     {im.caption?.trim() ? <View style={styles.pendingThumbCaptionDot} /> : null}
                     <TouchableOpacity
+                      onPress={() => setEditorIndex(index)}
+                      hitSlop={8}
+                      style={styles.pendingThumbEdit}
+                      testID={`pending-image-edit-${index}`}
+                    >
+                      <Feather name="edit-2" size={11} color={Colors.white} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
                       onPress={() => removePendingImage(index)}
                       hitSlop={8}
                       style={styles.pendingThumbRemove}
@@ -4775,11 +4785,23 @@ export default function ChatScreen() {
               </ScrollView>
               <Text style={styles.pendingImageHint} numberOfLines={1}>
                 {pendingImages.length === 1
-                  ? 'Add a caption (optional), then tap send'
-                  : `${pendingImages.length} photos · tap a photo to caption it, then send`}
+                  ? 'Tap ✎ to edit · add a caption, then send'
+                  : `${pendingImages.length} photos · tap ✎ to edit, tap a photo to caption it`}
               </Text>
             </View>
           ) : null}
+
+          <PhotoEditor
+            visible={editorIndex !== null}
+            imageUri={editorIndex !== null ? pendingImages[editorIndex]?.uri ?? null : null}
+            onCancel={() => setEditorIndex(null)}
+            onDone={(uri) => {
+              setPendingImages((prev) =>
+                prev.map((im, i) => (i === editorIndex ? { ...im, uri } : im)),
+              );
+              setEditorIndex(null);
+            }}
+          />
 
           {formattedPreviewSegments ? (
             <View style={styles.formatPreviewWrap} testID="composer-format-preview">
