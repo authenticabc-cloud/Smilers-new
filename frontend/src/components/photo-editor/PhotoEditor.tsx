@@ -122,7 +122,9 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
   const [stickers, setStickers] = useState<StickerItem[]>([]);
   const [blurs, setBlurs] = useState<BlurItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [filter, setFilter] = useState('none');
+  const [eraser, setEraser] = useState(false);
   const [color, setColor] = useState('#FF3B30');
   const [brush, setBrush] = useState(8);
   const [textSize, setTextSize] = useState(28);
@@ -180,6 +182,22 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
   }, [cw, ch]);
 
   // ── Drawing capture (only mounted when tool === 'draw') ──────────────────
+  const strokesRef = useRef<Stroke[]>([]);
+  strokesRef.current = strokes;
+  const eraseAt = useCallback((x: number, y: number, radius: number) => {
+    const survivors = strokesRef.current.filter((s) => {
+      // parse the numeric coords out of the "M x y L x y …" path and test proximity
+      const nums = s.d.match(/-?\d+(?:\.\d+)?/g);
+      if (!nums) return true;
+      for (let i = 0; i + 1 < nums.length; i += 2) {
+        const px = parseFloat(nums[i]);
+        const py = parseFloat(nums[i + 1]);
+        if (Math.hypot(px - x, py - y) <= radius) return false; // touched → remove
+      }
+      return true;
+    });
+    if (survivors.length !== strokesRef.current.length) setStrokes(survivors);
+  }, []);
   const drawResponder = useMemo(
     () =>
       PanResponder.create({
@@ -187,16 +205,24 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
         onMoveShouldSetPanResponder: () => true,
         onPanResponderGrant: (e) => {
           const { locationX, locationY } = e.nativeEvent;
+          if (eraser) {
+            eraseAt(locationX, locationY, Math.max(18, brush * 2));
+            return;
+          }
           pathRef.current = `M ${locationX.toFixed(1)} ${locationY.toFixed(1)}`;
           setCurrentPath(pathRef.current);
         },
         onPanResponderMove: (e) => {
           const { locationX, locationY } = e.nativeEvent;
+          if (eraser) {
+            eraseAt(locationX, locationY, Math.max(18, brush * 2));
+            return;
+          }
           pathRef.current += ` L ${locationX.toFixed(1)} ${locationY.toFixed(1)}`;
           setCurrentPath(pathRef.current);
         },
         onPanResponderRelease: () => {
-          if (pathRef.current.includes('L')) {
+          if (!eraser && pathRef.current.includes('L')) {
             const d = pathRef.current;
             setStrokes((prev) => [...prev, { d, color, width: brush }]);
           }
@@ -204,18 +230,37 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
           setCurrentPath('');
         },
       }),
-    [color, brush],
+    [color, brush, eraser, eraseAt],
   );
 
   // ── Draggable overlay factory ────────────────────────────────────────────
   const addText = () => {
+    setEditingTextId(null);
     setTextDraft('');
+    setTextModal(true);
+  };
+  const openEditText = (t: TextItem) => {
+    setEditingTextId(t.id);
+    setTextDraft(t.text);
+    setColor(t.color);
+    setTextSize(t.fontSize);
+    setTool('text');
     setTextModal(true);
   };
   const commitText = () => {
     const t = textDraft.trim();
     setTextModal(false);
-    if (!t) return;
+    if (!t) {
+      setEditingTextId(null);
+      return;
+    }
+    if (editingTextId) {
+      setTexts((prev) =>
+        prev.map((p) => (p.id === editingTextId ? { ...p, text: t, color, fontSize: textSize } : p)),
+      );
+      setEditingTextId(null);
+      return;
+    }
     setTexts((prev) => [
       ...prev,
       { id: `t_${Date.now()}`, text: t, x: cw / 2 - 40, y: ch / 2 - textSize, scale: 1, rotation: 0, color, fontSize: textSize },
@@ -456,6 +501,7 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
                 onSelect={() => setSelectedId(t.id)}
                 onDelete={() => deleteItem(t.id)}
                 onChange={(u) => setTexts((prev) => prev.map((p) => (p.id === t.id ? { ...p, ...u } : p)))}
+                onDoubleTap={() => openEditText(t)}
               >
                 <Text style={{ color: t.color, fontSize: t.fontSize, fontWeight: '700' }}>{t.text}</Text>
               </DraggableItem>
@@ -644,6 +690,7 @@ interface DraggableItemProps {
   onSelect: () => void;
   onDelete: () => void;
   onChange: (u: { x: number; y: number; scale: number; rotation: number }) => void;
+  onDoubleTap?: () => void;
   children: React.ReactNode;
 }
 
@@ -653,7 +700,7 @@ interface DraggableItemProps {
  * and is synced back to parent state on each gesture end so it survives
  * re-renders and is captured correctly by view-shot.
  */
-function DraggableItem({ item, selected, disabled, onSelect, onDelete, onChange, children }: DraggableItemProps) {
+function DraggableItem({ item, selected, disabled, onSelect, onDelete, onChange, onDoubleTap, children }: DraggableItemProps) {
   const tx = useSharedValue(item.x);
   const ty = useSharedValue(item.y);
   const sc = useSharedValue(item.scale ?? 1);
@@ -704,7 +751,14 @@ function DraggableItem({ item, selected, disabled, onSelect, onDelete, onChange,
     .enabled(!disabled)
     .onEnd(() => runOnJS(onSelect)());
 
-  const gesture = Gesture.Simultaneous(pan, pinch, rotation, tap);
+  const doubleTap = Gesture.Tap()
+    .enabled(!disabled && !!onDoubleTap)
+    .numberOfTaps(2)
+    .onEnd(() => {
+      if (onDoubleTap) runOnJS(onDoubleTap)();
+    });
+
+  const gesture = Gesture.Simultaneous(pan, pinch, rotation, Gesture.Exclusive(doubleTap, tap));
 
   const style = useAnimatedStyle(() => ({
     transform: [
