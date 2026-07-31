@@ -32,7 +32,29 @@ function patchAndroid() {
   }
   let src = fs.readFileSync(p, 'utf8');
   if (src.includes(MARKER)) {
-    log('android already patched — no-op');
+    // Already patched — but ensure the audio usage + full volume are up to date
+    // (so an already-patched, cached node_modules still picks up later tweaks).
+    let changed = false;
+    if (src.includes('data.put("audioUsage", AudioAttributes.USAGE_VOICE_COMMUNICATION);\n            data.put("audioContentType", AudioAttributes.CONTENT_TYPE_SONIFICATION);\n            mSmilersTone = player;')) {
+      src = src.replace(
+        'data.put("audioUsage", AudioAttributes.USAGE_VOICE_COMMUNICATION);\n            data.put("audioContentType", AudioAttributes.CONTENT_TYPE_SONIFICATION);\n            mSmilersTone = player;',
+        'data.put("audioUsage", AudioAttributes.USAGE_VOICE_COMMUNICATION_SIGNALLING);\n            data.put("audioContentType", AudioAttributes.CONTENT_TYPE_SONIFICATION);\n            mSmilersTone = player;',
+      );
+      changed = true;
+    }
+    if (src.includes('public void onPrepared(MediaPlayer mp) {\n                    try { mp.start(); } catch (Exception ignored) {}\n                }')) {
+      src = src.replace(
+        'public void onPrepared(MediaPlayer mp) {\n                    try { mp.start(); } catch (Exception ignored) {}\n                }',
+        'public void onPrepared(MediaPlayer mp) {\n                    try { mp.setVolume(1.0f, 1.0f); } catch (Exception ignored) {}\n                    try { mp.start(); } catch (Exception ignored) {}\n                }',
+      );
+      changed = true;
+    }
+    if (changed) {
+      fs.writeFileSync(p, src, 'utf8');
+      log('android already patched — usage/volume normalized ✓');
+    } else {
+      log('android already patched — no-op');
+    }
     return;
   }
 
@@ -100,7 +122,12 @@ function patchAndroid() {
             data.put("name", "mSmilersTone");
             data.put("sourceUri", uri);
             data.put("setLooping", false);
-            data.put("audioUsage", AudioAttributes.USAGE_VOICE_COMMUNICATION);
+            // USAGE_VOICE_COMMUNICATION_SIGNALLING is the Android-recommended usage
+            // for in-call signalling toning (e.g. connect/end chimes). Unlike plain
+            // USAGE_VOICE_COMMUNICATION it is intended to MIX with the ongoing WebRTC
+            // voice session (Stream owns it) rather than compete with it, so the tone
+            // is actually audible during MODE_IN_COMMUNICATION.
+            data.put("audioUsage", AudioAttributes.USAGE_VOICE_COMMUNICATION_SIGNALLING);
             data.put("audioContentType", AudioAttributes.CONTENT_TYPE_SONIFICATION);
             mSmilersTone = player;
             player.startPlay(data);
@@ -128,7 +155,20 @@ function patchIos() {
   }
   let src = fs.readFileSync(p, 'utf8');
   if (src.includes(MARKER)) {
-    log('ios already patched — no-op');
+    // Already patched — ensure full volume line is present.
+    if (
+      src.includes('_smilersTone.numberOfLoops = 0;') &&
+      !src.includes('_smilersTone.volume = 1.0;')
+    ) {
+      src = src.replace(
+        '_smilersTone.numberOfLoops = 0;',
+        '_smilersTone.numberOfLoops = 0;\n        _smilersTone.volume = 1.0;',
+      );
+      fs.writeFileSync(p, src, 'utf8');
+      log('ios already patched — volume normalized ✓');
+    } else {
+      log('ios already patched — no-op');
+    }
     return;
   }
 

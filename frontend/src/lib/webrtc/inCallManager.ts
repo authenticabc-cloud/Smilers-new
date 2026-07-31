@@ -15,6 +15,7 @@
 // (defensive — never let a missing native module crash the call screen).
 
 import { Platform } from 'react-native';
+import { recordDiagnostic } from '../diagnostics';
 
 type StartOptions = {
   media?: 'audio' | 'video';
@@ -354,14 +355,26 @@ export function stopNativeRingback() {
  */
 export function playCallEndTone() {
   const native = getNative();
-  if (!native || typeof native.playInCallSound !== 'function') return;
-  safeCall(() => native.playInCallSound!('incallmanager_busytone'), 'playCallEndTone');
+  const hasMethod = !!native && typeof native.playInCallSound === 'function';
+  recordDiagnostic({
+    tag: 'TONE',
+    message: `playCallEndTone called · nativeMethod=${hasMethod}`,
+    source: 'inCallManager',
+  });
+  if (!hasMethod) return;
+  safeCall(() => native!.playInCallSound!('incallmanager_busytone'), 'playCallEndTone');
 }
 
 export function playCallConnectedTone() {
   const native = getNative();
-  if (!native || typeof native.playInCallSound !== 'function') return;
-  safeCall(() => native.playInCallSound!('incallmanager_connected'), 'playCallConnectedTone');
+  const hasMethod = !!native && typeof native.playInCallSound === 'function';
+  recordDiagnostic({
+    tag: 'TONE',
+    message: `playCallConnectedTone called · nativeMethod=${hasMethod}`,
+    source: 'inCallManager',
+  });
+  if (!hasMethod) return;
+  safeCall(() => native!.playInCallSound!('incallmanager_connected'), 'playCallConnectedTone');
 }
 
 /**
