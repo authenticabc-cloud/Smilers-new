@@ -1,6 +1,12 @@
 # Smilers Mobile App — PRD
 
-## iter-432 (Jun 2026): Voice typing — "insert emoji by voice"
+## iter-433 (Jun 2026): Photo Editor Phase 2.1 — true Grayscale / Contrast / Saturation sliders (Skia)
+- New **Adjust** tool (`options` icon) in the Photo Editor with three sliders: **Grayscale (0–100%), Contrast (50–150%), Saturation (0–200%)**.
+- `src/lib/photo/colorMatrix.ts`: `buildAdjustMatrix()` composes saturation (grayscale folds in as effectiveSaturation) × contrast + brightness into one 4×5 RGBA matrix; `applyColorMatrixToImage(uri, matrix)` bakes it via a Skia offscreen surface → JPEG. `autoEnhance.ts` refactored to reuse these (its preset unchanged).
+- **Live preview:** `ColorMatrixPreview.tsx` renders the photo through a Skia `<Canvas>` + `<ColorMatrix>` while dragging sliders (lazy-loaded via `React.lazy`, native-only so Skia stays out of the web bundle's eager path). "Apply" bakes the matrix into the base photo ONLY (annotations untouched, matching the preview); "Reset" restores neutral. Toolbar height expands while adjusting so nothing clips.
+- Lint clean; app boots to Sign In. ⚠️ NATIVE-ONLY (Skia) — live preview + bake validate on an APK/TestFlight build; web preview shows the unadjusted photo.
+
+
 - New `src/lib/voiceTyping/spokenToEmoji.ts` post-processes each finalized dictation chunk (applied in `VoiceTypingButton.handleFinalText` only, so normal typing is unaffected). Two false-positive-safe strategies: (1) unambiguous multi-word phrases convert directly ("smiley face"→🙂, "thumbs up"→👍, "red heart"→❤️, etc.), and (2) an explicit "emoji <word>" trigger for common single words ("emoji fire"→🔥) so bare words like "fire"/"star"/"cool" spoken normally are left as text. English-only (spoken→emoji mapping is language-specific).
 - Lint clean; app boots to Sign In. Native-only (part of the dictation flow).
 

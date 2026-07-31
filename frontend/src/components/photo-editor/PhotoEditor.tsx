@@ -12,13 +12,14 @@
  * modules are lazy-imported so the rest of the app (and web preview) is
  * unaffected. Use as a controlled <Modal>: pass `imageUri`, get `onDone(uri)`.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
   Image,
   Modal,
   PanResponder,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -32,11 +33,18 @@ import Svg, { Path } from 'react-native-svg';
 import Animated, { useAnimatedStyle, useSharedValue, runOnJS } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { BlurView } from 'expo-blur';
+import Slider from '@react-native-community/slider';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { buildAdjustMatrix, applyColorMatrixToImage, AdjustParams } from '../../lib/photo/colorMatrix';
+
+// Skia live preview — lazy so Skia never enters the web bundle's eager path.
+const ColorMatrixPreview = React.lazy(() => import('./ColorMatrixPreview'));
 
 const PREFS_KEY = 'smilers.photoeditor.prefs.v1';
 
-type Tool = 'draw' | 'text' | 'sticker' | 'crop' | 'filter' | 'blur' | null;
+type Tool = 'draw' | 'text' | 'sticker' | 'crop' | 'filter' | 'blur' | 'adjust' | null;
+
+const ADJUST_DEFAULT: Required<AdjustParams> = { grayscale: 0, contrast: 1, saturation: 1, brightness: 0 };
 
 interface Stroke {
   d: string;
@@ -127,6 +135,7 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [filter, setFilter] = useState('none');
+  const [adjust, setAdjust] = useState<Required<AdjustParams>>(ADJUST_DEFAULT);
   const [eraser, setEraser] = useState(false);
   const [color, setColor] = useState('#FF3B30');
   const [brush, setBrush] = useState(8);
@@ -168,6 +177,7 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
     setBlurs([]);
     setSelectedId(null);
     setFilter('none');
+    setAdjust(ADJUST_DEFAULT);
     setTool(null);
   }, [imageUri]);
 
@@ -192,7 +202,7 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
   }, [tool, eraser]);
 
   const HEADER_H = 52 + insets.top;
-  const TOOLBAR_H = 132 + insets.bottom;
+  const TOOLBAR_H = (tool === 'adjust' ? 244 : 132) + insets.bottom;
   const areaW = screen.width;
   const areaH = screen.height - HEADER_H - TOOLBAR_H;
 
@@ -388,6 +398,33 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
     }
   };
 
+  const applyAdjust = async () => {
+    if (!baseUri || busy) return;
+    // Nothing changed → just close.
+    const changed = adjust.grayscale !== 0 || adjust.contrast !== 1 || adjust.saturation !== 1;
+    if (!changed) {
+      setTool(null);
+      return;
+    }
+    setBusy(true);
+    try {
+      // Apply to the PHOTO only (keep annotations untouched, matching the preview).
+      const matrix = buildAdjustMatrix(adjust);
+      const out = await applyColorMatrixToImage(baseUri, matrix);
+      if (out) {
+        setNatW(0);
+        setNatH(0);
+        setBaseUri(out);
+      }
+    } catch (err) {
+      console.log('[PhotoEditor] adjust failed', err);
+    } finally {
+      setAdjust(ADJUST_DEFAULT);
+      setBusy(false);
+      setTool(null);
+    }
+  };
+
   const applyCrop = async () => {
     if (!baseUri || busy || !natW) return;
     setBusy(true);
@@ -479,6 +516,13 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
           >
             {baseUri ? (
               <Image source={{ uri: baseUri }} style={{ width: cw, height: ch }} resizeMode="contain" />
+            ) : null}
+
+            {/* live Skia adjust preview (native only) — overlays the photo */}
+            {tool === 'adjust' && baseUri && Platform.OS !== 'web' ? (
+              <Suspense fallback={null}>
+                <ColorMatrixPreview uri={baseUri} width={cw} height={ch} matrix={buildAdjustMatrix(adjust)} />
+              </Suspense>
             ) : null}
 
             {/* filter tint overlay (sits directly on the photo) */}
@@ -667,6 +711,44 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
             </View>
           ) : null}
 
+          {tool === 'adjust' ? (
+            <View style={styles.adjustPanel}>
+              <AdjustSlider
+                label="Grayscale"
+                value={adjust.grayscale}
+                min={0}
+                max={1}
+                display={`${Math.round(adjust.grayscale * 100)}%`}
+                onChange={(v) => setAdjust((a) => ({ ...a, grayscale: v }))}
+              />
+              <AdjustSlider
+                label="Contrast"
+                value={adjust.contrast}
+                min={0.5}
+                max={1.5}
+                display={`${Math.round(adjust.contrast * 100)}%`}
+                onChange={(v) => setAdjust((a) => ({ ...a, contrast: v }))}
+              />
+              <AdjustSlider
+                label="Saturation"
+                value={adjust.saturation}
+                min={0}
+                max={2}
+                display={`${Math.round(adjust.saturation * 100)}%`}
+                onChange={(v) => setAdjust((a) => ({ ...a, saturation: v }))}
+              />
+              <View style={styles.adjustRow}>
+                <TouchableOpacity onPress={applyAdjust} style={styles.applyBtn} disabled={busy} testID="pe-adjust-apply">
+                  <Ionicons name="checkmark" size={18} color="#fff" />
+                  <Text style={styles.applyText}>Apply</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setAdjust(ADJUST_DEFAULT)} style={styles.resetBtn} testID="pe-adjust-reset">
+                  <Text style={styles.resetText}>Reset</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
+
           {inCrop ? (
             <View style={styles.rowPad}>
               <TouchableOpacity onPress={applyCrop} style={styles.applyBtn} disabled={busy}>
@@ -689,6 +771,7 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
             <ToolBtn icon="text" label="Text" active={tool === 'text'} onPress={() => setTool(tool === 'text' ? null : 'text')} />
             <ToolBtn icon="happy-outline" label="Sticker" active={tool === 'sticker'} onPress={() => setTool(tool === 'sticker' ? null : 'sticker')} />
             <ToolBtn icon="color-filter" label="Filter" active={tool === 'filter'} onPress={() => setTool(tool === 'filter' ? null : 'filter')} />
+            <ToolBtn icon="options" label="Adjust" active={tool === 'adjust'} onPress={() => setTool(tool === 'adjust' ? null : 'adjust')} />
             <ToolBtn icon="sparkles" label="Enhance" active={false} onPress={applyEnhance} />
             <ToolBtn icon="eye-off" label="Blur" active={tool === 'blur'} onPress={() => setTool(tool === 'blur' ? null : 'blur')} />
             <ToolBtn icon="crop" label="Crop" active={inCrop} onPress={() => setTool(inCrop ? null : 'crop')} />
@@ -742,6 +825,39 @@ function ToolBtn({
       <Ionicons name={icon} size={24} color={active ? '#0A84FF' : '#fff'} />
       <Text style={[styles.toolLabel, active && { color: '#0A84FF' }]}>{label}</Text>
     </TouchableOpacity>
+  );
+}
+
+function AdjustSlider({
+  label,
+  value,
+  min,
+  max,
+  display,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  display: string;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <View style={styles.adjustSliderRow}>
+      <Text style={styles.adjustLabel}>{label}</Text>
+      <Slider
+        style={styles.adjustSlider}
+        minimumValue={min}
+        maximumValue={max}
+        value={value}
+        onValueChange={onChange}
+        minimumTrackTintColor="#0A84FF"
+        maximumTrackTintColor="#444"
+        thumbTintColor="#fff"
+      />
+      <Text style={styles.adjustValue}>{display}</Text>
+    </View>
   );
 }
 
@@ -1004,6 +1120,12 @@ const styles = StyleSheet.create({
   applyText: { color: '#fff', fontWeight: '700' },
   resetBtn: { paddingHorizontal: 16, height: 40, borderRadius: 20, backgroundColor: '#333', justifyContent: 'center' },
   resetText: { color: '#fff', fontWeight: '600' },
+  adjustPanel: { paddingHorizontal: 14, paddingTop: 4, paddingBottom: 4 },
+  adjustSliderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  adjustLabel: { color: '#fff', fontSize: 13, width: 78 },
+  adjustSlider: { flex: 1, height: 34 },
+  adjustValue: { color: '#8e8e93', fontSize: 12, width: 44, textAlign: 'right' },
+  adjustRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4 },
   textModalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 24 },
   textModalCard: { backgroundColor: '#1c1c1e', borderRadius: 16, padding: 16 },
   textInput: { color: '#fff', fontSize: 20, minHeight: 60, textAlignVertical: 'top' },
