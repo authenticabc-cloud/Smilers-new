@@ -1,6 +1,10 @@
 # Smilers Mobile App — PRD
 
-## iter-431 (Jun 2026): Voice typing — automatic language detection (Android) with iOS fallback
+## iter-432 (Jun 2026): Voice typing — "insert emoji by voice"
+- New `src/lib/voiceTyping/spokenToEmoji.ts` post-processes each finalized dictation chunk (applied in `VoiceTypingButton.handleFinalText` only, so normal typing is unaffected). Two false-positive-safe strategies: (1) unambiguous multi-word phrases convert directly ("smiley face"→🙂, "thumbs up"→👍, "red heart"→❤️, etc.), and (2) an explicit "emoji <word>" trigger for common single words ("emoji fire"→🔥) so bare words like "fire"/"star"/"cool" spoken normally are left as text. English-only (spoken→emoji mapping is language-specific).
+- Lint clean; app boots to Sign In. Native-only (part of the dictation flow).
+
+
 - Added an **"Auto-detect"** option (🌐) at the top of the voice-typing language picker. When selected, `useVoiceTyping` enables `expo-speech-recognition`'s Android language detection/switching (`androidIntentOptions.EXTRA_ENABLE_LANGUAGE_DETECTION` + `EXTRA_ENABLE_LANGUAGE_SWITCH: LANGUAGE_SWITCH_BALANCED`), constrained to the curated `ALL_VOICE_TYPING_CODES` via `EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES`/`EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES`. Subscribes to the `languagedetection` event and surfaces the detected language live in the "Listening…" banner ("Auto · 🇫🇷 French").
 - iOS (SFSpeechRecognizer can't auto-detect) → "Auto" transparently falls back to the device's default supported language; the picker row notes this. Choice persisted in AsyncStorage.
 - Lint clean; app boots to Sign In. ⚠️ Native-only — validate auto-switching on an Android APK build (language models must be downloaded on-device).

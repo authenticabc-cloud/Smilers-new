@@ -22,6 +22,7 @@ import { Feather } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../theme';
 import { useVoiceTyping } from '../../lib/voiceTyping/useVoiceTyping';
+import { spokenToEmoji } from '../../lib/voiceTyping/spokenToEmoji';
 import {
   VOICE_TYPING_LANGUAGES,
   ALL_VOICE_TYPING_CODES,
@@ -71,7 +72,7 @@ export function VoiceTypingButton({
   const handleFinalText = useCallback(
     (t: string) => {
       dictatedRef.current = true;
-      onAppendText(t);
+      onAppendText(spokenToEmoji(t));
     },
     [onAppendText],
   );
