@@ -1,5 +1,13 @@
 # Smilers Mobile App — PRD
 
+## iter-426 (Jun 2026): Photo Editor — Phase 1.5 (pinch/rotate/delete) + Phase 2 (filters + blur)
+- **Phase 1.5:** text & emoji overlays are now a `DraggableItem` (RNGH `GestureDetector` + reanimated shared values): **drag + pinch-to-resize + two-finger rotate**, tap to select (dashed border) → **✕ delete** handle. Transform synced to state on gesture end; selection cleared before view-shot capture so handles never bake into the export.
+- **Phase 2 filters:** new Filter tool with a strip of overlay-based tints — Original, Warm, Cool, Vintage, Sunset, Bright, Fade, Dim — rendered as a colored layer over the photo (captured reliably by view-shot; NO risky new native color-matrix lib). (True grayscale/contrast would need Skia — deferred.)
+- **Phase 2 blur:** new Blur tool adds draggable/pinch-resizable **blur boxes** (`expo-blur` `BlurView`, `experimentalBlurMethod="dimezisBlurView"` for Android) to hide sensitive areas; tap-to-delete.
+- Toolbar main row made horizontally scrollable (8 tools: Draw, Text, Sticker, Filter, Blur, Crop, Rotate, Undo). Lint clean; app boots. ⚠️ Native (view-shot + image-manipulator + expo-blur) — validate on APK. Note: BlurView snapshotting can vary on iOS; verify blur bakes into the saved image on device.
+
+
+
 ## iter-425 (Jun 2026): Photo Editor — Phase 1 (draw/color, text, emoji stickers, crop, rotate)
 - New reusable `src/components/photo-editor/PhotoEditor.tsx` (full-screen controlled `<Modal>`): freehand DRAW (10-color palette + 3 brush sizes) via `react-native-svg`; TEXT overlays (color + 3 sizes, draggable, TextInput modal); EMOJI/STICKER overlays (30 emojis, draggable); CROP (movable + 4-corner-resizable rect → `expo-image-manipulator` crop); 90° ROTATE; Undo; Cancel/Done. Crop & rotate bake current annotations first (view-shot flatten) so nothing is lost. Save flattens via `react-native-view-shot` → re-encodes to JPEG (≤1600px, q0.85) → `onDone(uri)`.
 - Installed `react-native-view-shot@4.0.3` + `expo-image-manipulator@14.0.8` (autolink, NO prebuild). Native modules lazy-imported so the bundle/web preview is unaffected.

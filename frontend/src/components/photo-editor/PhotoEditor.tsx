@@ -29,8 +29,11 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
+import Animated, { useAnimatedStyle, useSharedValue, runOnJS } from 'react-native-reanimated';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { BlurView } from 'expo-blur';
 
-type Tool = 'draw' | 'text' | 'sticker' | 'crop' | null;
+type Tool = 'draw' | 'text' | 'sticker' | 'crop' | 'filter' | 'blur' | null;
 
 interface Stroke {
   d: string;
@@ -42,6 +45,8 @@ interface TextItem {
   text: string;
   x: number;
   y: number;
+  scale: number;
+  rotation: number;
   color: string;
   fontSize: number;
 }
@@ -50,8 +55,29 @@ interface StickerItem {
   emoji: string;
   x: number;
   y: number;
+  scale: number;
+  rotation: number;
   fontSize: number;
 }
+interface BlurItem {
+  id: string;
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+}
+
+/** Full-image tint filters (overlay-based → captured reliably by view-shot). */
+const FILTERS: { key: string; label: string; color: string; opacity: number }[] = [
+  { key: 'none', label: 'Original', color: 'transparent', opacity: 0 },
+  { key: 'warm', label: 'Warm', color: '#FF7A00', opacity: 0.2 },
+  { key: 'cool', label: 'Cool', color: '#0A6CFF', opacity: 0.2 },
+  { key: 'vintage', label: 'Vintage', color: '#6B4A2B', opacity: 0.3 },
+  { key: 'sunset', label: 'Sunset', color: '#FF2D55', opacity: 0.22 },
+  { key: 'bright', label: 'Bright', color: '#FFFFFF', opacity: 0.22 },
+  { key: 'fade', label: 'Fade', color: '#F5F0E6', opacity: 0.3 },
+  { key: 'dim', label: 'Dim', color: '#000000', opacity: 0.28 },
+];
 
 const PALETTE = [
   '#FFFFFF',
@@ -94,6 +120,9 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
   const [currentPath, setCurrentPath] = useState('');
   const [texts, setTexts] = useState<TextItem[]>([]);
   const [stickers, setStickers] = useState<StickerItem[]>([]);
+  const [blurs, setBlurs] = useState<BlurItem[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [filter, setFilter] = useState('none');
   const [color, setColor] = useState('#FF3B30');
   const [brush, setBrush] = useState(8);
   const [textSize, setTextSize] = useState(28);
@@ -111,6 +140,9 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
     setStrokes([]);
     setTexts([]);
     setStickers([]);
+    setBlurs([]);
+    setSelectedId(null);
+    setFilter('none');
     setTool(null);
   }, [imageUri]);
 
@@ -176,23 +208,6 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
   );
 
   // ── Draggable overlay factory ────────────────────────────────────────────
-  const makeDragResponder = useCallback(
-    (getPos: () => { x: number; y: number }, setPos: (x: number, y: number) => void) => {
-      let start = { x: 0, y: 0 };
-      return PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: () => true,
-        onPanResponderGrant: () => {
-          start = getPos();
-        },
-        onPanResponderMove: (_e, g) => {
-          setPos(start.x + g.dx, start.y + g.dy);
-        },
-      });
-    },
-    [],
-  );
-
   const addText = () => {
     setTextDraft('');
     setTextModal(true);
@@ -203,7 +218,7 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
     if (!t) return;
     setTexts((prev) => [
       ...prev,
-      { id: `t_${Date.now()}`, text: t, x: cw / 2 - 40, y: ch / 2 - textSize, color, fontSize: textSize },
+      { id: `t_${Date.now()}`, text: t, x: cw / 2 - 40, y: ch / 2 - textSize, scale: 1, rotation: 0, color, fontSize: textSize },
     ]);
     setTool(null);
   };
@@ -211,24 +226,34 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
   const addSticker = (emoji: string) => {
     setStickers((prev) => [
       ...prev,
-      { id: `s_${Date.now()}`, emoji, x: cw / 2 - 24, y: ch / 2 - 24, fontSize: 48 },
+      { id: `s_${Date.now()}`, emoji, x: cw / 2 - 24, y: ch / 2 - 24, scale: 1, rotation: 0, fontSize: 48 },
     ]);
     setTool(null);
   };
 
+  const addBlur = () => {
+    setBlurs((prev) => [...prev, { id: `b_${Date.now()}`, x: cw / 2 - 70, y: ch / 2 - 45, scale: 1, rotation: 0 }]);
+  };
+
+  const deleteItem = (id: string) => {
+    setTexts((p) => p.filter((i) => i.id !== id));
+    setStickers((p) => p.filter((i) => i.id !== id));
+    setBlurs((p) => p.filter((i) => i.id !== id));
+    setSelectedId(null);
+  };
+
   const undo = () => {
-    if (strokes.length) {
-      setStrokes((p) => p.slice(0, -1));
-    } else if (stickers.length) {
-      setStickers((p) => p.slice(0, -1));
-    } else if (texts.length) {
-      setTexts((p) => p.slice(0, -1));
-    }
+    if (strokes.length) setStrokes((p) => p.slice(0, -1));
+    else if (blurs.length) setBlurs((p) => p.slice(0, -1));
+    else if (stickers.length) setStickers((p) => p.slice(0, -1));
+    else if (texts.length) setTexts((p) => p.slice(0, -1));
   };
 
   // Flatten current canvas (image + annotations) → temp png uri.
   const flatten = useCallback(async (): Promise<string | null> => {
     try {
+      setSelectedId(null); // hide selection border/delete handle from the export
+      await new Promise((r) => setTimeout(r, 60));
       const { captureRef } = await import('react-native-view-shot');
       const uri = await captureRef(canvasRef, { format: 'png', quality: 1, result: 'tmpfile' });
       return uri as string;
@@ -242,6 +267,8 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
     setStrokes([]);
     setTexts([]);
     setStickers([]);
+    setBlurs([]);
+    setSelectedId(null);
     setCurrentPath('');
   };
 
@@ -360,6 +387,40 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
               <Image source={{ uri: baseUri }} style={{ width: cw, height: ch }} resizeMode="contain" />
             ) : null}
 
+            {/* filter tint overlay (sits directly on the photo) */}
+            {filter !== 'none'
+              ? (() => {
+                  const f = FILTERS.find((x) => x.key === filter);
+                  if (!f) return null;
+                  return (
+                    <View
+                      pointerEvents="none"
+                      style={[StyleSheet.absoluteFill, { backgroundColor: f.color, opacity: f.opacity }]}
+                    />
+                  );
+                })()
+              : null}
+
+            {/* blur boxes (hide sensitive areas) */}
+            {blurs.map((b) => (
+              <DraggableItem
+                key={b.id}
+                item={b}
+                selected={selectedId === b.id}
+                disabled={tool === 'draw' || inCrop}
+                onSelect={() => setSelectedId(b.id)}
+                onDelete={() => deleteItem(b.id)}
+                onChange={(u) => setBlurs((prev) => prev.map((p) => (p.id === b.id ? { ...p, ...u } : p)))}
+              >
+                <BlurView
+                  intensity={70}
+                  tint="default"
+                  experimentalBlurMethod="dimezisBlurView"
+                  style={styles.blurBox}
+                />
+              </DraggableItem>
+            ))}
+
             {/* strokes */}
             <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
               {strokes.map((s, i) => (
@@ -386,40 +447,34 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
             </Svg>
 
             {/* text overlays */}
-            {texts.map((t) => {
-              const resp = makeDragResponder(
-                () => ({ x: t.x, y: t.y }),
-                (x, y) => setTexts((prev) => prev.map((p) => (p.id === t.id ? { ...p, x, y } : p))),
-              );
-              return (
-                <View
-                  key={t.id}
-                  {...resp.panHandlers}
-                  style={[styles.overlay, { left: t.x, top: t.y }]}
-                  pointerEvents={tool === 'draw' || inCrop ? 'none' : 'auto'}
-                >
-                  <Text style={{ color: t.color, fontSize: t.fontSize, fontWeight: '700' }}>{t.text}</Text>
-                </View>
-              );
-            })}
+            {texts.map((t) => (
+              <DraggableItem
+                key={t.id}
+                item={t}
+                selected={selectedId === t.id}
+                disabled={tool === 'draw' || inCrop}
+                onSelect={() => setSelectedId(t.id)}
+                onDelete={() => deleteItem(t.id)}
+                onChange={(u) => setTexts((prev) => prev.map((p) => (p.id === t.id ? { ...p, ...u } : p)))}
+              >
+                <Text style={{ color: t.color, fontSize: t.fontSize, fontWeight: '700' }}>{t.text}</Text>
+              </DraggableItem>
+            ))}
 
             {/* sticker overlays */}
-            {stickers.map((s) => {
-              const resp = makeDragResponder(
-                () => ({ x: s.x, y: s.y }),
-                (x, y) => setStickers((prev) => prev.map((p) => (p.id === s.id ? { ...p, x, y } : p))),
-              );
-              return (
-                <View
-                  key={s.id}
-                  {...resp.panHandlers}
-                  style={[styles.overlay, { left: s.x, top: s.y }]}
-                  pointerEvents={tool === 'draw' || inCrop ? 'none' : 'auto'}
-                >
-                  <Text style={{ fontSize: s.fontSize }}>{s.emoji}</Text>
-                </View>
-              );
-            })}
+            {stickers.map((s) => (
+              <DraggableItem
+                key={s.id}
+                item={s}
+                selected={selectedId === s.id}
+                disabled={tool === 'draw' || inCrop}
+                onSelect={() => setSelectedId(s.id)}
+                onDelete={() => deleteItem(s.id)}
+                onChange={(u) => setStickers((prev) => prev.map((p) => (p.id === s.id ? { ...p, ...u } : p)))}
+              >
+                <Text style={{ fontSize: s.fontSize }}>{s.emoji}</Text>
+              </DraggableItem>
+            ))}
 
             {/* draw capture layer */}
             {tool === 'draw' ? (
@@ -475,6 +530,36 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
             </ScrollView>
           ) : null}
 
+          {tool === 'filter' ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.rowPad}>
+              {FILTERS.map((f) => (
+                <TouchableOpacity
+                  key={f.key}
+                  onPress={() => setFilter(f.key)}
+                  style={[styles.filterChip, filter === f.key && styles.filterChipSel]}
+                >
+                  <View
+                    style={[
+                      styles.filterSwatch,
+                      { backgroundColor: f.color === 'transparent' ? '#666' : f.color },
+                    ]}
+                  />
+                  <Text style={[styles.filterLabel, filter === f.key && { color: '#0A84FF' }]}>{f.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          ) : null}
+
+          {tool === 'blur' ? (
+            <View style={styles.rowPad}>
+              <TouchableOpacity onPress={addBlur} style={styles.applyBtn}>
+                <Ionicons name="add" size={18} color="#fff" />
+                <Text style={styles.applyText}>Add blur area</Text>
+              </TouchableOpacity>
+              <Text style={styles.blurHint}>Drag to move · pinch to resize · tap to delete</Text>
+            </View>
+          ) : null}
+
           {inCrop ? (
             <View style={styles.rowPad}>
               <TouchableOpacity onPress={applyCrop} style={styles.applyBtn} disabled={busy}>
@@ -488,14 +573,20 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
           ) : null}
 
           {/* main tool row */}
-          <View style={styles.tools}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.tools}
+          >
             <ToolBtn icon="brush" label="Draw" active={tool === 'draw'} onPress={() => setTool(tool === 'draw' ? null : 'draw')} />
             <ToolBtn icon="text" label="Text" active={tool === 'text'} onPress={() => setTool(tool === 'text' ? null : 'text')} />
             <ToolBtn icon="happy-outline" label="Sticker" active={tool === 'sticker'} onPress={() => setTool(tool === 'sticker' ? null : 'sticker')} />
+            <ToolBtn icon="color-filter" label="Filter" active={tool === 'filter'} onPress={() => setTool(tool === 'filter' ? null : 'filter')} />
+            <ToolBtn icon="eye-off" label="Blur" active={tool === 'blur'} onPress={() => setTool(tool === 'blur' ? null : 'blur')} />
             <ToolBtn icon="crop" label="Crop" active={inCrop} onPress={() => setTool(inCrop ? null : 'crop')} />
             <ToolBtn icon="refresh" label="Rotate" active={false} onPress={applyRotate} />
             <ToolBtn icon="arrow-undo" label="Undo" active={false} onPress={undo} />
-          </View>
+          </ScrollView>
         </View>
 
         {/* text entry modal */}
@@ -543,6 +634,98 @@ function ToolBtn({
       <Ionicons name={icon} size={24} color={active ? '#0A84FF' : '#fff'} />
       <Text style={[styles.toolLabel, active && { color: '#0A84FF' }]}>{label}</Text>
     </TouchableOpacity>
+  );
+}
+
+interface DraggableItemProps {
+  item: { x: number; y: number; scale: number; rotation: number };
+  selected: boolean;
+  disabled: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+  onChange: (u: { x: number; y: number; scale: number; rotation: number }) => void;
+  children: React.ReactNode;
+}
+
+/**
+ * Draggable / pinch-to-resize / rotatable overlay used for text, emoji and blur
+ * boxes. Transform lives in reanimated shared values (smooth on the UI thread)
+ * and is synced back to parent state on each gesture end so it survives
+ * re-renders and is captured correctly by view-shot.
+ */
+function DraggableItem({ item, selected, disabled, onSelect, onDelete, onChange, children }: DraggableItemProps) {
+  const tx = useSharedValue(item.x);
+  const ty = useSharedValue(item.y);
+  const sc = useSharedValue(item.scale ?? 1);
+  const rot = useSharedValue(item.rotation ?? 0);
+  const sx = useSharedValue(0);
+  const sy = useSharedValue(0);
+  const ss = useSharedValue(1);
+  const sr = useSharedValue(0);
+
+  const commit = useCallback(() => {
+    onChange({ x: tx.value, y: ty.value, scale: sc.value, rotation: rot.value });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onChange]);
+
+  const pan = Gesture.Pan()
+    .enabled(!disabled)
+    .onStart(() => {
+      sx.value = tx.value;
+      sy.value = ty.value;
+    })
+    .onUpdate((e) => {
+      tx.value = sx.value + e.translationX;
+      ty.value = sy.value + e.translationY;
+    })
+    .onEnd(() => runOnJS(commit)());
+
+  const pinch = Gesture.Pinch()
+    .enabled(!disabled)
+    .onStart(() => {
+      ss.value = sc.value;
+    })
+    .onUpdate((e) => {
+      sc.value = Math.max(0.3, Math.min(8, ss.value * e.scale));
+    })
+    .onEnd(() => runOnJS(commit)());
+
+  const rotation = Gesture.Rotation()
+    .enabled(!disabled)
+    .onStart(() => {
+      sr.value = rot.value;
+    })
+    .onUpdate((e) => {
+      rot.value = sr.value + e.rotation;
+    })
+    .onEnd(() => runOnJS(commit)());
+
+  const tap = Gesture.Tap()
+    .enabled(!disabled)
+    .onEnd(() => runOnJS(onSelect)());
+
+  const gesture = Gesture.Simultaneous(pan, pinch, rotation, tap);
+
+  const style = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: tx.value },
+      { translateY: ty.value },
+      { scale: sc.value },
+      { rotateZ: `${rot.value}rad` },
+    ],
+  }));
+
+  return (
+    <GestureDetector gesture={gesture}>
+      <Animated.View style={[styles.overlay, style, selected && styles.overlaySel]}>
+        {children}
+        {selected && !disabled ? (
+          <TouchableOpacity onPress={onDelete} style={styles.overlayDelete} hitSlop={8}>
+            <Ionicons name="close" size={12} color="#fff" />
+          </TouchableOpacity>
+        ) : null}
+      </Animated.View>
+    </GestureDetector>
   );
 }
 
@@ -647,7 +830,25 @@ const styles = StyleSheet.create({
   headerTitle: { color: '#fff', fontSize: 16, fontWeight: '600' },
   doneText: { color: '#0A84FF', fontSize: 17, fontWeight: '700', textAlign: 'right' },
   area: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-  overlay: { position: 'absolute', padding: 4 },
+  overlay: { position: 'absolute', left: 0, top: 0, padding: 4 },
+  overlaySel: { borderWidth: 1, borderColor: '#0A84FF', borderStyle: 'dashed' },
+  overlayDelete: {
+    position: 'absolute',
+    top: -10,
+    right: -10,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#FF3B30',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  blurBox: { width: 140, height: 90, borderRadius: 8, overflow: 'hidden' },
+  filterChip: { alignItems: 'center', marginRight: 14, paddingVertical: 4 },
+  filterChipSel: {},
+  filterSwatch: { width: 44, height: 44, borderRadius: 8, marginBottom: 4, borderWidth: 2, borderColor: '#333' },
+  filterLabel: { color: '#fff', fontSize: 12 },
+  blurHint: { color: '#888', fontSize: 11, flex: 1, marginLeft: 10 },
   toolbar: { backgroundColor: '#111', paddingTop: 8 },
   rowPad: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, gap: 8 },
   swatch: { width: 30, height: 30, borderRadius: 15, marginRight: 8, borderWidth: 2, borderColor: 'transparent' },
