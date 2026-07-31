@@ -1,5 +1,12 @@
 # Smilers Mobile App — PRD
 
+## iter-448 (Jun 2026): Ciao now plays on BOTH sides in 1:1 (was only the ender)
+- User confirmed iter-447 works: "Connected" audible on both sides; "Ciaooo" only played for the side that tapped End.
+- ROOT CAUSE: `hangup()` gated the end-tone on the LIVE `remoteConnected`. For the NON-initiator, the remote leaves first → CallUI's `onConnectedChange(false)` flips `remoteConnected` → false BEFORE their auto-end `hangup()` runs (400ms later) → gate failed → no Ciao.
+- FIX (`StreamCallInner.tsx`): added a sticky `everConnectedRef` latch (set true once the call ever media-connects, via new `handleConnectedChange` wired to CallUI's `onConnectedChange`) and gate the Ciao on `everConnectedRef.current` instead of the live `remoteConnected`. Unanswered/declined calls never connect → latch stays false → still silent (contract's doNotPlayOn preserved). Group leaver-only behavior unchanged. Lint clean.
+- ⚠️ NATIVE rebuild needed to hear it.
+
+
 ## iter-447 (Jun 2026): Call tones ROOT CAUSE found + moved to app-owned native module
 - On-device TONE diagnostics (Android 36, v2.3.54) showed both triggers fire correctly BUT `nativeMethod=false` → the `react-native-incall-manager` node_modules patch (`playInCallSound`) is NOT compiled into release builds (Emergent build doesn't apply/recompile the node_modules patch). The JS was calling a method that doesn't exist → silent. (Also confirmed the connect/end TRIGGER logic is correct, matching the ciao contract.)
 - **FIX — stop relying on the node_modules patch; use the app's OWN committed native module:** added `playCallTone(name, promise)` to `android/app/src/main/java/com/smilers/app/SmilersCallModule.kt` (already registered via `SmilersPackage`, ALWAYS compiled from committed source). It plays `res/raw/<name>` via `MediaPlayer` with `USAGE_VOICE_COMMUNICATION_SIGNALLING` + `CONTENT_TYPE_SONIFICATION` at full volume — the stream that MIXES with the live Stream/WebRTC voice session (expo-audio is ducked/muted during MODE_IN_COMMUNICATION; built-in InCallManager `startRingback` is hardcoded to the ringback file only).

@@ -1710,6 +1710,17 @@ export default function StreamCallInner() {
   // CallUI via onConnectedChange). Ringback then plays for the whole outgoing
   // ring window and stops the instant we connect / the call ends.
   const [remoteConnected, setRemoteConnected] = useState(false);
+  // Sticky latch: once the call has EVER media-connected (remote joined), stays
+  // true for the rest of this call. The Ciaooo end-tone gates on THIS, not the
+  // live `remoteConnected` — because for the side that did NOT tap End, the
+  // remote leaves first (flipping remoteConnected → false) before their
+  // auto-end hangup() runs, which previously suppressed their Ciao. An
+  // unanswered/declined call never connects, so this stays false → still silent.
+  const everConnectedRef = useRef(false);
+  const handleConnectedChange = useCallback((v: boolean) => {
+    if (v) everConnectedRef.current = true;
+    setRemoteConnected(v);
+  }, []);
   const isOutgoingRinging =
     activeCallReady && iAmCaller && convStatus === 'ringing' && !remoteConnected;
   useRingbackPlayer(isOutgoingRinging);
@@ -1964,15 +1975,17 @@ export default function StreamCallInner() {
     // iter-427: play the "Ciaooo" call-end tone to the leaving participant.
     // 1:1 → both sides run hangup (local End, or remote-ended via CallUI's
     // onHangup) so both hear it; group → only the member who leaves runs it.
-    // Gated on remoteConnected so an unanswered/cancelled ring stays silent.
-    if (remoteConnected) InCallAudio.playCallEndTone?.();
+    // Gated on everConnectedRef (sticky) so an unanswered/cancelled ring stays
+    // silent, while the side that didn't tap End still plays it even though the
+    // remote (and thus live remoteConnected) has already gone.
+    if (everConnectedRef.current) InCallAudio.playCallEndTone?.();
     const cid = liveCallIdRef.current || callId;
     if (cid) void endCall({ callId: String(cid) }).catch(() => {});
     try {
       call?.leave();
     } catch {}
     callHost.end();
-  }, [callId, call, endCall, remoteConnected]);
+  }, [callId, call, endCall]);
 
   // ── Call-waiting: surface a SECOND ringing call during an active call ──────
   const connectedNow = !!client && !!call;
@@ -2165,7 +2178,7 @@ export default function StreamCallInner() {
             isGroupAdmin={isGroupAdmin}
             adminIdentities={adminIdentities}
             conversationName={conversationName}
-            onConnectedChange={setRemoteConnected}
+            onConnectedChange={handleConnectedChange}
           />
           {waitingBanner}
         </NoiseCancellationProvider>
