@@ -9,8 +9,8 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "postinstall": "node ./scripts/patch-rn-webrtc.js && node ./scripts/patch-expo-share-intent.js && node ./scripts/patch-notifee.js",
-    "prepare": "node ./scripts/patch-rn-webrtc.js && node ./scripts/patch-expo-share-intent.js && node ./scripts/patch-notifee.js"
+    "postinstall": "node ./scripts/patch-rn-webrtc.js && node ./scripts/patch-expo-share-intent.js && node ./scripts/patch-notifee.js && node ./scripts/patch-incallmanager.js",
+    "prepare": "node ./scripts/patch-rn-webrtc.js && node ./scripts/patch-expo-share-intent.js && node ./scripts/patch-notifee.js && node ./scripts/patch-incallmanager.js"
   },
   "dependencies": {
     "@babel/core": "^7.29.0",

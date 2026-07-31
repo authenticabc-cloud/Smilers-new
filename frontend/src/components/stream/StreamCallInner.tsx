@@ -177,6 +177,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   const [seconds, setSeconds] = useState(0);
   const [callVideoHidden, setCallVideoHidden] = useState(false); // feature 3 (local hide)
   const wasConnectedRef = useRef(false);
+  const playedConnectedToneRef = useRef(false);
 
   // ── Guarded camera enable (fixes self-view flicker + dropped remote video) ──
   // Multiple effects (connect re-assert, AppState resume, isVideo init) each
@@ -317,6 +318,15 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   useEffect(() => {
     if (!connected) return;
     wasConnectedRef.current = true;
+    // iter-428: play the deep "Connected" tone to THIS participant the moment
+    // media connects (once per call). 1:1 → both sides connect when the callee
+    // answers so both hear it; group → each participant hears it upon joining
+    // (connected = JOINED && a remote is present), and the initiator hears it
+    // together with the first person who joins. Voice & video alike.
+    if (!playedConnectedToneRef.current) {
+      playedConnectedToneRef.current = true;
+      InCallAudio.playCallConnectedTone?.();
+    }
     const t = setInterval(() => setSeconds((v) => v + 1), 1000);
     return () => clearInterval(t);
   }, [connected]);

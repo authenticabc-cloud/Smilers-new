@@ -37,6 +37,7 @@ type NativeInCallManager = {
   stopRingback?: () => void;
   startRingtone?: (type?: string) => void;
   stopRingtone?: () => void;
+  playInCallSound?: (bundleName: string) => void;
   chooseAudioRoute?: (route: 'SPEAKER_PHONE' | 'EARPIECE' | 'WIRED_HEADSET' | 'BLUETOOTH') => void;
   setFlashOn?: (on: boolean, brightness?: number) => void;
   getIsWiredHeadsetPluggedIn?: () => Promise<{ isWiredHeadsetPluggedIn: boolean }>;
@@ -337,23 +338,30 @@ export function stopNativeRingback() {
 }
 
 /**
- * iter-427 CALL-END "Ciaooo" tone. Plays the bundled `incallmanager_busytone.mp3`
- * (a warm, drawn-out "Ciaooo") the moment a participant LEAVES a call.
+ * iter-427/428 in-call SmilerS tones — a warm "Ciaooo" at call-END and a deep
+ * "Connected" at call-CONNECT, played to the LOCAL participant.
  *
- * WHY the busytone bundle (not expo-audio): during an active call the WebRTC
- * audio session runs in MODE_IN_COMMUNICATION which DUCKS/MUTES expo-audio's
- * media stream. InCallManager's busytone plays on the native VOICE-CALL stream
- * (audible during the call & its teardown), and the library auto-stops the
- * session once the tone finishes (onCompletion → stop()). The MediaPlayer runs
- * NATIVELY so it keeps playing even after the RN call screen unmounts/navigates
- * away. Fully defensive + native-only (no-op on web / if the module is missing).
+ * WHY the custom native `playInCallSound` (added by scripts/patch-incallmanager.js,
+ * not `stop({busytone})`): the library's built-in busytone path is gated behind
+ * `audioManagerActivated`/`_audioSessionInitialized`, which is FALSE during a
+ * Stream call (Stream owns the WebRTC audio session, InCallManager is never
+ * started) — so `stop({busytone})` would silently no-op. `playInCallSound`
+ * plays a one-shot bundled sound on the VOICE-COMMUNICATION stream (audible
+ * during MODE_IN_COMMUNICATION) WITHOUT starting/tearing down InCallManager's
+ * own session, so it never disturbs the live call. The native MediaPlayer/
+ * AVAudioPlayer runs natively so it keeps playing after the RN call screen
+ * unmounts/navigates away. Fully defensive + native-only.
  */
 export function playCallEndTone() {
   const native = getNative();
-  if (!native || typeof native.stop !== 'function') return;
-  safeCall(() => {
-    native.stop({ busytone: '_BUNDLE_' });
-  }, 'playCallEndTone');
+  if (!native || typeof native.playInCallSound !== 'function') return;
+  safeCall(() => native.playInCallSound!('incallmanager_busytone'), 'playCallEndTone');
+}
+
+export function playCallConnectedTone() {
+  const native = getNative();
+  if (!native || typeof native.playInCallSound !== 'function') return;
+  safeCall(() => native.playInCallSound!('incallmanager_connected'), 'playCallConnectedTone');
 }
 
 /**
@@ -432,5 +440,6 @@ export const InCallAudio = {
   startRingback: startNativeRingback,
   stopRingback: stopNativeRingback,
   playCallEndTone,
+  playCallConnectedTone,
   playCallWaitingTone,
 };
