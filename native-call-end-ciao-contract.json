@@ -1,0 +1,51 @@
+{
+  "title": "Call-end \"Ciao\" goodbye sound",
+  "version": 1,
+  "updatedAt": "2026-07-31",
+  "summary": "A warm, slightly-long, stressed spoken \"Ciao\" is played to a participant when they LEAVE a call. Applies to BOTH voice and video calls. In 1:1 calls, when either person ends the call BOTH participants hear the Ciao (the call ends for both). In group calls, a participant hears it only after THEY leave the call (remaining members do not hear it).",
+  "behavior": {
+    "trigger": "Play the goodbye sound when the LOCAL participant's call transitions from connected/active to ended (they hung up, or the call ended for them).",
+    "oneToOne": "Both sides transition to ended when either hangs up, so both devices play the Ciao once.",
+    "group": "Only the participant who leaves transitions to ended locally, so only the leaver plays it. Remaining participants keep the call and play nothing.",
+    "callTypes": ["voice", "video"],
+    "playOncePerLeave": true,
+    "doNotPlayOn": [
+      "an unanswered outgoing call that is cancelled before it was ever connected",
+      "an incoming call that is declined/missed before being answered",
+      "a remote participant leaving a group call (only the person leaving hears it)"
+    ]
+  },
+  "audioAsset": {
+    "description": "The web app synthesizes the Ciao once via text-to-speech and caches it in Convex File Storage; every web client reuses the cached URL.",
+    "web": {
+      "query": "callSounds.getSoundUrl",
+      "queryArgs": { "key": "ciao" },
+      "queryReturns": "string | null (a temporary Convex storage URL for the MP3, or null until generated)",
+      "generatorAction": "callSounds.ensureCiaoSound",
+      "generatorArgs": { "force": "optional boolean" },
+      "generatorReturns": { "storageId": "Id<_storage>" },
+      "storage": { "table": "appSounds", "keyField": "key", "keyValue": "ciao", "index": "by_key" }
+    },
+    "native": {
+      "recommendation": "The native Android app should ship its OWN bundled short 'Ciao' sound asset (mp3/ogg in res/raw) and play it locally on call leave. Do NOT depend on the web Convex storage URL; it is a temporary signed URL intended for the web client. If you prefer a shared asset, request a permanent Hercules CDN URL from the web team.",
+      "delivery": "Play the goodbye tone from the local FCM/Stream call-leave handler on the device, mirroring the trigger rules above."
+    }
+  },
+  "notes": [
+    "This is purely a client-side sound-effect feature; no change to the ringing path (notifyIncomingCall) or to any call orchestration mutation.",
+    "The web trigger keys off the local call status transition active -> ended in the CallProvider, which is why 1:1 plays for both and group plays only for the leaver."
+  ],
+  "_nativeImplementationStatus": {
+    "conformsAsOf": "iter-446 (2026-07-31)",
+    "file": "src/components/stream/StreamCallInner.tsx",
+    "mapping": {
+      "trigger active->ended": "hangup() runs on local End; the CallUI auto-end effect calls onHangup() when convStatus flips to ended/declined OR the remote drops (remoteParticipants.length===0), i.e. when the LOCAL call transitions to ended.",
+      "oneToOne both play": "The non-initiator's CallUI detects the remote leaving + convStatus 'ended' and calls onHangup() -> hangup() -> plays. The initiator plays directly in hangup().",
+      "group leaver only": "The auto-end effect early-returns while remoteParticipants.length > 0, so remaining group members never call hangup() and stay silent; only the leaver's hangup() plays.",
+      "playOncePerLeave": "endedRef guard in hangup().",
+      "doNotPlayOn unanswered/declined": "playCallEndTone() is gated on remoteConnected (true only after a real connect); decline uses a separate path that never plays the tone.",
+      "bundled native asset": "res/raw/incallmanager_busytone.(mp3) played via the custom native playInCallSound()."
+    },
+    "openIssue": "Audibility during the live WebRTC/Stream audio session is still under diagnosis via on-device TONE Diagnostic Logs (see PRD iter-442/444)."
+  }
+}

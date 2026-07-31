@@ -1,5 +1,17 @@
 # Smilers Mobile App — PRD
 
+## iter-446 (Jun 2026): Received web team's `native-call-end-ciao-contract.json` — native ALREADY conforms
+- Saved the contract to `/app/native-call-end-ciao-contract.json` (behavior contract only — NO web→native signal; each client plays locally on its own active→ended transition).
+- Audited our end-tone logic (`StreamCallInner.tsx`) against every rule — it MATCHES:
+  - Trigger active→ended: `hangup()` (local End) + CallUI auto-end effect that calls `onHangup()` when `convStatus` flips ended/declined OR the remote drops.
+  - 1:1 both play: the non-initiator's CallUI detects remote-leave + ended and calls `onHangup()`→`hangup()`; initiator plays directly. ✓
+  - Group leaver-only: auto-end effect early-returns while `remoteParticipants.length > 0`, so remaining members stay silent; only the leaver's `hangup()` plays. ✓
+  - playOncePerLeave: `endedRef` guard. ✓  · voice+video: not gated on `isVideo`. ✓
+  - doNotPlayOn unanswered/declined: `playCallEndTone()` gated on `remoteConnected`; decline uses a separate path. ✓
+  - Bundled native asset (`res/raw/incallmanager_busytone`) via custom `playInCallSound()` — matches the contract's "ship your own asset, don't use the web Convex URL". ✓
+- CONCLUSION: no logic change needed. The ONLY open item is native AUDIBILITY, still pending the on-device TONE Diagnostic Logs (iter-442/444).
+
+
 ## iter-445 (Jun 2026): Pending-approval badge on Groups tab (admins only) + Receive-Once group-dedupe diagnosis
 - **#2 Message-approval count on the Groups tab (DONE, app-side):** new `src/components/GroupApprovalBadge.tsx` renders a small red "shield ✓ N" pill on each group row, driven by the reactive `messageApproval.getPendingCount({conversationId})` query. Backend already returns 0 for non-admins, so the badge is ADMIN-ONLY and renders nothing (returns null) otherwise. Wired into the Groups-tab row name line in `app/(tabs)/groups.tsx` (groups tab only; the main FlatList already includes pinned+regular groups). Each row owns its own live subscription (unmounts off-screen) and the component is `React.memo`'d. Complements the existing in-group "Pending Messages" badge (`group-info-pending`). Lint clean; app boots.
 - **#1 Receive-Once NOT hiding duplicates across GROUP↔1:1 = BACKEND (Convex) gap, not app:** verified the client already sends `fileHash` on all photo/video/doc sends AND on forwards (`msg.fileHash`), and only RENDERS the backend-set per-viewer `receiveOnceHidden` flag (`MediaBubble.tsx`) — it has no own dedupe. Works 1:1↔1:1 but the backend isn't setting `receiveOnceHidden` when a group receipt is involved (its "already received this fileHash?" scan likely ignores group conversations, and/or the shared group row lacks per-recipient hidden flags). Wrote precise fix spec `/app/CONVEX_BACKEND_FIX_RECEIVE_ONCE_GROUPS.md` for the user's Convex team (per-recipient, cross-conversation incl. groups, ordering, acceptance tests). No app change possible.
