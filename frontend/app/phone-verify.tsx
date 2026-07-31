@@ -18,7 +18,7 @@ import { parsePhoneNumberFromString } from 'libphonenumber-js';
 import { useRouter } from 'expo-router';
 import { useAction, useMutation, useQuery } from 'convex/react';
 import { api } from '../src/convexApi';
-import { PHONE_VERIFIED_INSTALL_KEY, readInstallMarker, writeInstallMarker } from '../src/lib/settingsStorage';
+import { PHONE_VERIFIED_INSTALL_KEY, writeInstallMarker, markDeviceProvisioned, resolveInstallVerified } from '../src/lib/settingsStorage';
 import { useAuth } from '../src/providers/AuthProvider';
 import { useScreenCaptureProtection } from '../src/hooks/useScreenCaptureProtection';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/theme';
@@ -57,16 +57,18 @@ export default function PhoneVerifyScreen() {
   useEffect(() => {
     let cancelled = false;
     const loadInstallMarker = async () => {
-      const installMarker = await readInstallMarker(PHONE_VERIFIED_INSTALL_KEY);
+      // Skip verification if this install is already verified OR (on an in-place
+      // update) the account is server-verified and the device was provisioned.
+      const verified = await resolveInstallVerified(Boolean(me?.phoneVerified));
       if (!cancelled) {
-        setHasVerifiedInstall(installMarker === 'true');
+        setHasVerifiedInstall(verified);
       }
     };
     void loadInstallMarker();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [me]);
 
   // The local install marker is the SINGLE source of truth. We deliberately do
   // NOT self-heal from the server `phoneVerified` flag: after every fresh
@@ -197,6 +199,10 @@ export default function PhoneVerifyScreen() {
       // Write the local install marker — this triggers the redirect effect immediately
       // and is the single source of truth for "this device has verified".
       await writeInstallMarker(PHONE_VERIFIED_INSTALL_KEY, 'true');
+      // Also mark the device provisioned so a FUTURE in-place update (where the
+      // install marker might be missing) can skip re-verification via the
+      // server-verified fallback, while a true reinstall still re-verifies.
+      await markDeviceProvisioned();
       setHasVerifiedInstall(true);
       // Refresh the user record once so we have name/avatar locally; useQuery will keep it live.
       try {

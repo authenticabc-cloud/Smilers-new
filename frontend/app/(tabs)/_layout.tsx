@@ -5,7 +5,7 @@ import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { api } from '../../src/convexApi';
-import { PHONE_VERIFIED_INSTALL_KEY, readInstallMarker } from '../../src/lib/settingsStorage';
+import { resolveInstallVerified, markDeviceProvisioned } from '../../src/lib/settingsStorage';
 import { useLocalReadMap } from '../../src/hooks/useLocalReadMap';
 import { conversationLastActivityMs, effectiveUnread } from '../../src/lib/localReadState';
 import { callDebug } from '../../src/lib/callDebugLog';
@@ -164,23 +164,33 @@ export default function TabsLayout() {
         return;
       }
 
-      const installMarker = await readInstallMarker(PHONE_VERIFIED_INSTALL_KEY);
-      if (!cancelled) {
-        setHasVerifiedInstall(installMarker === 'true');
+      // Skip verification if this install is already verified OR (on an in-place
+      // update) the account is server-verified and the device was provisioned.
+      // A true reinstall wipes local data so this can't fire → still re-verifies.
+      const verified = await resolveInstallVerified(Boolean(me?.phoneVerified));
+      if (cancelled) return;
+      if (verified) {
+        setHasVerifiedInstall(true);
         setInstallVerificationChecked(true);
-        if (installMarker !== 'true') {
-          setBootstrapAttempted(true);
-        }
+        // Ensure the device is marked provisioned so a FUTURE update where the
+        // install marker is missing can still skip re-verification.
+        void markDeviceProvisioned();
+      } else if (!meLoading) {
+        // Only conclude "not verified" once the server user has resolved, so the
+        // update fallback had a fair chance (avoids a phone-verify flash on
+        // updates while `me` loads).
+        setHasVerifiedInstall(false);
+        setInstallVerificationChecked(true);
+        setBootstrapAttempted(true);
       }
     };
 
-    setInstallVerificationChecked(false);
     void loadInstallVerification();
 
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated]);
+  }, [isAuthenticated, me, meLoading]);
 
   // iter-380 COLD-START STALL FIX: device logs showed `getCurrentUser` (me)
   // taking ~33s to resolve on a cold start with a stale cached id_token —
