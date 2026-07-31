@@ -1,5 +1,13 @@
 # Smilers Mobile App — PRD
 
+## iter-424 (Jun 2026): Web⇄Native Stream call interop spec (no code change needed)
+- Clarified architecture: normal 1:1 calls render `StreamCallInner` (Stream) via `CallHost.tsx` (`useStream = !screenOnly && !conference`); screen-share/conference use legacy WebRTC. So native 1:1 = Stream (user was correct). The `EXPO_PUBLIC_USE_TWILIO=0` flag only affects the push-routing layer, not the Stream media path. No Twilio switch performed.
+- Root cause of native↔web failure = web app not yet on the same Stream app/room/identity (migration WebRTC→Stream still in progress on web).
+- Delivered `/app/WEB_STREAM_CALL_INTEROP_SPEC.md` — exact contract for the web team: Stream API key `sf6v64y8z2q7`; Stream `user.id` = Convex `_id`; token via `POST /api/stream/token {user_id}` → `{token, api_key}` (verified live); call type `'default'`; call id `smilers_conv_<conversationId>` (matches native's iter-423 canonical room); join `{create:true, ring:false, notify:false}`; ringing via Convex `calls.initiateCall/answerCall/declineCall` (FCM doorbell), NOT Stream ring; hang up with `call.leave()`.
+- Verified `/api/stream/token` and `/api/twilio/video-token` endpoints live.
+
+
+
 ## iter-423 (Jun 2026): "Never connects" ROOT CAUSE FIXED — deterministic conversationId-derived Stream room
 - Backend team confirmed the ring contract: the FCM payload carries `twilio_room_name = "smilers_conv_<conversationId>"` (derived from CONVERSATION id), and `callId` is a reference only — NOT the room key. The native client was resolving the Stream room from `callId`/`createdCallId` (the Convex call-record id), which depends on the short-TTL ring query resolving and could differ from the caller's room → callee joined a DIFFERENT room ("answered but never connects").
 - Fix (`StreamCallInner.tsx`): `streamCallId` now = `streamRoomParam || \`smilers_conv_${conversationId}\` || pinnedRoom || callId || createdCallId`. Both devices derive the SAME room from conversationId IMMEDIATELY (no query/TTL race, no mid-call teardown). Explicit `streamRoom` param (group add-participant) still overrides; call-record ids kept only as last-resort fallbacks.
