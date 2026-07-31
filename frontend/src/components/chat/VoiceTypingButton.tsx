@@ -51,6 +51,7 @@ export function VoiceTypingButton({
   const [detectedLang, setDetectedLang] = useState<string | null>(null);
   const [showCheat, setShowCheat] = useState(false);
   const dictatedRef = useRef(false); // any speech captured this session?
+  const commandModeRef = useRef(false); // during the pause prompt, listen for "send"/"continue"
 
   const isAuto = languageCode === AUTO_CODE;
   // On iOS the recognizer can't auto-detect, so "Auto" falls back to the
@@ -73,6 +74,10 @@ export function VoiceTypingButton({
 
   const handleFinalText = useCallback(
     (t: string) => {
+      if (commandModeRef.current) {
+        interpretCommandRef.current(t);
+        return;
+      }
       dictatedRef.current = true;
       onAppendText(spokenToEmoji(t));
     },
@@ -80,10 +85,12 @@ export function VoiceTypingButton({
   );
 
   const handleSilence = useCallback(() => {
-    // Pause and ask the user only if we actually captured something.
+    // Pause and ask the user only if we actually captured something. Keep the
+    // recognizer running in COMMAND MODE so the user can say "send"/"continue".
     if (!dictatedRef.current) return;
-    setListening(false);
+    commandModeRef.current = true;
     setPausePrompt(true);
+    setListening(true);
   }, []);
 
   const { partial } = useVoiceTyping({
@@ -137,19 +144,36 @@ export function VoiceTypingButton({
   }, [listening, pulse]);
 
   const onSend = useCallback(() => {
+    commandModeRef.current = false;
     setPausePrompt(false);
+    setListening(false);
     onRequestSend();
   }, [onRequestSend]);
 
   const onKeepTalking = useCallback(() => {
+    commandModeRef.current = false;
     setPausePrompt(false);
     setListening(true);
   }, []);
 
   const onStop = useCallback(() => {
+    commandModeRef.current = false;
     setPausePrompt(false);
     setListening(false);
   }, []);
+
+  // Voice-sensitive prompt: interpret "send" / "continue" spoken during the pause.
+  const interpretCommandRef = useRef<(t: string) => void>(() => {});
+  interpretCommandRef.current = (text: string) => {
+    if (!commandModeRef.current) return;
+    const s = String(text || '').toLowerCase();
+    if (/\bsend\b/.test(s)) onSend();
+    else if (/\b(continue|keep|talking|talk|resume)\b/.test(s)) onKeepTalking();
+  };
+  // Interim results give a snappier response than waiting for the final chunk.
+  useEffect(() => {
+    if (pausePrompt && commandModeRef.current && partial) interpretCommandRef.current(partial);
+  }, [partial, pausePrompt]);
 
   return (
     <>
@@ -170,8 +194,8 @@ export function VoiceTypingButton({
         )}
       </TouchableOpacity>
 
-      {/* Live listening banner */}
-      <Modal visible={listening} transparent animationType="fade" onRequestClose={onStop}>
+      {/* Live listening banner (hidden while the pause prompt is up) */}
+      <Modal visible={listening && !pausePrompt} transparent animationType="fade" onRequestClose={onStop}>
         <View style={styles.bannerWrap} pointerEvents="box-none">
           <View style={styles.banner} testID="voice-typing-banner">
             <View style={styles.recDot} />
@@ -202,6 +226,7 @@ export function VoiceTypingButton({
             <Feather name="pause-circle" size={30} color={Colors.primary} />
             <Text style={styles.promptTitle}>You paused</Text>
             <Text style={styles.promptSub}>Send this message or keep talking?</Text>
+            <Text style={styles.promptHint}>🎙 Say “Send” or “Continue”</Text>
             <View style={styles.promptRow}>
               <TouchableOpacity style={[styles.promptBtn, styles.promptGhost]} onPress={onKeepTalking} testID="voice-typing-continue">
                 <Feather name="mic" size={18} color={Colors.primary} />
@@ -341,6 +366,7 @@ const styles = StyleSheet.create({
   },
   promptTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary, marginTop: 8 },
   promptSub: { fontSize: FontSize.base, color: Colors.textSecondary, marginTop: 4, textAlign: 'center' },
+  promptHint: { fontSize: FontSize.sm, color: Colors.primary, marginTop: 8, fontWeight: FontWeight.semibold },
   promptRow: { flexDirection: 'row', gap: 12, marginTop: Spacing.lg },
   promptBtn: {
     flexDirection: 'row',

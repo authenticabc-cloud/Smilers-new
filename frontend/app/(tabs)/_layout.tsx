@@ -5,7 +5,7 @@ import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { api } from '../../src/convexApi';
-import { PHONE_VERIFIED_INSTALL_KEY, readStoredString } from '../../src/lib/settingsStorage';
+import { PHONE_VERIFIED_INSTALL_KEY, readInstallMarker } from '../../src/lib/settingsStorage';
 import { useLocalReadMap } from '../../src/hooks/useLocalReadMap';
 import { conversationLastActivityMs, effectiveUnread } from '../../src/lib/localReadState';
 import { callDebug } from '../../src/lib/callDebugLog';
@@ -164,7 +164,7 @@ export default function TabsLayout() {
         return;
       }
 
-      const installMarker = await readStoredString(PHONE_VERIFIED_INSTALL_KEY);
+      const installMarker = await readInstallMarker(PHONE_VERIFIED_INSTALL_KEY);
       if (!cancelled) {
         setHasVerifiedInstall(installMarker === 'true');
         setInstallVerificationChecked(true);

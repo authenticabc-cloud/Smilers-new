@@ -18,7 +18,7 @@ import { parsePhoneNumberFromString } from 'libphonenumber-js';
 import { useRouter } from 'expo-router';
 import { useAction, useMutation, useQuery } from 'convex/react';
 import { api } from '../src/convexApi';
-import { PHONE_VERIFIED_INSTALL_KEY, readStoredString, writeStoredString } from '../src/lib/settingsStorage';
+import { PHONE_VERIFIED_INSTALL_KEY, readInstallMarker, writeInstallMarker } from '../src/lib/settingsStorage';
 import { useAuth } from '../src/providers/AuthProvider';
 import { useScreenCaptureProtection } from '../src/hooks/useScreenCaptureProtection';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../src/theme';
@@ -57,7 +57,7 @@ export default function PhoneVerifyScreen() {
   useEffect(() => {
     let cancelled = false;
     const loadInstallMarker = async () => {
-      const installMarker = await readStoredString(PHONE_VERIFIED_INSTALL_KEY);
+      const installMarker = await readInstallMarker(PHONE_VERIFIED_INSTALL_KEY);
       if (!cancelled) {
         setHasVerifiedInstall(installMarker === 'true');
       }
@@ -68,22 +68,15 @@ export default function PhoneVerifyScreen() {
     };
   }, []);
 
-  // SINGLE redirect effect: trust the local install marker, AND self-heal from server data.
-  // No `finalizingVerification` state, no duplicate effects — prevents the rapid double
-  // router.replace() calls that caused the visible "shaking" loop.
+  // The local install marker is the SINGLE source of truth. We deliberately do
+  // NOT self-heal from the server `phoneVerified` flag: after every fresh
+  // install (incl. reinstalls on the same device), the user MUST complete phone
+  // verification again — even if their account was verified on a prior install.
   useEffect(() => {
     if (hasVerifiedInstall) {
       router.replace('/(tabs)/chats');
-      return;
     }
-    // Self-heal: server says user is verified but the local marker is missing
-    // (e.g. fresh install on a known account). Write the marker and proceed.
-    if (me && me.phone && me.phoneVerified) {
-      void writeStoredString(PHONE_VERIFIED_INSTALL_KEY, 'true');
-      setHasVerifiedInstall(true);
-      router.replace('/(tabs)/chats');
-    }
-  }, [hasVerifiedInstall, me, router]);
+  }, [hasVerifiedInstall, router]);
 
   useEffect(() => {
     if (!isAuthenticated || meLoading || me || syncingUser) {
@@ -203,7 +196,7 @@ export default function PhoneVerifyScreen() {
       await verifyOtp({ phone: fullPhoneRef.current, code });
       // Write the local install marker — this triggers the redirect effect immediately
       // and is the single source of truth for "this device has verified".
-      await writeStoredString(PHONE_VERIFIED_INSTALL_KEY, 'true');
+      await writeInstallMarker(PHONE_VERIFIED_INSTALL_KEY, 'true');
       setHasVerifiedInstall(true);
       // Refresh the user record once so we have name/avatar locally; useQuery will keep it live.
       try {

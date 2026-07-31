@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const PRIVACY_SETTINGS_KEY = 'smilers_privacy_settings';
 export const APP_LOCK_SETTINGS_KEY = 'smilers_app_lock_settings';
@@ -114,5 +115,45 @@ export async function removeStoredValue(key: string) {
     await SecureStore.deleteItemAsync(key);
   } catch (errorValue) {
     console.warn('Failed to remove stored value', key, errorValue);
+  }
+}
+
+/**
+ * Install-scoped marker helpers (e.g. PHONE_VERIFIED_INSTALL_KEY).
+ *
+ * These MUST live in storage that is CLEARED on app uninstall on BOTH platforms
+ * so a reinstall forces the flow again. expo-secure-store uses the iOS Keychain,
+ * which PERSISTS across uninstall — so a reinstalled iOS app would wrongly skip
+ * phone verification. AsyncStorage (NSUserDefaults on iOS, cleared on uninstall)
+ * gives the correct "re-verify on every fresh install" behavior. We also delete
+ * any legacy Keychain copy on write so it can't act as a reinstall backdoor.
+ */
+export async function readInstallMarker(key: string): Promise<string> {
+  try {
+    if (Platform.OS === 'web') {
+      return getWebStorage()?.getItem(key) || '';
+    }
+    return (await AsyncStorage.getItem(key)) || '';
+  } catch (errorValue) {
+    console.warn('Failed to read install marker', key, errorValue);
+    return '';
+  }
+}
+
+export async function writeInstallMarker(key: string, value: string) {
+  try {
+    if (Platform.OS === 'web') {
+      getWebStorage()?.setItem(key, value);
+      return;
+    }
+    await AsyncStorage.setItem(key, value);
+    // Drop any legacy Keychain copy so it can't survive an uninstall.
+    try {
+      await SecureStore.deleteItemAsync(key);
+    } catch {
+      /* ignore */
+    }
+  } catch (errorValue) {
+    console.warn('Failed to write install marker', key, errorValue);
   }
 }

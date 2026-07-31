@@ -1,6 +1,11 @@
 # Smilers Mobile App — PRD
 
-## iter-438 (Jun 2026): Photo Editor — press-and-hold compare extended to tint Filters
+## iter-439 (Jun 2026): Voice-typing pause = voice-controlled + phone re-verification on every reinstall
+- **Voice-sensitive Send / Continue:** during the 5s-pause prompt the recognizer now stays in a "command mode" — saying **"Send"** sends, **"Continue"/"Keep talking"** resumes dictation (interim results acted on for snappiness). Prompt shows "🎙 Say ‘Send’ or ‘Continue’"; tap buttons still work. Listening banner hidden while the prompt is up so they don't overlap. (`VoiceTypingButton.tsx` — `commandModeRef` + `interpretCommandRef`.)
+- **Phone re-verification on every fresh install (incl. same-device reinstall):** ROOT CAUSE — the "verified this install" marker lived in expo-secure-store, and the **iOS Keychain survives uninstall**, so reinstalls skipped verification; plus phone-verify **self-healed from the server `phoneVerified` flag**. Fixes: (1) new `readInstallMarker`/`writeInstallMarker` in `settingsStorage.ts` store the marker in **AsyncStorage** (cleared on uninstall on BOTH platforms) and delete any legacy Keychain copy on write; (2) removed the server-flag self-heal in `phone-verify.tsx` so the LOCAL install marker is the single source of truth. Now after Google/Apple OIDC sign-in on a fresh install, phone (Twilio OTP) verification is always required. OTP mechanism unchanged (confirmed via integration expert). Note: existing verified users re-verify once after this update (intended, stricter behavior).
+- Lint clean; app boots to Sign In. (Voice command mode is native-only STT.)
+
+
 - Added a **Compare** chip (press-and-hold) at the end of the Filter chip row (shown when a filter is active): while held it hides the tint overlay to reveal the original photo, snapping back on release. Shares the same `comparing` state/gesture as the Adjust compare (reset effect now covers both `adjust` + `filter` tools). Consistent "peek original" gesture across the editor.
 - Lint clean; app boots to Sign In.
 
