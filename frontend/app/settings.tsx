@@ -67,6 +67,7 @@ const ITEMS: Row[] = [
   { key: 'chat-once', route: '/chat-once', title: 'Chat Once', sub: 'Temporary anonymous conversations', icon: 'message-circle', lib: 'mc', premium: true },
   { key: 'help', route: '/help', title: 'Help & Support', sub: 'FAQs, contact support team', icon: 'help-circle-outline', lib: 'ion' },
   { key: 'server-status', route: '/server-status', title: 'Server Status', sub: 'Backend health, version & integrations', icon: 'pulse-outline', lib: 'ion' },
+  { key: 'diagnostic-logs', route: '/diagnostic-logs', title: 'Diagnostic Logs', sub: 'Troubleshoot call tones & push (temporary)', icon: 'bug-outline', lib: 'ion' },
   { key: 'app-updates', route: '/app-updates', title: 'App Version & Updates', sub: 'Check for the latest version', icon: 'rocket-outline', lib: 'ion' },
   { key: 'account', route: '/account', title: 'Account', sub: 'Sign out, delete account', icon: 'lock-closed-outline', lib: 'ion', danger: true },
 ];
