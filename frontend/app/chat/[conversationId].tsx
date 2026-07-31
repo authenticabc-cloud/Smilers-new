@@ -138,6 +138,7 @@ import { MessageActionSheet } from '../../src/components/chat/MessageActionSheet
 import { DeleteMessageSheet } from '../../src/components/chat/DeleteMessageSheet';
 import { DisappearingSheet, DISAPPEARING_OPTIONS } from '../../src/components/chat/DisappearingSheet';
 import { ForwardPickerSheet } from '../../src/components/chat/ForwardPickerSheet';
+import { VoiceTypingButton } from '../../src/components/chat/VoiceTypingButton';
 import { TemplatePickerSheet } from '../../src/components/chat/TemplatePickerSheet';
 import { startCall } from '../../src/lib/twilio/startCall';
 
@@ -3547,74 +3548,115 @@ export default function ChatScreen() {
     [editMessage, updateMessage, editTextMutation],
   );
 
+  const [forwardProgress, setForwardProgress] = useState<{ done: number; total: number } | null>(null);
+
+  // Collect the message(s) the current forward action applies to (multi-select
+  // set, else the single long-pressed message).
+  const collectMsgsToForward = useCallback((): any[] => {
+    if (multiSelectIds && multiSelectIds.length > 0) {
+      return multiSelectIds.map((id) => msgById.get(id)).filter((m: any) => !!m);
+    }
+    if (selectedMsg) return [selectedMsg];
+    return [];
+  }, [multiSelectIds, msgById, selectedMsg]);
+
+  // Forward the given messages to ONE target conversation (sequential to
+  // preserve original order + E2EE re-encryption per target).
+  const forwardMsgsToTarget = useCallback(
+    async (msgsToForward: any[], targetConversationId: string) => {
+      for (const msg of msgsToForward) {
+        const fwd = {
+          isForwarded: true as const,
+          forwardOfMessageId: msg._id,
+          ...(msg.fileHash ? { fileHash: msg.fileHash } : {}),
+        };
+        await sendMessage(
+          msg.type === 'image' && msg.storageId
+            ? {
+                conversationId: targetConversationId,
+                type: 'image',
+                text: msg.text || '',
+                storageId: msg.storageId,
+                ...(msg.mimeType ? { mimeType: msg.mimeType } : {}),
+                ...(msg.duration ? { duration: msg.duration } : {}),
+                ...fwd,
+              }
+            : {
+                conversationId: targetConversationId,
+                type: msg.type || 'text',
+                text: msg.text || '',
+                ...(msg.poll ? { poll: msg.poll } : {}),
+                ...(msg.storageId ? { storageId: msg.storageId } : {}),
+                ...(msg.mimeType ? { mimeType: msg.mimeType } : {}),
+                ...(msg.fileName ? { fileName: msg.fileName } : {}),
+                ...(msg.fileSize ? { fileSize: msg.fileSize } : {}),
+                ...(msg.duration ? { duration: msg.duration } : {}),
+                ...fwd,
+              }
+        );
+      }
+    },
+    [sendMessage]
+  );
+
   const doForwardTo = useCallback(
     async (targetConversationId: string) => {
-      // Determine the list of messages to forward. In multi-select mode
-      // we look them up by id from the visible messages map. Outside
-      // multi-select we fall back to the single message that triggered
-      // the long-press action sheet.
-      let msgsToForward: any[] = [];
-      if (multiSelectIds && multiSelectIds.length > 0) {
-        msgsToForward = multiSelectIds
-          .map((id) => msgById.get(id))
-          .filter((m: any) => !!m);
-      } else if (selectedMsg) {
-        msgsToForward = [selectedMsg];
-      }
+      const msgsToForward = collectMsgsToForward();
       setShowForwardPicker(false);
       closeActionSheet();
       if (msgsToForward.length === 0 || !targetConversationId) return;
       try {
-        // Forward sequentially to preserve the original send order in
-        // the destination conversation. Parallel sends would race the
-        // _creationTime stamps.
-        for (const msg of msgsToForward) {
-          // Forward via send() with lineage args so the backend increments the
-          // global forward counter and stamps this copy (isForwarded +
-          // forwardCount). This keeps E2EE intact (we re-send/encrypt for the
-          // target conversation) while the server owns the FW<n> counting.
-          const fwd = {
-            isForwarded: true as const,
-            forwardOfMessageId: msg._id,
-            ...(msg.fileHash ? { fileHash: msg.fileHash } : {}),
-          };
-          await sendMessage(
-            msg.type === 'image' && msg.storageId
-              ? {
-                  conversationId: targetConversationId,
-                  type: 'image',
-                  text: msg.text || '',
-                  storageId: msg.storageId,
-                  ...(msg.mimeType ? { mimeType: msg.mimeType } : {}),
-                  ...(msg.duration ? { duration: msg.duration } : {}),
-                  ...fwd,
-                }
-              : {
-                  conversationId: targetConversationId,
-                  type: msg.type || 'text',
-                  text: msg.text || '',
-                  ...(msg.poll ? { poll: msg.poll } : {}),
-                  ...(msg.storageId ? { storageId: msg.storageId } : {}),
-                  ...(msg.mimeType ? { mimeType: msg.mimeType } : {}),
-                  ...(msg.fileName ? { fileName: msg.fileName } : {}),
-                  ...(msg.fileSize ? { fileSize: msg.fileSize } : {}),
-                  ...(msg.duration ? { duration: msg.duration } : {}),
-                  ...fwd,
-                }
-          );
-        }
-        Alert.alert(
-          msgsToForward.length === 1 ? 'Forwarded' : `Forwarded ${msgsToForward.length} messages`,
-        );
-        // Exit multi-select mode after a successful bulk forward.
-        if (multiSelectIds && multiSelectIds.length > 0) {
-          setMultiSelectIds(null);
-        }
+        await forwardMsgsToTarget(msgsToForward, targetConversationId);
+        Alert.alert(msgsToForward.length === 1 ? 'Forwarded' : `Forwarded ${msgsToForward.length} messages`);
+        if (multiSelectIds && multiSelectIds.length > 0) setMultiSelectIds(null);
       } catch (e: any) {
         Alert.alert('Failed to forward', e?.message || 'Unknown error');
       }
     },
-    [multiSelectIds, msgById, selectedMsg, sendMessage]
+    [collectMsgsToForward, forwardMsgsToTarget, multiSelectIds]
+  );
+
+  // Forward to MANY recipients — dispatched in BLOCKS OF 25 targets at a time
+  // (each block sent in parallel, then a short gap) so a large fan-out never
+  // floods the backend. Progress is surfaced live in the picker sheet.
+  const doForwardToMany = useCallback(
+    async (targetIds: string[]) => {
+      const msgsToForward = collectMsgsToForward();
+      const targets = Array.from(new Set(targetIds)).filter(Boolean);
+      if (msgsToForward.length === 0 || targets.length === 0) {
+        setShowForwardPicker(false);
+        return;
+      }
+      const BATCH = 25;
+      setForwardProgress({ done: 0, total: targets.length });
+      let done = 0;
+      let failed = 0;
+      try {
+        for (let i = 0; i < targets.length; i += BATCH) {
+          const block = targets.slice(i, i + BATCH);
+          const results = await Promise.allSettled(
+            block.map((t) => forwardMsgsToTarget(msgsToForward, t))
+          );
+          failed += results.filter((r) => r.status === 'rejected').length;
+          done += block.length;
+          setForwardProgress({ done, total: targets.length });
+          if (i + BATCH < targets.length) await new Promise((r) => setTimeout(r, 350));
+        }
+      } finally {
+        setForwardProgress(null);
+        setShowForwardPicker(false);
+        closeActionSheet();
+        if (multiSelectIds && multiSelectIds.length > 0) setMultiSelectIds(null);
+        const ok = targets.length - failed;
+        Alert.alert(
+          'Forwarded',
+          `Sent to ${ok} chat${ok === 1 ? '' : 's'}` +
+            (failed > 0 ? ` · ${failed} failed` : '') +
+            (msgsToForward.length > 1 ? ` (${msgsToForward.length} messages each)` : '')
+        );
+      }
+    },
+    [collectMsgsToForward, forwardMsgsToTarget, multiSelectIds]
   );
 
   const onStar = useCallback(async () => {
@@ -5184,6 +5226,16 @@ export default function ChatScreen() {
               >
                 <Ionicons name="color-palette-outline" size={20} color={Colors.textSecondary} />
               </TouchableOpacity>
+              <VoiceTypingButton
+                disabled={!isConversationAvailable || uploading || pendingImages.length > 0}
+                onAppendText={(t) =>
+                  setText((prev) => {
+                    const base = String(prev || '').trim();
+                    return base ? base + ' ' + t : t;
+                  })
+                }
+                onRequestSend={handleSend}
+              />
             </View>
           ) : null}
             </>
@@ -5392,6 +5444,9 @@ export default function ChatScreen() {
         myUserId={me?._id ? String(me._id) : undefined}
         onClose={() => setShowForwardPicker(false)}
         onForwardTo={doForwardTo}
+        onForwardToMany={doForwardToMany}
+        forwarding={!!forwardProgress}
+        progress={forwardProgress || undefined}
         onSaveToDiary={async () => {
           try {
             // Determine which messages we're forwarding — mirror
