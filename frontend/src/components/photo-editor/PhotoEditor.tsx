@@ -32,6 +32,9 @@ import Svg, { Path } from 'react-native-svg';
 import Animated, { useAnimatedStyle, useSharedValue, runOnJS } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { BlurView } from 'expo-blur';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const PREFS_KEY = 'smilers.photoeditor.prefs.v1';
 
 type Tool = 'draw' | 'text' | 'sticker' | 'crop' | 'filter' | 'blur' | null;
 
@@ -137,6 +140,26 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
   const canvasRef = useRef<View>(null);
   const pathRef = useRef('');
 
+  // Remember the last-used color & brush size across editing sessions.
+  const prefsLoaded = useRef(false);
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(PREFS_KEY);
+        if (raw) {
+          const p = JSON.parse(raw);
+          if (typeof p.color === 'string') setColor(p.color);
+          if (typeof p.brush === 'number') setBrush(p.brush);
+        }
+      } catch {}
+      prefsLoaded.current = true;
+    })();
+  }, []);
+  useEffect(() => {
+    if (!prefsLoaded.current) return;
+    AsyncStorage.setItem(PREFS_KEY, JSON.stringify({ color, brush })).catch(() => {});
+  }, [color, brush]);
+
   useEffect(() => {
     setBaseUri(imageUri);
     setStrokes([]);
@@ -163,6 +186,10 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
       },
     );
   }, [baseUri]);
+
+  useEffect(() => {
+    if (tool !== 'draw' && eraser) setEraser(false);
+  }, [tool, eraser]);
 
   const HEADER_H = 52 + insets.top;
   const TOOLBAR_H = 132 + insets.bottom;
@@ -540,8 +567,11 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
               {PALETTE.map((c) => (
                 <TouchableOpacity
                   key={c}
-                  onPress={() => setColor(c)}
-                  style={[styles.swatch, { backgroundColor: c }, color === c && styles.swatchSel]}
+                  onPress={() => {
+                    setColor(c);
+                    if (tool === 'draw') setEraser(false);
+                  }}
+                  style={[styles.swatch, { backgroundColor: c }, color === c && !eraser && styles.swatchSel]}
                 />
               ))}
               <View style={styles.sizeGroup}>
@@ -557,6 +587,15 @@ export default function PhotoEditor({ visible, imageUri, onCancel, onDone, conte
                     </TouchableOpacity>
                   );
                 })}
+                {tool === 'draw' ? (
+                  <TouchableOpacity
+                    onPress={() => setEraser((v) => !v)}
+                    style={[styles.sizeBtn, styles.eraserBtn, eraser && styles.sizeBtnSel]}
+                    testID="pe-eraser"
+                  >
+                    <Ionicons name="backspace-outline" size={20} color="#fff" />
+                  </TouchableOpacity>
+                ) : null}
                 {tool === 'text' ? (
                   <TouchableOpacity onPress={addText} style={styles.addTextBtn}>
                     <Text style={styles.addTextLabel}>+ Add text</Text>
@@ -917,6 +956,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#222',
   },
   sizeBtnSel: { backgroundColor: '#0A84FF' },
+  eraserBtn: { backgroundColor: '#333' },
   addTextBtn: { paddingHorizontal: 14, height: 40, borderRadius: 20, backgroundColor: '#0A84FF', justifyContent: 'center' },
   addTextLabel: { color: '#fff', fontWeight: '700' },
   emojiBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },

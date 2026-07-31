@@ -1,6 +1,12 @@
 # Smilers Mobile App — PRD
 
-## iter-426 (Jun 2026): Photo Editor — Phase 1.5 (pinch/rotate/delete) + Phase 2 (filters + blur)
+## iter-427 (Jun 2026): Photo Editor — Phase 3 (eraser tool + remember color/brush) — completes WIP
+- Double-tap-to-re-edit-text was already wired (`editingTextId`/`openEditText`/`commitText` + `DraggableItem.onDoubleTap`). Closed the two remaining gaps:
+  1. **Eraser toggle button** added to the Draw controls row (testID `pe-eraser`, `backspace-outline` icon). Toggles `eraser` state; `drawResponder`'s existing `eraseAt` removes strokes within a radius on grant/move. Picking a color turns eraser OFF; eraser auto-resets when leaving the Draw tool.
+  2. **Remembers last-used color & brush** across editing sessions via AsyncStorage (`smilers.photoeditor.prefs.v1`) — loaded on mount (guarded by `prefsLoaded` ref), persisted on change. Selected swatch highlight suppressed while eraser is active.
+- Lint clean; app boots to Sign In. ⚠️ Native (view-shot + image-manipulator) — final save/flatten only validates on an APK build.
+
+
 - **Phase 1.5:** text & emoji overlays are now a `DraggableItem` (RNGH `GestureDetector` + reanimated shared values): **drag + pinch-to-resize + two-finger rotate**, tap to select (dashed border) → **✕ delete** handle. Transform synced to state on gesture end; selection cleared before view-shot capture so handles never bake into the export.
 - **Phase 2 filters:** new Filter tool with a strip of overlay-based tints — Original, Warm, Cool, Vintage, Sunset, Bright, Fade, Dim — rendered as a colored layer over the photo (captured reliably by view-shot; NO risky new native color-matrix lib). (True grayscale/contrast would need Skia — deferred.)
 - **Phase 2 blur:** new Blur tool adds draggable/pinch-resizable **blur boxes** (`expo-blur` `BlurView`, `experimentalBlurMethod="dimezisBlurView"` for Android) to hide sensitive areas; tap-to-delete.
