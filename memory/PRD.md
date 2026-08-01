@@ -1,5 +1,12 @@
 # Smilers Mobile App — PRD
 
+## iter-450 (Jun 2026): App-Store reviewer bypass for the forced phone-OTP gate
+- Apple reviewers get a fresh install → forced phone verification → can't receive our SMS → guaranteed 2.1 rejection. Added a client-side reviewer allowlist (per integration_expert playbook).
+- `settingsStorage.ts`: `REVIEWER_EMAILS` parsed from `EXPO_PUBLIC_REVIEWER_EMAILS` (comma-separated) + `isReviewerEmail()`. `resolveInstallVerified(serverPhoneVerified, email?)` now short-circuits (skips phone-OTP + persists marker) when the signed-in email is allowlisted. Callers (`phone-verify.tsx`, `(tabs)/_layout.tsx`) pass `me?.email`.
+- `.env`: `EXPO_PUBLIC_REVIEWER_EMAILS=appreview@smilers.online` (placeholder — user must provision this account on Hercules, or tell us a different email). Safe: only skips phone verification for these specific accounts; OIDC token exchange unchanged; real users unaffected.
+- ⚠️ The OIDC sign-in credential itself must be provisioned on Hercules by the user (app can't create Hercules accounts). Lint clean.
+
+
 ## iter-449 (Jun 2026): Ported call tones to app-owned module on iOS too
 - Mirrored the Android fix on iOS so the tones no longer depend on the (unreliable) node_modules patch. Added a committed native module:
   - `ios/Smilers/SmilersCallModule.swift` — `@objc(SmilersCallModule)` with `playCallTone(name, resolve, reject)` that plays the bundled `ios/Smilers/<name>.mp3` (already in Copy Bundle Resources) via `AVAudioPlayer` at full volume, mixing into the AVAudioSession the Stream/WebRTC call configured.

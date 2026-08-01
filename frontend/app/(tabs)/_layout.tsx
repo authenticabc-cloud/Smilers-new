@@ -167,7 +167,7 @@ export default function TabsLayout() {
       // Skip verification if this install is already verified OR (on an in-place
       // update) the account is server-verified and the device was provisioned.
       // A true reinstall wipes local data so this can't fire → still re-verifies.
-      const verified = await resolveInstallVerified(Boolean(me?.phoneVerified));
+      const verified = await resolveInstallVerified(Boolean(me?.phoneVerified), me?.email);
       if (cancelled) return;
       if (verified) {
         setHasVerifiedInstall(true);

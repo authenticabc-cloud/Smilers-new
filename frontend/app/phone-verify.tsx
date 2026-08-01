@@ -59,7 +59,7 @@ export default function PhoneVerifyScreen() {
     const loadInstallMarker = async () => {
       // Skip verification if this install is already verified OR (on an in-place
       // update) the account is server-verified and the device was provisioned.
-      const verified = await resolveInstallVerified(Boolean(me?.phoneVerified));
+      const verified = await resolveInstallVerified(Boolean(me?.phoneVerified), me?.email);
       if (!cancelled) {
         setHasVerifiedInstall(verified);
       }

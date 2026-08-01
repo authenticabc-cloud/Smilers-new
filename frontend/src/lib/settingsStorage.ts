@@ -17,6 +17,27 @@ export const PHONE_VERIFIED_INSTALL_KEY = 'smilers_phone_verified_install';
 // it on a genuine reinstall.
 export const DEVICE_PROVISIONED_KEY = 'smilers_device_provisioned_v1';
 
+/**
+ * App-Store / TestFlight reviewer allowlist. Comma-separated emails in
+ * `EXPO_PUBLIC_REVIEWER_EMAILS`. A signed-in account whose email is on this list
+ * SKIPS the forced phone-OTP verification screen (Apple reviewers get a fresh
+ * install and can't receive our SMS). This is safe: it only skips phone
+ * verification for these specific accounts, which YOU provision on Hercules —
+ * it does not let arbitrary users bypass anything, and the OIDC sign-in itself
+ * is unchanged.
+ */
+const REVIEWER_EMAILS: ReadonlySet<string> = new Set(
+  (process.env.EXPO_PUBLIC_REVIEWER_EMAILS ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean),
+);
+
+export function isReviewerEmail(email?: string | null): boolean {
+  if (!email) return false;
+  return REVIEWER_EMAILS.has(email.trim().toLowerCase());
+}
+
 export const DEFAULT_PRIVACY_SETTINGS = {
   lastSeen: 'everyone',
   profilePhoto: 'everyone',
@@ -190,7 +211,17 @@ export async function markDeviceProvisioned(): Promise<void> {
  * fallback can't fire there — verification is still required, preserving the
  * "re-verify on reinstall" behavior.
  */
-export async function resolveInstallVerified(serverPhoneVerified: boolean): Promise<boolean> {
+export async function resolveInstallVerified(
+  serverPhoneVerified: boolean,
+  email?: string | null,
+): Promise<boolean> {
+  // App-Store reviewer accounts skip the forced phone-OTP screen (they can't
+  // receive our SMS on a fresh review install). Persist the marker so it's
+  // instant next time.
+  if (isReviewerEmail(email)) {
+    await writeInstallMarker(PHONE_VERIFIED_INSTALL_KEY, 'true');
+    return true;
+  }
   const marker = await readInstallMarker(PHONE_VERIFIED_INSTALL_KEY);
   if (marker === 'true') return true;
   if (serverPhoneVerified) {
