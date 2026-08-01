@@ -3,6 +3,37 @@ import React
 import ReactAppDependencyProvider
 import stream_io_noise_cancellation_react_native
 
+// TEMP native launch diagnostics. Since the iOS app hangs on the splash and
+// never runs JavaScript (no JS boot heartbeat reaches the backend), these
+// fire-and-forget beacons report each native launch step directly from Swift
+// so we can see exactly how far the native launch gets, and whether the
+// embedded JS bundle (main.jsbundle) is present. Reuses the existing
+// /api/diagnostic-logs endpoint, tagged platform "ios-native".
+func smilersNativeBeacon(_ stage: String, _ detail: String) {
+  let host = "https://app-migration-75.emergent.host"
+  guard let url = URL(string: host + "/api/diagnostic-logs") else { return }
+  let ts = Int(Date().timeIntervalSince1970 * 1000)
+  let appVer = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "?"
+  let payload: [String: Any] = [
+    "platform": "ios-native",
+    "appVersion": appVer,
+    "platformVersion": UIDevice.current.systemVersion,
+    "device": UIDevice.current.model,
+    "events": [[
+      "ts": ts,
+      "tag": "NATIVE",
+      "message": stage + ": " + detail,
+      "source": "AppDelegate",
+    ]],
+  ]
+  guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return }
+  var req = URLRequest(url: url)
+  req.httpMethod = "POST"
+  req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+  req.httpBody = body
+  URLSession.shared.dataTask(with: req).resume()
+}
+
 @UIApplicationMain
 public class AppDelegate: ExpoAppDelegate {
   var window: UIWindow?
@@ -14,6 +45,10 @@ public class AppDelegate: ExpoAppDelegate {
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
+    smilersNativeBeacon("didFinishLaunching", "start")
+    let embeddedBundle = Bundle.main.url(forResource: "main", withExtension: "jsbundle")
+    smilersNativeBeacon("embeddedBundle", embeddedBundle == nil ? "MISSING main.jsbundle" : ("found " + embeddedBundle!.lastPathComponent))
+
     let delegate = ReactNativeDelegate()
     let factory = ExpoReactNativeFactory(delegate: delegate)
     delegate.dependencyProvider = RCTAppDependencyProvider()
@@ -24,10 +59,12 @@ public class AppDelegate: ExpoAppDelegate {
 
 #if os(iOS) || os(tvOS)
     window = UIWindow(frame: UIScreen.main.bounds)
+    smilersNativeBeacon("startReactNative", "before")
     factory.startReactNative(
       withModuleName: "main",
       in: window,
       launchOptions: launchOptions)
+    smilersNativeBeacon("startReactNative", "after")
 #endif
 
     // Defer Stream Video native setup (Krisp noise/echo cancellation + VoIP
@@ -77,7 +114,9 @@ class ReactNativeDelegate: ExpoReactNativeFactoryDelegate {
 #if DEBUG
     return RCTBundleURLProvider.sharedSettings().jsBundleURL(forBundleRoot: ".expo/.virtual-metro-entry")
 #else
-    return Bundle.main.url(forResource: "main", withExtension: "jsbundle")
+    let u = Bundle.main.url(forResource: "main", withExtension: "jsbundle")
+    smilersNativeBeacon("bundleURL", u == nil ? "returned nil (no embedded bundle!)" : ("returned " + u!.absoluteString))
+    return u
 #endif
   }
 }
