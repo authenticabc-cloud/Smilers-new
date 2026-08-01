@@ -22,15 +22,6 @@ public class AppDelegate: ExpoAppDelegate {
     reactNativeFactory = factory
     bindReactNativeFactory(factory)
 
-    // Stream Video noise / echo cancellation (Krisp) — register the audio
-    // processor before any call joins so the SDK can attach it.
-    NoiseCancellationManager.getInstance().registerProcessor()
-
-    // Task 4 — register for VoIP (PushKit) so Stream can ring incoming calls
-    // through native CallKit even when the app is backgrounded/killed. Must run
-    // at launch (not after login). Stream owns the PushKit→CallKit bridge.
-    StreamVideoReactNative.voipRegistration()
-
 #if os(iOS) || os(tvOS)
     window = UIWindow(frame: UIScreen.main.bounds)
     factory.startReactNative(
@@ -38,6 +29,18 @@ public class AppDelegate: ExpoAppDelegate {
       in: window,
       launchOptions: launchOptions)
 #endif
+
+    // Defer Stream Video native setup (Krisp noise/echo cancellation + VoIP
+    // PushKit registration) to the next main-runloop tick so it runs AFTER
+    // React Native has begun loading the JS bundle. Running these SYNCHRONOUSLY
+    // before `startReactNative` can stall the iOS launch sequence so the JS
+    // bundle never executes — observed as a permanent splash-screen hang on
+    // first launch with NO JS boot heartbeat reaching the backend (iOS only;
+    // Android boots fine). They are still registered at launch time.
+    DispatchQueue.main.async {
+      NoiseCancellationManager.getInstance().registerProcessor()
+      StreamVideoReactNative.voipRegistration()
+    }
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
