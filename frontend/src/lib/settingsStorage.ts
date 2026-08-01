@@ -18,24 +18,38 @@ export const PHONE_VERIFIED_INSTALL_KEY = 'smilers_phone_verified_install';
 export const DEVICE_PROVISIONED_KEY = 'smilers_device_provisioned_v1';
 
 /**
- * App-Store / TestFlight reviewer allowlist. Comma-separated emails in
- * `EXPO_PUBLIC_REVIEWER_EMAILS`. A signed-in account whose email is on this list
- * SKIPS the forced phone-OTP verification screen (Apple reviewers get a fresh
- * install and can't receive our SMS). This is safe: it only skips phone
- * verification for these specific accounts, which YOU provision on Hercules —
- * it does not let arbitrary users bypass anything, and the OIDC sign-in itself
- * is unchanged.
+ * App-Store / TestFlight reviewer allowlist. Comma-separated identifiers in
+ * `EXPO_PUBLIC_REVIEWER_EMAILS`. Each entry is matched against the signed-in
+ * account's USERNAME, email, or display name (case-insensitive). A matching
+ * account SKIPS the forced phone-OTP verification screen (Apple reviewers get a
+ * fresh install and can't receive our SMS). Reviewers sign in with USERNAMES
+ * (e.g. `appreview` / `appreview1`), not emails, so we match on any of these
+ * identity fields. This is safe: it only skips phone verification for these
+ * specific accounts, which YOU provision on Hercules — it does not let arbitrary
+ * users bypass anything, and the OIDC sign-in itself is unchanged.
  */
-const REVIEWER_EMAILS: ReadonlySet<string> = new Set(
+const REVIEWER_IDS: ReadonlySet<string> = new Set(
   (process.env.EXPO_PUBLIC_REVIEWER_EMAILS ?? '')
     .split(',')
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean),
 );
 
-export function isReviewerEmail(email?: string | null): boolean {
-  if (!email) return false;
-  return REVIEWER_EMAILS.has(email.trim().toLowerCase());
+/**
+ * Returns true if the signed-in user is an allowlisted App-Store reviewer.
+ * Matches by username, email, or display name so reviewers who sign in with a
+ * plain username (no email) are still recognized.
+ */
+export function isReviewerAccount(user?: {
+  email?: string | null;
+  username?: string | null;
+  name?: string | null;
+} | null): boolean {
+  if (!user || REVIEWER_IDS.size === 0) return false;
+  const candidates = [user.username, user.email, user.name];
+  return candidates.some(
+    (c) => !!c && REVIEWER_IDS.has(c.trim().toLowerCase()),
+  );
 }
 
 export const DEFAULT_PRIVACY_SETTINGS = {
@@ -213,12 +227,12 @@ export async function markDeviceProvisioned(): Promise<void> {
  */
 export async function resolveInstallVerified(
   serverPhoneVerified: boolean,
-  email?: string | null,
+  user?: { email?: string | null; username?: string | null; name?: string | null } | null,
 ): Promise<boolean> {
   // App-Store reviewer accounts skip the forced phone-OTP screen (they can't
   // receive our SMS on a fresh review install). Persist the marker so it's
   // instant next time.
-  if (isReviewerEmail(email)) {
+  if (isReviewerAccount(user)) {
     await writeInstallMarker(PHONE_VERIFIED_INSTALL_KEY, 'true');
     return true;
   }
