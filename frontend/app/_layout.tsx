@@ -8,14 +8,7 @@ import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as SplashScreen from 'expo-splash-screen';
 import { sentry } from '../src/lib/sentry';
-import {
-  useFonts,
-  Inter_300Light,
-  Inter_400Regular,
-  Inter_500Medium,
-  Inter_600SemiBold,
-  Inter_700Bold,
-} from '@expo-google-fonts/inter';
+import { useFonts } from 'expo-font';
 import { AuthProvider } from '../src/providers/AuthProvider';
 import { ConvexClientProvider } from '../src/providers/ConvexClientProvider';
 import { useMessageNotificationSound } from '../src/lib/notification/useMessageNotificationSound';
@@ -424,11 +417,15 @@ function ShareIntentRouter() {
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
-    Inter_300Light,
-    Inter_400Regular,
-    Inter_500Medium,
-    Inter_600SemiBold,
-    Inter_700Bold,
+    // Load Inter weights from LOCAL bundled .ttf assets via expo-font.
+    // (Migrated off @expo-google-fonts/inter, whose useFonts stalled on the
+    // first iOS build and pinned the app on the splash.) Family names are kept
+    // identical so fontPatch.ts and all existing stylesheets work unchanged.
+    Inter_300Light: require('../assets/fonts/Inter_300Light.ttf'),
+    Inter_400Regular: require('../assets/fonts/Inter_400Regular.ttf'),
+    Inter_500Medium: require('../assets/fonts/Inter_500Medium.ttf'),
+    Inter_600SemiBold: require('../assets/fonts/Inter_600SemiBold.ttf'),
+    Inter_700Bold: require('../assets/fonts/Inter_700Bold.ttf'),
   });
 
   // ⚡ Boot watchdog: NEVER let font loading block app launch. On some
