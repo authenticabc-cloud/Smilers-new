@@ -1618,6 +1618,21 @@ async def download_frontend_part(idx: str):
     )
 
 
+@api_router.get("/download/anssi-dossier")
+async def download_anssi_dossier():
+    """Serve the ANSSI French encryption declaration technical dossier (Markdown)
+    so the user can download it and attach it to their ANSSI filing."""
+    from fastapi.responses import FileResponse
+    doc_path = Path(__file__).parent / "downloads" / "ANSSI_ENCRYPTION_DECLARATION.md"
+    if not doc_path.exists():
+        raise HTTPException(status_code=404, detail="Dossier not found")
+    return FileResponse(
+        path=str(doc_path),
+        media_type="text/markdown",
+        filename="ANSSI_ENCRYPTION_DECLARATION.md",
+    )
+
+
 @api_router.get("/download/freelancer-handover")
 async def download_freelancer_handover():
     """Serve the call-notifications handover document (Markdown) so it can be
