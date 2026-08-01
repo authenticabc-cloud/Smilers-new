@@ -431,11 +431,26 @@ export default function RootLayout() {
     Inter_700Bold,
   });
 
+  // ⚡ Boot watchdog: NEVER let font loading block app launch. On some
+  // native builds `useFonts` (@expo-google-fonts/inter) can fail to
+  // resolve AND fail to error — leaving the app pinned on the native
+  // splash forever (observed on first iOS/TestFlight launch). After a
+  // short grace period we force-proceed; iOS/Android fall back to the
+  // system font gracefully for any not-yet-loaded Inter weight.
+  const [bootTimedOut, setBootTimedOut] = React.useState(false);
   useEffect(() => {
-    if (fontsLoaded || fontError) {
+    const t = setTimeout(() => setBootTimedOut(true), 3000);
+    return () => clearTimeout(t);
+  }, []);
+
+  const fontsReady = fontsLoaded || !!fontError;
+  const canProceed = fontsReady || bootTimedOut;
+
+  useEffect(() => {
+    if (canProceed) {
       SplashScreen.hideAsync().catch(() => {});
     }
-  }, [fontsLoaded, fontError]);
+  }, [canProceed]);
 
   // ⚡ On app boot, flush any diagnostic events that were captured during
   // a previous session (e.g. a crash). The events are persisted to
@@ -466,8 +481,10 @@ export default function RootLayout() {
   // On native we wait for Inter weights to load (the patched Text would
   // otherwise reference a font that doesn't exist yet, causing a fallback
   // flash). On web/preview the splash isn't shown and the system fallback
-  // renders fine while fonts download, so don't block.
-  if (!fontsLoaded && !fontError && Platform.OS !== 'web') {
+  // renders fine while fonts download, so don't block. The boot watchdog
+  // (bootTimedOut) guarantees we NEVER stay on the splash indefinitely if
+  // font loading stalls without resolving or erroring.
+  if (!canProceed && Platform.OS !== 'web') {
     return null;
   }
 
