@@ -5,8 +5,8 @@ import AVFoundation
  * iOS counterpart of the Android `SmilersCallModule.playCallTone`.
  *
  * Plays a short in-call tone (the "Connected" / "Ciaooo" call chimes) bundled in
- * the app (ios/Smilers/*.mp3) via AVAudioPlayer. Lives in the app's OWN committed
- * native source (always compiled) — NOT a node_modules patch, which was not
+ * the app (the ios/Smilers folder, as .mp3 files) via AVAudioPlayer. Lives in the
+ * app's OWN committed native source (always compiled) — NOT a node_modules patch, which was not
  * reliably compiled into release builds. The mixing behaviour follows the
  * AVAudioSession the Stream/WebRTC call has already configured.
  *
