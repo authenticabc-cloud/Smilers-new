@@ -3,7 +3,7 @@
 <plist version="1.0">
   <dict>
     <key>ITSAppUsesNonExemptEncryption</key>
-    <true/>
+    <false/>
     <key>AppGroupIdentifier</key>
     <string>group.com.smilers.app</string>
     <key>CADisableMinimumFrameDurationOnPhone</key>

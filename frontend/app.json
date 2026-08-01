@@ -14,7 +14,7 @@
       "bundleIdentifier": "com.smilers.app",
       "buildNumber": "12",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": true,
+        "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "Take photos to send in chats and status",
         "NSPhotoLibraryUsageDescription": "Share photos from your gallery in chats",
         "NSMicrophoneUsageDescription": "Record voice notes and make voice calls",
