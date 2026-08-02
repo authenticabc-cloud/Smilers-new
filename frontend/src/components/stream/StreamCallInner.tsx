@@ -442,15 +442,45 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
 
   // Audio output routing. Stream RN does NOT manage audio routing itself, so we
   // drive the native AudioManager via InCallAudio (same as the WebRTC screen).
-  const applyAudioRoute = useCallback((route: AudioOutputRoute) => {
+  // `userPickedRouteRef` records an EXPLICIT user selection so the auto-Bluetooth
+  // detector below never overrides a manual choice.
+  const userPickedRouteRef = useRef(false);
+  const btWasAvailableRef = useRef(false);
+  const routeAudioNative = useCallback((route: AudioOutputRoute) => {
     setAudioRoute(route);
-    setAudioMenuVisible(false);
     try {
       if (route === 'speaker') InCallAudio.setSpeakerOn(true);
       else if (route === 'bluetooth') InCallAudio.setBluetoothOn(videoMode ? 'video' : 'audio');
       else InCallAudio.setEarpieceOn();
     } catch {}
   }, [videoMode]);
+  const applyAudioRoute = useCallback((route: AudioOutputRoute) => {
+    userPickedRouteRef.current = true; // manual selection wins over auto-routing
+    setAudioMenuVisible(false);
+    routeAudioNative(route);
+  }, [routeAudioNative]);
+
+  // Auto-detect & auto-route Bluetooth for Stream calls (voice & video), exactly
+  // like the custom-WebRTC screen. Stream never starts an InCallManager session,
+  // so on Android a paired headset was never picked up — audio stayed on the
+  // earpiece/speaker. When a headset is available (paired before OR connected
+  // mid-call) and the user hasn't explicitly chosen another output, route to it;
+  // fall back to speaker (video) / earpiece (voice) when it disconnects.
+  // Android-only — iOS AVAudioSession already auto-routes to Bluetooth.
+  useEffect(() => {
+    if (!connected) return undefined;
+    void InCallAudio.ensureBluetoothPermission();
+    const unsubscribe = InCallAudio.addAudioDeviceChangedListener(({ available }) => {
+      const btAvailable = available.includes('BLUETOOTH');
+      if (btAvailable && !userPickedRouteRef.current) {
+        routeAudioNative('bluetooth');
+      } else if (!btAvailable && btWasAvailableRef.current && !userPickedRouteRef.current) {
+        routeAudioNative(videoMode ? 'speaker' : 'earpiece');
+      }
+      btWasAvailableRef.current = btAvailable;
+    });
+    return unsubscribe;
+  }, [connected, videoMode, routeAudioNative]);
 
   // Voice → Video upgrade mid-call. Per requirement (2b), the switch now
   // REQUESTS the peer's consent via a Stream custom event; we only publish our
@@ -461,9 +491,12 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
       await call.camera.enable();
       setCamOn(true);
       setVideoMode(true);
-      applyAudioRoute('speaker');
+      // Keep Bluetooth if a headset is driving the call; otherwise use the
+      // loudspeaker for hands-free video. Don't mark this as a manual pick so
+      // the auto-Bluetooth detector still applies.
+      routeAudioNative(btWasAvailableRef.current ? 'bluetooth' : 'speaker');
     } catch {}
-  }, [call, applyAudioRoute]);
+  }, [call, routeAudioNative]);
 
   const [awaitingVideoAccept, setAwaitingVideoAccept] = useState(false);
   const [incomingVideoReqFrom, setIncomingVideoReqFrom] = useState<string | null>(null);

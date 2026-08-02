@@ -259,6 +259,35 @@ export default function GroupCallScreen() {
     };
   }, [isWeb, callId, myUserId, sendSignalM, joinConference]);
 
+  // Auto-detect & auto-route Bluetooth for the group (mesh) call. Group calls
+  // default to the loudspeaker (hands-free); when a paired headset is available
+  // (before OR mid-call) route to it, and fall back to the speaker when it
+  // disconnects. Android-only — iOS AVAudioSession already auto-routes to BT.
+  useEffect(() => {
+    if (isWeb || Platform.OS !== 'android' || !callId) return undefined;
+    let unsub: (() => void) | null = null;
+    let btWasAvailable = false;
+    void (async () => {
+      const { InCallAudio } = await import('../../src/lib/webrtc/inCallManager');
+      await InCallAudio.ensureBluetoothPermission();
+      unsub = InCallAudio.addAudioDeviceChangedListener(({ available }) => {
+        const has = available.includes('BLUETOOTH');
+        if (has && !btWasAvailable) {
+          InCallAudio.setBluetoothOn(wantsVideo ? 'video' : 'audio');
+        } else if (!has && btWasAvailable) {
+          InCallAudio.setSpeakerOn(true);
+        }
+        btWasAvailable = has;
+      });
+    })();
+    return () => {
+      try {
+        unsub?.();
+      } catch {}
+    };
+  }, [isWeb, callId, wantsVideo]);
+
+
   // --- Live roster from the conference backend. ---
   const participantsQ = useReactiveSafeConvexQuery<Any[]>(
     (api as Any).conference.getParticipants,
