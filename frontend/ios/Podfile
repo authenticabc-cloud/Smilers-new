@@ -77,7 +77,7 @@ target 'Smilers' do
         user_target.build_configurations.each do |config|
           ldflags = config.build_settings['OTHER_LDFLAGS'] || ['$(inherited)']
           ldflags = [ldflags] unless ldflags.is_a?(Array)
-          force_load_path = '"${PODS_CONFIGURATION_BUILD_DIR}/Pods-Smilers/libPods-Smilers.a"'
+          force_load_path = '"${PODS_CONFIGURATION_BUILD_DIR}/libPods-Smilers.a"'
           unless ldflags.any? { |f| f.to_s.include?('libPods-Smilers.a') }
             ldflags << '-force_load'
             ldflags << force_load_path
