@@ -62,25 +62,53 @@ target 'Smilers' do
 
     # withExpoModulesForceLoad — fix "Cannot find native module 'Expo*'" that
     # only happens in the Release/TestFlight archive (works in Debug). Expo
-    # modules are Swift classes registered at RUNTIME via ExpoModulesProvider,
-    # so the linker sees no compile-time reference to them and `-dead_strip`
-    # drops them from the Release binary -> every requireNativeModule() throws
-    # and the app hangs on the splash. Force-loading ONLY the Pods-Smilers
-    # aggregate (which compiles ExpoModulesProvider.swift and its `.self`
-    # references to every module class) keeps them all. We force-load JUST the
-    # aggregate — never `-all_load` — because react-native-skia bundles its own
-    # copy of libwebp/skottie/svg and `-all_load` would cause 544 duplicate
-    # symbol errors against the standalone libwebp pod.
+    # modules are Swift classes registered at RUNTIME via ExpoModulesProvider.
+    # Because nothing references those class OBJECTS at compile time, the static
+    # linker never pulls their .o files out of each module's own `lib<Name>.a`,
+    # so at runtime requireNativeModule() throws and the app hangs on splash.
+    #
+    # Force-loading ONLY the Pods-Smilers aggregate is NOT enough: the aggregate
+    # lib contains ExpoModulesProvider.o, but the provider's `.self` references
+    # are stripped and the individual module .o files are never included (proven
+    # in TestFlight: only 2/20 modules registered). The reliable fix is to
+    # `-force_load` EACH Expo module's own static library so all of its object
+    # files are linked in. We scope this strictly to `Expo*` / `EX*` pods so we
+    # NEVER force-load react-native-skia / libwebp — using `-all_load` there
+    # caused 544 duplicate-symbol errors (skia bundles its own libwebp copy).
+    #
+    # Path format: the aggregate proved products land FLAT at the root of
+    # ${PODS_CONFIGURATION_BUILD_DIR} (an earlier build failed on the
+    # ".../Pods-Smilers/libPods-Smilers.a" subdir path), so each pod lib is at
+    # ${PODS_CONFIGURATION_BUILD_DIR}/lib<Name>.a. Names are derived from the
+    # actually-installed pod targets so they can never be misspelled.
+    expo_static_lib_names = installer.pods_project.targets.select do |t|
+      t.respond_to?(:product_type) &&
+        t.product_type == 'com.apple.product-type.library.static' &&
+        (t.name.start_with?('Expo') || t.name.start_with?('EX')) &&
+        t.name != 'ExpoModulesTestCore'
+    end.map(&:name).uniq
+
+    force_load_flags = []
+    force_load_flags << '-force_load'
+    force_load_flags << '"${PODS_CONFIGURATION_BUILD_DIR}/libPods-Smilers.a"'
+    expo_static_lib_names.each do |lib_name|
+      force_load_flags << '-force_load'
+      force_load_flags << "\"${PODS_CONFIGURATION_BUILD_DIR}/lib#{lib_name}.a\""
+    end
+    Pod::UI.puts "[withExpoModulesForceLoad] force-loading #{expo_static_lib_names.length} Expo module libs + Pods-Smilers aggregate"
+
     installer.aggregate_targets.each do |aggregate_target|
       aggregate_target.user_targets.each do |user_target|
         next unless user_target.name == 'Smilers'
         user_target.build_configurations.each do |config|
           ldflags = config.build_settings['OTHER_LDFLAGS'] || ['$(inherited)']
           ldflags = [ldflags] unless ldflags.is_a?(Array)
-          force_load_path = '"${PODS_CONFIGURATION_BUILD_DIR}/libPods-Smilers.a"'
-          unless ldflags.any? { |f| f.to_s.include?('libPods-Smilers.a') }
-            ldflags << '-force_load'
-            ldflags << force_load_path
+          force_load_flags.each_slice(2) do |flag, path|
+            already = ldflags.each_cons(2).any? { |a, b| a.to_s == '-force_load' && b.to_s == path }
+            unless already
+              ldflags << flag
+              ldflags << path
+            end
           end
           config.build_settings['OTHER_LDFLAGS'] = ldflags
         end
