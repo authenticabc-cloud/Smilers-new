@@ -76,11 +76,13 @@ target 'Smilers' do
     # NEVER force-load react-native-skia / libwebp — using `-all_load` there
     # caused 544 duplicate-symbol errors (skia bundles its own libwebp copy).
     #
-    # Path format: the aggregate proved products land FLAT at the root of
-    # ${PODS_CONFIGURATION_BUILD_DIR} (an earlier build failed on the
-    # ".../Pods-Smilers/libPods-Smilers.a" subdir path), so each pod lib is at
-    # ${PODS_CONFIGURATION_BUILD_DIR}/lib<Name>.a. Names are derived from the
-    # actually-installed pod targets so they can never be misspelled.
+    # Path format: the Pods-Smilers AGGREGATE lib lands FLAT at the root of
+    # ${PODS_CONFIGURATION_BUILD_DIR} (libPods-Smilers.a), but each INDIVIDUAL
+    # Expo module pod lib lands inside its own per-target subdirectory:
+    # ${PODS_CONFIGURATION_BUILD_DIR}/<Name>/lib<Name>.a. A prior EAS build
+    # failed with "Build input files cannot be found" because we pointed at the
+    # flat ".../lib<Name>.a" path. Names are derived from the actually-installed
+    # pod targets so they can never be misspelled.
     expo_static_lib_names = installer.pods_project.targets.select do |t|
       t.respond_to?(:product_type) &&
         t.product_type == 'com.apple.product-type.library.static' &&
@@ -93,7 +95,7 @@ target 'Smilers' do
     force_load_flags << '"${PODS_CONFIGURATION_BUILD_DIR}/libPods-Smilers.a"'
     expo_static_lib_names.each do |lib_name|
       force_load_flags << '-force_load'
-      force_load_flags << "\"${PODS_CONFIGURATION_BUILD_DIR}/lib#{lib_name}.a\""
+      force_load_flags << "\"${PODS_CONFIGURATION_BUILD_DIR}/#{lib_name}/lib#{lib_name}.a\""
     end
     Pod::UI.puts "[withExpoModulesForceLoad] force-loading #{expo_static_lib_names.length} Expo module libs + Pods-Smilers aggregate"
 
