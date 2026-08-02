@@ -446,6 +446,13 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   // detector below never overrides a manual choice.
   const userPickedRouteRef = useRef(false);
   const btWasAvailableRef = useRef(false);
+  const audioToastRef = useRef<((msg: string) => void) | null>(null);
+  const routeToastLabel = (route: AudioOutputRoute): string =>
+    route === 'bluetooth'
+      ? '🎧 Audio: Bluetooth'
+      : route === 'speaker'
+        ? '🔊 Audio: Speaker'
+        : '📞 Audio: Earpiece';
   const routeAudioNative = useCallback((route: AudioOutputRoute) => {
     setAudioRoute(route);
     try {
@@ -458,6 +465,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
     userPickedRouteRef.current = true; // manual selection wins over auto-routing
     setAudioMenuVisible(false);
     routeAudioNative(route);
+    audioToastRef.current?.(routeToastLabel(route));
   }, [routeAudioNative]);
 
   // Auto-detect & auto-route Bluetooth for Stream calls (voice & video), exactly
@@ -465,7 +473,8 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   // so on Android a paired headset was never picked up — audio stayed on the
   // earpiece/speaker. When a headset is available (paired before OR connected
   // mid-call) and the user hasn't explicitly chosen another output, route to it;
-  // fall back to speaker (video) / earpiece (voice) when it disconnects.
+  // fall back to speaker (video) / earpiece (voice) when it disconnects. A short
+  // toast tells the user which output the audio jumped to.
   // Android-only — iOS AVAudioSession already auto-routes to Bluetooth.
   useEffect(() => {
     if (!connected) return undefined;
@@ -473,9 +482,12 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
     const unsubscribe = InCallAudio.addAudioDeviceChangedListener(({ available }) => {
       const btAvailable = available.includes('BLUETOOTH');
       if (btAvailable && !userPickedRouteRef.current) {
+        if (!btWasAvailableRef.current) audioToastRef.current?.(routeToastLabel('bluetooth'));
         routeAudioNative('bluetooth');
       } else if (!btAvailable && btWasAvailableRef.current && !userPickedRouteRef.current) {
-        routeAudioNative(videoMode ? 'speaker' : 'earpiece');
+        const fallback: AudioOutputRoute = videoMode ? 'speaker' : 'earpiece';
+        audioToastRef.current?.(routeToastLabel(fallback));
+        routeAudioNative(fallback);
       }
       btWasAvailableRef.current = btAvailable;
     });
@@ -595,6 +607,9 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     toastTimerRef.current = setTimeout(() => setToast(null), 3500);
   }, []);
+  // Expose showToast to the audio-route callbacks defined earlier in the
+  // component (they hold a ref because showToast is declared after them).
+  audioToastRef.current = showToast;
 
   // iter-386 (enhancement): proactive WEAK-CONNECTION warning. When the
   // (weaker-of-both) connection quality sits at POOR (1) for >3s while
