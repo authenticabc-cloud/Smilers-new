@@ -76,28 +76,46 @@ target 'Smilers' do
     # NEVER force-load react-native-skia / libwebp — using `-all_load` there
     # caused 544 duplicate-symbol errors (skia bundles its own libwebp copy).
     #
-    # Path format: the Pods-Smilers AGGREGATE lib lands FLAT at the root of
-    # ${PODS_CONFIGURATION_BUILD_DIR} (libPods-Smilers.a), but each INDIVIDUAL
-    # Expo module pod lib lands inside its own per-target subdirectory:
-    # ${PODS_CONFIGURATION_BUILD_DIR}/<Name>/lib<Name>.a. A prior EAS build
-    # failed with "Build input files cannot be found" because we pointed at the
-    # flat ".../lib<Name>.a" path. Names are derived from the actually-installed
-    # pod targets so they can never be misspelled.
-    expo_static_lib_names = installer.pods_project.targets.select do |t|
+    # Product handling: for each Expo/EX pod target we read its ACTUAL build
+    # product (from product_reference) instead of guessing the filename.
+    #   - static library   -> lib<Name>.a lands FLAT at ${PODS_CONFIGURATION_BUILD_DIR}
+    #     (empirically links; 17/20 worked this way).
+    #   - static framework -> <Name>.framework lands in a <Name>/ subdir; the
+    #     force_load target is the framework BINARY (<Name>.framework/<Name>).
+    # SDK 54 tree-shaking + a few Expo pods that build as STATIC FRAMEWORKS
+    # (this is why the plain "lib<Name>.a" loop missed exactly ExpoConstants /
+    # ExpoFileSystem / ExpoBlur — those 3 have NO .a file so the old loop's
+    # force_load silently no-op'd and they got dead-code-stripped -> 17/20).
+    expo_targets = installer.pods_project.targets.select do |t|
       t.respond_to?(:product_type) &&
-        t.product_type == 'com.apple.product-type.library.static' &&
         (t.name.start_with?('Expo') || t.name.start_with?('EX')) &&
-        t.name != 'ExpoModulesTestCore'
-    end.map(&:name).uniq
+        t.name != 'ExpoModulesTestCore' &&
+        [
+          'com.apple.product-type.library.static',
+          'com.apple.product-type.framework',
+        ].include?(t.product_type)
+    end
 
     force_load_flags = []
     force_load_flags << '-force_load'
     force_load_flags << '"${PODS_CONFIGURATION_BUILD_DIR}/libPods-Smilers.a"'
-    expo_static_lib_names.each do |lib_name|
+
+    Pod::UI.puts '[withExpoModulesForceLoad] Expo/EX pod target inventory:'
+    expo_targets.each do |t|
+      ref = t.respond_to?(:product_reference) ? t.product_reference : nil
+      product = (ref && ref.path) ? File.basename(ref.path) : "lib#{t.name}.a"
+      if product.end_with?('.framework')
+        fw = File.basename(product, '.framework')
+        path = "\"${PODS_CONFIGURATION_BUILD_DIR}/#{t.name}/#{product}/#{fw}\""
+      else
+        # static library (.a) — lands FLAT at the build dir root
+        path = "\"${PODS_CONFIGURATION_BUILD_DIR}/#{product}\""
+      end
+      Pod::UI.puts "  - #{t.name} (#{t.product_type}) product=#{product} -> #{path}"
       force_load_flags << '-force_load'
-      force_load_flags << "\"${PODS_CONFIGURATION_BUILD_DIR}/#{lib_name}/lib#{lib_name}.a\""
+      force_load_flags << path
     end
-    Pod::UI.puts "[withExpoModulesForceLoad] force-loading #{expo_static_lib_names.length} Expo module libs + Pods-Smilers aggregate"
+    Pod::UI.puts "[withExpoModulesForceLoad] force-loading #{expo_targets.length} Expo module products + Pods-Smilers aggregate"
 
     installer.aggregate_targets.each do |aggregate_target|
       aggregate_target.user_targets.each do |user_target|
