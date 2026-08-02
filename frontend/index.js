@@ -1,19 +1,47 @@
+// TEMP JS-boot beacons. The iOS app reaches native `startReactNative` fine and
+// the JS bundle is embedded, yet no JS boot heartbeat ever arrives — so JS
+// evaluation is halting somewhere in this entry file (iOS only; Android boots
+// fine). These fire-and-forget beacons report progress after each startup step
+// directly to the backend so we can see the exact line where JS stops. Reuses
+// the existing /api/diagnostic-logs endpoint, tagged platform "ios-js".
+function __jsBoot(stage) {
+  try {
+    if (typeof fetch !== 'function') return;
+    fetch('https://app-migration-75.emergent.host/api/diagnostic-logs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        platform: 'ios-js',
+        appVersion: 'entry',
+        events: [{ ts: Date.now(), tag: 'JSBOOT', message: stage, source: 'index.js' }],
+      }),
+    }).catch(function () {});
+  } catch (_e) {
+    /* ignore */
+  }
+}
+
+__jsBoot('entry-start');
+
 // MUST be first — registers the background notification task handler and
 // Notifee call event handlers at module scope so they run in ALL contexts,
 // including the headless JS process that Expo spawns when a FCM data message
 // arrives while the app is killed (React components do not mount in that
 // context, so anything registered only inside a hook would never execute).
-import './src/push/backgroundTaskSetup';
+require('./src/push/backgroundTaskSetup');
+__jsBoot('after-backgroundTaskSetup');
 
 // Registers the headless JS task that sends replies typed into the Android
 // notification's inline "Reply" box (RemoteInput) — works even when killed.
-import './src/push/messageReplyTask';
+require('./src/push/messageReplyTask');
+__jsBoot('after-messageReplyTask');
 
 // Task 4 — register the Stream iOS CallKit/VoIP push config BEFORE the app
 // component registers, so incoming Stream calls ring via native CallKit even
 // when the app is killed. No-op on Android/web (guarded internally).
-import { setupStreamIosPush } from './src/push/streamIosPushConfig';
-setupStreamIosPush();
-
+const __streamIosPush = require('./src/push/streamIosPushConfig');
+__streamIosPush.setupStreamIosPush();
+__jsBoot('after-streamIosPush');
 // Hand off to Expo Router for the normal app launch.
 require('expo-router/entry');
+__jsBoot('after-router-entry');
