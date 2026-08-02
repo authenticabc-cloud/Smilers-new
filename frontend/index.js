@@ -23,6 +23,37 @@ function __jsBoot(stage) {
 
 __jsBoot('entry-start');
 
+// TEMP global error trap. index.js runs fully (all beacons fire) but the
+// app/_layout route tree never evaluates its boot heartbeat — meaning an
+// uncaught error is thrown while expo-router renders the root routes on iOS.
+// Capture it here (ErrorUtils fires for uncaught JS/render errors) and beacon
+// the message + stack so we can see the exact failing module.
+try {
+  const __EU = global.ErrorUtils;
+  if (__EU && typeof __EU.setGlobalHandler === 'function') {
+    const __prev =
+      typeof __EU.getGlobalHandler === 'function' ? __EU.getGlobalHandler() : null;
+    __EU.setGlobalHandler(function (err, isFatal) {
+      try {
+        const msg = err && err.message ? String(err.message) : String(err);
+        const stack = err && err.stack ? String(err.stack).slice(0, 1200) : 'none';
+        __jsBoot('GLOBAL-ERROR fatal=' + isFatal + ' msg=' + msg + ' :: ' + stack);
+      } catch (_e2) {
+        /* ignore */
+      }
+      if (typeof __prev === 'function') {
+        try {
+          __prev(err, isFatal);
+        } catch (_e3) {
+          /* ignore */
+        }
+      }
+    });
+  }
+} catch (_e) {
+  /* ignore */
+}
+
 // MUST be first — registers the background notification task handler and
 // Notifee call event handlers at module scope so they run in ALL contexts,
 // including the headless JS process that Expo spawns when a FCM data message
