@@ -1,31 +1,36 @@
 #!/usr/bin/env node
 /**
- * Patch expo-notifications so a MISSING iOS native module can't hard-crash the
- * whole app at launch.
+ * Patch expo-notifications so its native modules being UNREGISTERED on iOS
+ * cannot hard-crash the whole app at launch.
  *
- * Problem (iOS only, first TestFlight build):
- *   expo-notifications' generated `*.native.js` files do a MODULE-SCOPE call:
- *     import { requireNativeModule } from 'expo-modules-core';
- *     export default requireNativeModule('ExpoPushTokenManager');
- *   `requireNativeModule` THROWS if the native module isn't registered. On the
- *   customized iOS build `ExpoPushTokenManager` isn't found, so the throw fires
- *   the moment `app/_layout.tsx` does `import * as Notifications from
- *   'expo-notifications'` — BEFORE React renders. The whole app dies on the
- *   splash screen with no crash log (verified via native + JS boot beacons:
- *     GLOBAL-ERROR fatal=true "Cannot find native module 'ExpoPushTokenManager'").
- *   Android registers every module, so Android is unaffected.
+ * Root cause (iOS only — verified via native + JS boot beacons):
+ *   The entire expo-notifications iOS native module set is not registered in
+ *   this customized iOS build. Its generated `*.native.js` files do a
+ *   MODULE-SCOPE `requireNativeModule('X')` which THROWS when the module is
+ *   missing -> fatal the instant `app/_layout.tsx` imports 'expo-notifications',
+ *   before React renders -> app frozen on the splash, no crash log.
+ *   Beacons captured, in order:
+ *     1) "Cannot find native module 'ExpoPushTokenManager'"
+ *     2) "Cannot read property 'getRegistrationInfoAsync' of null"
+ *        (a module-scope method call on the now-null module)
  *
  * Fix:
- *   Alias the import to the OPTIONAL variant:
- *     import { requireOptionalNativeModule as requireNativeModule } from 'expo-modules-core';
- *   `requireOptionalNativeModule` returns `null` instead of throwing. So:
- *     - Present modules (all of Android, most of iOS) behave EXACTLY as before.
- *     - A genuinely-missing iOS module resolves to `null`, degrading that one
- *       feature (e.g. push token) instead of crashing the entire app. Existing
- *       try/catch around push calls handles the null gracefully.
+ *   Rewrite each `requireNativeModule('X')` to
+ *     (requireOptionalNativeModule('X') || __exNotifStub)
+ *   where __exNotifStub is a harmless object exposing no-op event-emitter
+ *   methods. This means:
+ *     - Present modules (all of Android, most of iOS) are returned unchanged.
+ *     - Missing modules resolve to a stub, so:
+ *         * `new LegacyEventEmitter(stub)` (module-scope, NotificationsEmitter)
+ *           does not throw — stub has addListener/removeListeners/etc.
+ *         * `if (module.someOtherMethod)` guards (e.g. getRegistrationInfoAsync)
+ *           see `undefined` and fall through to expo-notifications' OWN built-in
+ *           graceful fallbacks instead of crashing.
+ *   Net effect: the app boots; push features simply degrade where the native
+ *   module is genuinely absent (existing try/catch around push handles it).
  *
- * Runs via the postinstall / prepare hooks so it survives node_modules rebuilds
- * on EAS and clean installs. Idempotent.
+ * Runs via the postinstall / prepare hooks so it survives clean installs on EAS.
+ * Idempotent (safe to run repeatedly; upgrades any earlier `|| {}` form).
  */
 const fs = require('fs');
 const path = require('path');
@@ -43,7 +48,11 @@ if (!fs.existsSync(BUILD_DIR)) {
   process.exit(0);
 }
 
-// Match an `import { ... } from 'expo-modules-core'` statement.
+const STUB_DECL =
+  'const __exNotifStub = { addListener: () => ({ remove: () => {} }), ' +
+  'removeListeners: () => {}, removeAllListeners: () => {}, ' +
+  'startObserving: () => {}, stopObserving: () => {} };';
+
 const IMPORT_RE = /import\s*\{([^}]*)\}\s*from\s*(['"])expo-modules-core\2/;
 
 let patched = 0;
@@ -52,34 +61,63 @@ let skipped = 0;
 for (const file of fs.readdirSync(BUILD_DIR)) {
   if (!file.endsWith('.native.js')) continue;
   const full = path.join(BUILD_DIR, file);
-  const src = fs.readFileSync(full, 'utf8');
+  let src = fs.readFileSync(full, 'utf8');
 
-  // Only touch files that actually call requireNativeModule at module scope.
-  if (!/\brequireNativeModule\s*\(/.test(src)) continue;
-
-  // Already aliased → idempotent no-op.
-  if (src.includes('requireOptionalNativeModule as requireNativeModule')) {
+  if (!/require(?:Optional)?NativeModule\s*\(/.test(src)) continue;
+  if (src.includes('|| __exNotifStub')) {
     skipped++;
     continue;
   }
 
+  const before = src;
+
+  // 1) Ensure requireOptionalNativeModule is imported from expo-modules-core
+  //    (handles pristine `requireNativeModule` and a prior alias form).
   const m = src.match(IMPORT_RE);
-  if (!m) continue;
+  if (m) {
+    let names = m[1]
+      .replace(/requireOptionalNativeModule\s+as\s+requireNativeModule/g, 'requireOptionalNativeModule')
+      .replace(/\brequireNativeModule\b/g, 'requireOptionalNativeModule');
+    const seen = new Set();
+    const deduped = names
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .filter((n) => (seen.has(n) ? false : (seen.add(n), true)));
+    src = src.replace(m[0], `import { ${deduped.join(', ')} } from 'expo-modules-core'`);
+  }
 
-  const names = m[1];
-  // Alias the requireNativeModule specifier inside the import braces so every
-  // module-scope `requireNativeModule(...)` call becomes non-throwing.
-  const newNames = names.replace(
-    /\brequireNativeModule\b/,
-    'requireOptionalNativeModule as requireNativeModule',
+  // 2) Inject the stub declaration once (right after the import block).
+  if (!src.includes('__exNotifStub')) {
+    const importMatch = src.match(/^(import[^\n]*\n)+/);
+    if (importMatch) {
+      const idx = importMatch[0].length;
+      src = src.slice(0, idx) + STUB_DECL + '\n' + src.slice(idx);
+    } else {
+      src = STUB_DECL + '\n' + src;
+    }
+  }
+
+  // 3) Upgrade an earlier simple `|| {}` fallback to the stub.
+  src = src.replace(
+    /require(?:Optional)?NativeModule\((['"][^'"]+['"])\)\s*\|\|\s*\{\}/g,
+    'requireOptionalNativeModule($1) || __exNotifStub',
   );
-  if (newNames === names) continue;
 
-  const next = src.replace(m[0], `import {${newNames}} from 'expo-modules-core'`);
-  fs.writeFileSync(full, next, 'utf8');
-  patched++;
+  // 4) Wrap any remaining bare require(Optional)NativeModule('X') calls.
+  src = src.replace(
+    /require(?:Optional)?NativeModule\((['"][^'"]+['"])\)(?!\s*\|\|)/g,
+    'requireOptionalNativeModule($1) || __exNotifStub',
+  );
+
+  if (src !== before) {
+    fs.writeFileSync(full, src, 'utf8');
+    patched++;
+  } else {
+    skipped++;
+  }
 }
 
 console.log(
-  `[patch-expo-notifications] aliased requireNativeModule→requireOptionalNativeModule in ${patched} file(s) (${skipped} already patched).`,
+  `[patch-expo-notifications] hardened ${patched} native module file(s) with stub fallback (${skipped} already patched/none).`,
 );
