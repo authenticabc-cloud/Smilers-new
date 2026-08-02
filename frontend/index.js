@@ -23,6 +23,44 @@ function __jsBoot(stage) {
 
 __jsBoot('entry-start');
 
+// TEMP module-inventory probe. Config files (Podfile/pbxproj) match a fresh
+// SDK 54 prebuild, yet expo-secure-store reports "Cannot find native module".
+// This probe uses requireOptionalNativeModule (never throws — returns null when
+// absent) to enumerate EXACTLY which Expo native modules are registered at
+// runtime vs missing. Beacons the present/missing split so we can tell whether
+// the whole ExpoModulesProvider failed to link (all missing) or only specific
+// pods are absent. Runs synchronously here, before any route imports crash.
+try {
+  const emc = require('expo-modules-core');
+  const req = emc && emc.requireOptionalNativeModule;
+  if (typeof req === 'function') {
+    const names = [
+      'ExpoConstants', 'ExpoCrypto', 'ExpoSecureStore', 'ExpoDevice',
+      'ExpoApplication', 'ExpoFileSystem', 'ExpoFontLoader', 'ExpoKeepAwake',
+      'ExpoImage', 'ExpoLinking', 'ExpoSplashScreen', 'ExpoHaptics',
+      'ExpoLocation', 'ExpoPushTokenManager', 'ExpoAsset', 'ExpoSystemUI',
+      'ExpoWebBrowser', 'ExpoClipboard', 'ExpoBlur', 'ExpoLocalAuthentication',
+    ];
+    const present = [];
+    const missing = [];
+    for (const n of names) {
+      let mod = null;
+      try { mod = req(n); } catch (_e) { mod = null; }
+      (mod ? present : missing).push(n);
+    }
+    const providerType = typeof emc.NativeModule;
+    __jsBoot(
+      'MODULE-INVENTORY present=' + present.length + '/' + names.length +
+      ' missing=[' + missing.join(',') + ']' +
+      ' NativeModule=' + providerType,
+    );
+  } else {
+    __jsBoot('MODULE-INVENTORY requireOptionalNativeModule-unavailable');
+  }
+} catch (e) {
+  __jsBoot('MODULE-INVENTORY probe-error ' + (e && e.message ? e.message : String(e)));
+}
+
 // TEMP global error trap. index.js runs fully (all beacons fire) but the
 // app/_layout route tree never evaluates its boot heartbeat — meaning an
 // uncaught error is thrown while expo-router renders the root routes on iOS.
