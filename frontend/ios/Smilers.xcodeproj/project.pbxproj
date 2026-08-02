@@ -313,7 +313,6 @@
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
-					"-all_load",
 					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.smilers.app";
@@ -343,7 +342,6 @@
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
-					"-all_load",
 					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.smilers.app";

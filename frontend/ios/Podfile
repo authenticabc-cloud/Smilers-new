@@ -60,6 +60,34 @@ target 'Smilers' do
       :ccache_enabled => ccache_enabled?(podfile_properties),
     )
 
+    # withExpoModulesForceLoad — fix "Cannot find native module 'Expo*'" that
+    # only happens in the Release/TestFlight archive (works in Debug). Expo
+    # modules are Swift classes registered at RUNTIME via ExpoModulesProvider,
+    # so the linker sees no compile-time reference to them and `-dead_strip`
+    # drops them from the Release binary -> every requireNativeModule() throws
+    # and the app hangs on the splash. Force-loading ONLY the Pods-Smilers
+    # aggregate (which compiles ExpoModulesProvider.swift and its `.self`
+    # references to every module class) keeps them all. We force-load JUST the
+    # aggregate — never `-all_load` — because react-native-skia bundles its own
+    # copy of libwebp/skottie/svg and `-all_load` would cause 544 duplicate
+    # symbol errors against the standalone libwebp pod.
+    installer.aggregate_targets.each do |aggregate_target|
+      aggregate_target.user_targets.each do |user_target|
+        next unless user_target.name == 'Smilers'
+        user_target.build_configurations.each do |config|
+          ldflags = config.build_settings['OTHER_LDFLAGS'] || ['$(inherited)']
+          ldflags = [ldflags] unless ldflags.is_a?(Array)
+          force_load_path = '"${PODS_CONFIGURATION_BUILD_DIR}/Pods-Smilers/libPods-Smilers.a"'
+          unless ldflags.any? { |f| f.to_s.include?('libPods-Smilers.a') }
+            ldflags << '-force_load'
+            ldflags << force_load_path
+          end
+          config.build_settings['OTHER_LDFLAGS'] = ldflags
+        end
+      end
+      aggregate_target.user_project.save
+    end
+
     # withPodfileResourceBundleSigning — Xcode14 resource-bundle signing fix
     installer.pods_project.targets.each do |__rb_target|
       if __rb_target.respond_to?(:product_type) && __rb_target.product_type == 'com.apple.product-type.bundle'
