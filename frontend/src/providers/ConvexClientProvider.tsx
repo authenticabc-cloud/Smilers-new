@@ -205,18 +205,12 @@ const RECREATE_COOLDOWN_MS = 30_000;
 // amount of recreating helps — it just burns battery + spams push register.
 const MAX_CONSECUTIVE_RECREATES = 3;
 const RECREATE_HALT_MS = 5 * 60_000;
-// Silent full re-login cooldown. A silent re-login (OIDC prompt=none) mints a
-// BRAND-NEW token off the live SSO session — exactly what a manual sign-out/
-// sign-in does, which is the proven fix for the stale/rotated-token "No chats
-// yet" limbo. We gate it so a persistent mismatch can't reopen the auth flow
-// on every cycle.
-const SILENT_REAUTH_COOLDOWN_MS = 45_000;
 
 // Module-scoped governor so it SURVIVES the client-recreate remount.
-const recreateGov = { lastAt: 0, consecutive: 0, haltedUntil: 0, lastSilentAt: 0 };
+const recreateGov = { lastAt: 0, consecutive: 0, haltedUntil: 0 };
 
 function ConvexAuthWatchdog({ onRecreate }: { onRecreate: () => void }) {
-  const { isAuthenticated: localAuthed, sessionExpired, trySilentReauth } = useAuth();
+  const { isAuthenticated: localAuthed, sessionExpired } = useAuth();
   const { isLoading: convexAuthLoading, isAuthenticated: convexAuthed } = useConvexAuth();
 
   // True when we have a usable local session but Convex is NOT authenticated.
@@ -241,31 +235,17 @@ function ConvexAuthWatchdog({ onRecreate }: { onRecreate: () => void }) {
     const recreateTimer = setTimeout(async () => {
       const now = Date.now();
 
-      // ── Stage 2a: SILENT full re-login (the real fix) ──
-      // A plain refresh (stage 1) reuses the possibly-dead refresh token; a
-      // silent re-login mints a fresh token off the SSO session, which is what
-      // manually signing out/in does. Try this BEFORE the nuclear recreate.
-      if (now - recreateGov.lastSilentAt >= SILENT_REAUTH_COOLDOWN_MS && typeof trySilentReauth === 'function') {
-        recreateGov.lastSilentAt = now;
-        callDebug.push('CONVEX', 'auth-watchdog: stage2 SILENT re-login (prompt=none) …');
-        let ok = false;
-        try {
-          ok = await trySilentReauth();
-        } catch {
-          ok = false;
-        }
-        if (ok) {
-          // Fresh token minted — push it to Convex (epoch bump re-runs setAuth).
-          requestConvexReauth('post-silent-reauth');
-          recreateGov.consecutive = 0;
-          recreateGov.haltedUntil = 0;
-          callDebug.push('CONVEX', 'auth-watchdog: silent re-login OK → fresh token pushed to Convex');
-          return;
-        }
-        callDebug.push('CONVEX', 'auth-watchdog: silent re-login did NOT recover — falling back to recreate');
-      }
-
-      // ── Stage 2b: recreate client (sync-desync fallback), governed ──
+      // ── Stage 2: recreate client (sync-desync fallback), governed ──
+      // NOTE (gentle-heal fix): we deliberately DO NOT auto-run the OIDC
+      // `prompt=none` silent re-login here anymore. On native `promptAsync`
+      // PRESENTS the system auth browser (ASWebAuthenticationSession /
+      // Chrome Custom Tab) even for prompt=none — it flashes open, which
+      // backgrounds→foregrounds the app and re-fires this watchdog, producing
+      // the "app shaking / repeatedly opening sign-in" loop users reported.
+      // The invisible recoveries (stage-1 token refresh via refreshAsync, and
+      // this client recreate) are enough to self-heal without any visible UI;
+      // the explicit `trySilentReauth` browser flow now runs ONLY when the
+      // user taps the manual "Reconnect" button.
       if (now < recreateGov.haltedUntil) {
         callDebug.push('CONVEX', 'auth-watchdog: stage2 recreate HALTED (backoff)');
         return;
@@ -290,7 +270,7 @@ function ConvexAuthWatchdog({ onRecreate }: { onRecreate: () => void }) {
       clearTimeout(reauthTimer);
       clearTimeout(recreateTimer);
     };
-  }, [mismatch, onRecreate, trySilentReauth]);
+  }, [mismatch, onRecreate]);
 
   // Re-evaluate promptly on foreground: if we resume into a mismatch, clear any
   // recreate halt (fresh user attention) and kick a reauth immediately.

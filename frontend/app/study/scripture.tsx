@@ -36,17 +36,35 @@ import {
   type Surah,
 } from '../../src/lib/scripture/api';
 import { useScriptureSync, type ScripturePosition } from '../../src/lib/scripture/sync';
+import { useRoom } from '../../src/lib/study/useRooms';
 
 type Material = 'bible' | 'quran';
 
+function pickField(o: any, ...keys: string[]) {
+  for (const k of keys) if (o && o[k] != null && o[k] !== '') return o[k];
+  return undefined;
+}
+
 export default function ScriptureScreen() {
-  const params = useLocalSearchParams<{ type?: string }>();
+  const params = useLocalSearchParams<{ type?: string; roomId?: string }>();
   const material: Material = params.type === 'quran' ? 'quran' : 'bible';
+  const roomId = params.roomId || null;
   const me = useQuery(api.users.getCurrentUser, {}) as any;
   const myId = me?._id ? String(me._id) : 'me';
 
+  // When reading inside a Study Room, only the room's admin/chief (the session
+  // initiator) is the LEADER who broadcasts the position; every other member is
+  // a FOLLOWER whose screen scrolls along. Previously `isLeader = mode==='all'`
+  // made EVERY "Read with all" member a leader, so nobody ever subscribed to
+  // the leader's position — the reason followers never saw the reader's screen.
+  const { room } = useRoom(roomId);
+  const roomRole = pickField(room, 'role', 'myRole', 'memberRole') || 'member';
+  const isRoomAdmin = roomRole === 'owner' || roomRole === 'admin' || roomRole === 'chief';
+
   const [mode, setMode] = useState<'choose' | 'alone' | 'all'>('choose');
-  const isLeader = mode === 'all';
+  // Leader = in "Read with all" AND (either the room admin/initiator, or there
+  // is no room context — e.g. a plain 1:1/group call where the opener leads).
+  const isLeader = mode === 'all' && (roomId ? isRoomAdmin : true);
 
   // Bible state
   const [bLangIdx, setBLangIdx] = useState(0);
@@ -225,7 +243,7 @@ export default function ScriptureScreen() {
     <SafeAreaView style={styles.root} edges={['top']}>
       <Header
         title={material === 'bible' ? 'Bible' : 'Quran'}
-        badge={mode === 'all' ? 'Reading to all' : undefined}
+        badge={mode === 'all' ? (isLeader ? 'Reading to all' : 'Following') : undefined}
       />
 
       {/* Selector bar */}

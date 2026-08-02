@@ -24,6 +24,7 @@ import {
   Text,
   TouchableOpacity,
   View,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -34,8 +35,11 @@ import {
   ExpoSpeechRecognitionModule,
   useSpeechRecognitionEvent,
 } from 'expo-speech-recognition';
+import { useAction } from 'convex/react';
 
 import { Colors } from '../../src/theme';
+import { api } from '../../src/convexApi';
+import { liveCapitalize, applyCaps } from '../../src/lib/voiceTyping/capitalize';
 import {
   loadVoiceNotes,
   saveVoiceNote,
@@ -95,12 +99,20 @@ export default function VoiceTypingScreen() {
   const [history, setHistory] = useState<VoiceNote[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  // CAPS-lock: when ON, everything is displayed/saved uppercase. The buffer in
+  // `committedRef` always stays natural-cased so toggling OFF is non-lossy.
+  const [capsLock, setCapsLock] = useState(false);
+  // Grammar-adaptive AI polish (proper nouns, punctuation, obvious grammar).
+  const [polishing, setPolishing] = useState(false);
 
   const phaseRef = useRef<Phase>('idle');
   const modeRef = useRef<Mode>('dictation');
   const committedRef = useRef('');
+  const capsLockRef = useRef(false);
   const lastSpeechRef = useRef(Date.now());
   const pauseTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const polishAction = useAction(api.study.voiceTypingGrammar.polish);
 
   const setPhaseSafe = useCallback((p: Phase) => {
     phaseRef.current = p;
@@ -120,7 +132,7 @@ export default function VoiceTypingScreen() {
     if (modeRef.current === 'dictation') {
       if (!transcript) return;
       if (e?.isFinal) {
-        committedRef.current = (committedRef.current + ' ' + transcript).trim();
+        committedRef.current = liveCapitalize((committedRef.current + ' ' + transcript).trim());
         setCommitted(committedRef.current);
         setInterim('');
       } else {
@@ -307,14 +319,49 @@ export default function VoiceTypingScreen() {
     setPhaseSafe('onhold');
   }, [setPhaseSafe, stopRecognition]);
 
-  const handleFinished = useCallback(() => {
+  // Apply CAPS-lock + on-device live capitalization, then run the backend
+  // grammar-adaptive polish (proper nouns, punctuation, obvious grammar). The
+  // action never rewrites the speaker's words — it only fixes casing/grammar.
+  const runPolish = useCallback(async () => {
+    const raw = committedRef.current.trim();
+    if (!raw) return;
+    const base = capsLockRef.current ? raw.toUpperCase() : liveCapitalize(raw);
+    committedRef.current = base;
+    setCommitted(base);
+    setPolishing(true);
+    try {
+      const res = await polishAction({ text: base, allCaps: capsLockRef.current });
+      if (typeof res === 'string' && res.trim()) {
+        committedRef.current = res;
+        setCommitted(res);
+      }
+    } catch {
+      /* polish is best-effort — keep the live-capitalized text on failure */
+    }
+    setPolishing(false);
+  }, [polishAction]);
+
+  // CAPS-lock toggle. The buffer stays natural-cased; only display/output casing
+  // flips, so turning it OFF restores natural sentence capitalization.
+  const toggleCaps = useCallback(() => {
+    setCapsLock((prev) => {
+      const next = !prev;
+      capsLockRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const handleFinished = useCallback(async () => {
     stopRecognition();
+    // Grammar-adaptive polish runs here, BEFORE the copy prompt, so the copied/
+    // saved text is already corrected.
+    await runPolish();
     setPhaseSafe('promptCopy');
     speak('Do you want to copy it to the clipboard?');
     setTimeout(() => {
       if (phaseRef.current === 'promptCopy') startRecognition('copyCmd');
     }, 2200);
-  }, [setPhaseSafe, speak, startRecognition, stopRecognition]);
+  }, [runPolish, setPhaseSafe, speak, startRecognition, stopRecognition]);
 
   const finalizeNote = useCallback(
     async (copy: boolean) => {
@@ -323,7 +370,7 @@ export default function VoiceTypingScreen() {
         Speech.stop();
       } catch {}
       modeRef.current = 'dictation';
-      const text = committedRef.current.trim();
+      const text = applyCaps(committedRef.current.trim(), capsLockRef.current);
       if (copy && text) {
         try {
           await Clipboard.setStringAsync(text);
@@ -357,7 +404,7 @@ export default function VoiceTypingScreen() {
   }, [handleFinished]);
 
   const copyCurrent = useCallback(async () => {
-    const text = (committedRef.current + ' ' + interim).trim();
+    const text = applyCaps((committedRef.current + ' ' + interim).trim(), capsLockRef.current);
     if (!text) return;
     await Clipboard.setStringAsync(text);
     setError(null);
@@ -403,7 +450,10 @@ export default function VoiceTypingScreen() {
     ]);
   }, []);
 
-  const displayText = useMemo(() => (committed + (interim ? ' ' + interim : '')).trim(), [committed, interim]);
+  const displayText = useMemo(() => {
+    const natural = liveCapitalize((committed + (interim ? ' ' + interim : '')).trim());
+    return applyCaps(natural, capsLock);
+  }, [committed, interim, capsLock]);
   const isPrompt = phase === 'promptFinish' || phase === 'promptCopy';
 
   return (
@@ -433,16 +483,47 @@ export default function VoiceTypingScreen() {
             <Text style={styles.cardLabel}>
               {phase === 'listening' ? 'Listening…' : phase === 'onhold' ? 'On hold' : 'Your text'}
             </Text>
-            {displayText ? (
-              <TouchableOpacity onPress={copyCurrent} style={styles.copyInline} hitSlop={8}>
-                <Feather name="copy" size={14} color={Colors.primaryDark} />
-                <Text style={styles.copyInlineText}>Copy</Text>
+            <View style={styles.cardHeadActions}>
+              <TouchableOpacity
+                onPress={toggleCaps}
+                style={[styles.capsBtn, capsLock && styles.capsBtnOn]}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityState={{ selected: capsLock }}
+              >
+                <Feather name="type" size={13} color={capsLock ? Colors.white : Colors.primaryDark} />
+                <Text style={[styles.capsBtnText, capsLock && styles.capsBtnTextOn]}>
+                  CAPS {capsLock ? 'ON' : 'OFF'}
+                </Text>
               </TouchableOpacity>
-            ) : null}
+              {displayText ? (
+                <TouchableOpacity onPress={copyCurrent} style={styles.copyInline} hitSlop={8}>
+                  <Feather name="copy" size={14} color={Colors.primaryDark} />
+                  <Text style={styles.copyInlineText}>Copy</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
           </View>
           <Text style={[styles.transcript, !displayText && styles.transcriptPlaceholder]}>
             {displayText || 'Tap the mic and start speaking. When you pause for 10 seconds I\u2019ll ask if you\u2019re done.'}
           </Text>
+          {committed ? (
+            <TouchableOpacity
+              onPress={runPolish}
+              style={styles.polishBtn}
+              disabled={polishing}
+              hitSlop={6}
+            >
+              {polishing ? (
+                <ActivityIndicator size="small" color={Colors.primaryDark} />
+              ) : (
+                <Feather name="check-circle" size={15} color={Colors.primaryDark} />
+              )}
+              <Text style={styles.polishBtnText}>
+                {polishing ? 'Fixing…' : 'Fix grammar & capitals'}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
 
         {/* Prompt actions (also voice-controllable) */}
@@ -575,11 +656,40 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
   },
   cardHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  cardHeadActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   cardLabel: { fontSize: 13, fontWeight: '700', color: Colors.textSecondary },
+  capsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    backgroundColor: Colors.surface,
+  },
+  capsBtnOn: { backgroundColor: Colors.primary },
+  capsBtnText: { fontSize: 11, fontWeight: '800', color: Colors.primaryDark, letterSpacing: 0.5 },
+  capsBtnTextOn: { color: Colors.white },
   copyInline: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   copyInlineText: { color: Colors.primaryDark, fontWeight: '700', fontSize: 13 },
   transcript: { fontSize: 17, lineHeight: 26, color: Colors.textPrimary },
   transcriptPlaceholder: { color: Colors.textMuted, fontStyle: 'italic' },
+  polishBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    alignSelf: 'flex-start',
+    marginTop: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: Colors.borderLight,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  polishBtnText: { color: Colors.primaryDark, fontWeight: '800', fontSize: 13 },
   promptBox: {
     backgroundColor: Colors.surface,
     borderRadius: 16,
