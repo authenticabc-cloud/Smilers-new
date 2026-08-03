@@ -11,6 +11,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
+import httpx  # HTTP client for scripture/Quran proxy endpoints (module-level import)
 import jwt  # PyJWT — signs Stream Video access tokens (HS256) with the Stream secret
 from datetime import datetime, timezone, timedelta
 from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
@@ -2415,7 +2416,6 @@ async def diagnostic_logs_recent(limit: int = 50):
 # deploy time by the Emergent deployer with the real key. DO NOT edit
 # the .env value yourself.
 
-import httpx
 from fastapi import Header
 
 PUSH_BASE_URL = "https://integrations.emergentagent.com"
