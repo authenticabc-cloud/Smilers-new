@@ -73,6 +73,39 @@ target 'Smilers' do
       end
     end
 
+    # withExpoModulesForceLoad — CONFIRMED runtime failure: expo-modules-core
+    # registers 0 native modules on iOS Release (present=0/20) even though
+    # autolinking detects all of them and the AppDelegate wiring is correct.
+    # With `ios.useFrameworks=static` (required by Firebase/Stream) each Expo
+    # module is a STATIC framework; its Swift classes are only pulled into the
+    # binary on demand. Force-load every Expo module static framework so all
+    # module classes are present in the ObjC runtime at launch and
+    # ExpoModulesProvider can register them (otherwise the app hangs on splash
+    # because ExpoSplashScreen/ExpoConstants are null).
+    __expo_fw = installer.pods_project.targets
+      .select { |t| t.respond_to?(:product_type) && t.product_type == 'com.apple.product-type.framework' }
+      .map(&:name)
+      .select { |n| n =~ /\A(Expo|EX)/ }
+      .uniq
+    __force_flags = __expo_fw.map { |n|
+      "-force_load \"${PODS_CONFIGURATION_BUILD_DIR}/#{n}/#{n}.framework/#{n}\""
+    }
+    puts "[withExpoModulesForceLoad] force-loading #{__expo_fw.length} Expo module frameworks: #{__expo_fw.join(', ')}"
+    installer.aggregate_targets.each do |__agg|
+      __proj = __agg.user_project
+      next unless __proj
+      __proj.native_targets.each do |__ut|
+        __ut.build_configurations.each do |__c|
+          next unless __c.name == 'Release'
+          __ldflags = __c.build_settings['OTHER_LDFLAGS'] || ['$(inherited)']
+          __ldflags = [__ldflags] unless __ldflags.is_a?(Array)
+          __force_flags.each { |__f| __ldflags << __f unless __ldflags.include?(__f) }
+          __c.build_settings['OTHER_LDFLAGS'] = __ldflags
+        end
+      end
+      __proj.save
+    end
+
     # withPodfileResourceBundleSigning — Xcode14 resource-bundle signing fix
     installer.pods_project.targets.each do |__rb_target|
       if __rb_target.respond_to?(:product_type) && __rb_target.product_type == 'com.apple.product-type.bundle'
