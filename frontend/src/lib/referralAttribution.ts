@@ -15,11 +15,23 @@
  */
 import { useEffect, useRef } from 'react';
 import { AppState, Platform } from 'react-native';
-import * as Linking from 'expo-linking';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useConvex } from 'convex/react';
 import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
+
+// Deferred/lazy access — see AuthProvider.tsx for why: expo-linking's own
+// binding calls requireNativeModule('ExpoLinking') at module scope, which
+// can throw if native module registration hasn't finished yet on an iOS
+// cold start. Proxy defers the actual require() to first real use. This
+// file is loaded at _layout.tsx module scope (via <ReferralAttribution/>),
+// i.e. very early in boot, so a static import here was crashing iOS launch.
+const Linking: typeof import('expo-linking') = new Proxy({} as any, {
+  get(_target, prop) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('expo-linking')[prop];
+  },
+});
 
 const CAPTURED_KEY = 'smilers_install_referrer_captured';
 const PENDING_CODE_KEY = 'smilers_pending_referral_code';

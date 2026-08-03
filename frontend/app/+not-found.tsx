@@ -12,6 +12,8 @@ import { useGlobalSearchParams, useLocalSearchParams, useRouter } from 'expo-rou
 import * as Linking from 'expo-linking';
 import * as AuthSession from 'expo-auth-session';
 import { Ionicons } from '@expo/vector-icons';
+import { useAuth } from '../src/providers/AuthProvider';
+import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
 // Deferred/lazy access — see src/providers/AuthProvider.tsx for why:
 // expo-secure-store's own binding calls requireNativeModule('ExpoSecureStore')
@@ -24,8 +26,6 @@ const SecureStore: typeof import('expo-secure-store') = new Proxy({} as any, {
     return require('expo-secure-store')[prop];
   },
 });
-import { useAuth } from '../src/providers/AuthProvider';
-import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 
 const OIDC_AUTHORITY = process.env.EXPO_PUBLIC_OIDC_AUTHORITY!;
 const OIDC_CLIENT_ID = process.env.EXPO_PUBLIC_OIDC_CLIENT_ID!;

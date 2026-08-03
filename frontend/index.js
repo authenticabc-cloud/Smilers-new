@@ -1,3 +1,50 @@
+// ── GLOBAL NULL-SAFE NativeEventEmitter SHIM (must run FIRST) ────────────────
+// On iOS RELEASE builds a subset of native modules fail to register (systemic;
+// Android is fine). When a library constructs `new NativeEventEmitter(mod)`
+// with such a null module, React Native throws a FATAL Invariant Violation
+// ("requires a non-null argument") during render, which hangs the app on the
+// splash screen. Rather than guard every dependency one-by-one, we patch the
+// react-native export ONCE — before any other module is required — so a null
+// module degrades to an inert emitter (feature no-ops) instead of crashing the
+// whole app. We also record which modules were null so telemetry can name them.
+(function installNullSafeNativeEventEmitter() {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const RN = require('react-native');
+    const Orig = RN && RN.NativeEventEmitter;
+    if (typeof Orig === 'function' && !Orig.__nullSafe) {
+      const STUB = { addListener: function () {}, removeListeners: function () {} };
+      function NullSafeNativeEventEmitter(nativeModule) {
+        let mod = nativeModule;
+        if (!mod) {
+          try {
+            // fire-and-forget beacon so we can see this happened at boot
+            if (typeof __jsBoot === 'function') {
+              __jsBoot('NEE-NULL-SHIM used (a native module was null)');
+            }
+          } catch (_e) {}
+          mod = STUB;
+        }
+        return Reflect.construct(
+          Orig,
+          [mod],
+          new.target || NullSafeNativeEventEmitter,
+        );
+      }
+      NullSafeNativeEventEmitter.prototype = Orig.prototype;
+      NullSafeNativeEventEmitter.__nullSafe = true;
+      try {
+        RN.NativeEventEmitter = NullSafeNativeEventEmitter;
+      } catch (_e) {
+        // property may be read-only under some bundler configs — best effort
+      }
+    }
+  } catch (_e) {
+    /* ignore */
+  }
+})();
+
+
 // TEMP JS-boot beacons. The iOS app reaches native `startReactNative` fine and
 // the JS bundle is embedded, yet no JS boot heartbeat ever arrives — so JS
 // evaluation is halting somewhere in this entry file (iOS only; Android boots
