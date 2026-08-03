@@ -7,7 +7,13 @@
 function __jsBoot(stage) {
   try {
     if (typeof fetch !== 'function') return;
-    fetch('https://app-migration-75.emergent.host/api/diagnostic-logs', {
+    var __base =
+      (typeof process !== 'undefined' &&
+        process.env &&
+        process.env.EXPO_PUBLIC_BACKEND_URL) ||
+      '';
+    if (!__base) return;
+    fetch(__base.replace(/\/$/, '') + '/api/diagnostic-logs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
