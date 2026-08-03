@@ -93,7 +93,7 @@ export default function PrivacyScreen() {
   const updateSettings = useMutation(api.privacy.updateSettings);
   const [draft, setDraft] = useState<PrivacySettings>(DEFAULTS);
   const [saving, setSaving] = useState(false);
-  const [pickerKey, setPickerKey] = useState<VisibilityKey | GroupsKey | null>(null);
+  const [pickerKey, setPickerKey] = useState<VisibilityKey | null>(null);
   const controlsDisabled = !cloudSyncEnabled || saving;
   // People-picker (for `only` / `everyone_except` policies).
   const [contactPicker, setContactPicker] = useState<{ key: VisibilityKey; mode: VisibilityValue } | null>(null);
@@ -171,7 +171,7 @@ export default function PrivacyScreen() {
       ? 'Saving…'
       : 'Synced with Smilers cloud';
 
-  const onPickVisibility = (key: VisibilityKey | GroupsKey, value: VisibilityValue | GroupsValue) => {
+  const onPickVisibility = (key: VisibilityKey, value: VisibilityValue) => {
     setPickerKey(null);
     // `only` / `everyone_except` need a people list → open the contact picker,
     // seeded with the field's current list. Other policies persist right away.
@@ -213,10 +213,10 @@ export default function PrivacyScreen() {
 
   const currentPickerOptions = useMemo(() => {
     if (!pickerKey) return [];
-    return pickerKey === 'groups' ? GROUPS_OPTIONS : VISIBILITY_OPTIONS;
+    return VISIBILITY_OPTIONS;
   }, [pickerKey]);
 
-  const currentPickerLabels: Record<string, string> = pickerKey === 'groups' ? GROUPS_LABEL : VISIBILITY_LABEL;
+  const currentPickerLabels: Record<string, string> = VISIBILITY_LABEL;
 
   if (loading) {
     return (
@@ -280,7 +280,7 @@ export default function PrivacyScreen() {
             {currentPickerOptions.map((option) => {
               const selected = pickerKey ? draft[pickerKey] === option : false;
               return (
-                <TouchableOpacity key={option} style={styles.optionRow} onPress={() => pickerKey && onPickVisibility(pickerKey, option as VisibilityValue | GroupsValue)} testID={`privacy-opt-${option}`}>
+                <TouchableOpacity key={option} style={styles.optionRow} onPress={() => pickerKey && onPickVisibility(pickerKey, option as VisibilityValue)} testID={`privacy-opt-${option}`}>
                   <Text style={styles.optionLabel}>{currentPickerLabels[option]}</Text>
                   {selected ? <Feather name="check" size={20} color={Colors.primary} /> : null}
                 </TouchableOpacity>
