@@ -50,6 +50,25 @@ _SERVER_STARTED_AT = datetime.now(timezone.utc)
 api_router = APIRouter(prefix="/api")
 
 
+# ── Liveness (app-level, NO /api prefix, NO DB dependency) ───────────────────
+# Kubernetes / Emergent readiness+liveness probes hit the backend directly on
+# port 8001 at "/" and "/health". These MUST return 200 immediately without
+# touching MongoDB/Atlas — otherwise a slow or momentarily-unreachable database
+# during boot makes the probe fail and the pod is killed → CrashLoopBackOff
+# (the symptom seen in the deploy logs: backend boots, "Application startup
+# complete", then the whole container restarts seconds later, on repeat).
+# The rich, DB-aware readiness report still lives at GET /api/health.
+@app.get("/")
+async def liveness_root():
+    return {"status": "ok"}
+
+
+@app.get("/health")
+async def liveness_health():
+    return {"status": "ok"}
+
+
+
 # Define Models
 class StatusCheck(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
