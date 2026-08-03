@@ -78,14 +78,12 @@ target 'Smilers' do
     #
     # Product handling: for each Expo/EX pod target we read its ACTUAL build
     # product (from product_reference) instead of guessing the filename.
-    #   - static library   -> lib<Name>.a lands FLAT at ${PODS_CONFIGURATION_BUILD_DIR}
-    #     (empirically links; 17/20 worked this way).
-    #   - static framework -> <Name>.framework lands in a <Name>/ subdir; the
-    #     force_load target is the framework BINARY (<Name>.framework/<Name>).
-    # SDK 54 tree-shaking + a few Expo pods that build as STATIC FRAMEWORKS
-    # (this is why the plain "lib<Name>.a" loop missed exactly ExpoConstants /
-    # ExpoFileSystem / ExpoBlur — those 3 have NO .a file so the old loop's
-    # force_load silently no-op'd and they got dead-code-stripped -> 17/20).
+    #   - static library   -> lib<Name>.a lands in a per-TARGET subdirectory
+    #     ${PODS_CONFIGURATION_BUILD_DIR}/<Name>/lib<Name>.a (Xcode 26 / EAS).
+    #   - static framework -> <Name>.framework also lands in a <Name>/ subdir.
+    # DEFINITIVE (EAS build 35 Ld log): the flat individual-lib path fails with
+    # "Build input files cannot be found"; the subdirectory path is correct.
+    # The Pods-Smilers AGGREGATE lib is the ONLY one that lands FLAT (root).
     expo_targets = installer.pods_project.targets.select do |t|
       t.respond_to?(:product_type) &&
         (t.name.start_with?('Expo') || t.name.start_with?('EX')) &&
@@ -108,8 +106,13 @@ target 'Smilers' do
         fw = File.basename(product, '.framework')
         path = "\"${PODS_CONFIGURATION_BUILD_DIR}/#{t.name}/#{product}/#{fw}\""
       else
-        # static library (.a) — lands FLAT at the build dir root
-        path = "\"${PODS_CONFIGURATION_BUILD_DIR}/#{product}\""
+        # static library (.a) — EAS/Xcode 26 places each pod lib in a
+        # per-TARGET subdirectory: ${PODS_CONFIGURATION_BUILD_DIR}/<Name>/lib<Name>.a
+        # (proven by the failing build's Ld "-L.../Release-iphoneos/EXAV -lEXAV").
+        # The old flat ".../lib<Name>.a" path does NOT exist -> "Build input
+        # files cannot be found". The Pods-Smilers AGGREGATE lib, however, IS
+        # flat at the root (handled separately above).
+        path = "\"${PODS_CONFIGURATION_BUILD_DIR}/#{t.name}/#{product}\""
       end
       Pod::UI.puts "  - #{t.name} (#{t.product_type}) product=#{product} -> #{path}"
       force_load_flags << '-force_load'
