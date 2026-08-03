@@ -104,6 +104,3 @@ google-service-account.json
 backend/firebase-admin-sdk.json
 **/firebase-admin-sdk*.json
 backend/downloads/smilers-frontend.zip
-.env
-.env.*
-*.env
