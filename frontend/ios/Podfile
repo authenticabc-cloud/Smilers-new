@@ -82,11 +82,20 @@ target 'Smilers' do
     # module classes are present in the ObjC runtime at launch and
     # ExpoModulesProvider can register them (otherwise the app hangs on splash
     # because ExpoSplashScreen/ExpoConstants are null).
-    __expo_fw = installer.pods_project.targets
-      .select { |t| t.respond_to?(:product_type) && t.product_type == 'com.apple.product-type.framework' }
-      .map(&:name)
-      .select { |n| n =~ /\A(Expo|EX)/ }
-      .uniq
+    # Only force-load Expo module frameworks that actually COMPILE sources into
+    # a Mach-O binary. A framework target with no compile-sources build phase
+    # (resource-only / interface-only pods) produces no `Foo.framework/Foo`
+    # binary, and referencing it via -force_load makes Xcode's build system
+    # treat it as a required input file — failing with
+    # "Build input files cannot be found: .../Foo.framework/Foo" at the Ld step
+    # (this is exactly what the removed expo-av/EXAV pod did). Guarding on the
+    # presence of compiled sources keeps the list to real, linkable binaries.
+    __expo_fw = installer.pods_project.targets.select do |t|
+      next false unless t.respond_to?(:product_type) && t.product_type == 'com.apple.product-type.framework'
+      next false unless t.name =~ /\A(Expo|EX)/
+      __sbp = (t.respond_to?(:source_build_phase) ? t.source_build_phase : nil)
+      __sbp && __sbp.files.count > 0
+    end.map(&:name).uniq
     __force_flags = __expo_fw.map { |n|
       "-force_load \"${PODS_CONFIGURATION_BUILD_DIR}/#{n}/#{n}.framework/#{n}\""
     }
