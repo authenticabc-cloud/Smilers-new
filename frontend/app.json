@@ -253,6 +253,10 @@
       [
         "expo-build-properties",
         {
+          "ios": {
+            "useFrameworks": "static",
+            "buildReactNativeFromSource": true
+          },
           "android": {
             "minSdkVersion": 24,
             "enableProguardInReleaseBuilds": true,

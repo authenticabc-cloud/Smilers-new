@@ -3,5 +3,6 @@
   "EX_DEV_CLIENT_NETWORK_INSPECTOR": "true",
   "newArchEnabled": "true",
   "ios.useFrameworks": "static",
+  "ios.buildReactNativeFromSource": "true",
   "apple.privacyManifestAggregationEnabled": "true"
 }
