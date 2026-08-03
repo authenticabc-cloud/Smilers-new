@@ -83,21 +83,25 @@ target 'Smilers' do
     # ExpoModulesProvider can register them (otherwise the app hangs on splash
     # because ExpoSplashScreen/ExpoConstants are null).
     # Only force-load Expo module frameworks that actually COMPILE sources into
-    # a Mach-O binary. A framework target with no compile-sources build phase
-    # (resource-only / interface-only pods) produces no `Foo.framework/Foo`
-    # binary, and referencing it via -force_load makes Xcode's build system
-    # treat it as a required input file — failing with
-    # "Build input files cannot be found: .../Foo.framework/Foo" at the Ld step
-    # (this is exactly what the removed expo-av/EXAV pod did). Guarding on the
-    # presence of compiled sources keeps the list to real, linkable binaries.
+    # a Mach-O binary (skip resource/interface-only pods that emit no binary).
     __expo_fw = installer.pods_project.targets.select do |t|
       next false unless t.respond_to?(:product_type) && t.product_type == 'com.apple.product-type.framework'
       next false unless t.name =~ /\A(Expo|EX)/
       __sbp = (t.respond_to?(:source_build_phase) ? t.source_build_phase : nil)
       __sbp && __sbp.files.count > 0
     end.map(&:name).uniq
+    # CRITICAL flag format: pass -force_load as a SINGLE comma-joined token via
+    # `-Wl,-force_load,<path>` (NOT the two-token `-force_load "<path>"`).
+    # Xcode's new build system parses a bare `-force_load <path>` pair in
+    # OTHER_LDFLAGS and registers <path> as a REQUIRED build input, then
+    # validates it exists before the sibling pod targets have produced it —
+    # failing the archive at the Ld step with
+    # "Build input files cannot be found: .../Foo.framework/Foo".
+    # Wrapping it in `-Wl,...` makes Xcode treat the whole thing as one opaque
+    # linker argument (no input-file validation); clang still forwards it to ld
+    # verbatim, so the runtime force-load (which fixes present=0/20) is intact.
     __force_flags = __expo_fw.map { |n|
-      "-force_load \"${PODS_CONFIGURATION_BUILD_DIR}/#{n}/#{n}.framework/#{n}\""
+      "-Wl,-force_load,${PODS_CONFIGURATION_BUILD_DIR}/#{n}/#{n}.framework/#{n}"
     }
     puts "[withExpoModulesForceLoad] force-loading #{__expo_fw.length} Expo module frameworks: #{__expo_fw.join(', ')}"
     installer.aggregate_targets.each do |__agg|
