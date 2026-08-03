@@ -110,10 +110,18 @@ target 'Smilers' do
       __proj.native_targets.each do |__ut|
         __ut.build_configurations.each do |__c|
           next unless __c.name == 'Release'
-          __ldflags = __c.build_settings['OTHER_LDFLAGS'] || ['$(inherited)']
-          __ldflags = [__ldflags] unless __ldflags.is_a?(Array)
-          __force_flags.each { |__f| __ldflags << __f unless __ldflags.include?(__f) }
-          __c.build_settings['OTHER_LDFLAGS'] = __ldflags
+          # Do NOT inject `-force_load <framework-binary>` flags here. Xcode's
+          # new build system parses those paths (even in the `-Wl,-force_load,`
+          # comma form) and registers them as REQUIRED build inputs, then fails
+          # the archive at the Ld step with "Build input files cannot be found"
+          # because they live in sibling pod targets' products. Every Expo
+          # framework is ALREADY linked via `-framework <Name>`, so instead of
+          # force-loading we simply disable dead-code stripping on the app
+          # target. That keeps the Expo module Swift classes in the binary (so
+          # ExpoModulesProvider can register them at launch, fixing the
+          # present=0/20 splash hang) without injecting any validated input
+          # paths that break the linker.
+          __c.build_settings['DEAD_CODE_STRIPPING'] = 'NO'
         end
       end
       __proj.save
