@@ -10,7 +10,6 @@
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "ios": {
-      "newArchEnabled": false,
       "supportsTablet": true,
       "bundleIdentifier": "com.smilers.app",
       "buildNumber": "12",

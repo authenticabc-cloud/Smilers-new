@@ -60,6 +60,19 @@ target 'Smilers' do
       :ccache_enabled => ccache_enabled?(podfile_properties),
     )
 
+    # withNonModularIncludeFix — @stream-io/react-native-webrtc builds as a
+    # clang framework module yet imports non-modular React-Core headers
+    # (React/RCTBridgeModule.h, RCTConvert.h, RCTEventEmitter.h,
+    # RCTViewManager.h). Under -Werror=non-modular-include-in-framework-module
+    # this is fatal and the iOS archive fails. Allow non-modular includes in
+    # framework modules across all pod targets (canonical CocoaPods fix; does
+    # not affect runtime behaviour).
+    installer.pods_project.targets.each do |__nm_target|
+      __nm_target.build_configurations.each do |__nm_config|
+        __nm_config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+      end
+    end
+
     # withPodfileResourceBundleSigning — Xcode14 resource-bundle signing fix
     installer.pods_project.targets.each do |__rb_target|
       if __rb_target.respond_to?(:product_type) && __rb_target.product_type == 'com.apple.product-type.bundle'
