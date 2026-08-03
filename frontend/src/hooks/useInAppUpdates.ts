@@ -19,7 +19,6 @@
  */
 import { useEffect, useRef } from 'react';
 import { AppState, Platform, type AppStateStatus } from 'react-native';
-import * as InAppUpdates from 'expo-in-app-updates';
 
 // Play "in-app update priority" (0–5) at/above which we force an IMMEDIATE,
 // blocking update instead of a dismissible flexible one.
@@ -30,6 +29,16 @@ export function useInAppUpdates(): void {
 
   useEffect(() => {
     if (Platform.OS !== 'android' || __DEV__) return;
+
+    // Deliberately required here, not statically imported above: this native
+    // module (expo-in-app-updates) calls requireNativeModule("ExpoInAppUpdates")
+    // at ITS OWN module scope, which throws synchronously since that module
+    // doesn't exist on iOS (Android/Play Store-only API). A static top-level
+    // import runs at bundle-load time regardless of the Platform.OS guard
+    // above, which fatally crashed the JS thread on every iOS launch before
+    // _layout.tsx ever finished rendering (app stuck on splash forever).
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const InAppUpdates = require('expo-in-app-updates');
 
     const runCheck = async () => {
       if (checkingRef.current) return;

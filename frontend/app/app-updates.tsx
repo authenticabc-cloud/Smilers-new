@@ -14,7 +14,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
-import * as InAppUpdates from 'expo-in-app-updates';
 import Header from '../src/components/Header';
 import { getCurrentAppVersion, fetchAppVersion, type AppVersionInfo } from '../src/lib/appVersion';
 import { Colors, FontSize, FontWeight, Spacing, Radius } from '../src/theme';
@@ -74,6 +73,14 @@ export default function AppUpdatesScreen() {
         return;
       }
 
+      // Lazily required (NOT a static top-level import): expo-in-app-updates
+      // calls requireNativeModule("ExpoInAppUpdates") at its own module scope,
+      // which throws synchronously on iOS (Android/Play-only). A static import
+      // would run at bundle-load — and because expo-router eagerly loads every
+      // route file at boot, that fatally crashed the iOS JS thread on the
+      // splash screen. This require only runs on Android, non-dev.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const InAppUpdates = require('expo-in-app-updates');
       const info = await InAppUpdates.checkForUpdate();
       if (info?.updateAvailable) {
         setState('available');
