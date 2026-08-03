@@ -1,12 +1,25 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback, ReactNode } from 'react';
 import { AppState, AppStateStatus, Platform } from 'react-native';
 import * as AuthSession from 'expo-auth-session';
-import * as SecureStore from 'expo-secure-store';
 import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { sentry } from '../lib/sentry';
 import { setDiagnosticUser } from '../lib/diagnostics';
 import { callDebug } from '../lib/callDebugLog';
+
+// Deferred/lazy access: expo-secure-store's own binding file calls
+// requireNativeModule('ExpoSecureStore') at ITS module scope, which can
+// throw if the native module registry hasn't finished registering yet on
+// an iOS cold start (observed intermittently in production — see the
+// module-inventory boot diagnostics). A Proxy defers the actual require()
+// until the first real property access (well after this file itself is
+// imported at _layout.tsx module scope), instead of at import time.
+const SecureStore: typeof import('expo-secure-store') = new Proxy({} as any, {
+  get(_target, prop) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('expo-secure-store')[prop];
+  },
+});
 
 WebBrowser.maybeCompleteAuthSession();
 

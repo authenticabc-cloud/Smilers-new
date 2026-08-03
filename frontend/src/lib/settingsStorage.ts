@@ -1,6 +1,16 @@
 import { Platform } from 'react-native';
-import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Deferred/lazy access — see AuthProvider.tsx for why: expo-secure-store's
+// own binding calls requireNativeModule('ExpoSecureStore') at module scope,
+// which can throw if native module registration hasn't finished yet on an
+// iOS cold start. Proxy defers the actual require() to first real use.
+const SecureStore: typeof import('expo-secure-store') = new Proxy({} as any, {
+  get(_target, prop) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('expo-secure-store')[prop];
+  },
+});
 
 export const PRIVACY_SETTINGS_KEY = 'smilers_privacy_settings';
 export const APP_LOCK_SETTINGS_KEY = 'smilers_app_lock_settings';

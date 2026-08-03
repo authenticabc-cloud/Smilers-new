@@ -11,8 +11,19 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useGlobalSearchParams, useLocalSearchParams, useRouter } from 'expo-router';
 import * as Linking from 'expo-linking';
 import * as AuthSession from 'expo-auth-session';
-import * as SecureStore from 'expo-secure-store';
 import { Ionicons } from '@expo/vector-icons';
+
+// Deferred/lazy access — see src/providers/AuthProvider.tsx for why:
+// expo-secure-store's own binding calls requireNativeModule('ExpoSecureStore')
+// at module scope, which can throw if native module registration hasn't
+// finished yet on an iOS cold start. Proxy defers the actual require() to
+// first real use.
+const SecureStore: typeof import('expo-secure-store') = new Proxy({} as any, {
+  get(_target, prop) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('expo-secure-store')[prop];
+  },
+});
 import { useAuth } from '../src/providers/AuthProvider';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../src/theme';
 

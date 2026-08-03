@@ -14,8 +14,18 @@ import { gcm } from '@noble/ciphers/aes.js';
 import { pbkdf2 } from '@noble/hashes/pbkdf2.js';
 import { hmac } from '@noble/hashes/hmac.js';
 import { sha256 } from '@noble/hashes/sha2.js';
-import * as SecureStore from 'expo-secure-store';
 import * as Crypto from 'expo-crypto';
+
+// Deferred/lazy access — see AuthProvider.tsx for why: expo-secure-store's
+// own binding calls requireNativeModule('ExpoSecureStore') at module scope,
+// which can throw if native module registration hasn't finished yet on an
+// iOS cold start. Proxy defers the actual require() to first real use.
+const SecureStore: typeof import('expo-secure-store') = new Proxy({} as any, {
+  get(_target, prop) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('expo-secure-store')[prop];
+  },
+});
 
 const PBKDF2_ITERATIONS = 100_000;
 const KEY_LEN = 32; // 256 bits

@@ -12,11 +12,27 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
-import {
-  ExpoSpeechRecognitionModule,
-  useSpeechRecognitionEvent,
-  RecognizerIntentEnableLanguageSwitch,
-} from 'expo-speech-recognition';
+// Lazily/​safely resolved: `expo-speech-recognition` calls
+// requireNativeModule("ExpoSpeechRecognition") at its OWN module scope, which
+// throws synchronously on any build where that native module isn't linked
+// (e.g. iOS). A static top-level import runs at bundle-load and — because this
+// hook is pulled in by boot-loaded chat components — fatally crashed the iOS
+// JS thread on the splash screen. Wrapping the require in try/catch degrades
+// voice typing to a safe no-op instead of taking the whole app down.
+let ExpoSpeechRecognitionModule: any = null;
+let useSpeechRecognitionEvent: any = (_event: string, _cb: any) => {};
+let RecognizerIntentEnableLanguageSwitch: any = undefined;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const _sr = require('expo-speech-recognition');
+  ExpoSpeechRecognitionModule = _sr.ExpoSpeechRecognitionModule ?? null;
+  if (typeof _sr.useSpeechRecognitionEvent === 'function') {
+    useSpeechRecognitionEvent = _sr.useSpeechRecognitionEvent;
+  }
+  RecognizerIntentEnableLanguageSwitch = _sr.RecognizerIntentEnableLanguageSwitch;
+} catch {
+  // Native module unavailable on this platform/build — feature no-ops.
+}
 
 interface Args {
   listening: boolean;

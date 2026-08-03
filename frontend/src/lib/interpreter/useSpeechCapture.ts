@@ -11,10 +11,22 @@
  */
 import { useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
-import {
-  ExpoSpeechRecognitionModule,
-  useSpeechRecognitionEvent,
-} from 'expo-speech-recognition';
+// Lazily/​safely resolved — see useVoiceTyping.ts for the full rationale:
+// `expo-speech-recognition` throws at module scope when its native module
+// isn't linked (e.g. iOS), and a static import at boot fatally crashed the
+// iOS JS thread on the splash screen. try/catch degrades to a safe no-op.
+let ExpoSpeechRecognitionModule: any = null;
+let useSpeechRecognitionEvent: any = (_event: string, _cb: any) => {};
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const _sr = require('expo-speech-recognition');
+  ExpoSpeechRecognitionModule = _sr.ExpoSpeechRecognitionModule ?? null;
+  if (typeof _sr.useSpeechRecognitionEvent === 'function') {
+    useSpeechRecognitionEvent = _sr.useSpeechRecognitionEvent;
+  }
+} catch {
+  // Native module unavailable on this platform/build — feature no-ops.
+}
 import { bcp47 } from './languages';
 import { callDebug } from '../callDebugLog';
 
