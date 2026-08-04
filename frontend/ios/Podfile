@@ -110,17 +110,40 @@ target 'Smilers' do
       __proj.native_targets.each do |__ut|
         __ut.build_configurations.each do |__c|
           next unless __c.name == 'Release'
-          # Do NOT inject `-force_load <framework-binary>` flags here. Xcode's
-          # new build system parses those paths (even in the `-Wl,-force_load,`
-          # comma form) and registers them as REQUIRED build inputs, then fails
-          # the archive at the Ld step with "Build input files cannot be found"
-          # because they live in sibling pod targets' products. Every Expo
-          # framework is ALREADY linked via `-framework <Name>`, so instead of
-          # force-loading we simply disable dead-code stripping on the app
-          # target. That keeps the Expo module Swift classes in the binary (so
-          # ExpoModulesProvider can register them at launch, fixing the
-          # present=0/20 splash hang) without injecting any validated input
-          # paths that break the linker.
+          # CONFIRMED via on-device boot logs: the app compiled & launched but
+          # died at the first `requireNativeModule('ExpoLinking')` because
+          # expo-modules-core registered 0 native modules (present=0/20). With
+          # `ios.useFrameworks=static` each Expo module is its OWN static
+          # framework; the linker only pulls object files that resolve a
+          # referenced symbol, and nothing in the app references the module
+          # Swift classes directly, so ExpoModulesProvider finds none at launch
+          # and the app hangs on the splash screen.
+          #
+          # `DEAD_CODE_STRIPPING = NO` on the APP target did NOT fix this — the
+          # module classes live in SEPARATE framework binaries, so app-target
+          # dead-stripping never reaches them (archive-member selection, not
+          # dead-strip, is what drops them).
+          #
+          # Path-based `-force_load <framework>/<binary>` (and the
+          # `-Wl,-force_load,<path>` comma form) both FAIL on EAS: Xcode's new
+          # build system registers each path as a REQUIRED build input and
+          # validates it before the sibling pod target has produced it, failing
+          # the Ld step with "Build input files cannot be found".
+          #
+          # `-all_load` is the EAS-safe escape hatch: it force-loads ALL object
+          # files from every linked static-framework archive (a single flag, NO
+          # file paths -> no input-file validation), guaranteeing every Expo
+          # module Swift class is present so ExpoModulesProvider registers them
+          # (present=20/20) and boot reaches the Sign In screen. We keep
+          # DEAD_CODE_STRIPPING=NO so nothing pulled in by -all_load is stripped
+          # back out. (The one known duplicate-symbol conflict this could
+          # surface — react-native-skia's bundled libwebp vs the standalone
+          # libwebp.framework — is already removed by scripts/patch-rn-skia-webp.js.)
+          __ldflags = __c.build_settings['OTHER_LDFLAGS'] || ['$(inherited)']
+          __ldflags = [__ldflags] unless __ldflags.is_a?(Array)
+          __ldflags << '$(inherited)' unless __ldflags.include?('$(inherited)')
+          __ldflags << '-all_load' unless __ldflags.include?('-all_load')
+          __c.build_settings['OTHER_LDFLAGS'] = __ldflags
           __c.build_settings['DEAD_CODE_STRIPPING'] = 'NO'
         end
       end
