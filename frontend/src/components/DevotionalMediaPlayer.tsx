@@ -28,6 +28,7 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { Colors, FontSize, FontWeight, Radius } from '../theme';
+import { ensureVoicePlaybackMode } from '../lib/audio/voicePlaybackMode';
 
 interface Props {
   /** Optional — the raw storage ID. Kept for backwards compat / logs. */
