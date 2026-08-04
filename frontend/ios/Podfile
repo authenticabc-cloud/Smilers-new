@@ -23,28 +23,6 @@ prepare_react_native_project!
 target 'Smilers' do
   use_expo_modules!
 
-  # withExpoModulesDynamic — build Expo/EX-prefixed pods as DYNAMIC frameworks even
-  # though ios.useFrameworks=static (required by Firebase/Stream). Under static
-  # linkage, Expo's Swift module classes are only pulled into the binary on demand
-  # and never self-register (ExpoModulesProvider finds 0/20 modules at launch,
-  # app hangs on splash). Dynamic frameworks are loaded whole by dyld at process
-  # start, so registration happens automatically -- no force_load/-all_load linker
-  # flags needed. This supersedes the withExpoModulesForceLoad post_install hack
-  # (force_load response-file and -all_load variants), both of which produced
-  # duplicate-symbol linker failures because Expo frameworks are referenced more
-  # than once in CocoaPods' generated OTHER_LDFLAGS for widely-shared transitive
-  # deps like ExpoModulesCore, and force-loading/-all_load re-extracts every
-  # occurrence in full.
-  pre_install do |installer|
-    installer.pod_targets.each do |pod|
-      if pod.name.start_with?('Expo') || pod.name.start_with?('EX')
-        def pod.build_type
-          Pod::BuildType.dynamic_framework
-        end
-      end
-    end
-  end
-
   if ENV['EXPO_USE_COMMUNITY_AUTOLINKING'] == '1'
     config_command = ['node', '-e', "process.argv=['', '', 'config'];require('@react-native-community/cli').run()"];
   else
