@@ -90,77 +90,93 @@ target 'Smilers' do
       __sbp = (t.respond_to?(:source_build_phase) ? t.source_build_phase : nil)
       __sbp && __sbp.files.count > 0
     end.map(&:name).uniq
-    # CRITICAL flag format: pass -force_load as a SINGLE comma-joined token via
-    # `-Wl,-force_load,<path>` (NOT the two-token `-force_load "<path>"`).
-    # Xcode's new build system parses a bare `-force_load <path>` pair in
-    # OTHER_LDFLAGS and registers <path> as a REQUIRED build input, then
-    # validates it exists before the sibling pod targets have produced it —
-    # failing the archive at the Ld step with
-    # "Build input files cannot be found: .../Foo.framework/Foo".
-    # Wrapping it in `-Wl,...` makes Xcode treat the whole thing as one opaque
-    # linker argument (no input-file validation); clang still forwards it to ld
-    # verbatim, so the runtime force-load (which fixes present=0/20) is intact.
-    __force_flags = __expo_fw.map { |n|
-      "-Wl,-force_load,${PODS_CONFIGURATION_BUILD_DIR}/#{n}/#{n}.framework/#{n}"
-    }
-    puts "[withExpoModulesForceLoad] force-loading #{__expo_fw.length} Expo module frameworks: #{__expo_fw.join(', ')}"
+    # The list above (__expo_fw) drives a build-time linker RESPONSE FILE — see
+    # the detailed rationale in the ROOT CAUSE block below.
+    puts "[withExpoModulesForceLoad] will force-load #{__expo_fw.length} Expo module frameworks via a build-time response file: #{__expo_fw.join(', ')}"
+
+    # ==========================================================================
+    # ROOT CAUSE (confirmed twice via EAS logs)
+    # ==========================================================================
+    # With `ios.useFrameworks=static` (required by Firebase/Stream) every Expo
+    # module ships as its OWN static framework. The app's Ld step processes each
+    # `-framework Foo` as a static archive and only pulls in the object files
+    # that resolve a referenced symbol. Nothing references the module Swift
+    # classes strongly enough, so ExpoModulesProvider finds 0 modules at launch
+    # (present=0/20) and the app hangs on the splash screen with
+    # `Cannot find native module 'ExpoLinking'`.
+    #
+    # We must force-load ONLY the Expo module frameworks (touching Fabric/Skia
+    # via `-all_load` produced 78 duplicate symbols — DO NOT do that).
+    #
+    # PROVEN-DEAD approaches (both fail the EAS archive):
+    #   1. `-all_load`                                  -> 78 duplicate symbols.
+    #   2. `-force_load <abs>` OR `-Wl,-force_load,<abs>` OR
+    #      `-Wl,-force_load,${PODS_CONFIGURATION_BUILD_DIR}/...` placed directly
+    #      in OTHER_LDFLAGS -> Xcode's NEW build system scans OTHER_LDFLAGS,
+    #      resolves the build variable, registers each framework binary path as
+    #      a REQUIRED build input, and validates it during dependency-graph
+    #      construction (before the sibling pod targets emit it) => the archive
+    #      dies with "Build input files cannot be found: .../ExpoLinking". This
+    #      was CONFIRMED from the real Ld command in the EAS logs: the flags DID
+    #      resolve to absolute paths and STILL tripped input validation.
+    #
+    # WORKING approach — LINKER RESPONSE FILE:
+    #   * A pre-link Run-Script phase writes one `-Wl,-force_load,<abs binary>`
+    #     line per Expo framework into `$(DERIVED_FILE_DIR)/ExpoForceLoad.resp`,
+    #     resolving the products dir from `$PODS_CONFIGURATION_BUILD_DIR` at
+    #     build time (in the shell env — NOT scanned by the graph builder).
+    #   * OTHER_LDFLAGS references the file with clang's `@<file>` syntax. Xcode
+    #     registers ONLY the single `.resp` path as an input; it is declared as
+    #     the script phase's OUTPUT, so the build system schedules the script
+    #     BEFORE Ld. The framework paths live INSIDE the response file and are
+    #     therefore never seen by input validation. clang expands `@file` at
+    #     link time and forwards the force_load directives to ld verbatim.
+    #   * DEAD_CODE_STRIPPING=NO is kept as a belt-and-braces guard.
+    # ==========================================================================
+    __resp_flag = '@$(DERIVED_FILE_DIR)/ExpoForceLoad.resp'
+    __resp_out  = '$(DERIVED_FILE_DIR)/ExpoForceLoad.resp'
+    __phase_name = '[Expo] Generate ForceLoad Response File'
+    __resp_script = <<~SH
+      set -e
+      BASE="${PODS_CONFIGURATION_BUILD_DIR:-$CONFIGURATION_BUILD_DIR}"
+      OUT="${DERIVED_FILE_DIR}/ExpoForceLoad.resp"
+      mkdir -p "${DERIVED_FILE_DIR}"
+      : > "$OUT"
+      for n in #{__expo_fw.join(' ')}; do
+        echo "-Wl,-force_load,${BASE}/${n}/${n}.framework/${n}" >> "$OUT"
+      done
+      echo "[ExpoForceLoad] wrote $(wc -l < "$OUT" | tr -d ' ') force_load entries to $OUT"
+    SH
+
     installer.aggregate_targets.each do |__agg|
       __proj = __agg.user_project
       next unless __proj
       __proj.native_targets.each do |__ut|
+        # Only the main app target needs the Expo modules force-loaded; applying
+        # this to app extensions (e.g. the share extension) would force-load
+        # frameworks the extension does not otherwise link and can break its Ld.
+        next unless __ut.respond_to?(:product_type) && __ut.product_type == 'com.apple.product-type.application'
+
         __ut.build_configurations.each do |__c|
           next unless __c.name == 'Release'
-          # CONFIRMED via on-device boot logs: the app compiled & launched but
-          # died at the first `requireNativeModule('ExpoLinking')` because
-          # expo-modules-core registered 0 native modules (present=0/20). With
-          # `ios.useFrameworks=static` each Expo module is its OWN static
-          # framework; the linker only pulls object files that resolve a
-          # referenced symbol, and nothing in the app references the module
-          # Swift classes directly, so ExpoModulesProvider finds none at launch
-          # and the app hangs on the splash screen.
-          #
-          # `DEAD_CODE_STRIPPING = NO` on the APP target did NOT fix this — the
-          # module classes live in SEPARATE framework binaries, so app-target
-          # dead-stripping never reaches them (archive-member selection, not
-          # dead-strip, is what drops them).
-          #
-          # HISTORY: A HARDCODED-ABSOLUTE-PATH `-force_load /abs/.../Foo.framework/Foo`
-          # (space-separated pair) FAILS on EAS: Xcode's new build system parses
-          # the bare pair, registers the absolute path as a REQUIRED build input,
-          # and validates it before the sibling pod target has produced it —
-          # failing the Ld step with "Build input files cannot be found".
-          # The form applied below AVOIDS that by (a) wrapping in `-Wl,` so the
-          # whole thing is one opaque token (not parsed as a `-force_load <path>`
-          # pair) and (b) using the `${PODS_CONFIGURATION_BUILD_DIR}` build
-          # variable instead of an absolute path (resolved late, at link time).
-          #
-          # FIX (reverting -all_load): `-all_load` was too blunt — it force-loads
-          # EVERY linked static-framework archive, which pulled duplicate C/C++
-          # symbols out of React_Fabric, React_FabricComponents and
-          # react-native-skia and failed the archive with 78 duplicate symbols.
-          #
-          # The precise fix is to force-load ONLY the Expo module frameworks
-          # (computed in __force_flags above). Each flag is the single opaque
-          # token `-Wl,-force_load,${PODS_CONFIGURATION_BUILD_DIR}/<N>/<N>.framework/<N>`:
-          #   * `-Wl,...` => Xcode treats it as ONE linker argument and does NOT
-          #     register the path as a build input (so no "Build input files
-          #     cannot be found" EAS validation failure); clang forwards it to ld
-          #     verbatim so the runtime force-load still happens.
-          #   * `${PODS_CONFIGURATION_BUILD_DIR}` resolves at build time to the
-          #     per-configuration products dir where the sibling pod frameworks
-          #     are emitted — no hardcoded absolute paths.
-          # This guarantees every Expo module Swift class is present at launch so
-          # ExpoModulesProvider registers them (present=20/20) WITHOUT touching
-          # Fabric/Skia (so no duplicate symbols). DEAD_CODE_STRIPPING=NO is kept
-          # as a belt-and-braces guard against the linker stripping them back out.
           __ldflags = __c.build_settings['OTHER_LDFLAGS'] || ['$(inherited)']
           __ldflags = [__ldflags] unless __ldflags.is_a?(Array)
           __ldflags << '$(inherited)' unless __ldflags.include?('$(inherited)')
-          # Remove any previously-applied blunt -all_load (revert regression).
+          # Drop any previously-applied approaches that fail on EAS.
           __ldflags.delete('-all_load')
-          __force_flags.each { |__ff| __ldflags << __ff unless __ldflags.include?(__ff) }
+          __ldflags.reject! { |f| f.to_s.include?('-force_load') && f.to_s != __resp_flag }
+          __ldflags << __resp_flag unless __ldflags.include?(__resp_flag)
           __c.build_settings['OTHER_LDFLAGS'] = __ldflags
           __c.build_settings['DEAD_CODE_STRIPPING'] = 'NO'
+        end
+
+        # Add the response-file generator as a pre-link script phase (idempotent).
+        unless __ut.shell_script_build_phases.any? { |p| p.name == __phase_name }
+          __sp = __ut.new_shell_script_build_phase(__phase_name)
+          __sp.shell_path = '/bin/sh'
+          __sp.shell_script = __resp_script
+          __sp.input_paths = []
+          __sp.output_paths = [__resp_out]
         end
       end
       __proj.save
