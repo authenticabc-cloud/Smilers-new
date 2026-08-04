@@ -1,6 +1,7 @@
 import Expo
 import React
 import ReactAppDependencyProvider
+import ExpoModulesCore
 import stream_io_noise_cancellation_react_native
 
 // TEMP native launch diagnostics. Since the iOS app hangs on the splash and
@@ -65,6 +66,25 @@ public class AppDelegate: ExpoAppDelegate {
       in: window,
       launchOptions: launchOptions)
     smilersNativeBeacon("startReactNative", "after")
+
+    // TEMP DECISIVE PROBE. JS reports present=0/20 with globalThis.expo present
+    // but empty. That means `AppContext.modulesProvider()` returned the EMPTY
+    // fallback `ModulesProvider()` (0 classes) instead of the generated
+    // `Smilers.ExpoModulesProvider` (which lists 50). This beacon prints the
+    // ACTUAL provider class + module-class count so we know definitively
+    // whether the generated provider is resolvable under use_frameworks static:
+    //   count=0  => generated provider NOT found in the app Swift module
+    //               (fix: ensure ExpoModulesProvider.swift compiles into the
+    //                "Smilers" module / matches CFBundleName)
+    //   count=50 => provider resolves; the empty registry is a later
+    //               (registration / JS-exposure) problem.
+    let __provider = AppContext.modulesProvider()
+    let __count = __provider.getModuleClasses().count
+    let __cfName = (Bundle.main.infoDictionary?["CFBundleName"] as? String) ?? "?"
+    smilersNativeBeacon(
+      "modulesProvider",
+      "count=\(__count) providerClass=\(String(describing: type(of: __provider))) cfBundleName=\(__cfName)"
+    )
 #endif
 
     // Defer Stream Video native setup (Krisp noise/echo cancellation + VoIP

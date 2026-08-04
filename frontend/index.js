@@ -156,15 +156,40 @@ try {
     }
   }
   const expoAfter = g && g.expo ? Object.keys(g.expo.modules || {}).length : -1;
+  // Runtime-truth signals to decisively classify the failure:
+  //  - os: if 'web' => Metro embedded the WEB bundle (wrong platform) and
+  //    globalThis.expo is the inert web polyfill (=> fix the export/embed).
+  //  - hermes/bridgeless: confirm we're in the real native New-Arch runtime.
+  //  - expoKeys: the SHAPE of globalThis.expo (web polyfill vs native host).
+  //  - proxyKeys: does the legacy bridge NativeModulesProxy have any modules?
+  let os = 'unknown';
+  let hermes = false;
+  let bridgeless = 'n';
+  let expoKeys = '';
+  let proxyKeys = -1;
+  try { os = RN && RN.Platform ? RN.Platform.OS : 'no-Platform'; } catch (_e) {}
+  try { hermes = typeof g.HermesInternal !== 'undefined' && !!g.HermesInternal; } catch (_e) {}
+  try { bridgeless = (typeof g.RN$Bridgeless !== 'undefined' && g.RN$Bridgeless) ? 'y' : 'n'; } catch (_e) {}
+  try { expoKeys = g && g.expo ? Object.keys(g.expo).slice(0, 12).join(',') : 'no-expo'; } catch (_e) {}
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const NMP = require('expo-modules-core').NativeModulesProxy;
+    proxyKeys = NMP ? Object.keys(NMP).length : -2;
+  } catch (_e) { proxyKeys = -3; }
   __jsBoot(
-    'TM-PROBE expoBefore=' + expoBefore +
+    'TM-PROBE os=' + os +
+      ' hermes=' + hermes +
+      ' bridgeless=' + bridgeless +
+      ' expoBefore=' + expoBefore +
       ' tmProxy=' + tmProxy +
       ' emcResolvable=' + emcResolvable +
       ' installFn=' + installFn +
       ' getErr=' + (getErr || 'none') +
       ' installTried=' + installTried +
       ' installErr=' + (installErr || 'none') +
-      ' expoAfter=' + expoAfter,
+      ' expoAfter=' + expoAfter +
+      ' proxyKeys=' + proxyKeys +
+      ' expoKeys=[' + expoKeys + ']',
   );
 } catch (e) {
   __jsBoot('TM-PROBE probe-error ' + (e && e.message ? e.message : String(e)));
