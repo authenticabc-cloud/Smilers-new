@@ -39,6 +39,14 @@ function run(cmd, args) {
   return execFileSync(cmd, args, { encoding: 'utf8' });
 }
 
+// Always invoke the Apple toolchain via `xcrun` so we get llvm-ar / lipo that
+// understand FAT static archives (libskia.a is a 0xCAFEBABE universal archive;
+// plain BSD `ar` reports "file format not recognized"). `xcrun` also guarantees
+// the tools are found regardless of PATH on the EAS macOS worker.
+function xcrun(tool, args) {
+  return run('xcrun', [tool, ...args]);
+}
+
 function findSkiaDeviceLibs() {
   const base = path.join(
     __dirname,
@@ -62,7 +70,7 @@ function findSkiaDeviceLibs() {
 }
 
 function listWebpMembers(archive) {
-  const members = run('ar', ['t', archive])
+  const members = xcrun('ar', ['t', archive])
     .split('\n')
     .map((s) => s.trim())
     .filter(Boolean);
@@ -72,9 +80,9 @@ function listWebpMembers(archive) {
 function stripThin(archive, label) {
   const webp = listWebpMembers(archive);
   if (webp.length === 0) return 0;
-  run('ar', ['d', archive, ...webp]);
+  xcrun('ar', ['d', archive, ...webp]);
   try {
-    run('ranlib', [archive]);
+    xcrun('ranlib', [archive]);
   } catch (_) {
     /* best-effort */
   }
@@ -85,7 +93,7 @@ function stripThin(archive, label) {
 function getArches(lib) {
   // `lipo -archs` prints e.g. "arm64 arm64e"; throws / prints error for a
   // non-fat (thin) archive.
-  return run('lipo', ['-archs', lib]).trim().split(/\s+/).filter(Boolean);
+  return xcrun('lipo', ['-archs', lib]).trim().split(/\s+/).filter(Boolean);
 }
 
 function stripLib({ slice, lib }) {
@@ -123,7 +131,7 @@ function stripLib({ slice, lib }) {
   try {
     for (const arch of arches) {
       const thin = path.join(tmp, `libskia-${arch}.a`);
-      run('lipo', [lib, '-thin', arch, '-output', thin]);
+      xcrun('lipo', [lib, '-thin', arch, '-output', thin]);
       try {
         total += stripThin(thin, `${slice}/libskia.a[${arch}]`);
         touched = true;
@@ -133,7 +141,7 @@ function stripLib({ slice, lib }) {
       thinPaths.push(thin);
     }
     if (touched && total > 0) {
-      run('lipo', ['-create', ...thinPaths, '-output', lib]);
+      xcrun('lipo', ['-create', ...thinPaths, '-output', lib]);
       log(`${slice}/libskia.a: recombined ${arches.length} arch(es), ${total} libwebp object(s) removed`);
     } else {
       log(`${slice}/libskia.a: already clean`);

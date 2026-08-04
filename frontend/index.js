@@ -156,6 +156,8 @@ try {
     }
   }
   const expoAfter = g && g.expo ? Object.keys(g.expo.modules || {}).length : -1;
+  let expoModNames = '';
+  try { expoModNames = g && g.expo && g.expo.modules ? Object.keys(g.expo.modules).slice(0, 60).join(',') : ''; } catch (_e) {}
   // Runtime-truth signals to decisively classify the failure:
   //  - os: if 'web' => Metro embedded the WEB bundle (wrong platform) and
   //    globalThis.expo is the inert web polyfill (=> fix the export/embed).
@@ -189,7 +191,8 @@ try {
       ' installErr=' + (installErr || 'none') +
       ' expoAfter=' + expoAfter +
       ' proxyKeys=' + proxyKeys +
-      ' expoKeys=[' + expoKeys + ']',
+      ' expoKeys=[' + expoKeys + ']' +
+      ' expoMods=[' + expoModNames + ']',
   );
 } catch (e) {
   __jsBoot('TM-PROBE probe-error ' + (e && e.message ? e.message : String(e)));

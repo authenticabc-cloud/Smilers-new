@@ -114,6 +114,32 @@ target 'Smilers' do
       end
     end
 
+    # withExpoModulesNoStrip — DEVICE-CONFIRMED: the generated ExpoModulesProvider
+    # resolves with all 51 module classes (native beacon count=51) but only ~6
+    # survive to the JS runtime (`globalThis.expo.modules`), so expo-router's
+    # ExpoLinking is missing and the app throws + hangs on splash. Root cause:
+    # under `ios.useFrameworks=static` + New Arch, the Swift module-class
+    # IMPLEMENTATIONS are dead-code-stripped from the final app binary even
+    # though their metatypes are referenced by getModuleClasses(). Disabling
+    # dead-code stripping on the app target Release keeps every module class so
+    # all register (present=20/20). NO `-all_load` (that duplicate-symbol-clashes
+    # with react-native-skia's 9 shared static libs). The only known side effect
+    # is a duplicate libwebp (skia's bundled copy vs SDWebImage's) which
+    # `scripts/patch-rn-skia-webp.js` strips at install time.
+    installer.aggregate_targets.each do |__agg|
+      __proj = __agg.user_project
+      next unless __proj
+      __proj.native_targets.each do |__ut|
+        __is_app = (__ut.respond_to?(:product_type) && __ut.product_type == 'com.apple.product-type.application')
+        next unless __is_app || __ut.name == 'Smilers'
+        __ut.build_configurations.each do |__c|
+          next unless __c.name == 'Release'
+          __c.build_settings['DEAD_CODE_STRIPPING'] = 'NO'
+        end
+      end
+      __proj.save
+    end
+
     # withPodfileResourceBundleSigning — Xcode14 resource-bundle signing fix
     installer.pods_project.targets.each do |__rb_target|
       if __rb_target.respond_to?(:product_type) && __rb_target.product_type == 'com.apple.product-type.bundle'
