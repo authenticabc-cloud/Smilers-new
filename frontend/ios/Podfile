@@ -124,25 +124,41 @@ target 'Smilers' do
           # dead-stripping never reaches them (archive-member selection, not
           # dead-strip, is what drops them).
           #
-          # Path-based `-force_load <framework>/<binary>` (and the
-          # `-Wl,-force_load,<path>` comma form) both FAIL on EAS: Xcode's new
-          # build system registers each path as a REQUIRED build input and
-          # validates it before the sibling pod target has produced it, failing
-          # the Ld step with "Build input files cannot be found".
+          # HISTORY: A HARDCODED-ABSOLUTE-PATH `-force_load /abs/.../Foo.framework/Foo`
+          # (space-separated pair) FAILS on EAS: Xcode's new build system parses
+          # the bare pair, registers the absolute path as a REQUIRED build input,
+          # and validates it before the sibling pod target has produced it —
+          # failing the Ld step with "Build input files cannot be found".
+          # The form applied below AVOIDS that by (a) wrapping in `-Wl,` so the
+          # whole thing is one opaque token (not parsed as a `-force_load <path>`
+          # pair) and (b) using the `${PODS_CONFIGURATION_BUILD_DIR}` build
+          # variable instead of an absolute path (resolved late, at link time).
           #
-          # `-all_load` is the EAS-safe escape hatch: it force-loads ALL object
-          # files from every linked static-framework archive (a single flag, NO
-          # file paths -> no input-file validation), guaranteeing every Expo
-          # module Swift class is present so ExpoModulesProvider registers them
-          # (present=20/20) and boot reaches the Sign In screen. We keep
-          # DEAD_CODE_STRIPPING=NO so nothing pulled in by -all_load is stripped
-          # back out. (The one known duplicate-symbol conflict this could
-          # surface — react-native-skia's bundled libwebp vs the standalone
-          # libwebp.framework — is already removed by scripts/patch-rn-skia-webp.js.)
+          # FIX (reverting -all_load): `-all_load` was too blunt — it force-loads
+          # EVERY linked static-framework archive, which pulled duplicate C/C++
+          # symbols out of React_Fabric, React_FabricComponents and
+          # react-native-skia and failed the archive with 78 duplicate symbols.
+          #
+          # The precise fix is to force-load ONLY the Expo module frameworks
+          # (computed in __force_flags above). Each flag is the single opaque
+          # token `-Wl,-force_load,${PODS_CONFIGURATION_BUILD_DIR}/<N>/<N>.framework/<N>`:
+          #   * `-Wl,...` => Xcode treats it as ONE linker argument and does NOT
+          #     register the path as a build input (so no "Build input files
+          #     cannot be found" EAS validation failure); clang forwards it to ld
+          #     verbatim so the runtime force-load still happens.
+          #   * `${PODS_CONFIGURATION_BUILD_DIR}` resolves at build time to the
+          #     per-configuration products dir where the sibling pod frameworks
+          #     are emitted — no hardcoded absolute paths.
+          # This guarantees every Expo module Swift class is present at launch so
+          # ExpoModulesProvider registers them (present=20/20) WITHOUT touching
+          # Fabric/Skia (so no duplicate symbols). DEAD_CODE_STRIPPING=NO is kept
+          # as a belt-and-braces guard against the linker stripping them back out.
           __ldflags = __c.build_settings['OTHER_LDFLAGS'] || ['$(inherited)']
           __ldflags = [__ldflags] unless __ldflags.is_a?(Array)
           __ldflags << '$(inherited)' unless __ldflags.include?('$(inherited)')
-          __ldflags << '-all_load' unless __ldflags.include?('-all_load')
+          # Remove any previously-applied blunt -all_load (revert regression).
+          __ldflags.delete('-all_load')
+          __force_flags.each { |__ff| __ldflags << __ff unless __ldflags.include?(__ff) }
           __c.build_settings['OTHER_LDFLAGS'] = __ldflags
           __c.build_settings['DEAD_CODE_STRIPPING'] = 'NO'
         end
