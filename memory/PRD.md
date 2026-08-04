@@ -1,5 +1,12 @@
 # Smilers Mobile App — PRD
 
+## iter-451 (Jun 2026): iOS EAS build — fixed "ld: 75 duplicate symbols" (react-native-skia libwebp vs SDWebImage libwebp)
+- The prior `DEAD_CODE_STRIPPING = 'NO'` fix got PAST the old Expo-modules linker error; the archive now failed at `Ld` with **75 duplicate WebP symbols** (`_VP8LPredictor*_C`, `_WebP*`, `_kSLog2Table`, `_SharpYuvInitDsp`, ...).
+- ROOT CAUSE: `@shopify/react-native-skia`'s prebuilt `libskia.a` (in `libskia.xcframework`) statically bundles its own `libwebp` (`libwebp.*.o` members), while the app ALSO links a standalone `libwebp.framework` pulled transitively by `expo-image` → `SDWebImage`(`SDWebImageWebPCoder`) → `libwebp`. Two definitions of the same WebP C symbols → duplicate-symbol link failure.
+- FIX (`scripts/patch-rn-skia-webp.js`, wired into `package.json` postinstall+prepare AFTER the other patches): strips the bundled `libwebp.*.o` objects out of Skia's iOS static libs so exactly ONE WebP copy links. The standalone `libwebp.framework` remains the provider (expo-image/SDWebImage were compiled against its headers; Skia's WebP references resolve against it — same libwebp C ABI). Device slice `ios-arm64_arm64e` is a FAT archive, so the script splits arches with `lipo`, `ar d` each thin arch, `ranlib`, then `lipo -create` to recombine. Idempotent; NEVER throws (skips on the Linux sandbox where `ar`/`lipo` aren't the Apple toolchain — the real strip runs on the macOS EAS worker's install step).
+- ⚠️ NATIVE-ONLY — validate on a fresh EAS iOS build. Expected: no duplicate-symbol error; archive succeeds. Did NOT reintroduce path-based `-force_load` (breaks EAS input validation) — Podfile unchanged.
+
+
 ## iter-450 (Jun 2026): App-Store reviewer bypass for the forced phone-OTP gate
 - Apple reviewers get a fresh install → forced phone verification → can't receive our SMS → guaranteed 2.1 rejection. Added a client-side reviewer allowlist (per integration_expert playbook).
 - `settingsStorage.ts`: `REVIEWER_EMAILS` parsed from `EXPO_PUBLIC_REVIEWER_EMAILS` (comma-separated) + `isReviewerEmail()`. `resolveInstallVerified(serverPhoneVerified, email?)` now short-circuits (skips phone-OTP + persists marker) when the signed-in email is allowlisted. Callers (`phone-verify.tsx`, `(tabs)/_layout.tsx`) pass `me?.email`.
