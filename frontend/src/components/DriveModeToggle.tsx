@@ -4,14 +4,20 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Colors, FontSize, FontWeight, Radius, Shadow } from '../theme';
 import { subscribeTouchActivity } from '../lib/touchActivity';
 import { toggleDriveMode, useDriveMode } from '../lib/driveMode';
+import { IS_EXPO_GO } from '../lib/isExpoGo';
 
 // Lazily grab the speech-recognition module for the permission prompt.
+// Expo Go carries no ExpoSpeechRecognition native module, and the throw comes
+// from a property access that escapes the try/catch below, so skip the require
+// entirely there. Real builds are unchanged (IS_EXPO_GO is false).
 let ExpoSpeechRecognitionModule: any = null;
-try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  ExpoSpeechRecognitionModule = require('expo-speech-recognition').ExpoSpeechRecognitionModule;
-} catch {
-  ExpoSpeechRecognitionModule = null;
+if (!IS_EXPO_GO) {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    ExpoSpeechRecognitionModule = require('expo-speech-recognition').ExpoSpeechRecognitionModule;
+  } catch {
+    ExpoSpeechRecognitionModule = null;
+  }
 }
 
 const IDLE_FADE_MS = 4000;
