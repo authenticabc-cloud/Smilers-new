@@ -133,14 +133,19 @@ target 'Smilers' do
     #     link time and forwards the force_load directives to ld verbatim.
     #   * DEAD_CODE_STRIPPING=NO is kept as a belt-and-braces guard.
     # ==========================================================================
-    __resp_flag = '@$(DERIVED_FILE_DIR)/ExpoForceLoad.resp'
-    __resp_out  = '$(DERIVED_FILE_DIR)/ExpoForceLoad.resp'
+    # Use $(TARGET_TEMP_DIR): it is identical in the script-phase env and in the
+    # Ld step (no $(CURRENT_ARCH) in it), so the path we write is the exact path
+    # the linker reads. It is always present as the target's build-intermediates
+    # dir. (DERIVED_FILE_DIR can differ between a run-script phase, where
+    # CURRENT_ARCH=undefined_arch, and the per-arch link, so we avoid it.)
+    __resp_flag = '@$(TARGET_TEMP_DIR)/ExpoForceLoad.resp'
+    __resp_out  = '$(TARGET_TEMP_DIR)/ExpoForceLoad.resp'
     __phase_name = '[Expo] Generate ForceLoad Response File'
     __resp_script = <<~SH
       set -e
       BASE="${PODS_CONFIGURATION_BUILD_DIR:-$CONFIGURATION_BUILD_DIR}"
-      OUT="${DERIVED_FILE_DIR}/ExpoForceLoad.resp"
-      mkdir -p "${DERIVED_FILE_DIR}"
+      OUT="${TARGET_TEMP_DIR}/ExpoForceLoad.resp"
+      mkdir -p "${TARGET_TEMP_DIR}"
       : > "$OUT"
       for n in #{__expo_fw.join(' ')}; do
         echo "-Wl,-force_load,${BASE}/${n}/${n}.framework/${n}" >> "$OUT"
@@ -155,7 +160,10 @@ target 'Smilers' do
         # Only the main app target needs the Expo modules force-loaded; applying
         # this to app extensions (e.g. the share extension) would force-load
         # frameworks the extension does not otherwise link and can break its Ld.
-        next unless __ut.respond_to?(:product_type) && __ut.product_type == 'com.apple.product-type.application'
+        # Match by product type OR the known app target name ('Smilers') so we
+        # never silently skip the app target if product_type is unset.
+        __is_app = (__ut.respond_to?(:product_type) && __ut.product_type == 'com.apple.product-type.application')
+        next unless __is_app || __ut.name == 'Smilers'
 
         __ut.build_configurations.each do |__c|
           next unless __c.name == 'Release'
@@ -177,6 +185,16 @@ target 'Smilers' do
           __sp.shell_script = __resp_script
           __sp.input_paths = []
           __sp.output_paths = [__resp_out]
+          # Belt-and-suspenders ordering: the output->OTHER_LDFLAGS(@file) input
+          # dependency already forces this to run before Ld on the new build
+          # system, but we ALSO move the phase to the very front so it precedes
+          # Compile Sources / Ld under any build-system path. Guard the reorder
+          # so a CocoaPods/xcodeproj API mismatch can never break `pod install`.
+          begin
+            __ut.build_phases.unshift(__ut.build_phases.delete(__sp))
+          rescue => __reorder_err
+            puts "[withExpoModulesForceLoad] phase reorder skipped (#{__reorder_err.class}); relying on output/input dependency ordering"
+          end
         end
       end
       __proj.save
