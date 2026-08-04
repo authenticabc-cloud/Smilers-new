@@ -114,6 +114,63 @@ try {
   __jsBoot('MODULE-INVENTORY probe-error ' + (e && e.message ? e.message : String(e)));
 }
 
+// TEMP TurboModule-registry probe. present=0/20 (TOTAL) means expo's JSI host
+// object `globalThis.expo` was never installed. That install is triggered by
+// `TurboModuleRegistry.get('ExpoModulesCore').installModules()`. This probe
+// reports EXACTLY where that chain breaks so we stop guessing:
+//   - expoGlobal: is globalThis.expo already present? how many modules?
+//   - tmProxy: is the New-Arch TurboModule proxy installed at all?
+//   - emcTM: is the ExpoModulesCore TurboModule itself resolvable? (if false =>
+//     its C++ provider isn't registered/linked -> the real root cause)
+//   - installTried/installErr: result of manually invoking installModules()
+//   - afterExpoModules: module count on globalThis.expo AFTER manual install
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const RN = require('react-native');
+  const TMR = RN && RN.TurboModuleRegistry;
+  const g = globalThis;
+  const expoBefore = g && g.expo ? Object.keys(g.expo.modules || {}).length : -1;
+  const tmProxy =
+    typeof g.__turboModuleProxy !== 'undefined'
+      ? 'present'
+      : typeof g.RN$TurboInterop !== 'undefined'
+        ? 'interop'
+        : 'absent';
+  let emcTM = null;
+  let getErr = '';
+  try {
+    emcTM = TMR && typeof TMR.get === 'function' ? TMR.get('ExpoModulesCore') : null;
+  } catch (e) {
+    getErr = e && e.message ? e.message : String(e);
+  }
+  const emcResolvable = !!emcTM;
+  const installFn = emcTM && typeof emcTM.installModules === 'function';
+  let installTried = false;
+  let installErr = '';
+  if (installFn && expoBefore < 0) {
+    try {
+      installTried = true;
+      emcTM.installModules();
+    } catch (e) {
+      installErr = e && e.message ? e.message : String(e);
+    }
+  }
+  const expoAfter = g && g.expo ? Object.keys(g.expo.modules || {}).length : -1;
+  __jsBoot(
+    'TM-PROBE expoBefore=' + expoBefore +
+      ' tmProxy=' + tmProxy +
+      ' emcResolvable=' + emcResolvable +
+      ' installFn=' + installFn +
+      ' getErr=' + (getErr || 'none') +
+      ' installTried=' + installTried +
+      ' installErr=' + (installErr || 'none') +
+      ' expoAfter=' + expoAfter,
+  );
+} catch (e) {
+  __jsBoot('TM-PROBE probe-error ' + (e && e.message ? e.message : String(e)));
+}
+
+
 // TEMP global error trap. index.js runs fully (all beacons fire) but the
 // app/_layout route tree never evaluates its boot heartbeat — meaning an
 // uncaught error is thrown while expo-router renders the root routes on iOS.
