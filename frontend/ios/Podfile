@@ -95,6 +95,48 @@ target 'Smilers' do
       end
     end
 
+    # withExpoModulesForceLoad — CONFIRMED runtime failure on iOS Release:
+    # expo-modules-core registers 0 native modules (present=0/20) even though
+    # autolinking detected all of them, so the app throws at
+    # requireNativeModule('ExpoLinking') during expo-router init and hangs on the
+    # native splash screen (Android is unaffected). Root cause: with
+    # `ios.useFrameworks=static` (required by Firebase/Stream) each Expo module
+    # ships as its OWN static framework, and the linker only pulls object files
+    # that resolve a referenced symbol — the Swift module classes are never
+    # referenced strongly enough, so they are absent at launch.
+    #
+    # Why `-all_load` (and NOT per-framework `-force_load`): CocoaPods already
+    # links every Expo module via `-framework ExpoX`. Adding a per-framework
+    # `-force_load <path>/ExpoX` loads the SAME archive a second time, which made
+    # ld report 11205 duplicate symbols (every Expo object listed twice against
+    # itself). `-all_load` is a GLOBAL switch that force-loads every static
+    # archive object EXACTLY ONCE (it is not additive to the `-framework` links),
+    # so it registers all Expo modules without that self-duplication.
+    # DEAD_CODE_STRIPPING=NO keeps the pulled-in classes from being stripped.
+    installer.aggregate_targets.each do |__agg|
+      __proj = __agg.user_project
+      next unless __proj
+      __proj.native_targets.each do |__ut|
+        # Apply only to the main app target (never app extensions).
+        __is_app = (__ut.respond_to?(:product_type) && __ut.product_type == 'com.apple.product-type.application')
+        next unless __is_app || __ut.name == 'Smilers'
+        __ut.build_configurations.each do |__c|
+          next unless __c.name == 'Release'
+          __ldflags = __c.build_settings['OTHER_LDFLAGS'] || ['$(inherited)']
+          __ldflags = [__ldflags] unless __ldflags.is_a?(Array)
+          __ldflags << '$(inherited)' unless __ldflags.include?('$(inherited)')
+          # Strip any stale per-framework force_load / response-file flags from
+          # earlier attempts (they double-load and cause 11205 duplicates).
+          __ldflags.reject! { |f| f.to_s.include?('-force_load') || f.to_s.include?('ExpoForceLoad.resp') }
+          __ldflags << '-all_load' unless __ldflags.include?('-all_load')
+          __c.build_settings['OTHER_LDFLAGS'] = __ldflags
+          __c.build_settings['DEAD_CODE_STRIPPING'] = 'NO'
+        end
+      end
+      __proj.save
+    end
+
+
     # withPodfileResourceBundleSigning — Xcode14 resource-bundle signing fix
     installer.pods_project.targets.each do |__rb_target|
       if __rb_target.respond_to?(:product_type) && __rb_target.product_type == 'com.apple.product-type.bundle'
