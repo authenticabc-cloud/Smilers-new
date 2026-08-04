@@ -39,12 +39,26 @@ function run(cmd, args) {
   return execFileSync(cmd, args, { encoding: 'utf8' });
 }
 
-// Always invoke the Apple toolchain via `xcrun` so we get llvm-ar / lipo that
-// understand FAT static archives (libskia.a is a 0xCAFEBABE universal archive;
-// plain BSD `ar` reports "file format not recognized"). `xcrun` also guarantees
-// the tools are found regardless of PATH on the EAS macOS worker.
+// Invoke an Apple toolchain binary robustly. On the EAS macOS worker the plain
+// tool (`ar`/`lipo`/`ranlib`) sometimes isn't on PATH or `/usr/bin/ar` is BSD
+// `ar` that can't read FAT static archives (libskia.a is a 0xCAFEBABE universal
+// archive → "file format not recognized"). We therefore try, in order:
+//   1) `xcrun <tool>`   (resolves the active Xcode toolchain; llvm-ar/lipo)
+//   2) bare `<tool>`    (fallback if xcrun itself isn't configured)
+// and log exactly which invocation was used / failed so a build log is
+// conclusive. Throws (with a combined message) only if BOTH fail.
 function xcrun(tool, args) {
-  return run('xcrun', [tool, ...args]);
+  try {
+    return run('xcrun', [tool, ...args]);
+  } catch (e1) {
+    try {
+      return run(tool, args);
+    } catch (e2) {
+      const m1 = (e1 && e1.message ? e1.message : String(e1)).split('\n')[0];
+      const m2 = (e2 && e2.message ? e2.message : String(e2)).split('\n')[0];
+      throw new Error(`xcrun ${tool} failed [${m1}] AND bare ${tool} failed [${m2}]`);
+    }
+  }
 }
 
 function findSkiaDeviceLibs() {
