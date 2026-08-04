@@ -1,39 +1,7 @@
 import Expo
 import React
 import ReactAppDependencyProvider
-import ExpoModulesCore
 import stream_io_noise_cancellation_react_native
-
-// TEMP native launch diagnostics. Since the iOS app hangs on the splash and
-// never runs JavaScript (no JS boot heartbeat reaches the backend), these
-// fire-and-forget beacons report each native launch step directly from Swift
-// so we can see exactly how far the native launch gets, and whether the
-// embedded JS bundle (main.jsbundle) is present. Reuses the existing
-// /api/diagnostic-logs endpoint, tagged platform "ios-native".
-func smilersNativeBeacon(_ stage: String, _ detail: String) {
-  let host = "https://app-migration-75.emergent.host"
-  guard let url = URL(string: host + "/api/diagnostic-logs") else { return }
-  let ts = Int(Date().timeIntervalSince1970 * 1000)
-  let appVer = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "?"
-  let payload: [String: Any] = [
-    "platform": "ios-native",
-    "appVersion": appVer,
-    "platformVersion": UIDevice.current.systemVersion,
-    "device": UIDevice.current.model,
-    "events": [[
-      "ts": ts,
-      "tag": "NATIVE",
-      "message": stage + ": " + detail,
-      "source": "AppDelegate",
-    ]],
-  ]
-  guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return }
-  var req = URLRequest(url: url)
-  req.httpMethod = "POST"
-  req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-  req.httpBody = body
-  URLSession.shared.dataTask(with: req).resume()
-}
 
 @UIApplicationMain
 public class AppDelegate: ExpoAppDelegate {
@@ -46,10 +14,6 @@ public class AppDelegate: ExpoAppDelegate {
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
-    smilersNativeBeacon("didFinishLaunching", "start")
-    let embeddedBundle = Bundle.main.url(forResource: "main", withExtension: "jsbundle")
-    smilersNativeBeacon("embeddedBundle", embeddedBundle == nil ? "MISSING main.jsbundle" : ("found " + embeddedBundle!.lastPathComponent))
-
     let delegate = ReactNativeDelegate()
     let factory = ExpoReactNativeFactory(delegate: delegate)
     delegate.dependencyProvider = RCTAppDependencyProvider()
@@ -60,31 +24,10 @@ public class AppDelegate: ExpoAppDelegate {
 
 #if os(iOS) || os(tvOS)
     window = UIWindow(frame: UIScreen.main.bounds)
-    smilersNativeBeacon("startReactNative", "before")
     factory.startReactNative(
       withModuleName: "main",
       in: window,
       launchOptions: launchOptions)
-    smilersNativeBeacon("startReactNative", "after")
-
-    // TEMP DECISIVE PROBE. JS reports present=0/20 with globalThis.expo present
-    // but empty. That means `AppContext.modulesProvider()` returned the EMPTY
-    // fallback `ModulesProvider()` (0 classes) instead of the generated
-    // `Smilers.ExpoModulesProvider` (which lists 50). This beacon prints the
-    // ACTUAL provider class + module-class count so we know definitively
-    // whether the generated provider is resolvable under use_frameworks static:
-    //   count=0  => generated provider NOT found in the app Swift module
-    //               (fix: ensure ExpoModulesProvider.swift compiles into the
-    //                "Smilers" module / matches CFBundleName)
-    //   count=50 => provider resolves; the empty registry is a later
-    //               (registration / JS-exposure) problem.
-    let __provider = AppContext.modulesProvider()
-    let __count = __provider.getModuleClasses().count
-    let __cfName = (Bundle.main.infoDictionary?["CFBundleName"] as? String) ?? "?"
-    smilersNativeBeacon(
-      "modulesProvider",
-      "count=\(__count) providerClass=\(String(describing: type(of: __provider))) cfBundleName=\(__cfName)"
-    )
 #endif
 
     // Defer Stream Video native setup (Krisp noise/echo cancellation + VoIP
@@ -134,9 +77,7 @@ class ReactNativeDelegate: ExpoReactNativeFactoryDelegate {
 #if DEBUG
     return RCTBundleURLProvider.sharedSettings().jsBundleURL(forBundleRoot: ".expo/.virtual-metro-entry")
 #else
-    let u = Bundle.main.url(forResource: "main", withExtension: "jsbundle")
-    smilersNativeBeacon("bundleURL", u == nil ? "returned nil (no embedded bundle!)" : ("returned " + u!.absoluteString))
-    return u
+    return Bundle.main.url(forResource: "main", withExtension: "jsbundle")
 #endif
   }
 }
