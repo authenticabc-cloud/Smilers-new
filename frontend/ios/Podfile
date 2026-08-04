@@ -23,6 +23,28 @@ prepare_react_native_project!
 target 'Smilers' do
   use_expo_modules!
 
+  # withExpoModulesDynamic — build Expo/EX-prefixed pods as DYNAMIC frameworks even
+  # though ios.useFrameworks=static (required by Firebase/Stream). Under static
+  # linkage, Expo's Swift module classes are only pulled into the binary on demand
+  # and never self-register (ExpoModulesProvider finds 0/20 modules at launch,
+  # app hangs on splash). Dynamic frameworks are loaded whole by dyld at process
+  # start, so registration happens automatically -- no force_load/-all_load linker
+  # flags needed. This supersedes the withExpoModulesForceLoad post_install hack
+  # (force_load response-file and -all_load variants), both of which produced
+  # duplicate-symbol linker failures because Expo frameworks are referenced more
+  # than once in CocoaPods' generated OTHER_LDFLAGS for widely-shared transitive
+  # deps like ExpoModulesCore, and force-loading/-all_load re-extracts every
+  # occurrence in full.
+  pre_install do |installer|
+    installer.pod_targets.each do |pod|
+      if pod.name.start_with?('Expo') || pod.name.start_with?('EX')
+        def pod.build_type
+          Pod::BuildType.dynamic_framework
+        end
+      end
+    end
+  end
+
   if ENV['EXPO_USE_COMMUNITY_AUTOLINKING'] == '1'
     config_command = ['node', '-e', "process.argv=['', '', 'config'];require('@react-native-community/cli').run()"];
   else
@@ -71,127 +93,6 @@ target 'Smilers' do
       __nm_target.build_configurations.each do |__nm_config|
         __nm_config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
       end
-    end
-
-    # withExpoModulesForceLoad — CONFIRMED runtime failure: expo-modules-core
-    # registers 0 native modules on iOS Release (present=0/20) even though
-    # autolinking detects all of them and the AppDelegate wiring is correct.
-    # With `ios.useFrameworks=static` (required by Firebase/Stream) each Expo
-    # module is a STATIC framework; its Swift classes are only pulled into the
-    # binary on demand. Force-load every Expo module static framework so all
-    # module classes are present in the ObjC runtime at launch and
-    # ExpoModulesProvider can register them (otherwise the app hangs on splash
-    # because ExpoSplashScreen/ExpoConstants are null).
-    # Only force-load Expo module frameworks that actually COMPILE sources into
-    # a Mach-O binary (skip resource/interface-only pods that emit no binary).
-    __expo_fw = installer.pods_project.targets.select do |t|
-      next false unless t.respond_to?(:product_type) && t.product_type == 'com.apple.product-type.framework'
-      next false unless t.name =~ /\A(Expo|EX)/
-      __sbp = (t.respond_to?(:source_build_phase) ? t.source_build_phase : nil)
-      __sbp && __sbp.files.count > 0
-    end.map(&:name).uniq
-    # The list above (__expo_fw) drives a build-time linker RESPONSE FILE — see
-    # the detailed rationale in the ROOT CAUSE block below.
-    puts "[withExpoModulesForceLoad] will force-load #{__expo_fw.length} Expo module frameworks via a build-time response file: #{__expo_fw.join(', ')}"
-
-    # ==========================================================================
-    # ROOT CAUSE (confirmed twice via EAS logs)
-    # ==========================================================================
-    # With `ios.useFrameworks=static` (required by Firebase/Stream) every Expo
-    # module ships as its OWN static framework. The app's Ld step processes each
-    # `-framework Foo` as a static archive and only pulls in the object files
-    # that resolve a referenced symbol. Nothing references the module Swift
-    # classes strongly enough, so ExpoModulesProvider finds 0 modules at launch
-    # (present=0/20) and the app hangs on the splash screen with
-    # `Cannot find native module 'ExpoLinking'`.
-    #
-    # We must force-load ONLY the Expo module frameworks (touching Fabric/Skia
-    # via `-all_load` produced 78 duplicate symbols — DO NOT do that).
-    #
-    # PROVEN-DEAD approaches (both fail the EAS archive):
-    #   1. `-all_load`                                  -> 78 duplicate symbols.
-    #   2. `-force_load <abs>` OR `-Wl,-force_load,<abs>` OR
-    #      `-Wl,-force_load,${PODS_CONFIGURATION_BUILD_DIR}/...` placed directly
-    #      in OTHER_LDFLAGS -> Xcode's NEW build system scans OTHER_LDFLAGS,
-    #      resolves the build variable, registers each framework binary path as
-    #      a REQUIRED build input, and validates it during dependency-graph
-    #      construction (before the sibling pod targets emit it) => the archive
-    #      dies with "Build input files cannot be found: .../ExpoLinking". This
-    #      was CONFIRMED from the real Ld command in the EAS logs: the flags DID
-    #      resolve to absolute paths and STILL tripped input validation.
-    #
-    # WORKING approach — LINKER RESPONSE FILE:
-    #   * A pre-link Run-Script phase writes one `-Wl,-force_load,<abs binary>`
-    #     line per Expo framework into `$(DERIVED_FILE_DIR)/ExpoForceLoad.resp`,
-    #     resolving the products dir from `$PODS_CONFIGURATION_BUILD_DIR` at
-    #     build time (in the shell env — NOT scanned by the graph builder).
-    #   * OTHER_LDFLAGS references the file with clang's `@<file>` syntax. Xcode
-    #     registers ONLY the single `.resp` path as an input; it is declared as
-    #     the script phase's OUTPUT, so the build system schedules the script
-    #     BEFORE Ld. The framework paths live INSIDE the response file and are
-    #     therefore never seen by input validation. clang expands `@file` at
-    #     link time and forwards the force_load directives to ld verbatim.
-    #   * DEAD_CODE_STRIPPING=NO is kept as a belt-and-braces guard.
-    # ==========================================================================
-    # Use $(TARGET_TEMP_DIR): it is identical in the script-phase env and in the
-    # Ld step (no $(CURRENT_ARCH) in it), so the path we write is the exact path
-    # the linker reads. It is always present as the target's build-intermediates
-    # dir. (DERIVED_FILE_DIR can differ between a run-script phase, where
-    # CURRENT_ARCH=undefined_arch, and the per-arch link, so we avoid it.)
-    __resp_flag = '@$(TARGET_TEMP_DIR)/ExpoForceLoad.resp'
-    __resp_out  = '$(TARGET_TEMP_DIR)/ExpoForceLoad.resp'
-    __phase_name = '[Expo] Generate ForceLoad Response File'
-    __resp_script = <<~SH
-      set -e
-      BASE="${PODS_CONFIGURATION_BUILD_DIR:-$CONFIGURATION_BUILD_DIR}"
-      OUT="${TARGET_TEMP_DIR}/ExpoForceLoad.resp"
-      mkdir -p "${TARGET_TEMP_DIR}"
-      : > "$OUT"
-      for n in #{__expo_fw.join(' ')}; do
-        echo "-Wl,-force_load,${BASE}/${n}/${n}.framework/${n}" >> "$OUT"
-      done
-      echo "[ExpoForceLoad] wrote $(wc -l < "$OUT" | tr -d ' ') force_load entries to $OUT"
-    SH
-
-    installer.aggregate_targets.each do |__agg|
-      __proj = __agg.user_project
-      next unless __proj
-      __proj.native_targets.each do |__ut|
-        # Only the main app target needs the Expo modules force-loaded; applying
-        # this to app extensions (e.g. the share extension) would force-load
-        # frameworks the extension does not otherwise link and can break its Ld.
-        # Match by product type OR the known app target name ('Smilers') so we
-        # never silently skip the app target if product_type is unset.
-        __is_app = (__ut.respond_to?(:product_type) && __ut.product_type == 'com.apple.product-type.application')
-        next unless __is_app || __ut.name == 'Smilers'
-
-        __ut.build_configurations.each do |__c|
-          next unless __c.name == 'Release'
-          # NOTE (confirmed via EAS Ld logs): per-framework `-force_load` of the
-          # Expo static frameworks DOUBLE-LOADS them — CocoaPods already links
-          # each via `-framework ExpoX`, and force-loading the same binary again
-          # made ld report 11205 duplicate symbols (every Expo object listed
-          # twice against itself). The response-file trick DID fix the
-          # "Build input files cannot be found" validation error, but the
-          # double-load is fatal.
-          #
-          # `-all_load` is the only switch that force-loads ALL static-archive
-          # objects exactly ONCE (it is global, not additive to `-framework`),
-          # so it registers every Expo module without self-duplication. Its only
-          # side effect is genuine CROSS-library duplicate symbols (previously
-          # ~78, from react-native-skia's bundled libwebp vs the standalone
-          # libwebp.framework), which are addressed separately.
-          __ldflags = __c.build_settings['OTHER_LDFLAGS'] || ['$(inherited)']
-          __ldflags = [__ldflags] unless __ldflags.is_a?(Array)
-          __ldflags << '$(inherited)' unless __ldflags.include?('$(inherited)')
-          # Remove the (double-loading) per-framework force_load response-file flag.
-          __ldflags.reject! { |f| f.to_s.include?('ExpoForceLoad.resp') }
-          __ldflags << '-all_load' unless __ldflags.include?('-all_load')
-          __c.build_settings['OTHER_LDFLAGS'] = __ldflags
-          __c.build_settings['DEAD_CODE_STRIPPING'] = 'NO'
-        end
-      end
-      __proj.save
     end
 
     # withPodfileResourceBundleSigning — Xcode14 resource-bundle signing fix
