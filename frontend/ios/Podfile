@@ -167,34 +167,28 @@ target 'Smilers' do
 
         __ut.build_configurations.each do |__c|
           next unless __c.name == 'Release'
+          # NOTE (confirmed via EAS Ld logs): per-framework `-force_load` of the
+          # Expo static frameworks DOUBLE-LOADS them — CocoaPods already links
+          # each via `-framework ExpoX`, and force-loading the same binary again
+          # made ld report 11205 duplicate symbols (every Expo object listed
+          # twice against itself). The response-file trick DID fix the
+          # "Build input files cannot be found" validation error, but the
+          # double-load is fatal.
+          #
+          # `-all_load` is the only switch that force-loads ALL static-archive
+          # objects exactly ONCE (it is global, not additive to `-framework`),
+          # so it registers every Expo module without self-duplication. Its only
+          # side effect is genuine CROSS-library duplicate symbols (previously
+          # ~78, from react-native-skia's bundled libwebp vs the standalone
+          # libwebp.framework), which are addressed separately.
           __ldflags = __c.build_settings['OTHER_LDFLAGS'] || ['$(inherited)']
           __ldflags = [__ldflags] unless __ldflags.is_a?(Array)
           __ldflags << '$(inherited)' unless __ldflags.include?('$(inherited)')
-          # Drop any previously-applied approaches that fail on EAS.
-          __ldflags.delete('-all_load')
-          __ldflags.reject! { |f| f.to_s.include?('-force_load') && f.to_s != __resp_flag }
-          __ldflags << __resp_flag unless __ldflags.include?(__resp_flag)
+          # Remove the (double-loading) per-framework force_load response-file flag.
+          __ldflags.reject! { |f| f.to_s.include?('ExpoForceLoad.resp') }
+          __ldflags << '-all_load' unless __ldflags.include?('-all_load')
           __c.build_settings['OTHER_LDFLAGS'] = __ldflags
           __c.build_settings['DEAD_CODE_STRIPPING'] = 'NO'
-        end
-
-        # Add the response-file generator as a pre-link script phase (idempotent).
-        unless __ut.shell_script_build_phases.any? { |p| p.name == __phase_name }
-          __sp = __ut.new_shell_script_build_phase(__phase_name)
-          __sp.shell_path = '/bin/sh'
-          __sp.shell_script = __resp_script
-          __sp.input_paths = []
-          __sp.output_paths = [__resp_out]
-          # Belt-and-suspenders ordering: the output->OTHER_LDFLAGS(@file) input
-          # dependency already forces this to run before Ld on the new build
-          # system, but we ALSO move the phase to the very front so it precedes
-          # Compile Sources / Ld under any build-system path. Guard the reorder
-          # so a CocoaPods/xcodeproj API mismatch can never break `pod install`.
-          begin
-            __ut.build_phases.unshift(__ut.build_phases.delete(__sp))
-          rescue => __reorder_err
-            puts "[withExpoModulesForceLoad] phase reorder skipped (#{__reorder_err.class}); relying on output/input dependency ordering"
-          end
         end
       end
       __proj.save
