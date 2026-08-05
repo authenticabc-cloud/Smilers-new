@@ -1,5 +1,28 @@
 # Smilers Mobile App — PRD
 
+## iter-460 (Jun 2026): REVERTED Expo static-library linkage (kept race patch) — fixes iOS view/permission-requester registration
+
+DECISION (user-approved): The try/catch added in iter-459 surfaced the REAL native errors on TestFlight:
+- Gallery: `Unrecognized requester: ExpoImagePicker.MediaLibraryPermissionRequester`
+- Document: `Calling 'getDocumentAsync' failed → Different document picking in progress`
+- Video: still `Unimplemented component: ViewManagerAdapter_ExpoVideo_VideoView`
+→ Modules LOAD, but Expo's native VIEW components + permission REQUESTERS don't register. Per PRD iter-457, the static-library override + DCS "treated the wrong cause"; the true splash fix is `scripts/patch-expo-modules-race.js`. The static-library conversion was the collateral-damage source.
+
+CHANGE (`ios/Podfile`):
+- REMOVED the `pre_install` block that forced all Expo pods to `Pod::BuildType.static_library`.
+- REMOVED the iter-459 per-pod `-force_load` block from post_install.
+- KEPT: `patch-expo-modules-race.js` (the real splash fix, untouched), `DEAD_CODE_STRIPPING=NO` (Release), non-modular-include fix, resource-bundle signing fix, skia-webp patch.
+- Net: Expo modules link as STANDARD static frameworks again (useFrameworks=static unchanged) → Fabric views (VideoView/CameraView) + permission requesters (ImagePicker/Location/Contacts) register the normal way.
+
+KEPT (JS, iter-458/459): DevotionalMediaPlayer audio wiring + VideoErrorBoundary; chat picker/permission try-catch (now surface actionable Alerts).
+
+VERIFY (user does EAS/TestFlight build):
+1. SPLASH must still boot (race patch should hold). If it HANGS on splash → the race patch alone is insufficient; ROLLBACK = restore the pre_install `static_library` override block from git history (iter-459 Podfile).
+2. Devotionals video plays; Take Photo camera renders; Gallery/Video/Document/Location/Contacts all open.
+3. If some work and some don't, capture the exact on-screen error (try/catch surfaces them) for the next targeted step.
+RISK: splash regression (reversible in one step). This is the key experiment toward iOS parity for App Store submission.
+
+
 ## iter-459 (Jun 2026): iOS-only native module failures — targeted `-force_load` for Expo view/picker static libs + defensive JS error handling
 
 USER REPORT (iOS only; Android fine): (1) Devotionals video "Unimplemented component: ViewManagerAdapter_ExpoVideo_VideoView"; (2a) Take Photo opens black camera; (2b) Photo/Video-from-Gallery, Document, Location do NOTHING on tap; (3) Contacts "Allow access" does nothing. Goal: iOS parity with Android for App Store submission.
