@@ -2568,7 +2568,13 @@ export default function ChatScreen() {
   );
 
   const pickPhoto = useCallback(async () => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    let permission;
+    try {
+      permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    } catch (e: any) {
+      Alert.alert('Gallery unavailable', e?.message || 'Could not open the photo library on this device.');
+      return;
+    }
     if (!permission.granted) {
       Alert.alert('Permission needed', 'Allow photo access to share images.');
       return;
@@ -2615,7 +2621,13 @@ export default function ChatScreen() {
   );
 
   const pickVideo = useCallback(async () => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    let permission;
+    try {
+      permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    } catch (e: any) {
+      Alert.alert('Gallery unavailable', e?.message || 'Could not open the video library on this device.');
+      return;
+    }
     if (!permission.granted) {
       Alert.alert('Permission needed', 'Allow gallery access to share videos.');
       return;
@@ -2670,7 +2682,13 @@ export default function ChatScreen() {
   }, [conversationId, convex, refetchMessages, sendMessage]);
 
   const recordVideo = useCallback(async () => {
-    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    let permission;
+    try {
+      permission = await ImagePicker.requestCameraPermissionsAsync();
+    } catch (e: any) {
+      Alert.alert('Camera unavailable', e?.message || 'Could not access the camera on this device.');
+      return;
+    }
     if (!permission.granted) {
       Alert.alert('Permission needed', 'Allow camera access to record videos.');
       return;
@@ -2727,7 +2745,13 @@ export default function ChatScreen() {
   const shareLocation = useCallback(async () => {
     if (!conversationId || !isConversationAvailable) return;
 
-    const permission = await Location.requestForegroundPermissionsAsync();
+    let permission;
+    try {
+      permission = await Location.requestForegroundPermissionsAsync();
+    } catch (e: any) {
+      Alert.alert('Location unavailable', e?.message || 'Could not access location services on this device.');
+      return;
+    }
     if (!permission.granted) {
       Alert.alert('Permission needed', 'Allow location access to share your location.');
       return;

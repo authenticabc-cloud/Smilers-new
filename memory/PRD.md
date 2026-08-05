@@ -1,5 +1,23 @@
 # Smilers Mobile App — PRD
 
+## iter-459 (Jun 2026): iOS-only native module failures — targeted `-force_load` for Expo view/picker static libs + defensive JS error handling
+
+USER REPORT (iOS only; Android fine): (1) Devotionals video "Unimplemented component: ViewManagerAdapter_ExpoVideo_VideoView"; (2a) Take Photo opens black camera; (2b) Photo/Video-from-Gallery, Document, Location do NOTHING on tap; (3) Contacts "Allow access" does nothing. Goal: iOS parity with Android for App Store submission.
+
+ROOT CAUSE (definitive): The splash fix links all Expo pods as STATIC LIBRARIES (Podfile pre_install build_type override) with `-ObjC` set. `-ObjC` force-loads only Objective-C class/category members; Expo's Fabric VIEW components (VideoView, CameraView) and several picker/permission registration units are pure-C++ static initializers with NO ObjC symbols → those object files are never pulled from the static archives → views = "Unimplemented component", and native picker/permission calls throw/no-op. Confirmed in JS: `pickPhoto`/`pickVideo`/`recordVideo`/`shareLocation` called `ImagePicker/Location.request*PermissionsAsync()` with NO try/catch → a native throw silently killed the handler ("nothing happens"); Contacts `loadDeviceContacts` caught the throw and fell back to 'denied' (no dialog).
+
+FIX (native — needs EAS build to verify; user does iterative TestFlight builds):
+- `ios/Podfile` post_install `withExpoFabricViewForceLoad`: adds targeted `-force_load "${PODS_CONFIGURATION_BUILD_DIR}/<Pod>/lib<Pod>.a"` to the app target OTHER_LDFLAGS (all configs) for ONLY: ExpoVideo, ExpoCamera, ExpoImagePicker, ExpoDocumentPicker, ExpoContacts, ExpoLocation. Auto-filtered to pods present in the build (no "file not found" risk). Deliberately NOT `-all_load`/global force_load (that re-triggers the react-native-skia 78-duplicate-symbol clash). skia builds as separate static FRAMEWORKS → untouched. Kept DEAD_CODE_STRIPPING=NO (Release) and the module-race patch UNCHANGED.
+- Pod names verified from podspecs. No Podfile.lock in repo (generated on EAS).
+
+FIX (JS — safe, live in preview now):
+- `src/components/DevotionalMediaPlayer.tsx`: added `VideoErrorBoundary` around `<VideoView>` so a native "Unimplemented component" render error shows a clean "Video can't play on this build" placeholder instead of the full-width red error.
+- `app/chat/[conversationId].tsx`: wrapped the permission requests in `pickPhoto`, `pickVideo`, `recordVideo`, `shareLocation` in try/catch → native failures now surface an actionable Alert (also confirms the diagnosis on the next build) instead of silently doing nothing.
+
+VERIFY AFTER BUILD: rebuild iOS (TestFlight) → Devotionals video plays; Take Photo shows camera; Gallery/Document/Location/Contacts open. If a specific pod causes a duplicate-symbol LINK error, remove just that name from `__force_load_expo` in the Podfile. If a picker still no-ops, the new Alert will show the native error message to guide the next step.
+RISK: additive linker flags only; if a build fails, revert the `withExpoFabricViewForceLoad` block. Splash/module-race patch untouched.
+
+
 ## iter-458 (Jun 2026): Devotionals media fix + Bug 2b (one-active-device) client scaffold; Bug 2a confirmed already-correct (strict policy kept)
 
 ### Devotionals media player (`src/components/DevotionalMediaPlayer.tsx`)

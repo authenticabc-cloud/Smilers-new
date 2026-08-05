@@ -126,6 +126,28 @@ target 'Smilers' do
     # with react-native-skia's 9 shared static libs). The only known side effect
     # is a duplicate libwebp (skia's bundled copy vs SDWebImage's) which
     # `scripts/patch-rn-skia-webp.js` strips at install time.
+    #
+    # withExpoFabricViewForceLoad — the module-class fix above (getModuleClasses
+    # references + no dead-strip) recovers the Swift MODULE classes, but Expo's
+    # Fabric VIEW components (VideoView, CameraView, …) and several picker/native
+    # modules self-register through pure-C++ static initializers / registration
+    # units that carry NO Objective-C symbols. `-ObjC` (set in the app target)
+    # only force-loads ObjC class/category members, so those C++-only object
+    # files are never pulled from the Expo *static libraries* → the views show
+    # "Unimplemented component: ViewManagerAdapter_ExpoVideo_VideoView" and the
+    # native pickers no-op on iOS (Android is unaffected). We fix this by
+    # `-force_load`-ing ONLY these specific Expo static archives (never globally
+    # — a global -all_load re-introduces the react-native-skia duplicate-symbol
+    # clash). Names are auto-filtered to pods that are actually in the build, so
+    # a removed dependency can never turn this into a "file not found" link error.
+    __force_load_expo = %w[
+      ExpoVideo ExpoCamera ExpoImagePicker ExpoDocumentPicker ExpoContacts ExpoLocation
+    ]
+    __present_pods = installer.pod_targets.map(&:name)
+    __force_flags = __force_load_expo
+      .select { |__n| __present_pods.include?(__n) }
+      .map { |__n| "-force_load \"${PODS_CONFIGURATION_BUILD_DIR}/#{__n}/lib#{__n}.a\"" }
+
     installer.aggregate_targets.each do |__agg|
       __proj = __agg.user_project
       next unless __proj
@@ -133,8 +155,15 @@ target 'Smilers' do
         __is_app = (__ut.respond_to?(:product_type) && __ut.product_type == 'com.apple.product-type.application')
         next unless __is_app || __ut.name == 'Smilers'
         __ut.build_configurations.each do |__c|
-          next unless __c.name == 'Release'
-          __c.build_settings['DEAD_CODE_STRIPPING'] = 'NO'
+          # Keep Release dead-code-stripping OFF (splash-fix requirement).
+          __c.build_settings['DEAD_CODE_STRIPPING'] = 'NO' if __c.name == 'Release'
+          # Force-load the Expo view/picker static archives on every config.
+          unless __force_flags.empty?
+            __ld = __c.build_settings['OTHER_LDFLAGS'] || ['$(inherited)']
+            __ld = [__ld] if __ld.is_a?(String)
+            __force_flags.each { |__f| __ld << __f unless __ld.include?(__f) }
+            __c.build_settings['OTHER_LDFLAGS'] = __ld
+          end
         end
       end
       __proj.save
