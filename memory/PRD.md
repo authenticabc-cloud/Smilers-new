@@ -1,5 +1,14 @@
 # Smilers Mobile App — PRD
 
+## iter-462b (Jun 2026): JS permission-requester probe added to the EXPORTABLE diagnostic log
+
+User's exported JS diagnostic log confirmed the failure is SYSTEMIC across every permission module: `Unrecognized requester: EXUserFacingNotificationsPermissionsRequester` (expo-notifications), failing even minutes after boot. (Unknown whether that build included iter-462 FIX 3.) The app's native `[smilers-diag]` NSLogs go to the device console (Console.app), which the user hasn't captured — but the app HAS an exportable JS diagnostic buffer (`src/lib/diagnostics.ts` `recordDiagnostic`, surfaced in `app/diagnostic-logs.tsx`).
+
+ADDED (JS, easy to export): `src/lib/permissionRequesterProbe.ts` — `runPermissionRequesterProbe()` samples the GET (non-prompting) permission APIs (imgpicker media+camera, contacts, location, notifications) at t=400/1500/3000/6000/10000ms and logs `PROBE t=Xms <name> OK status=…` or `ERR Unrecognized requester` to `recordDiagnostic`. Wired in `app/_layout.tsx` RootLayout (one useEffect). This measures IF/WHEN FIX 3's native re-registration makes requesters available, entirely in the exportable log — no Console.app needed.
+
+NEXT: user rebuilds with latest (FIX 3 native patch + this probe), reproduces, exports diagnostic log. Interpretation: if PROBE shows ERR early then OK later → FIX 3 works (timing). If all ERR → FIX 3's re-registration isn't populating requesters (legacyModuleRegistry never set OR re-registration ineffective) → then need native [smilers-diag] Console.app logs to see the legacyProxyDidSetBridge / legacyModuleRegistry timeline, or a different native approach. REMEMBER TO REMOVE this probe once resolved.
+
+
 ## iter-462 (Jun 2026): FIX 2 failed → FIX 3 = deferred main-queue re-registration after legacy registry is ready (+ [smilers-diag] logs)
 
 iter-461 FIX 2 (installModules gated pass) did NOT change anything on device (permissions still fail, no Settings entry). Traced deeper via expo-image-picker source: `OnCreate { self.appContext?.permissions?.register([...]) }` — `appContext.permissions` = `legacyModule(implementing: EXPermissionsInterface)` which is nil until `legacyModuleRegistry` is wired. The early splash registration runs OnCreate with permissions==nil → `?.` short-circuits → requesters never register. Expo's OWN synchronous re-registration in `legacyProxyDidSetBridge:` (line 86) apparently doesn't populate them either (permissions not queryable synchronously at that instant).

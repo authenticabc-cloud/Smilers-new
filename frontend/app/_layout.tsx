@@ -23,6 +23,7 @@ import CallHost from '../src/components/call/CallHost';
 import CallReturnBanner from '../src/components/call/CallReturnBanner';
 import ResumeLastRoute from '../src/components/ResumeLastRoute';
 import UpdateBanner from '../src/components/UpdateBanner';import { recordTouchActivity } from '../src/lib/touchActivity';
+import { runPermissionRequesterProbe } from '../src/lib/permissionRequesterProbe';
 import WhatsNewModal from '../src/components/WhatsNewModal';
 import InAppMessageBanner from '../src/components/InAppMessageBanner';
 import EmergencyCaptureService from '../src/components/EmergencyCaptureService';
@@ -438,6 +439,12 @@ export default function RootLayout() {
   useEffect(() => {
     const t = setTimeout(() => setBootTimedOut(true), 3000);
     return () => clearTimeout(t);
+  }, []);
+
+  // iter-462 TEMP diagnostic: sample when the native permission requesters
+  // become available (routes results to the exportable diagnostic log).
+  useEffect(() => {
+    runPermissionRequesterProbe();
   }, []);
 
   const fontsReady = fontsLoaded || !!fontError;
