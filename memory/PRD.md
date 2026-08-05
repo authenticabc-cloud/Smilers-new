@@ -1,5 +1,23 @@
 # Smilers Mobile App — PRD
 
+## iter-458 (Jun 2026): Devotionals media fix + Bug 2b (one-active-device) client scaffold; Bug 2a confirmed already-correct (strict policy kept)
+
+### Devotionals media player (`src/components/DevotionalMediaPlayer.tsx`)
+- AUDIO FIX: `ensureVoicePlaybackMode()` was imported but NEVER called — voice devotionals loaded silently on iOS (ringer switch). Now awaited before first `play()` in `DevotionalVoice.toggle` (sets playsInSilentMode + shouldPlayInBackground).
+- VIDEO FIX (rules-of-hooks): `useVideoPlayer` was called behind a `?:` ternary (conditional hook). Refactored — `DevotionalVideo` now returns the placeholder early when expo-video is absent, and renders `<ExpoVideoInner>` (a child that calls `useVideoPlayer` UNCONDITIONALLY) otherwise. Graceful "Video unavailable on this build" placeholder retained.
+- NOTE: video "Unimplemented component" (`ViewManagerAdapter_ExpoVideo_VideoView`) + real audio playback are NATIVE — only verifiable in a TestFlight/EAS build, NOT Expo Go / web preview.
+
+### Bug 2a (re-verify on app update) — ALREADY IMPLEMENTED, kept STRICT (user chose option a)
+- App-side secure flag already exists: `settingsStorage.ts` `resolveInstallVerified` / `markDeviceProvisioned` / `PHONE_VERIFIED_INSTALL_KEY` (AsyncStorage → survives in-place updates, wiped on reinstall; deliberately NOT Keychain, which survives reinstall on iOS). Wired in `app/(tabs)/_layout.tsx` (L170/L177) + `app/phone-verify.tsx`.
+- Behaviour: updates never re-verify going forward; existing users who verified on a pre-flag build re-verify EXACTLY ONCE on the migration build, then seamless forever. A true reinstall always re-verifies. User confirmed this strict policy is desired. NO code change needed.
+
+### Bug 2b (one active device only) — CLIENT SCAFFOLD shipped (feature-flag OFF)
+- NEW `src/lib/deviceIdentity.ts`: stable per-device UUID (expo-secure-store, lazy require) + `getDeviceName()` / `getDevicePlatformLabel()`.
+- NEW `src/providers/ActiveDeviceProvider.tsx`: wraps authenticated tabs. Claims active slot when free; on another-active it Face-ID-gates a takeover request (`requireFaceId` via expo-local-authentication); shows "Waiting for approval" (new device), "New sign-in request" Approve/Deny prompt (old device), and "Signed in on another device" eviction overlay (auto signOut). All backend calls via optional `(api as any).deviceSessions?.*` + `useSafeConvexSubscription` → NO-OPS safely until backend ships.
+- Flag: `EXPO_PUBLIC_ONE_ACTIVE_DEVICE_ENABLED` (default off). Backend contract for the web team: `docs/backend/one-active-device-spec.md` (getActiveDevice / claimActiveDevice / confirmTakeover / denyTakeover / heartbeat).
+- Wired in `app/(tabs)/_layout.tsx` (import + `<ActiveDeviceProvider>` wrapping `<Tabs>`). Verified: lint clean, app boots (sign-in screen), no regression.
+
+
 ## iter-457 (Jun 2026): iOS splash hang = bridgeless MODULE-REGISTRATION RACE (not stripping) — native patch registers all modules before JS starts
 - DEFINITIVE root cause (device beacons + source read): the SAME build gives INCONSISTENT results across launches — mostly `present=2/20` (expoBefore=6, ExpoLinking MISSING → fatal `Cannot find native module 'ExpoLinking'` at expo-router render → splash hang), but occasionally `present=17/20` (ExpoLinking present, reached after-router-entry). Native provider always `count=51`. Inconsistency ⇒ a RACE, not deterministic dead-stripping (so iter-456 DCS=NO was treating the wrong cause).
 - MECHANISM: `globalThis.expo.modules` is a LIVE JSI host object (`ExpoModulesHostObject::get` → `[appContext hasModule:name]`) — a module resolves ONLY if registered in the native ModuleRegistry at the instant JS accesses it. In New Arch (bridgeless), the full registration `[_appContext useModulesProvider:@"ExpoModulesProvider"]` (registers all 51) runs ONLY on the async legacy-proxy path (`ExpoBridgeModule.legacyProxyDidSetBridge:`), which races JS startup. expo-router's first render usually asks for ExpoLinking before that path finishes → crash. (So all 51 classes ARE present/instantiable — never a linker/strip problem.)

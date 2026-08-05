@@ -10,6 +10,7 @@ import { useLocalReadMap } from '../../src/hooks/useLocalReadMap';
 import { conversationLastActivityMs, effectiveUnread } from '../../src/lib/localReadState';
 import { callDebug } from '../../src/lib/callDebugLog';
 import { forceConvexReconnect } from '../../src/providers/useConvexAutoReconnect';
+import { ActiveDeviceProvider } from '../../src/providers/ActiveDeviceProvider';
 import { Colors, FontSize, FontWeight } from '../../src/theme';
 
 export default function TabsLayout() {
@@ -371,7 +372,8 @@ export default function TabsLayout() {
   }
 
   return (
-    <Tabs
+    <ActiveDeviceProvider>
+      <Tabs
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: Colors.primary,
@@ -457,6 +459,7 @@ export default function TabsLayout() {
         }}
       />
     </Tabs>
+    </ActiveDeviceProvider>
   );
 }
 
