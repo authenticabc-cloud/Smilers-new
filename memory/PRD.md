@@ -1,5 +1,26 @@
 # Smilers Mobile App — PRD
 
+## iter-461 (Jun 2026): ROOT CAUSE FOUND — permission requesters / Fabric views register during OnCreate BEFORE the legacy registry exists. Fixed in the race patch (FIX 2).
+
+CONFIRMED (user's TestFlight, iter-459 try/catch surfaced it): `Unrecognized requester: ExpoImagePicker.MediaLibraryPermissionRequester`, video `Unimplemented component`, and Smilers never appears in iOS Settings permission lists → the permission request fails before iOS ever sees it. iter-460 static-library revert did NOT change this (and splash STILL booted fine without static libs → confirms the race patch is the real splash fix, static libs were unnecessary/kept-off).
+
+MECHANISM (traced through expo-modules-core source):
+- `ModuleHolder.init` runs each module's `OnCreate {}` immediately (ModuleHolder.swift L43 `post(.moduleCreate)`).
+- Expo modules register their PERMISSION REQUESTERS + native VIEW components into the LEGACY registry (EXPermissionsService) DURING `OnCreate`.
+- The splash patch (`patch-expo-modules-race.js`) calls `useModulesProvider` in `setRuntimeExecutor` (ExpoBridgeModule.mm) — which runs BEFORE `legacyProxyDidSetBridge:` sets `_appContext.legacyModuleRegistry`. So those OnCreate registrations hit a nil legacy registry and silently no-op → requesters/views never register on iOS.
+
+FIX 2 (`scripts/patch-expo-modules-race.js`, rewritten — still idempotent):
+- Kept FIX 1 (early registration = splash fix) UNCHANGED (3 sites).
+- ADDED a final authoritative pass at the TOP of `installModules` (the RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD JS calls synchronously BEFORE requiring any module), gated on `_appContext.legacyModuleRegistry != nil`:
+    `if (_appContext.legacyModuleRegistry != nil) { [_appContext useModulesProvider:@"ExpoModulesProvider"]; }`
+  → re-creates holders + re-runs OnCreate WITH the legacy registry set → requesters/views register; also ensures JS caches the good holder (not the early nil-registry one).
+- Verified locally on a reconstructed PRISTINE ExpoBridgeModule.mm: patch applies (early=3 sites, legacy final pass applied), idempotent on re-run (5 total useModulesProvider = 3 early + 1 original L75 + 1 FIX2). node_modules left correctly patched; EAS fresh-install postinstall reproduces it.
+
+STILL PRESENT (safe JS): DevotionalMediaPlayer VideoErrorBoundary + audio wiring; chat picker/permission try-catch Alerts.
+
+VERIFY (user EAS/TestFlight build): (1) splash still boots; (2) Smilers now appears in iOS Settings permission lists and Gallery/Camera/Video/Document/Location/Contacts all prompt + work; (3) Devotionals video plays. IF still broken → the fix depends on `legacyModuleRegistry` being set by installModules time / on `installModules` being called in bridgeless; next step = add NSLog diagnostics in ExpoBridgeModule.mm (legacyProxyDidSetBridge fire count, legacyModuleRegistry nil-state at each registration) and capture device logs via Console.app. Rollback: `git checkout` the patch script (FIX 2 only adds the gated installModules block).
+
+
 ## iter-460 (Jun 2026): REVERTED Expo static-library linkage (kept race patch) — fixes iOS view/permission-requester registration
 
 DECISION (user-approved): The try/catch added in iter-459 surfaced the REAL native errors on TestFlight:

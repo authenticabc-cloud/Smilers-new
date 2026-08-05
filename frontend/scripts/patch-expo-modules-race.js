@@ -2,35 +2,44 @@
 /**
  * patch-expo-modules-race.js
  *
- * Fixes an iOS-only, NON-DETERMINISTIC startup crash where the app hangs on the
- * splash screen because `requireNativeModule('ExpoLinking')` (used by
- * expo-router during its first render) throws "Cannot find native module
- * 'ExpoLinking'".
+ * Fixes TWO related iOS-only (New Architecture / bridgeless) startup problems in
+ * expo-modules-core's ExpoBridgeModule.mm. Both stem from WHEN the modules
+ * provider is registered relative to (a) the JS runtime starting and (b) the
+ * legacy module registry being wired up.
  *
- * ROOT CAUSE (device-confirmed via boot beacons):
- *   `global.expo.modules` is a LIVE JSI host object (ExpoModulesHostObject::get)
- *   that resolves a module ONLY if it is registered in the native
- *   ModuleRegistry *at the moment JS accesses it*. In the New Architecture
- *   (bridgeless) the full registration —
- *   `[_appContext useModulesProvider:@"ExpoModulesProvider"]`, which registers
- *   all ~51 modules — only runs on the async legacy-proxy `setBridge` path
- *   (ExpoBridgeModule `legacyProxyDidSetBridge:`). That races against JS
- *   startup: usually only ~6 modules are registered by the time expo-router
- *   asks for ExpoLinking, so it crashes (and occasionally wins the race and
- *   boots — hence the flakiness: present=2/20 vs 17/20 across launches).
+ * ── Problem 1: splash-screen hang ────────────────────────────────────────────
+ *   `global.expo.modules` is a LIVE JSI host object that resolves a module only
+ *   if it is registered in the native ModuleRegistry AT THE MOMENT JS accesses
+ *   it. In bridgeless the full registration (`useModulesProvider:`) originally
+ *   ran only on the async legacy-proxy path, which races JS startup, so
+ *   expo-router's `requireNativeModule('ExpoLinking')` often threw and the app
+ *   hung on the splash screen.
+ *   FIX 1: register the provider EARLY — right before the ExpoRuntime is created
+ *   (setBridge <0.74 / setRuntimeExecutor >=0.74 / the installModules fallback).
+ *   The registry is fully populated before any JS module lookup.
  *
- * FIX:
- *   Register the modules provider EARLY — right before the ExpoRuntime is
- *   created (which installs `global.expo` and after which JS runs). This makes
- *   the ModuleRegistry fully populated before any JS module lookup.
- *   `ModuleRegistry.register(holder:)` is `registry[name] = holder` (a plain
- *   dictionary overwrite), so calling `useModulesProvider` an extra time is
- *   idempotent and safe; the later legacy-proxy call still runs so legacy
- *   modules keep their legacy registry linkage.
+ * ── Problem 2: permission requesters / Fabric views never register ───────────
+ *   `ModuleHolder.init` runs each module's `OnCreate { }` immediately. Several
+ *   modules register their PERMISSION REQUESTERS (e.g.
+ *   ExpoImagePicker.MediaLibraryPermissionRequester) and native VIEW components
+ *   into the LEGACY registry (EXPermissionsService) during `OnCreate`. But
+ *   FIX 1 runs `OnCreate` in `setRuntimeExecutor`, which happens BEFORE
+ *   `legacyProxyDidSetBridge:` sets `_appContext.legacyModuleRegistry`. So those
+ *   OnCreate registrations hit a `nil` legacy registry and silently no-op →
+ *   at runtime iOS throws "Unrecognized requester: …" and
+ *   "Unimplemented component: ViewManagerAdapter_ExpoVideo_VideoView", and the
+ *   app never even appears in iOS Settings' permission lists (Android is fine).
+ *   FIX 2: add a FINAL authoritative registration pass at the top of
+ *   `installModules` — the RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD that JS calls
+ *   synchronously BEFORE requiring any module. By that point all native bridge
+ *   modules (incl. the legacy proxy) are set up, so `legacyModuleRegistry` is
+ *   available. Re-running `useModulesProvider` there re-creates the holders and
+ *   re-runs `OnCreate` WITH the legacy registry set, so requesters/views
+ *   register. Gated on `legacyModuleRegistry != nil` so it only runs the extra
+ *   pass when it can actually help.
  *
- * Applied to every place ExpoBridgeModule assigns `_appContext._runtime` from
- * `runtimeFromBridge` (setBridge <0.74, setRuntimeExecutor >=0.74, and the
- * synchronous installModules fallback).
+ * `ModuleRegistry.register` is a plain dictionary overwrite, so extra
+ * `useModulesProvider` calls are safe/idempotent for registration.
  */
 'use strict';
 
@@ -58,46 +67,70 @@ if (!fs.existsSync(target)) {
 
 let src = fs.readFileSync(target, 'utf8');
 
-const MARKER = 'useModulesProvider:@"ExpoModulesProvider"';
-// Insert the registration call immediately before each runtime assignment,
-// unless it is already directly preceded by the marker (idempotent).
-const assignRe = /([ \t]*)(_appContext\._runtime = \[EXJavaScriptRuntimeManager runtimeFromBridge:)/g;
+const PROVIDER_CALL = '[_appContext useModulesProvider:@"ExpoModulesProvider"];';
+const EARLY_MARKER = '// [patch-expo-modules-race] register all modules before the runtime/JS starts';
+const LATE_MARKER = '// [patch-expo-modules-race:onCreate-legacy] final pass with legacy registry';
 
-let inserted = 0;
+let changed = false;
+
+// ── FIX 1: early registration before every runtime assignment ────────────────
+// Insert naively, then collapse any duplicate (marker + call) runs that
+// directly precede a runtime assignment down to one — idempotent for both
+// pristine and already-patched sources.
+const assignRe = /([ \t]*)(_appContext\._runtime = \[EXJavaScriptRuntimeManager runtimeFromBridge:)/g;
 src = src.replace(assignRe, (match, indent) => {
-  return (
-    indent +
-    '// [patch-expo-modules-race] register all modules before the runtime/JS starts\n' +
-    indent +
-    '[_appContext ' +
-    MARKER +
-    '];\n' +
-    match
-  );
+  changed = true;
+  return indent + EARLY_MARKER + '\n' + indent + PROVIDER_CALL + '\n' + match;
 });
 
-// The regex above would double-insert if run on already-patched source, so
-// guard by counting: only write if we actually changed something AND the file
-// is not already patched with the same number of markers as assignments.
-function count(str, sub) {
-  return str.split(sub).length - 1;
+src = src.replace(
+  new RegExp(
+    '(?:[ \\t]*' + escapeRe(EARLY_MARKER) + '\\n[ \\t]*' + escapeRe(PROVIDER_CALL) + '\\n)+([ \\t]*_appContext\\._runtime)',
+    'g'
+  ),
+  (m, tail) => {
+    const indent = (tail.match(/^[ \t]*/) || [''])[0];
+    return indent + EARLY_MARKER + '\n' + indent + PROVIDER_CALL + '\n' + tail;
+  }
+);
+
+// ── FIX 2: final authoritative pass at the top of installModules ─────────────
+if (!src.includes(LATE_MARKER)) {
+  const installRe = /(RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD\(installModules\)\s*\n\{\n)/;
+  if (installRe.test(src)) {
+    src = src.replace(installRe, (m) => {
+      changed = true;
+      return (
+        m +
+        '  ' + LATE_MARKER + '\n' +
+        '  // Re-register now that the legacy module registry is available so\n' +
+        '  // permission requesters / Fabric views actually register in OnCreate.\n' +
+        '  if (_appContext.legacyModuleRegistry != nil) {\n' +
+        '    ' + PROVIDER_CALL + '\n' +
+        '  }\n'
+      );
+    });
+  } else {
+    log('warn — installModules method not found; FIX 2 (permission requesters) NOT applied');
+  }
 }
 
-const original = fs.readFileSync(target, 'utf8');
-const assignCount = count(original, '_appContext._runtime = [EXJavaScriptRuntimeManager runtimeFromBridge:');
-const alreadyPatched = count(original, MARKER) >= assignCount && assignCount > 0;
-
-if (alreadyPatched) {
-  log('already patched — skipping');
-  process.exit(0);
+function escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-if (assignCount === 0) {
-  log('skip — no runtime assignment found (expo-modules-core internals changed)');
+if (!changed && src.includes(LATE_MARKER)) {
+  log('already fully patched — skipping');
   process.exit(0);
 }
 
 fs.writeFileSync(target, src, 'utf8');
-inserted = count(src, MARKER) - count(original, MARKER);
-log('patched ExpoBridgeModule.mm — inserted early module registration at ' + inserted + ' site(s)');
+const earlyCount = src.split(EARLY_MARKER).length - 1;
+const lateApplied = src.includes(LATE_MARKER);
+log(
+  'patched ExpoBridgeModule.mm — early registration at ' +
+    earlyCount +
+    ' site(s); legacy-registry final pass ' +
+    (lateApplied ? 'applied' : 'NOT applied')
+);
 process.exit(0);
