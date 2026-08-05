@@ -1,5 +1,22 @@
 # Smilers Mobile App — PRD
 
+## iter-462 (Jun 2026): FIX 2 failed → FIX 3 = deferred main-queue re-registration after legacy registry is ready (+ [smilers-diag] logs)
+
+iter-461 FIX 2 (installModules gated pass) did NOT change anything on device (permissions still fail, no Settings entry). Traced deeper via expo-image-picker source: `OnCreate { self.appContext?.permissions?.register([...]) }` — `appContext.permissions` = `legacyModule(implementing: EXPermissionsInterface)` which is nil until `legacyModuleRegistry` is wired. The early splash registration runs OnCreate with permissions==nil → `?.` short-circuits → requesters never register. Expo's OWN synchronous re-registration in `legacyProxyDidSetBridge:` (line 86) apparently doesn't populate them either (permissions not queryable synchronously at that instant).
+
+CRITICAL COMPILE NOTE: `AppContext.permissions` is NOT `@objc` (AppContext.swift L233, no annotation) → CANNOT be referenced from ExpoBridgeModule.mm. `legacyModuleRegistry` IS `@objc` (L45). All patch code uses `legacyModuleRegistry` as the readiness gate.
+
+FIX 3 (`scripts/patch-expo-modules-race.js`, rewritten; verified on reconstructed pristine, idempotent):
+- Kept FIX 1 early registration (splash) — 3 sites, unchanged.
+- Added class-extension decl `- (void)__smilersRetryRegister:(NSInteger)` before @implementation.
+- After the >=0.74 runtime assignment (setRuntimeExecutor), kicks `dispatch_async(main){ [weakSelf __smilersRetryRegister:0]; }`.
+- `__smilersRetryRegister:` polls every 0.1s (≤100 tries) until `_appContext.legacyModuleRegistry != nil`, then re-runs `useModulesProvider` on a 0.25s-DELAYED main-queue tick (gives the legacy permissions service time to finish init — the delay is the key difference vs Expo's synchronous line 86). Re-running OnCreate with permissions now available registers requesters/views into the shared EXPermissionsService.
+- NSLog `[smilers-diag]` at setRuntimeExecutor, legacyProxyDidSetBridge, and each retry step → device-log timeline.
+- Rollback: `git checkout` the patch script.
+
+VERIFY (user EAS/TestFlight): (1) splash boots; (2) Smilers appears in iOS Settings permission lists & Gallery/Camera/Video/Document/Location/Contacts prompt+work; (3) Devotionals video plays. IF STILL BROKEN: capture logs via macOS Console.app (connect iPhone → filter process "Smilers" or text "smilers-diag" → launch app) and send the `[smilers-diag]` lines — they show whether legacyProxyDidSetBridge fires, when legacyModuleRegistry becomes set, and whether the re-registration ran. That pinpoints the exact fix. iter-460 (static-lib revert) + JS safety nets (VideoErrorBoundary, picker try/catch) remain.
+
+
 ## iter-461 (Jun 2026): ROOT CAUSE FOUND — permission requesters / Fabric views register during OnCreate BEFORE the legacy registry exists. Fixed in the race patch (FIX 2).
 
 CONFIRMED (user's TestFlight, iter-459 try/catch surfaced it): `Unrecognized requester: ExpoImagePicker.MediaLibraryPermissionRequester`, video `Unimplemented component`, and Smilers never appears in iOS Settings permission lists → the permission request fails before iOS ever sees it. iter-460 static-library revert did NOT change this (and splash STILL booted fine without static libs → confirms the race patch is the real splash fix, static libs were unnecessary/kept-off).

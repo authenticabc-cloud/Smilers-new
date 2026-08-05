@@ -2,44 +2,39 @@
 /**
  * patch-expo-modules-race.js
  *
- * Fixes TWO related iOS-only (New Architecture / bridgeless) startup problems in
- * expo-modules-core's ExpoBridgeModule.mm. Both stem from WHEN the modules
- * provider is registered relative to (a) the JS runtime starting and (b) the
- * legacy module registry being wired up.
+ * Patches expo-modules-core's ExpoBridgeModule.mm (iOS, New Architecture /
+ * bridgeless) to fix TWO issues rooted in WHEN the modules provider is
+ * registered.
  *
- * ── Problem 1: splash-screen hang ────────────────────────────────────────────
- *   `global.expo.modules` is a LIVE JSI host object that resolves a module only
- *   if it is registered in the native ModuleRegistry AT THE MOMENT JS accesses
- *   it. In bridgeless the full registration (`useModulesProvider:`) originally
- *   ran only on the async legacy-proxy path, which races JS startup, so
- *   expo-router's `requireNativeModule('ExpoLinking')` often threw and the app
- *   hung on the splash screen.
- *   FIX 1: register the provider EARLY — right before the ExpoRuntime is created
- *   (setBridge <0.74 / setRuntimeExecutor >=0.74 / the installModules fallback).
- *   The registry is fully populated before any JS module lookup.
+ * ── FIX 1: splash-screen hang ────────────────────────────────────────────────
+ *   `global.expo.modules` resolves a module only if it is in the native
+ *   ModuleRegistry at the moment JS accesses it. Originally the full
+ *   registration ran only on the async legacy path, which races JS startup, so
+ *   expo-router's `requireNativeModule('ExpoLinking')` threw and the app hung on
+ *   the splash. FIX: register the provider EARLY, right before the ExpoRuntime
+ *   is created (setBridge <0.74 / setRuntimeExecutor >=0.74 / installModules).
  *
- * ── Problem 2: permission requesters / Fabric views never register ───────────
- *   `ModuleHolder.init` runs each module's `OnCreate { }` immediately. Several
- *   modules register their PERMISSION REQUESTERS (e.g.
- *   ExpoImagePicker.MediaLibraryPermissionRequester) and native VIEW components
- *   into the LEGACY registry (EXPermissionsService) during `OnCreate`. But
- *   FIX 1 runs `OnCreate` in `setRuntimeExecutor`, which happens BEFORE
- *   `legacyProxyDidSetBridge:` sets `_appContext.legacyModuleRegistry`. So those
- *   OnCreate registrations hit a `nil` legacy registry and silently no-op →
- *   at runtime iOS throws "Unrecognized requester: …" and
- *   "Unimplemented component: ViewManagerAdapter_ExpoVideo_VideoView", and the
- *   app never even appears in iOS Settings' permission lists (Android is fine).
- *   FIX 2: add a FINAL authoritative registration pass at the top of
- *   `installModules` — the RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD that JS calls
- *   synchronously BEFORE requiring any module. By that point all native bridge
- *   modules (incl. the legacy proxy) are set up, so `legacyModuleRegistry` is
- *   available. Re-running `useModulesProvider` there re-creates the holders and
- *   re-runs `OnCreate` WITH the legacy registry set, so requesters/views
- *   register. Gated on `legacyModuleRegistry != nil` so it only runs the extra
- *   pass when it can actually help.
+ * ── FIX 3: permission requesters / Fabric views never register ───────────────
+ *   `ModuleHolder.init` runs each module's `OnCreate {}` immediately. Modules
+ *   register their PERMISSION REQUESTERS + native VIEWS like:
+ *       OnCreate { self.appContext?.permissions?.register([...]) }
+ *   `appContext.permissions` is `legacyModule(implementing: EXPermissionsInterface)`
+ *   — it is NIL until the legacy module registry is fully wired
+ *   (`legacyProxyDidSetBridge:`). FIX 1 runs OnCreate BEFORE that, so the `?.`
+ *   short-circuits and the requesters/views are NEVER registered → at runtime
+ *   iOS throws "Unrecognized requester: ExpoImagePicker.MediaLibraryPermission-
+ *   Requester" and "Unimplemented component: ViewManagerAdapter_ExpoVideo_
+ *   VideoView", and the app never appears in iOS Settings permission lists
+ *   (Android is unaffected).
  *
- * `ModuleRegistry.register` is a plain dictionary overwrite, so extra
- * `useModulesProvider` calls are safe/idempotent for registration.
+ *   FIX: after the early registration, kick off a MAIN-QUEUE retry loop that
+ *   waits until `_appContext.permissions` is non-nil, then re-runs
+ *   `useModulesProvider` ONCE. Re-registration re-runs OnCreate WITH the
+ *   permissions service available, so requesters/views land in the shared
+ *   EXPermissionsService (this mirrors what Expo's own legacy-proxy path does,
+ *   so the app already tolerates a runtime re-registration). NSLog diagnostics
+ *   (tag "[smilers-diag]") record the timeline so it can be confirmed via
+ *   Console.app if needed.
  */
 'use strict';
 
@@ -47,18 +42,11 @@ const fs = require('fs');
 const path = require('path');
 
 const target = path.join(
-  __dirname,
-  '..',
-  'node_modules',
-  'expo-modules-core',
-  'ios',
-  'Core',
-  'ExpoBridgeModule.mm'
+  __dirname, '..', 'node_modules', 'expo-modules-core', 'ios', 'Core', 'ExpoBridgeModule.mm'
 );
 
-function log(msg) {
-  console.log('[patch-expo-modules-race] ' + msg);
-}
+function log(msg) { console.log('[patch-expo-modules-race] ' + msg); }
+function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 if (!fs.existsSync(target)) {
   log('skip — ExpoBridgeModule.mm not found (expo-modules-core layout changed?)');
@@ -69,68 +57,125 @@ let src = fs.readFileSync(target, 'utf8');
 
 const PROVIDER_CALL = '[_appContext useModulesProvider:@"ExpoModulesProvider"];';
 const EARLY_MARKER = '// [patch-expo-modules-race] register all modules before the runtime/JS starts';
-const LATE_MARKER = '// [patch-expo-modules-race:onCreate-legacy] final pass with legacy registry';
+const DECL_MARKER = '// [patch-expo-modules-race:decl]';
+const RETRY_CALL_MARKER = '// [patch-expo-modules-race:retry-kick]';
+const RETRY_METHOD_MARKER = '// [patch-expo-modules-race:retry-method]';
+const LEGACY_LOG_MARKER = '// [patch-expo-modules-race:legacy-log]';
 
 let changed = false;
 
-// ── FIX 1: early registration before every runtime assignment ────────────────
-// Insert naively, then collapse any duplicate (marker + call) runs that
-// directly precede a runtime assignment down to one — idempotent for both
-// pristine and already-patched sources.
+// ── FIX 1: early registration before every runtime assignment (idempotent) ───
 const assignRe = /([ \t]*)(_appContext\._runtime = \[EXJavaScriptRuntimeManager runtimeFromBridge:)/g;
 src = src.replace(assignRe, (match, indent) => {
   changed = true;
   return indent + EARLY_MARKER + '\n' + indent + PROVIDER_CALL + '\n' + match;
 });
-
 src = src.replace(
-  new RegExp(
-    '(?:[ \\t]*' + escapeRe(EARLY_MARKER) + '\\n[ \\t]*' + escapeRe(PROVIDER_CALL) + '\\n)+([ \\t]*_appContext\\._runtime)',
-    'g'
-  ),
+  new RegExp('(?:[ \\t]*' + escapeRe(EARLY_MARKER) + '\\n[ \\t]*' + escapeRe(PROVIDER_CALL) + '\\n)+([ \\t]*_appContext\\._runtime)', 'g'),
   (m, tail) => {
     const indent = (tail.match(/^[ \t]*/) || [''])[0];
     return indent + EARLY_MARKER + '\n' + indent + PROVIDER_CALL + '\n' + tail;
   }
 );
 
-// ── FIX 2: final authoritative pass at the top of installModules ─────────────
-if (!src.includes(LATE_MARKER)) {
-  const installRe = /(RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD\(installModules\)\s*\n\{\n)/;
-  if (installRe.test(src)) {
-    src = src.replace(installRe, (m) => {
-      changed = true;
-      return (
-        m +
-        '  ' + LATE_MARKER + '\n' +
-        '  // Re-register now that the legacy module registry is available so\n' +
-        '  // permission requesters / Fabric views actually register in OnCreate.\n' +
-        '  if (_appContext.legacyModuleRegistry != nil) {\n' +
-        '    ' + PROVIDER_CALL + '\n' +
-        '  }\n'
-      );
-    });
-  } else {
-    log('warn — installModules method not found; FIX 2 (permission requesters) NOT applied');
+// ── FIX 3a: private method declaration (class extension before @implementation)
+if (!src.includes(DECL_MARKER)) {
+  const implRe = /(@implementation ExpoBridgeModule\b)/;
+  if (implRe.test(src)) {
+    const decl =
+      DECL_MARKER + '\n' +
+      '@interface ExpoBridgeModule ()\n' +
+      '- (void)__smilersRetryRegister:(NSInteger)attempt;\n' +
+      '@end\n\n';
+    src = src.replace(implRe, decl + '$1');
+    changed = true;
   }
 }
 
-function escapeRe(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// ── FIX 3b: NSLog when the legacy registry is set (diagnostic) ───────────────
+if (!src.includes(LEGACY_LOG_MARKER)) {
+  const legacyRe = /([ \t]*)(_appContext\.legacyModuleRegistry = moduleRegistry;)/;
+  if (legacyRe.test(src)) {
+    src = src.replace(legacyRe, (m, indent, stmt) => {
+      changed = true;
+      return (
+        indent + stmt + '\n' +
+        indent + LEGACY_LOG_MARKER + '\n' +
+        indent + 'NSLog(@"[smilers-diag] legacyProxyDidSetBridge fired; permissions now=%@", _appContext.legacyModuleRegistry ? @"set" : @"nil");'
+      );
+    });
+  }
 }
 
-if (!changed && src.includes(LATE_MARKER)) {
+// ── FIX 3c: kick off the retry loop right after the >=0.74 runtime assignment ─
+if (!src.includes(RETRY_CALL_MARKER)) {
+  const rtRe = /([ \t]*)(_appContext\._runtime = \[EXJavaScriptRuntimeManager runtimeFromBridge:_bridge withExecutor:runtimeExecutor\];)/;
+  if (rtRe.test(src)) {
+    src = src.replace(rtRe, (m, indent, stmt) => {
+      changed = true;
+      return (
+        m + '\n' +
+        indent + RETRY_CALL_MARKER + '\n' +
+        indent + 'NSLog(@"[smilers-diag] setRuntimeExecutor: early register done; permissions=%@", _appContext.legacyModuleRegistry ? @"set" : @"nil");\n' +
+        indent + '__weak __typeof(self) __smilersWeakSelf = self;\n' +
+        indent + 'dispatch_async(dispatch_get_main_queue(), ^{ [__smilersWeakSelf __smilersRetryRegister:0]; });'
+      );
+    });
+  } else {
+    log('warn — setRuntimeExecutor runtime assignment not found; FIX 3 retry NOT wired');
+  }
+}
+
+// ── FIX 3d: the retry method itself, inserted before the final @end ──────────
+if (!src.includes(RETRY_METHOD_MARKER)) {
+  const method =
+    '\n' + RETRY_METHOD_MARKER + '\n' +
+    '- (void)__smilersRetryRegister:(NSInteger)attempt\n' +
+    '{\n' +
+    '  if (_appContext.legacyModuleRegistry != nil) {\n' +
+    '    NSLog(@"[smilers-diag] retryRegister: legacy registry ready at attempt %ld — re-registering in 0.25s", (long)attempt);\n' +
+    '    __weak __typeof(self) weakSelf = self;\n' +
+    '    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{\n' +
+    '      __typeof(self) strongSelf = weakSelf;\n' +
+    '      if (strongSelf == nil) { return; }\n' +
+    '      NSLog(@"[smilers-diag] retryRegister: re-registering modules now (with legacy registry)");\n' +
+    '      [strongSelf->_appContext useModulesProvider:@"ExpoModulesProvider"];\n' +
+    '    });\n' +
+    '    return;\n' +
+    '  }\n' +
+    '  if (attempt >= 100) {\n' +
+    '    NSLog(@"[smilers-diag] retryRegister: gave up after %ld attempts (legacy registry still nil)", (long)attempt);\n' +
+    '    return;\n' +
+    '  }\n' +
+    '  __weak __typeof(self) weakSelf = self;\n' +
+    '  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{\n' +
+    '    [weakSelf __smilersRetryRegister:attempt + 1];\n' +
+    '  });\n' +
+    '}\n';
+  // Insert before the LAST @end in the file.
+  const lastEnd = src.lastIndexOf('\n@end');
+  if (lastEnd !== -1) {
+    src = src.slice(0, lastEnd) + '\n' + method + src.slice(lastEnd + 1);
+    changed = true;
+  } else {
+    log('warn — could not find trailing @end; FIX 3 retry method NOT added');
+  }
+}
+
+const fullyPatched =
+  src.includes(EARLY_MARKER) && src.includes(DECL_MARKER) &&
+  src.includes(RETRY_CALL_MARKER) && src.includes(RETRY_METHOD_MARKER);
+
+if (!changed && fullyPatched) {
   log('already fully patched — skipping');
   process.exit(0);
 }
 
 fs.writeFileSync(target, src, 'utf8');
-const earlyCount = src.split(EARLY_MARKER).length - 1;
-const lateApplied = src.includes(LATE_MARKER);
 log(
-  'patched ExpoBridgeModule.mm — early registration at ' +
-    earlyCount +
-    ' site(s); legacy-registry final pass ' +
-    (lateApplied ? 'applied' : 'NOT applied')
+  'patched ExpoBridgeModule.mm — early=' + (src.split(EARLY_MARKER).length - 1) +
+  ' site(s); decl=' + (src.includes(DECL_MARKER) ? 'y' : 'n') +
+  '; retry-kick=' + (src.includes(RETRY_CALL_MARKER) ? 'y' : 'n') +
+  '; retry-method=' + (src.includes(RETRY_METHOD_MARKER) ? 'y' : 'n')
 );
 process.exit(0);
