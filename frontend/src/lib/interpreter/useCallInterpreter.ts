@@ -7,8 +7,9 @@
  * participants).
  */
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { useMutation, useQuery } from 'convex/react';
+import { useMutation } from 'convex/react';
 import { api } from '../../convexApi';
+import { useSafeConvexSubscription } from '../../hooks/useSafeConvexQuery';
 import type { LangName, VoiceMode } from './languages';
 import { useInterpreterPrefs } from './prefs';
 
@@ -26,10 +27,18 @@ export interface InterpreterParticipant {
 export function useCallInterpreter(callId: string | null) {
   const { prefs, update: updatePrefs, ready: prefsReady } = useInterpreterPrefs();
 
-  const participants = useQuery(
+  // iter-463: was `useQuery(getForCall)` — a backend Server Error from that
+  // query THREW during render and bubbled to CallErrorBoundary, so the whole
+  // call ended with "Call ended unexpectedly" (Android/iOS). The interpreter
+  // is an OPTIONAL feature, so use the safe subscription: it catches server
+  // errors and keeps `participants` as `undefined` (treated as "loading";
+  // auto-enable stays off) instead of crashing the call.
+  const { data: participants } = useSafeConvexSubscription<InterpreterParticipant[] | undefined>(
     api.callInterpreter.getForCall,
-    callId ? ({ callId } as any) : 'skip',
-  ) as InterpreterParticipant[] | undefined;
+    callId ? { callId } : {},
+    undefined,
+    !!callId,
+  );
 
   const setForCall = useMutation(api.callInterpreter.setForCall);
 

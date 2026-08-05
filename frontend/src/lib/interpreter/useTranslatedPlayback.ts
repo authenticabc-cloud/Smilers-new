@@ -10,10 +10,11 @@
  */
 import { useCallback, useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
-import { useAction, useQuery } from 'convex/react';
+import { useAction } from 'convex/react';
 import { createAudioPlayer, type AudioPlayer, type AudioSource } from 'expo-audio';
 import * as FileSystem from 'expo-file-system/legacy';
 import { api } from '../../convexApi';
+import { useSafeConvexSubscription } from '../../hooks/useSafeConvexQuery';
 import {
   modeDucksFully,
   modePlaysVoice,
@@ -46,10 +47,14 @@ interface Args {
 }
 
 export function useCallSubtitles(callId: string | null): SubtitleLine[] {
-  const rows = useQuery(
+  // iter-463: safe subscription (was raw useQuery) so a backend Server Error
+  // in getSubtitles can't throw into render and end the call.
+  const { data: rows } = useSafeConvexSubscription<SubtitleLine[]>(
     api.callInterpreter.getSubtitles,
-    callId ? ({ callId } as any) : 'skip',
-  ) as SubtitleLine[] | undefined;
+    callId ? { callId } : {},
+    [],
+    !!callId,
+  );
   return rows || [];
 }
 

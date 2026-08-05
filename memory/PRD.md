@@ -1,5 +1,17 @@
 # Smilers Mobile App — PRD
 
+## iter-463 (Jun 2026): Android/iOS calls ending abruptly — interpreter Convex query error crashed the call (client-side fix)
+
+USER REPORT (Android): calls end with "Call ended unexpectedly … [CONVEX Q(callInterpreter:getForCall)] Server Error". Root cause (client): `useCallInterpreter` used raw `useQuery(api.callInterpreter.getForCall)`; convex/react THROWS a query Server Error into render, which bubbled to `CallErrorBoundary` (app/call/[conversationId].tsx) → whole call torn down. The interpreter is an OPTIONAL feature and must not be able to kill a call.
+
+FIX (client, safe/live):
+- `src/lib/interpreter/useCallInterpreter.ts`: `useQuery(getForCall)` → `useSafeConvexSubscription(getForCall, {callId}, undefined, !!callId)`. On backend error `participants` stays `undefined` → downstream `(participants||[]).find`, `me=null`, auto-enable guarded by `participants===undefined` → interpreter simply stays off, CALL PROCEEDS.
+- `src/lib/interpreter/useTranslatedPlayback.ts` `useCallSubtitles`: same swap for `getSubtitles` (fallback []). Removed now-unused `useQuery` import.
+- Lint clean, app boots.
+
+NOTE: the BACKEND `callInterpreter.getForCall` / `getSubtitles` Server Error itself lives in the web team's Convex repo — needs their fix for the interpreter FEATURE to work; but calls no longer crash regardless. Takes effect on next build/preview.
+
+
 ## iter-462b (Jun 2026): JS permission-requester probe added to the EXPORTABLE diagnostic log
 
 User's exported JS diagnostic log confirmed the failure is SYSTEMIC across every permission module: `Unrecognized requester: EXUserFacingNotificationsPermissionsRequester` (expo-notifications), failing even minutes after boot. (Unknown whether that build included iter-462 FIX 3.) The app's native `[smilers-diag]` NSLogs go to the device console (Console.app), which the user hasn't captured — but the app HAS an exportable JS diagnostic buffer (`src/lib/diagnostics.ts` `recordDiagnostic`, surfaced in `app/diagnostic-logs.tsx`).
