@@ -18,6 +18,26 @@ ENV['RCT_USE_RN_DEP'] ||= '1' if podfile_properties['ios.buildReactNativeFromSou
 ENV['RCT_USE_PREBUILT_RNCORE'] ||= '1' if podfile_properties['ios.buildReactNativeFromSource'] != 'true' && podfile_properties['newArchEnabled'] != 'false'
 platform :ios, podfile_properties['ios.deploymentTarget'] || '15.1'
 
+# iter-463: Guarantee the expo-modules-core race / permission-requester patch
+# is applied on EVERY build — even if the build pipeline skips npm
+# `postinstall`/`prepare` lifecycle scripts (unconfirmed whether Emergent's
+# iOS build runs them). `pod install` ALWAYS runs on the build server because
+# neither `Pods/` nor `Podfile.lock` are committed, so running the patch here
+# — before `use_expo_modules!` resolves the expo-modules-core source — makes
+# the native permission-requester + splash-hang fix deterministic across every
+# build. This mirrors why SmilersCallModule was moved into committed native
+# source: node_modules patches wired only via npm lifecycle scripts were not
+# reliably compiled into release builds.
+_smilers_patch = File.join(__dir__, "..", "scripts", "patch-expo-modules-race.js")
+if File.exist?(_smilers_patch)
+  Pod::UI.puts "[Podfile] applying expo-modules-core race patch (pod-install safety net)"
+  unless system("node", _smilers_patch)
+    Pod::UI.warn "[Podfile] patch-expo-modules-race.js exited non-zero (continuing build)"
+  end
+else
+  Pod::UI.warn "[Podfile] patch-expo-modules-race.js NOT FOUND at #{_smilers_patch}"
+end
+
 prepare_react_native_project!
 
 target 'Smilers' do
