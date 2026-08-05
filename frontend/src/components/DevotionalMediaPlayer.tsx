@@ -136,13 +136,18 @@ function DevotionalVoice({
     };
   }, []);
 
-  const toggle = () => {
+  const toggle = async () => {
     try {
       const mod = loadExpoAudio();
       if (!mod?.createAudioPlayer) {
         setAudioAvailable(false);
         return;
       }
+      // Configure the audio session (playsInSilentMode / background) BEFORE
+      // the first play so voice devotionals actually produce sound on iOS —
+      // without this the clip loads but stays silent when the ringer switch
+      // is on. Safe to call repeatedly; it self-guards after the first apply.
+      await ensureVoicePlaybackMode();
       let p = playerRef.current;
       if (!p) {
         const newP = mod.createAudioPlayer({ uri: url });
@@ -215,16 +220,32 @@ function DevotionalVoice({
 }
 
 function DevotionalVideo({ url }: { url: string }) {
-  // Resolve expo-video lazily. If the module isn't linked, render a
-  // friendly placeholder instead of crashing the whole feed.
+  // Resolve expo-video lazily. If the module isn't linked at all (missing
+  // `useVideoPlayer` / `VideoView` exports), render a friendly placeholder
+  // instead of crashing the whole feed. The module-loaded state is stable
+  // for the life of the process, so this early return never changes the
+  // hook order between renders (the real player hook lives in the inner
+  // component below, called unconditionally).
   const expoVideo = React.useMemo(() => loadExpoVideo(), []);
-  const player = expoVideo?.useVideoPlayer
-    ? expoVideo.useVideoPlayer({ uri: url }, (p: any) => {
-        try {
-          p.loop = false;
-        } catch {}
-      })
-    : null;
+  if (!expoVideo?.useVideoPlayer || !expoVideo?.VideoView) {
+    return (
+      <View style={[styles.videoWrap, styles.videoPlaceholder]}>
+        <Feather name="alert-circle" size={20} color={Colors.white} />
+        <Text style={styles.videoPlaceholderText}>Video unavailable on this build</Text>
+      </View>
+    );
+  }
+  return <ExpoVideoInner expoVideo={expoVideo} url={url} />;
+}
+
+// Rendered ONLY when expo-video is available, so `useVideoPlayer` is always
+// called (never behind a conditional) — satisfying the rules of hooks.
+function ExpoVideoInner({ expoVideo, url }: { expoVideo: any; url: string }) {
+  const player = expoVideo.useVideoPlayer({ uri: url }, (p: any) => {
+    try {
+      p.loop = false;
+    } catch {}
+  });
 
   useEffect(() => {
     return () => {
@@ -234,24 +255,10 @@ function DevotionalVideo({ url }: { url: string }) {
     };
   }, [player]);
 
-  if (!expoVideo?.VideoView || !player) {
-    return (
-      <View style={[styles.videoWrap, styles.videoPlaceholder]}>
-        <Feather name="alert-circle" size={20} color={Colors.white} />
-        <Text style={styles.videoPlaceholderText}>Video unavailable on this build</Text>
-      </View>
-    );
-  }
-
   const VideoView = expoVideo.VideoView;
   return (
     <View style={styles.videoWrap}>
-      <VideoView
-        player={player}
-        style={styles.videoView}
-        contentFit="cover"
-        nativeControls
-      />
+      <VideoView player={player} style={styles.videoView} contentFit="cover" nativeControls />
     </View>
   );
 }
