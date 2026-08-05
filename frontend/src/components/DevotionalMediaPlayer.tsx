@@ -258,9 +258,48 @@ function ExpoVideoInner({ expoVideo, url }: { expoVideo: any; url: string }) {
   const VideoView = expoVideo.VideoView;
   return (
     <View style={styles.videoWrap}>
-      <VideoView player={player} style={styles.videoView} contentFit="cover" nativeControls />
+      {/* If the native ExpoVideo Fabric view isn't registered in this iOS
+          build (the "Unimplemented component: ViewManagerAdapter_ExpoVideo_
+          VideoView" error), rendering <VideoView> throws at native mount.
+          The VideoErrorBoundary catches that and shows a clean placeholder
+          instead of a full-width red error box. */}
+      <VideoErrorBoundary>
+        <VideoView player={player} style={styles.videoView} contentFit="cover" nativeControls />
+      </VideoErrorBoundary>
     </View>
   );
+}
+
+// Local error boundary — the ONLY reliable way to intercept a native
+// "Unimplemented component" render failure from JS and degrade gracefully.
+class VideoErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { failed: boolean }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { failed: false };
+  }
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(err: unknown) {
+    if (__DEV__) {
+      // eslint-disable-next-line no-console
+      console.warn('[DevotionalVideo] native VideoView failed:', (err as Error)?.message);
+    }
+  }
+  render() {
+    if (this.state.failed) {
+      return (
+        <View style={styles.videoPlaceholderInline}>
+          <Feather name="video-off" size={20} color={Colors.white} />
+          <Text style={styles.videoPlaceholderText}>Video can&apos;t play on this build</Text>
+        </View>
+      );
+    }
+    return this.props.children as React.ReactElement;
+  }
 }
 
 const styles = StyleSheet.create({
@@ -302,6 +341,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
   videoView: { width: '100%', height: 220 },
+  videoPlaceholderInline: {
+    width: '100%',
+    height: 220,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#000',
+  },
   videoPlaceholder: {
     paddingVertical: 32,
     paddingHorizontal: 16,
