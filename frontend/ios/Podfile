@@ -121,8 +121,25 @@ target 'Smilers' do
         __is_app = (__ut.respond_to?(:product_type) && __ut.product_type == 'com.apple.product-type.application')
         next unless __is_app || __ut.name == 'Smilers'
         __ut.build_configurations.each do |__c|
-          next unless __c.name == 'Release'
-          __c.build_settings['DEAD_CODE_STRIPPING'] = 'NO'
+          # iter-463: `-ObjC` forces the linker to load EVERY Objective-C class
+          # and category from the static frameworks (use_frameworks! :static).
+          # Without it, classes that aren't directly referenced by Swift/ObjC
+          # app code are stripped from the app binary — including
+          # EXNativeModulesProxy and the EXPermissions requester classes that
+          # the legacy Expo module registry discovers via an objc runtime scan.
+          # When they're stripped, `appContext.legacyModuleRegistry` /
+          # `appContext.permissions` stay nil, so EVERY permission requester
+          # fails at runtime with "Unrecognized requester:
+          # ExpoImagePicker.MediaLibraryPermissionRequester" etc. (confirmed on
+          # device across imagepicker/camera/contacts/location/notifications).
+          # `-ObjC` is the canonical CocoaPods fix for "ObjC class from a static
+          # library missing at runtime". Applied to ALL configs so dev-client
+          # and Release behave identically.
+          __ld = __c.build_settings['OTHER_LDFLAGS'] || ['$(inherited)']
+          __ld = [__ld] if __ld.is_a?(String)
+          __ld << '-ObjC' unless __ld.include?('-ObjC')
+          __c.build_settings['OTHER_LDFLAGS'] = __ld
+          __c.build_settings['DEAD_CODE_STRIPPING'] = 'NO' if __c.name == 'Release'
         end
       end
       __proj.save

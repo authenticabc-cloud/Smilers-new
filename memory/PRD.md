@@ -2252,3 +2252,10 @@ Standalone social layer (NOT tied to Smilers group chat; AI never reads chat mes
   - Marker APPEARS → fork code DOES reach builds → iterate on the static-framework/linker fix with confidence.
   - Marker ABSENT → fork workspace code is NOT propagating to the user's build pipeline → THAT is the true blocker → escalate to Emergent support (support@emergent.sh); no code change will help until resolved.
 - Do NOT keep shipping blind native guesses — each costs the user a multi-hour iOS build. Wait for the marker result first.
+
+## iter-463b (fork) — CONFIRMED total legacy-permission failure → -ObjC linker fix
+- On-device PROBE (build ~2.2.57, iOS 26.4.1) shows ALL requesters fail at every delay up to t=10000ms: imgpicker.media/camera, contacts, location, notifications ALL "Unrecognized requester". This is a SYSTEM-WIDE legacy permissions failure (not one module) → `appContext.legacyModuleRegistry`/`permissions` is nil → the retry loop gives up (never populates).
+- Root cause: `use_frameworks! :static` (required by StreamVideoNoiseCancellation, can't remove) strips undiscovered ObjC classes (EXNativeModulesProxy + EXPermissions requesters) from the app binary; the legacy registry's objc-runtime scan can't find them.
+- FIX SHIPPED: `ios/Podfile` post_install now appends `-ObjC` to app-target OTHER_LDFLAGS (all configs) — canonical fix to force-load all ObjC classes/categories from static libs. Kept DEAD_CODE_STRIPPING=NO (Release). NOTE: watch for possible duplicate-symbol BUILD errors from -ObjC; if the BUILD fails, that's diagnostic (report the linker error).
+- Flush-proof marker: permissionRequesterProbe.ts now prefixes persistent PROBE samples with `[iter463b-OBJC]`. If next build's PROBE lines show that tag → fork code reaches builds (settles propagation doubt). If PROBE shows `OK status=...` instead of ERR → -ObjC FIXED it.
+- Earlier `_layout` BUILD-MARKER was inconclusive only because that event is flushed+cleared on boot before the user views the screen (events start post-flush). Not evidence of stale code.

@@ -64,6 +64,10 @@ export function runPermissionRequesterProbe(): void {
 
   recordDiagnostic({ tag: 'PROBE', source: 'permProbe', message: `starting; ${probes.length} requesters to sample` });
 
+  // Flush-proof build marker: the on-boot flush clears early events, but these
+  // timer-fired PROBE samples persist — so embedding the build tag here gives a
+  // reliable "did THIS code reach the build" signal on-device.
+  const BUILD = 'iter463b-OBJC';
   const delays = [400, 1500, 3000, 6000, 10000];
   delays.forEach((delay) => {
     setTimeout(() => {
@@ -71,9 +75,9 @@ export function runPermissionRequesterProbe(): void {
         try {
           const res = await p.fn();
           const status = res?.status ?? (res?.granted ? 'granted' : 'unknown');
-          recordDiagnostic({ tag: 'PROBE', source: 'permProbe', message: `t=${delay}ms ${p.name} OK status=${status}` });
+          recordDiagnostic({ tag: 'PROBE', source: 'permProbe', message: `[${BUILD}] t=${delay}ms ${p.name} OK status=${status}` });
         } catch (e) {
-          recordDiagnostic({ tag: 'PROBE', source: 'permProbe', message: `t=${delay}ms ${p.name} ERR ${msg(e)}` });
+          recordDiagnostic({ tag: 'PROBE', source: 'permProbe', message: `[${BUILD}] t=${delay}ms ${p.name} ERR ${msg(e)}` });
         }
       });
     }, delay);
