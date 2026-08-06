@@ -67,7 +67,7 @@ export function runPermissionRequesterProbe(): void {
   // Flush-proof build marker: the on-boot flush clears early events, but these
   // timer-fired PROBE samples persist — so embedding the build tag here gives a
   // reliable "did THIS code reach the build" signal on-device.
-  const BUILD = 'iter463c-LEGACYPROXY';
+  const BUILD = 'iter463d-NATDIAG';
   const delays = [400, 1500, 3000, 6000, 10000];
   delays.forEach((delay) => {
     setTimeout(() => {
@@ -80,6 +80,32 @@ export function runPermissionRequesterProbe(): void {
           recordDiagnostic({ tag: 'PROBE', source: 'permProbe', message: `[${BUILD}] t=${delay}ms ${p.name} ERR ${msg(e)}` });
         }
       });
+    }, delay);
+  });
+
+  // iter-463d: read the NATIVE boot timeline (mirrored into NSUserDefaults by
+  // the expo-modules-core patch) via the committed SmilersCallModule bridge and
+  // record it into the on-device diagnostic buffer. Fires at 4s/11s — AFTER the
+  // on-boot flush — so these entries persist for the user to screenshot.
+  [4000, 11000].forEach((delay) => {
+    setTimeout(async () => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { NativeModules } = require('react-native');
+        const mod = NativeModules?.SmilersCallModule;
+        if (mod?.getNativeDiag) {
+          const lines = await mod.getNativeDiag();
+          const arr = Array.isArray(lines) ? lines : [];
+          recordDiagnostic({ tag: 'NATDIAG', source: 'native', message: `[${BUILD}] t=${delay}ms nativeEvents=${arr.length}` });
+          arr.forEach((l: any, i: number) =>
+            recordDiagnostic({ tag: 'NATDIAG', source: 'native', message: `#${i} ${String(l)}` }),
+          );
+        } else {
+          recordDiagnostic({ tag: 'NATDIAG', source: 'native', message: `[${BUILD}] t=${delay}ms getNativeDiag UNAVAILABLE (bridge missing)` });
+        }
+      } catch (e) {
+        recordDiagnostic({ tag: 'NATDIAG', source: 'native', message: `[${BUILD}] t=${delay}ms read ERR ${msg(e)}` });
+      }
     }, delay);
   });
 }

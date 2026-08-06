@@ -2267,3 +2267,16 @@ Standalone social layer (NOT tied to Smilers group chat; AI never reads chat mes
 - **FIX SHIPPED (JS-only, zero build-break risk): app/_layout.tsx module scope now touches `NativeModules.NativeUnimoduleProxy`** (reads `.callMethod`) at the very top of the JS bundle → forces bridgeless interop to realize the module → setBridge → legacyProxyDidSetBridge sets registry AND re-runs useModulesProvider (re-registers OnCreate WITH permissions available) → requesters register. Records a BOOT `legacyProxy` diagnostic (present/absent/callMethod).
 - Probe marker bumped to `[iter463c-LEGACYPROXY]`. Kept `-ObjC` (harmless, built fine).
 - NEXT build check (Settings→Diagnostic Logs): PROBE `[iter463c-LEGACYPROXY] … OK status=…` → FIXED. Still ERR → the lazy-touch isn't triggering setBridge in bridgeless; next escalate to a committed-native early instantiation of EXNativeModulesProxy in AppDelegate, or Emergent support (native-build engineer). Also read the BOOT `legacyProxy` line (present/absent) for the touch outcome.
+
+## iter-463d (fork) — NATIVE DIAGNOSTIC BRIDGE (surface native boot timeline to on-device log)
+- iter463c (touch NativeUnimoduleProxy) FAILED — still all requesters ERR. JS-side fixes exhausted. Confirmed: useFrameworks:static CANNOT be removed (Stream noise-cancellation), New Arch CANNOT be disabled (reanimated 4 requires it). Confirmed SDK 54 still uses legacy `appContext.permissions?.register()` in module OnCreate. So the legacy permissions registry genuinely isn't wired in bridgeless.
+- The one unknown left = the NATIVE boot timeline (does legacyProxyDidSetBridge fire? does retry give up?), previously only in Xcode console. User has NO Mac.
+- BUILT native diagnostic bridge:
+  1. `scripts/patch-expo-modules-race.js` FIX 4: adds `SmilersNativeDiagAppend()` helper + mirrors all 5 `[smilers-diag]` events into NSUserDefaults key `smilers_native_diag` (idempotent; verified 6 append calls + helper in patched .mm).
+  2. Committed `ios/Smilers/SmilersCallModule.swift` + `.m`: new `getNativeDiag(resolve,reject)` returns the NSUserDefaults array (committed → always compiles).
+  3. `src/lib/permissionRequesterProbe.ts`: at 4s/11s (post-flush, persists) calls `NativeModules.SmilersCallModule.getNativeDiag()` and records each line as tag `NATDIAG`. Probe BUILD tag bumped to `iter463d-NATDIAG`.
+- USER: build once → Settings→Diagnostic Logs → send `NATDIAG` lines. Interpretation:
+  - see "legacyProxyDidSetBridge fired; permissions now=set" → registry IS wired → problem is module discovery/timing (fix EXPermissionsService discovery).
+  - see "retryRegister: gave up after 100 attempts" and NO "legacyProxyDidSetBridge fired" → CONFIRMED: proxy/setBridge never wires registry in bridgeless → fix = force-wire registry from committed native (AppDelegate) or escalate to support.
+  - "getNativeDiag UNAVAILABLE" → SmilersCallModule bridge not loading (itself a clue).
+  - nativeEvents=0 → patch NSUserDefaults writes never ran (patch not compiled / code paths not hit).

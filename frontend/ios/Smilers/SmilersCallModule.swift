@@ -45,4 +45,19 @@ class SmilersCallModule: NSObject {
   @objc static func requiresMainQueueSetup() -> Bool {
     return false
   }
+
+  /// iter-463d: Native diagnostic bridge. The expo-modules-core race patch
+  /// mirrors its `[smilers-diag]` boot-timeline events into
+  /// NSUserDefaults("smilers_native_diag"). This method (in COMMITTED native
+  /// source, so it always compiles) hands that timeline to JS, which records it
+  /// into the on-device Diagnostic Logs — letting us see whether
+  /// legacyProxyDidSetBridge fires / the permission retry gives up, WITHOUT a Mac.
+  @objc(getNativeDiag:rejecter:)
+  func getNativeDiag(
+    _ resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    let arr = UserDefaults.standard.array(forKey: "smilers_native_diag") as? [String] ?? []
+    resolve(arr)
+  }
 }

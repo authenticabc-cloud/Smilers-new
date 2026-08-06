@@ -162,6 +162,44 @@ if (!src.includes(RETRY_METHOD_MARKER)) {
   }
 }
 
+// ── FIX 4: native diagnostic capture into NSUserDefaults (JS-readable) ───────
+// The `[smilers-diag]` NSLogs only reach the Xcode console. Mirror each one
+// into NSUserDefaults so a committed native module (SmilersCallModule.getNativeDiag)
+// can hand the timeline to JS → the on-device Diagnostic Logs screen. This is
+// how we can finally SEE whether legacyProxyDidSetBridge fires / the retry
+// gives up, without a Mac.
+const DIAG_HELPER_MARKER = '// [patch-expo-modules-race:diag-helper]';
+if (!src.includes(DIAG_HELPER_MARKER)) {
+  const anchor = '#endif // React Native >=0.74\n';
+  const idx = src.indexOf(anchor);
+  if (idx !== -1) {
+    const helper =
+      '\n' + DIAG_HELPER_MARKER + '\n' +
+      'static void SmilersNativeDiagAppend(NSString *label) {\n' +
+      '  @try {\n' +
+      '    NSUserDefaults *__d = [NSUserDefaults standardUserDefaults];\n' +
+      '    NSArray *__cur = [__d arrayForKey:@"smilers_native_diag"] ?: @[];\n' +
+      '    NSMutableArray *__arr = [__cur mutableCopy];\n' +
+      '    NSTimeInterval __t = [[NSDate date] timeIntervalSince1970];\n' +
+      '    [__arr addObject:[NSString stringWithFormat:@"%.0f %@", __t, label]];\n' +
+      '    NSUInteger __n = __arr.count; if (__n > 80) { [__arr removeObjectsInRange:NSMakeRange(0, __n - 80)]; }\n' +
+      '    [__d setObject:__arr forKey:@"smilers_native_diag"];\n' +
+      '  } @catch (__unused NSException *__e) {}\n' +
+      '}\n';
+    const insertAt = idx + anchor.length;
+    src = src.slice(0, insertAt) + helper + src.slice(insertAt);
+    changed = true;
+  }
+}
+// Append a capture call after each smilers-diag NSLog (idempotent via lookahead).
+src = src.replace(
+  /(NSLog\(@"\[smilers-diag\] ([^"]*)"[^;]*\);)(?!\s*SmilersNativeDiagAppend)/g,
+  (m, full, label) => {
+    changed = true;
+    return full + ' SmilersNativeDiagAppend(@"' + label.replace(/"/g, '\\"') + '");';
+  }
+);
+
 const fullyPatched =
   src.includes(EARLY_MARKER) && src.includes(DECL_MARKER) &&
   src.includes(RETRY_CALL_MARKER) && src.includes(RETRY_METHOD_MARKER);
