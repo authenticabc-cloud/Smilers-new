@@ -105,6 +105,30 @@ target 'Smilers' do
     installer.pods_project.targets.each do |__nm_target|
       __nm_target.build_configurations.each do |__nm_config|
         __nm_config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+
+        # iter-463g: FORCE-RECOMPILE ExpoModulesCore every build. Evidence from
+        # on-device diagnostics showed a NEW source change inside the patched
+        # ExpoModulesCore pod (ExpoBridgeModule.mm) did NOT reach the compiled
+        # binary while committed app-target + Podfile changes DID — i.e. the
+        # pipeline reused a cached/ccached ExpoModulesCore framework. Injecting a
+        # per-revision compiler define changes the compile invocation so the
+        # cache (incl. ccache, keyed on flags) MISSES and the pod's .mm/.swift
+        # are actually rebuilt from the freshly-patched source. Bump the REV
+        # string whenever the pod patch changes.
+        if __nm_target.name == 'ExpoModulesCore'
+          __rev = 'SMILERS_PERM_PATCH_REV=463g'
+          __defs = __nm_config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] || ['$(inherited)']
+          __defs = [__defs] if __defs.is_a?(String)
+          __defs.reject! { |d| d.to_s.start_with?('SMILERS_PERM_PATCH_REV=') }
+          __defs << __rev
+          __nm_config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = __defs
+
+          __sw = __nm_config.build_settings['OTHER_SWIFT_FLAGS'] || ['$(inherited)']
+          __sw = [__sw] if __sw.is_a?(String)
+          __sw.reject! { |f| f.to_s.start_with?('-DSMILERS_PERM_PATCH_REV_') }
+          __sw << '-DSMILERS_PERM_PATCH_REV_463g'
+          __nm_config.build_settings['OTHER_SWIFT_FLAGS'] = __sw
+        end
       end
     end
 
