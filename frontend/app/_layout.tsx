@@ -138,7 +138,7 @@ if (SENTRY_DSN) {
 // the NEXT app launch. Without this, production-APK crashes are
 // completely invisible to us.
 installGlobalDiagnostics();
-recordDiagnostic({ tag: 'BOOT', source: '_layout', message: 'root layout module evaluated' });
+recordDiagnostic({ tag: 'BOOT', source: '_layout', message: 'root layout module evaluated · BUILD-MARKER=iter463-KX7Q9' });
 
 // iter-D1: One-shot BOOT fingerprint — captures the EXACT backend URL,
 // app version, versionCode, platform burned into THIS apk. If a
