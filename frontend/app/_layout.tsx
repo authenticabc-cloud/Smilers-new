@@ -140,6 +140,41 @@ if (SENTRY_DSN) {
 installGlobalDiagnostics();
 recordDiagnostic({ tag: 'BOOT', source: '_layout', message: 'root layout module evaluated · BUILD-MARKER=iter463-KX7Q9' });
 
+// iter-463c: In RN 0.81 bridgeless / New Architecture, legacy Expo bridge
+// modules are instantiated LAZILY — only when JS first touches them. The
+// legacy unimodule proxy (exported as "NativeUnimoduleProxy" /
+// EXNativeModulesProxy) is the one whose `setBridge:` calls
+// `legacyProxyDidSetBridge:` → sets `appContext.legacyModuleRegistry` → makes
+// `appContext.permissions` (EXPermissionsService) available so every module's
+// OnCreate can register its permission REQUESTER. If nothing ever touches the
+// proxy, the legacy registry stays nil forever and ALL permission requesters
+// fail at runtime with "Unrecognized requester: …" (confirmed on iOS across
+// imagepicker/camera/contacts/location/notifications). Touch it here, at the
+// very top of the JS bundle (before any provider mounts or the probe runs), to
+// force early instantiation + legacy-registry wiring. Native-only; wrapped so
+// it can never break boot.
+if (Platform.OS !== 'web') {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { NativeModules } = require('react-native');
+    const legacyProxy = NativeModules?.NativeUnimoduleProxy;
+    // Reading a property forces the bridgeless interop to fully realize the
+    // module (getModule → setBridge → legacyProxyDidSetBridge).
+    const realized = legacyProxy ? typeof legacyProxy.callMethod : 'no-proxy';
+    recordDiagnostic({
+      tag: 'BOOT',
+      source: 'legacyProxy',
+      message: `NativeUnimoduleProxy touched → ${legacyProxy ? 'present' : 'absent'} callMethod=${realized}`,
+    });
+  } catch (errorValue: any) {
+    recordDiagnostic({
+      tag: 'BOOT',
+      source: 'legacyProxy',
+      message: `NativeUnimoduleProxy touch failed: ${errorValue?.message || String(errorValue)}`,
+    });
+  }
+}
+
 // iter-D1: One-shot BOOT fingerprint — captures the EXACT backend URL,
 // app version, versionCode, platform burned into THIS apk. If a
 // `/api/register-push` 404 ever surfaces again, one grep on
