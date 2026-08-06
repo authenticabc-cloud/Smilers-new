@@ -14,6 +14,11 @@ public class AppDelegate: ExpoAppDelegate {
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
+    // iter-463f: clear the native diagnostic ring from previous launches so the
+    // on-device Diagnostic Logs show ONLY this launch's boot timeline. The
+    // expo-modules-core patch repopulates it during startReactNative (below).
+    UserDefaults.standard.removeObject(forKey: "smilers_native_diag")
+
     let delegate = ReactNativeDelegate()
     let factory = ExpoReactNativeFactory(delegate: delegate)
     delegate.dependencyProvider = RCTAppDependencyProvider()

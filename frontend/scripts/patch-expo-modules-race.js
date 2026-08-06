@@ -233,6 +233,52 @@ if (!src.includes(PERM_FORCE_MARKER)) {
   }
 }
 
+// ── FIX 6: ensure requesters register once the permissions service resolves ──
+// The service now exists (FIX 5) but requesters land in it only if
+// `appContext.permissions` is non-nil DURING each module's OnCreate. In this
+// bridgeless build the sole useModulesProvider runs inside legacyProxyDidSetBridge;
+// if the registry's interface map isn't ready at that instant, OnCreate skips
+// requesters (silent `?.`) and the service ends up empty → "Unrecognized
+// requester" even though the service is present. Here we (a) diagnose whether
+// the permissions service resolves right after registration, (b) force
+// [registry initialize] if not, and (c) RE-register modules once it resolves so
+// OnCreate re-runs with permissions available and requesters land.
+const PERM_IFACE_IMPORT_MARKER = '// [patch-expo-modules-race:perm-iface-import]';
+if (!src.includes(PERM_IFACE_IMPORT_MARKER)) {
+  const importAnchor2 = '#import <ExpoModulesCore/EXPermissionsService.h>\n';
+  const i2 = src.indexOf(importAnchor2);
+  if (i2 !== -1) {
+    const insertAt = i2 + importAnchor2.length;
+    const imp = PERM_IFACE_IMPORT_MARKER + '\n#import <ExpoModulesCore/EXPermissionsInterface.h>\n#import <ExpoModulesCore/EXModuleRegistry.h>\n';
+    src = src.slice(0, insertAt) + imp + src.slice(insertAt);
+    changed = true;
+  }
+}
+const PERM_REREG_MARKER = '// [patch-expo-modules-race:perm-reregister]';
+if (!src.includes(PERM_REREG_MARKER)) {
+  const reregAnchor = "// otherwise legacy modules (e.g. permissions) won't be available in OnCreate { }\n  [_appContext useModulesProvider:@\"ExpoModulesProvider\"];";
+  if (src.includes(reregAnchor)) {
+    const block =
+      '\n  ' + PERM_REREG_MARKER + '\n' +
+      '  {\n' +
+      '    id __permSvc = [moduleRegistry getModuleImplementingProtocol:@protocol(EXPermissionsInterface)];\n' +
+      '    NSUInteger __internal = [[moduleRegistry getAllInternalModules] count];\n' +
+      '    SmilersNativeDiagAppend([NSString stringWithFormat:@"afterUseModules: permSvc=%@ internalModules=%lu", __permSvc ? @"RESOLVED" : @"nil", (unsigned long)__internal]);\n' +
+      '    if (!__permSvc) {\n' +
+      '      [moduleRegistry initialize];\n' +
+      '      __permSvc = [moduleRegistry getModuleImplementingProtocol:@protocol(EXPermissionsInterface)];\n' +
+      '      SmilersNativeDiagAppend([NSString stringWithFormat:@"afterInitialize: permSvc=%@", __permSvc ? @"RESOLVED" : @"nil"]);\n' +
+      '    }\n' +
+      '    if (__permSvc) {\n' +
+      '      [_appContext useModulesProvider:@"ExpoModulesProvider"];\n' +
+      '      SmilersNativeDiagAppend(@"re-registered modules after permSvc resolved");\n' +
+      '    }\n' +
+      '  }';
+    src = src.replace(reregAnchor, reregAnchor + block);
+    changed = true;
+  }
+}
+
 const fullyPatched =
   src.includes(EARLY_MARKER) && src.includes(DECL_MARKER) &&
   src.includes(RETRY_CALL_MARKER) && src.includes(RETRY_METHOD_MARKER);
