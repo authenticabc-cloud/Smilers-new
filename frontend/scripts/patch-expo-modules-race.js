@@ -200,6 +200,39 @@ src = src.replace(
   }
 );
 
+// ── FIX 5: force-link EXPermissionsService under use_frameworks! :static ─────
+// EXPermissionsService auto-registers into the legacy EXModuleRegistry via an
+// ObjC `+load` (EX_EXPORT_MODULE). Under static frameworks the linker DROPS its
+// object file because nothing references it, so `+load` never fires → the
+// service is absent from the registry → `appContext.permissions` is nil →
+// EVERY Expo permission requester fails "Unrecognized requester" (confirmed on
+// device: legacyProxyDidSetBridge fires / registry set, but requesters missing).
+// Referencing the class from ExpoBridgeModule.mm (same framework, and this .o
+// IS linked) adds an undefined symbol for `_OBJC_CLASS_$_EXPermissionsService`,
+// forcing the linker to pull its object file → `+load` fires → service present.
+const PERM_IMPORT_MARKER = '// [patch-expo-modules-race:perm-import]';
+if (!src.includes(PERM_IMPORT_MARKER)) {
+  const importAnchor = '#import <ExpoModulesCore/Swift.h>\n';
+  const iAt = src.indexOf(importAnchor);
+  if (iAt !== -1) {
+    const insertAt = iAt + importAnchor.length;
+    const imp = PERM_IMPORT_MARKER + '\n#import <ExpoModulesCore/EXPermissionsService.h>\n';
+    src = src.slice(0, insertAt) + imp + src.slice(insertAt);
+    changed = true;
+  }
+}
+const PERM_FORCE_MARKER = '// [patch-expo-modules-race:perm-force]';
+if (!src.includes(PERM_FORCE_MARKER)) {
+  const forceAnchor = '_appContext.legacyModuleRegistry = moduleRegistry;';
+  if (src.includes(forceAnchor)) {
+    src = src.replace(
+      forceAnchor,
+      forceAnchor + '\n  ' + PERM_FORCE_MARKER + '\n  (void)[EXPermissionsService class]; // force-link so +load registers the permissions service\n  SmilersNativeDiagAppend([NSString stringWithFormat:@"forced EXPermissionsService link; class=%@", NSStringFromClass([EXPermissionsService class])]);'
+    );
+    changed = true;
+  }
+}
+
 const fullyPatched =
   src.includes(EARLY_MARKER) && src.includes(DECL_MARKER) &&
   src.includes(RETRY_CALL_MARKER) && src.includes(RETRY_METHOD_MARKER);

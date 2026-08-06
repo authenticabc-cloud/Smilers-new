@@ -67,7 +67,7 @@ export function runPermissionRequesterProbe(): void {
   // Flush-proof build marker: the on-boot flush clears early events, but these
   // timer-fired PROBE samples persist — so embedding the build tag here gives a
   // reliable "did THIS code reach the build" signal on-device.
-  const BUILD = 'iter463d-NATDIAG';
+  const BUILD = 'iter463e-PERMFIX';
   const delays = [400, 1500, 3000, 6000, 10000];
   delays.forEach((delay) => {
     setTimeout(() => {
