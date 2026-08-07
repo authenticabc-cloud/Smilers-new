@@ -32,44 +32,6 @@
   }
 })();
 
-// ── LEGACY UNIMODULE PROXY TOUCH (must run before expo-router) ─────────────
-// In RN 0.81 bridgeless, legacy Expo bridge modules are instantiated LAZILY.
-// EXNativeModulesProxy (exported as "NativeUnimoduleProxy") is the one whose
-// `setBridge:` calls `legacyProxyDidSetBridge:`, which sets
-// `appContext.legacyModuleRegistry` AND registers every Expo module — with
-// `appContext.permissions` available, so each module's OnCreate can register its
-// permission requester and Fabric views.
-//
-// Until something touches it, NO Expo module is registered. That caused BOTH
-// known failures:
-//   * expo-router's requireNativeModule('ExpoLinking') threw -> splash hang
-//   * every requester failed "Unrecognized requester: ..." (gallery, camera,
-//     contacts, location, notifications) and expo-video's VideoView rendered as
-//     "Unimplemented component: ViewManagerAdapter_ExpoVideo_VideoView"
-//
-// This touch used to live in app/_layout.tsx, which loads AFTER
-// `expo-router/entry` — too late for the router itself. Doing it here, at the
-// top of the entry module, fixes the ordering for both.
-//
-// It MUST stay in JS bundle scope. Do NOT move this into expo-modules-core's
-// `installModules` (RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD): that runs on the JS
-// thread, and EXNativeModulesProxy is +requiresMainQueueSetup=YES, so RCT would
-// dispatch_sync to a main thread that is itself waiting on JS — deadlock.
-(function touchLegacyUnimoduleProxy() {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const RN = require('react-native');
-    if (RN && RN.Platform && RN.Platform.OS !== 'web') {
-      // Reading a property forces the bridgeless interop to fully realize the
-      // module (getModule -> setBridge -> legacyProxyDidSetBridge).
-      const legacyProxy = RN.NativeModules && RN.NativeModules.NativeUnimoduleProxy;
-      void (legacyProxy ? typeof legacyProxy.callMethod : 'no-proxy');
-    }
-  } catch (_e) {
-    // Never let this break boot; _layout.tsx still records a diagnostic later.
-  }
-})();
-
 // MUST be first — registers the background notification task handler and
 // Notifee call event handlers at module scope so they run in ALL contexts,
 // including the headless JS process that Expo spawns when a FCM data message

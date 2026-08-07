@@ -64,34 +64,19 @@ const LEGACY_LOG_MARKER = '// [patch-expo-modules-race:legacy-log]';
 
 let changed = false;
 
-// ── FIX 1 REVERTED 2026-08-07 — early registration REMOVED ──────────────────
-// The early `useModulesProvider` call was the ROOT CAUSE of the iOS permission
-// and expo-video breakage. Registering the provider BEFORE
-// `legacyProxyDidSetBridge:` assigns `_appContext.legacyModuleRegistry` makes
-// every module's OnCreate run while `appContext.permissions` is nil, so
-//     OnCreate { self.appContext?.permissions?.register([...]) }
-// silently short-circuits on the `?.` and NO permission requester / Fabric view
-// is ever registered. On device this surfaced as ALL FIVE requesters failing:
-//   Unrecognized requester: ExpoImagePicker.MediaLibraryPermissionRequester
-//   Unrecognized requester: ExpoImagePicker.CameraPermissionRequester
-//   Unrecognized requester: ExpoContacts.ContactsPermissionRequester
-//   Unrecognized requester: EXForegroundPermissionRequester
-//   Unrecognized requester: EXUserFacingNotificationsPermissionsRequester
-// plus "Unimplemented component: ViewManagerAdapter_ExpoVideo_VideoView".
-// Android was unaffected, which is the tell that this is the iOS legacy path.
-//
-// Upstream registers ONLY inside legacyProxyDidSetBridge, after the registry is
-// set, and documents exactly why. Restore that ordering here, and strip the
-// injection from any node_modules tree that a previous run already patched.
-const earlyInjectionRe = new RegExp(
-  '[ \\t]*' + escapeRe(EARLY_MARKER) + '\\n[ \\t]*' + escapeRe(PROVIDER_CALL) + '\\n',
-  'g'
-);
-if (earlyInjectionRe.test(src)) {
-  src = src.replace(earlyInjectionRe, '');
+// ── FIX 1: early registration before every runtime assignment (idempotent) ───
+const assignRe = /([ \t]*)(_appContext\._runtime = \[EXJavaScriptRuntimeManager runtimeFromBridge:)/g;
+src = src.replace(assignRe, (match, indent) => {
   changed = true;
-  log('reverted FIX 1 — stripped early useModulesProvider injection(s)');
-}
+  return indent + EARLY_MARKER + '\n' + indent + PROVIDER_CALL + '\n' + match;
+});
+src = src.replace(
+  new RegExp('(?:[ \\t]*' + escapeRe(EARLY_MARKER) + '\\n[ \\t]*' + escapeRe(PROVIDER_CALL) + '\\n)+([ \\t]*_appContext\\._runtime)', 'g'),
+  (m, tail) => {
+    const indent = (tail.match(/^[ \t]*/) || [''])[0];
+    return indent + EARLY_MARKER + '\n' + indent + PROVIDER_CALL + '\n' + tail;
+  }
+);
 
 // ── FIX 3a: private method declaration (class extension before @implementation)
 if (!src.includes(DECL_MARKER)) {
@@ -294,50 +279,9 @@ if (!src.includes(PERM_REREG_MARKER)) {
   }
 }
 
-// ── FIX 7: splash-hang fix that does NOT break permissions ──────────────────
-// Replaces the reverted FIX 1. The splash hang happened because JS reached
-// expo-router's requireNativeModule('ExpoLinking') while NO expo module was
-// registered yet. Registration only happens in `legacyProxyDidSetBridge:`, and
-// that fires from EXNativeModulesProxy's `setBridge:` — which in bridgeless is
-// LAZY, so it may not have run yet.
-//
-// `installModules` is a BLOCKING SYNCHRONOUS method that JS calls before its
-// first requireNativeModule(). So force the legacy proxy to instantiate right
-// there: EXNativeModulesProxy.setBridge: synchronously calls
-// legacyProxyDidSetBridge:, which sets `_appContext.legacyModuleRegistry` AND
-// registers every module — with `appContext.permissions` already available, so
-// permission requesters and Fabric views land correctly.
-//
-// Net effect: modules are ready before JS needs them (splash fixed) AND they are
-// registered only after the registry exists (permissions/expo-video fixed).
-// Verified against this tree: EXNativeModulesProxy.mm:98 RCT_EXPORT_MODULE(
-// NativeUnimoduleProxy); :190-192 setBridge: -> legacyProxyDidSetBridge:.
-// moduleForName:lazilyLoadIfNecessary: exists on RCTBridge.h:153 and
-// RCTBridgeProxy.h:43 (RN 0.81); the respondsToSelector: guard makes it a no-op
-// if that ever changes.
-// !! FIX 7 WITHDRAWN 2026-08-07 - IT DEADLOCKED THE APP ON THE SPLASH SCREEN !!
-// The withdrawn code called, from inside installModules:
-//     [_bridge moduleForName:@"NativeUnimoduleProxy" lazilyLoadIfNecessary:YES];
-// installModules is RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD, so it runs on the JS
-// thread. EXNativeModulesProxy.mm:137 returns YES from +requiresMainQueueSetup,
-// so RCT dispatch_sync's to the main queue to instantiate it - while the main
-// thread is still inside startReactNative waiting on the JS thread. Deadlock:
-// the app froze on the splash forever and sent ZERO telemetry (build 12:08 UTC).
-// NEVER force a requiresMainQueueSetup module from the JS thread.
-// Any future splash fix must be async (dispatch_async to the main queue) or run
-// on the main thread to begin with - it must never block the JS thread.
-const SPLASH_MARKER = '// [patch-expo-modules-race:splash-safe-install]';
-const withdrawnFix7Re = /[ \t]*\/\/ \[patch-expo-modules-race:splash-safe-install\][\s\S]*?\n  \}\n/;
-if (withdrawnFix7Re.test(src)) {
-  src = src.replace(withdrawnFix7Re, '');
-  changed = true;
-  log('WITHDREW FIX 7 - removed deadlocking installModules force');
-}
-
 const fullyPatched =
-  !src.includes(EARLY_MARKER) && src.includes(DECL_MARKER) &&
-  src.includes(RETRY_CALL_MARKER) && src.includes(RETRY_METHOD_MARKER) &&
-  !src.includes(SPLASH_MARKER);
+  src.includes(EARLY_MARKER) && src.includes(DECL_MARKER) &&
+  src.includes(RETRY_CALL_MARKER) && src.includes(RETRY_METHOD_MARKER);
 
 if (!changed && fullyPatched) {
   log('already fully patched — skipping');
