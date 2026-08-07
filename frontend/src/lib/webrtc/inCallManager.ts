@@ -390,7 +390,22 @@ function playInCallTone(name: string, label: string) {
   }
 }
 
+// iter-465: timestamp of the most recent call end. The in-app "new message"
+// notification sound (useMessageNotificationSound) must NOT fire in the moments
+// right after a call ends, because every call inserts a call-log message into
+// the conversation whose arrival would otherwise play the Smilers notification
+// tone on top of the "Ciao" call-ended tone — covering it. Consumers check this
+// to suppress that overlap.
+let __lastCallEndedAt = 0;
+export function markCallEnded(): void {
+  __lastCallEndedAt = Date.now();
+}
+export function getLastCallEndedAt(): number {
+  return __lastCallEndedAt;
+}
+
 export function playCallEndTone() {
+  markCallEnded();
   playInCallTone('incallmanager_busytone', 'playCallEndTone');
 }
 

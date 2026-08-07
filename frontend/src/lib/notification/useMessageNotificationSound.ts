@@ -6,6 +6,7 @@ import { usePathname } from 'expo-router';
 import { api } from '../../convexApi';
 import { readStoredJson } from '../settingsStorage';
 import { getRingSource, type RingId } from '../ringtone/ringCatalog';
+import { getLastCallEndedAt } from '../webrtc/inCallManager';
 import { useAuth } from '../../providers/AuthProvider';
 
 /**
@@ -145,6 +146,13 @@ export function useMessageNotificationSound() {
         map.set(c._id, t);
       }
     }
-    if (shouldPlay) void playSound();
+    if (shouldPlay) {
+      // iter-465: a call just ended → the incoming update is the call-log
+      // message. Suppress the notification tone so it doesn't cover the "Ciao"
+      // call-ended tone. (Baseline map is already updated above, so we won't
+      // play it late either.)
+      if (Date.now() - getLastCallEndedAt() < 6000) return;
+      void playSound();
+    }
   }, [conversations, pathname]);
 }
