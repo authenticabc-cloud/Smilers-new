@@ -523,6 +523,11 @@ export const styles = StyleSheet.create({
     borderTopColor: '#E4D6BE',
     paddingHorizontal: 18,
     paddingVertical: 8,
+    // iter-466: never let the live formatting preview grow unbounded. A very
+    // large draft (e.g. a pasted log containing "[b…]"/"[i…]" that trips the
+    // rich-text regex) would otherwise expand this block and push the composer
+    // TextInput off-screen — leaving the user unable to edit/send/clear it.
+    maxHeight: 96,
   },
   formatPreviewLabel: {
     fontSize: 10,

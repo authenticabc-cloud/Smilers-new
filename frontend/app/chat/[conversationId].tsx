@@ -4887,7 +4887,7 @@ export default function ChatScreen() {
           {formattedPreviewSegments ? (
             <View style={styles.formatPreviewWrap} testID="composer-format-preview">
               <Text style={styles.formatPreviewLabel}>Preview</Text>
-              <Text style={styles.formatPreviewText}>
+              <Text style={styles.formatPreviewText} numberOfLines={4} ellipsizeMode="tail">
                 {formattedPreviewSegments.map((segment, index) => (
                   <Text
                     key={`fp-${index}`}
