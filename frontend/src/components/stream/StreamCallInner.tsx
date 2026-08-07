@@ -21,7 +21,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Animated, AppState, Dimensions, FlatList, Image, Modal, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 // @ts-expect-error — native-only Stream SDK, resolved in the dev/prod build
 import {
   StreamVideo,
@@ -2142,7 +2142,9 @@ export default function StreamCallInner() {
       <View style={styles.waitingWrap} pointerEvents="box-none" testID="stream-call-waiting">
         <View style={styles.waitingCard}>
           <View style={styles.waitingHeader}>
-            <Ionicons name={waitingIsVideo ? 'videocam' : 'call'} size={18} color={Colors.white} />
+            <View style={styles.waitingBadge}>
+              <Ionicons name={waitingIsVideo ? 'videocam' : 'call'} size={18} color={Colors.white} />
+            </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.waitingLabel}>Incoming {waitingIsVideo ? 'video' : 'voice'} call</Text>
               <Text style={styles.waitingName} numberOfLines={1}>
@@ -2150,12 +2152,25 @@ export default function StreamCallInner() {
               </Text>
             </View>
           </View>
+          <Text style={styles.waitingHint}>Answering will end your current call.</Text>
           <View style={styles.waitingActions}>
-            <TouchableOpacity style={[styles.waitingBtn, styles.waitingDecline]} onPress={declineWaiting}>
+            <TouchableOpacity
+              style={[styles.waitingBtn, styles.waitingDecline]}
+              activeOpacity={0.85}
+              onPress={declineWaiting}
+              testID="stream-call-waiting-decline"
+            >
+              <Ionicons name="close" size={18} color={Colors.white} />
               <Text style={styles.waitingBtnText}>Decline</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.waitingBtn, styles.waitingAccept]} onPress={acceptWaiting}>
-              <Text style={styles.waitingBtnText}>End &amp; Accept</Text>
+            <TouchableOpacity
+              style={[styles.waitingBtn, styles.waitingAccept]}
+              activeOpacity={0.85}
+              onPress={acceptWaiting}
+              testID="stream-call-waiting-accept"
+            >
+              <MaterialCommunityIcons name="phone-check" size={18} color={Colors.white} />
+              <Text style={styles.waitingBtnText}>End &amp; Answer</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -2349,10 +2364,27 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.12)',
   },
   waitingHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  waitingBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   waitingLabel: { color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '600' },
   waitingName: { color: Colors.white, fontSize: 17, fontWeight: '700', marginTop: 1 },
+  waitingHint: { color: 'rgba(255,255,255,0.5)', fontSize: 12, marginTop: 10 },
   waitingActions: { flexDirection: 'row', gap: 10, marginTop: 12 },
-  waitingBtn: { flex: 1, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  waitingBtn: {
+    flex: 1,
+    height: 46,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
   waitingAccept: { backgroundColor: '#22C55E' },
   waitingDecline: { backgroundColor: '#EF4444' },
   waitingBtnText: { color: Colors.white, fontSize: 15, fontWeight: '700' },
