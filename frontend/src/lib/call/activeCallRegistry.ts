@@ -19,8 +19,56 @@ export type ActiveCallInfo = {
 let current: ActiveCallInfo | null = null;
 const listeners = new Set<(info: ActiveCallInfo | null) => void>();
 
+// ── "Answered recently" registry ──────────────────────────────────────────
+// The missed-call listener (useIncomingCallListener) fires a missed-call
+// notification when a ringing record disappears and its own `userAnsweredRef`
+// is false. But that ref is ONLY set on the Twilio/WebRTC foreground answer
+// path — a call answered from the native notification "Answer" button or via
+// the Stream in-app UI bypasses it, so a genuinely-answered call that then
+// ends looked "unanswered" and produced a FALSE missed-call push.
+//
+// Any call screen that goes active records itself here (via setActiveCall).
+// The missed-call listener then consults `wasCallAnsweredRecently()` as a
+// reliable cross-path signal: if a screen was active for this call/conversation
+// within the TTL, it was answered → suppress the missed-call.
+const answeredRecently = new Map<string, number>();
+const ANSWERED_TTL_MS = 120000; // 2 min — well past the 5s missed-call debounce.
+
+function pruneAnswered(): void {
+  const now = Date.now();
+  for (const [key, ts] of answeredRecently) {
+    if (now - ts > ANSWERED_TTL_MS) answeredRecently.delete(key);
+  }
+}
+
+export function markCallAnswered(
+  callId: string | null | undefined,
+  conversationId: string | null | undefined,
+): void {
+  const now = Date.now();
+  if (callId) answeredRecently.set(`call:${callId}`, now);
+  if (conversationId) answeredRecently.set(`conv:${conversationId}`, now);
+  pruneAnswered();
+}
+
+export function wasCallAnsweredRecently(
+  callId: string | null | undefined,
+  conversationId: string | null | undefined,
+): boolean {
+  pruneAnswered();
+  const now = Date.now();
+  const byCall = callId ? answeredRecently.get(`call:${callId}`) : undefined;
+  const byConv = conversationId ? answeredRecently.get(`conv:${conversationId}`) : undefined;
+  const ts = Math.max(byCall || 0, byConv || 0);
+  return !!ts && now - ts <= ANSWERED_TTL_MS;
+}
+
 export function setActiveCall(info: ActiveCallInfo | null): void {
   current = info && (info.callId || info.conversationId) ? info : null;
+  // A call becoming active means it was answered/started — record it so the
+  // missed-call listener can tell "hung up after answering" apart from a
+  // genuinely missed ring, regardless of WHICH answer path was taken.
+  if (current) markCallAnswered(current.callId, current.conversationId);
   listeners.forEach((fn) => {
     try {
       fn(current);

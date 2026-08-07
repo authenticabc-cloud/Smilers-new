@@ -58,6 +58,8 @@ import type { AudioOutputRoute } from '../call/callTypes';
 import * as Haptics from 'expo-haptics';
 import { Colors } from '../../theme';
 import { recordDiagnostic } from '../../lib/diagnostics';
+import { setActiveCall } from '../../lib/call/activeCallRegistry';
+import CallBackground from '../CallBackground';
 
 function fmt(seconds: number) {
   const m = Math.floor(seconds / 60);
@@ -1740,6 +1742,26 @@ export default function StreamCallInner() {
       setAcceptedAt(acceptedAtRef.current);
     }
   }, [accepted]);
+
+  // Register this call in the global active-call registry the moment it goes
+  // active (answered on the callee side, or initiated on the caller side).
+  // This does two jobs:
+  //   1. A SECOND incoming call can now detect "user is already on a call" and
+  //      render the in-call call-waiting overlay instead of hijacking the
+  //      ongoing call (hasOtherActiveCall in useIncomingCallListener).
+  //   2. It records the answer, so the missed-call listener never fires a
+  //      FALSE "missed call" when THIS call is later hung up — the answer path
+  //      through the native notification / Stream UI bypasses the listener's
+  //      own userAnsweredRef. Cleared on unmount.
+  useEffect(() => {
+    if (accepted && (callId || conversationId)) {
+      setActiveCall({
+        callId: callId ? String(callId) : null,
+        conversationId: conversationId ? String(conversationId) : null,
+      });
+    }
+  }, [accepted, callId, conversationId]);
+  useEffect(() => () => setActiveCall(null), []);
   const activeCallReady = !activeCallLoading && !!activeCall;
   const isIncomingPending =
     activeCallReady && !iAmCaller && !isAnswering && !locallyAccepted && convStatus === 'ringing';
@@ -2143,6 +2165,7 @@ export default function StreamCallInner() {
   if (isIncomingPending) {
     return (
       <View style={styles.loading}>
+        <CallBackground variant="incoming" />
         <View style={styles.avatarBig}>
           <Ionicons name="person" size={64} color={Colors.white} />
         </View>
@@ -2178,6 +2201,7 @@ export default function StreamCallInner() {
   if (!client || !call) {
     return (
       <View style={styles.loading}>
+        <CallBackground variant="incoming" />
         <ActivityIndicator color={Colors.primary} size="large" />
         <Text style={styles.loadingText}>{isCaller ? 'Calling…' : 'Connecting…'}</Text>
         <Text style={styles.loadingName} numberOfLines={1}>

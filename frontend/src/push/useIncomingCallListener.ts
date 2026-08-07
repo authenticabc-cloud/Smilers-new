@@ -5,7 +5,7 @@ import { useMutation, useQuery } from 'convex/react';
 import { api } from '../convexApi';
 import { useAuth } from '../providers/AuthProvider';
 import { isTwilioEnabled } from '../lib/twilio/twilioApi';
-import { hasOtherActiveCall } from '../lib/call/activeCallRegistry';
+import { hasOtherActiveCall, wasCallAnsweredRecently } from '../lib/call/activeCallRegistry';
 
 // sml-013: the native FCM handler posts a heads-up ring notification for EVERY
 // incoming call regardless of app state — it has no way to know this listener's
@@ -102,6 +102,16 @@ export function useIncomingCallListener() {
         cancelTimerRef.current = setTimeout(() => {
           cancelTimerRef.current = null;
           if (userAnsweredRef.current) return;
+          // Cross-path answer signal: a call answered via the native
+          // notification "Answer" button or the Stream in-app UI never sets
+          // userAnsweredRef (that ref is only set on the Twilio/WebRTC
+          // foreground path). If a call screen went active for this
+          // call/conversation, it WAS answered — so a subsequent
+          // ringing→gone transition is a normal hang-up, NOT a missed call.
+          if (wasCallAnsweredRecently(snapshot._id, snapshot.conversationId)) {
+            prevCallRef.current = null;
+            return;
+          }
           const cur = prevCallRef.current;
           // A different ringing call took over → don't fire for the stale one.
           if (cur && cur._id !== snapshot._id) return;
