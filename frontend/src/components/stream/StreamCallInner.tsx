@@ -738,6 +738,62 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
     void reportParticipantStatus({ streamRoom: room, identity: myId, status: 'joined', displayName: myName });
   }, [isGroupCall, connected, room, myId, myName]);
 
+  // ── Backup "Left" auto-detection ─────────────────────────────────────────
+  // The leaving participant reports 'left' on hangup, but a killed / crashed /
+  // offline app can't send that. So EVERY other participant also watches the
+  // live Stream SFU roster: a member whose backend status is 'joined' but who
+  // is no longer among the live Stream participants for > LEFT_GRACE_MS is
+  // reported 'left' on their behalf. Idempotent — safe if several clients
+  // report the same person at once. A short grace avoids false positives from
+  // transient SFU reconnects, and a per-id "already reported" latch prevents
+  // re-report loops (cleared the moment they reappear, e.g. after a redial).
+  const presentUserIds = useMemo(() => {
+    const s = new Set<string>();
+    (participants || []).forEach((p: any) => p?.userId && s.add(String(p.userId)));
+    return s;
+  }, [participants]);
+  const absentSinceRef = useRef<Map<string, number>>(new Map());
+  const leftReportedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!isGroupCall || !connected || !room || !myId) return;
+    const LEFT_GRACE_MS = 8000;
+    const check = () => {
+      const now = Date.now();
+      const absent = absentSinceRef.current;
+      roster.forEach((r) => {
+        const id = r.identity;
+        if (!id || id === myId) return;
+        // Only ever downgrade someone the backend still considers 'joined'.
+        if (r.status !== 'joined') {
+          absent.delete(id);
+          return;
+        }
+        if (presentUserIds.has(id)) {
+          absent.delete(id);
+          leftReportedRef.current.delete(id); // present again → allow future detection
+          return;
+        }
+        // 'joined' per backend but absent from the live SFU roster.
+        if (!absent.has(id)) absent.set(id, now);
+        const since = absent.get(id) as number;
+        if (now - since >= LEFT_GRACE_MS && !leftReportedRef.current.has(id)) {
+          leftReportedRef.current.add(id);
+          void reportParticipantStatus({
+            streamRoom: room,
+            identity: id,
+            status: 'left',
+            displayName: r.displayName || '',
+          }).then(() => {
+            if (room && myId) fetchCallParticipants(room, myId).then(setRoster);
+          });
+        }
+      });
+    };
+    check();
+    const iv = setInterval(check, 2000);
+    return () => clearInterval(iv);
+  }, [isGroupCall, connected, room, myId, roster, presentUserIds]);
+
   // Waiting strip: members who have NOT joined (ringing/missed/left). Excludes
   // me and anyone already joined so the strip only shows who we're waiting on
   // or can dial again.

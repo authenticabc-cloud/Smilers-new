@@ -2334,3 +2334,30 @@ User: (1) answering a call (Stream/native-notification) then hanging up still fi
 - User chose (b): keep the reliable Stream-native options only. Upgraded the existing 2-button `waitingBanner` in `StreamCallInner` to a polished card (icon badge + hint "Answering will end your current call.") with **Decline** (keep current) and **End & Answer** (the reliable switch: ends current call + auto-answers incoming). Logic (`declineWaiting`/`acceptWaiting`) was already correct; this was UI polish + honest labeling. No fake hold.
 
 **VALIDATION NOTE:** all three are call-screen features that DO NOT run in the web/Expo-Go preview (CallHost skips the overlay on web; Stream media is native-only). They compile & bundle clean but must be validated on a real device build. Testing agent cannot exercise a live 1:1 Stream call.
+
+## iter-467 (fork) — Stream Add-Participant: connection bug + Joined/Missed/Left status tags + Dial-again
+User: (2a) added participant in a VOICE call shows "Connecting" but never connects; (2b) in a VIDEO call their camera is on but no audio either way; (2c) their name stays in the participant list, not re-addable until removed. PLUS a new feature: status tags — (i) Joined (visible to all), (ii) Missed (rang, no answer) with a Dial-again button beside Remove, (iii) Left (joined then left) with Dial-again. Dial-again VISIBILITY: if added with "show number" → visible to ALL participants; if "hide number" → only the person who added them. Applies to both voice & video.
+
+**ROOT CAUSE of 2a & 2b (FIXED):** The add-participant push carries `stream_room` = the EXISTING group room the invitee must join (their own `conversation_id` is the direct adder↔callee convo, NOT the group). Both answer-route builders DROPPED `stream_room`, so the invitee joined `smilers_conv_<theirDirectConvo>` — a DIFFERENT, empty SFU room → alone → "Connecting…" (voice) / camera-on-but-muted (video). Since EXPO_PUBLIC_USE_TWILIO=0 (Stream mode):
+  - JS: `src/push/notifeeCallWake.ts` buildCallRoute (non-twilio branch) now appends `&streamRoom=<data.stream_room>` to `/call/<conv>?...&answer=1`.
+  - NATIVE: `android/.../SmilersCallNotificationService.kt` — the "Answer" ACTION BUTTON's `answerActionUrl` now appends `&streamRoom=<data["stream_room"]>` (var added at line ~907). NOTE: requires a native Android build to take effect; the content/full-screen intents still go to /incoming-call (Twilio path, pre-existing, unchanged). The Answer button is the correct Stream connect path.
+
+**2c FIXED:** `inCallIds` in StreamCallInner previously included EVERY roster identity, so a left/missed person couldn't be re-selected in the add picker. Now it only includes derived 'joined' or 'ringing' identities — left/missed/declined are re-addable.
+
+**STATUS TAGS + DIAL-AGAIN (frontend, device-only test):**
+- Backend (`server.py`, TESTED 11/11 pass, EXTERNAL URL, iteration_22.json):
+  - `/api/calls/add-participant`: callee entry now written with `status='pending'`, `call_role='added'`, `rang_at=now`; adder entry `status='joined'`. Re-adding (dial-again) resets callee to pending + newer rang_at.
+  - `/api/calls/participant-status`: enum expanded to `joined|declined|pending|left|missed` (422 on invalid).
+  - `/api/twilio/call-participants` GET: now returns `rang_at` (ISO) per entry (falls back to updated_at). Privacy masking of phone_number per-viewer preserved; hide_number + added_by returned to ALL viewers so the client computes redial visibility.
+- Frontend (`StreamCallInner.tsx`): `deriveRosterStatus(entry, now)` maps raw→derived: joined→Joined(green); left→Left(grey); declined/missed→Missed(red); pending→Ringing…(amber) unless now-rangAt > 40s → Missed. `canRedialEntry(entry, myId)` = `!hideNumber || addedBy===myId`. `handleRedial(entry)` re-runs addStreamParticipant preserving hideNumber (getOrCreateDirect for the deep-link convo). `hangup` now reports `status='left'` (group + everConnected). Waiting strip + roster modal (RosterRow) show the derived tag; missed/left rows show a green Dial-again phone button (gated by canRedialEntry) beside Remove. `twilioApi.ts` CallRosterEntry gained `rangAt` + extended status union; reportParticipantStatus accepts left/missed.
+
+**VALIDATION:** Backend fully tested & passing. Frontend call-UI + native Kotlin streamRoom fix are device-only (Stream media + FCM answer buttons don't run in web/Expo-Go preview) → MUST verify on a real Android build: add a contact to an active voice/video call → they connect (not stuck) → tags show Joined; let one go unanswered → Missed + Dial-again (per show/hide-number rule); have one leave → Left + Dial-again.
+
+
+## iter-468 (fork) — Left auto-detection (backup to the explicit leave report)
+User: also flip a participant to "Left" instantly when their video tile/participant disappears, as a backup to the leave signal.
+- WHY: the leaving participant reports status='left' on hangup, but a killed/crashed/offline app can't send it → they'd linger as "Joined" in everyone else's roster.
+- FIX (`StreamCallInner.tsx`, CallUI): new effect watches the LIVE Stream SFU participants (`useParticipants().userId`) vs the backend roster. For any entry the backend still marks `status==='joined'` (and != me) that is NOT among the live participants for > 8s (grace against transient SFU reconnects), the client reports `participantStatus(status='left')` on their behalf, then refetches the roster. Idempotent (safe if several clients report at once). A per-id `leftReportedRef` latch prevents re-report loops and is cleared the instant they reappear (e.g. after a dial-again rejoin). `absentSinceRef` implements the grace. Runs every 2s while connected in a group call.
+- roster identity == Stream userId == Convex user id, so presence matching is exact.
+- VALIDATION: device-only (Stream media). On a real Android build: during a group call, force-kill one participant's app → within ~10s the others should see their tag flip Joined→Left with a Dial-again button (per show/hide-number rule).
+
