@@ -904,6 +904,11 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
         val room = data["twilio_room_name"] ?: ""
         val callerIdentity = data["twilio_caller_identity"] ?: ""
         val conversationId = data["conversationId"] ?: ""
+        // Add-participant invites carry the EXISTING call room the invitee must
+        // join. It MUST be threaded through the answer deep-link, else the
+        // invitee joins their own conversation-derived room and lands alone
+        // ("Connecting…" on voice / camera-on-but-muted on video).
+        val streamRoom = data["stream_room"] ?: ""
 
         Log.d(TAG, "handleCallMessage: callId=$callId callerName=$callerName isVideo=$isVideo")
         Log.d(TAG, "handleCallMessage: backendUrl='${data["backendUrl"]}' callerId='${data["callerId"]}' callerIdentity='${data["callerIdentity"]}'")
@@ -1010,6 +1015,7 @@ class SmilersCallNotificationService : ExpoFirebaseMessagingService() {
                 append("?type=${if (isVideo) "video" else "voice"}")
                 append("&answer=1")
                 if (callerName.isNotBlank()) append("&displayName=${Uri.encode(callerName)}")
+                if (streamRoom.isNotEmpty()) append("&streamRoom=${Uri.encode(streamRoom)}")
             }
         } else answerUrl
 

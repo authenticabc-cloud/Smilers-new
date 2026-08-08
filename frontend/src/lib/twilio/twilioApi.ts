@@ -271,10 +271,14 @@ export interface CallRosterEntry {
   phoneNumber: string | null;
   hideNumber: boolean;
   addedBy: string | null;
-  /** Group-call status: 'joined' | 'pending' | 'declined'. */
-  status: 'joined' | 'pending' | 'declined';
+  /** Raw backend roster status. 'left'/'missed' are set once a participant
+   *  leaves or their ring goes unanswered. */
+  status: 'joined' | 'pending' | 'declined' | 'left' | 'missed';
   /** 'member' for original group members, 'added' for people added mid-call. */
   callRole: 'member' | 'added';
+  /** ISO timestamp of the most recent ring — used to derive a "Missed" tag
+   *  when a 'pending' entry goes unanswered past the ring timeout. */
+  rangAt: string | null;
 }
 
 // ── Group call orchestration (Phase 2) ──────────────────────────────────────
@@ -357,7 +361,7 @@ export async function groupCallAgain(args: {
 export async function reportParticipantStatus(args: {
   streamRoom: string;
   identity: string;
-  status: 'joined' | 'declined' | 'pending';
+  status: 'joined' | 'declined' | 'pending' | 'left' | 'missed';
   displayName?: string;
 }): Promise<void> {
   if (!BACKEND_URL || !args.streamRoom || !args.identity) return;
@@ -627,8 +631,9 @@ export async function fetchCallParticipants(roomName: string, viewer: string): P
       phoneNumber: p.phone_number ?? null,
       hideNumber: !!p.hide_number,
       addedBy: p.added_by ?? null,
-      status: (p.status as 'joined' | 'pending' | 'declined') || 'joined',
+      status: (p.status as CallRosterEntry['status']) || 'joined',
       callRole: (p.call_role as 'member' | 'added') || 'added',
+      rangAt: p.rang_at ?? null,
     }));
   } catch {
     return [];

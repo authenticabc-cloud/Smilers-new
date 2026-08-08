@@ -685,6 +685,13 @@ async def stream_add_participant(payload: StreamAddParticipantRequest, request: 
                     "phone_number": payload.callee_phone,
                     "hide_number": bool(payload.hide_number),
                     "added_by": payload.adder_identity,
+                    "call_role": "added",
+                    # A freshly-(re)rung participant starts as 'pending'. Their
+                    # device reports 'joined' once connected, or 'left' on
+                    # hangup. `rang_at` restarts the callee's missed-call timer
+                    # on every (re)dial so a redial clears a stale "Missed" tag.
+                    "status": "pending",
+                    "rang_at": now,
                     "updated_at": now,
                 },
                 "$setOnInsert": {"created_at": now},
@@ -702,6 +709,7 @@ async def stream_add_participant(payload: StreamAddParticipantRequest, request: 
                     "phone_number": payload.adder_phone,
                     "hide_number": False,
                     "added_by": payload.adder_identity,
+                    "status": "joined",
                     "updated_at": now,
                 },
                 "$setOnInsert": {"created_at": now},
@@ -888,6 +896,7 @@ async def twilio_call_participants(room_name: str, viewer: str = ""):
         identity = d.get("identity")
         phone = d.get("phone_number")
         can_see_phone = (not hide) or (bool(viewer) and (viewer == added_by or viewer == identity))
+        rang_at = d.get("rang_at") or d.get("updated_at")
         participants.append(
             {
                 "identity": identity,
@@ -897,6 +906,9 @@ async def twilio_call_participants(room_name: str, viewer: str = ""):
                 "added_by": added_by,
                 "status": d.get("status") or "joined",
                 "call_role": d.get("call_role") or "added",
+                # ISO timestamp of the most recent ring — the client derives a
+                # "Missed" tag from this when a 'pending' entry goes unanswered.
+                "rang_at": rang_at.isoformat() if hasattr(rang_at, "isoformat") else rang_at,
             }
         )
     return {"participants": participants}
@@ -1184,7 +1196,7 @@ async def group_again(payload: GroupAgainRequest, request: Request):
 class ParticipantStatusRequest(BaseModel):
     stream_room: str = Field(..., min_length=1, max_length=160)
     identity: str = Field(..., min_length=1, max_length=120)
-    status: str = Field(..., pattern="^(joined|declined|pending)$")
+    status: str = Field(..., pattern="^(joined|declined|pending|left|missed)$")
     display_name: Optional[str] = Field(None, max_length=160)
 
 

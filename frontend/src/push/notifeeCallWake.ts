@@ -152,10 +152,18 @@ function buildCallRoute(data: any): string {
       String(data?.is_video) === 'true' ||
       String(data?.is_video) === '1' ||
       String(data?.callType) === 'video';
+    // CRITICAL (add-participant): when this push is an "Adding you to a call"
+    // invite it carries `stream_room` = the EXISTING group/call room the added
+    // person must join. Without threading it through, the callee joins the
+    // conversation-derived room (smilers_conv_<theirConvo>) instead — landing
+    // ALONE in the wrong SFU room ("Connecting…" forever on voice, camera-on
+    // but muted on video). Preserve it so they join the same room as everyone.
+    const streamRoom = String(data?.stream_room || data?.streamRoom || '');
+    const streamQs = streamRoom ? `&streamRoom=${encodeURIComponent(streamRoom)}` : '';
     if (conversationId) {
       return (
         `/call/${conversationId}?displayName=${name}` +
-        `&type=${isVideoCall ? 'video' : 'voice'}&answer=1`
+        `&type=${isVideoCall ? 'video' : 'voice'}&answer=1${streamQs}`
       );
     }
     return String(data?.action_url || '/');

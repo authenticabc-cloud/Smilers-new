@@ -138,14 +138,43 @@ type CallUIProps = {
   onConnectedChange?: (connected: boolean) => void;
 };
 
-// Visual mapping for group-call member statuses shown in the live waiting
-// strip (mirrors the legacy WebRTC group-call invite strip: Ringing / Joined /
-// Declined). Backend roster status: pending → Ringing…, joined, declined.
-const GROUP_STATUS_META: Record<string, { label: string; color: string }> = {
-  pending: { label: 'Ringing…', color: '#E4B53B' },
+// Visual mapping for group-call member DERIVED statuses shown in the live
+// waiting strip + roster (mirrors the WebRTC group-call invite strip).
+//   joined  → connected now
+//   ringing → still being rung (pending, within the ring window)
+//   missed  → rang but no answer (ring timed out / declined)
+//   left    → was in the call and has left
+type DerivedRosterStatus = 'joined' | 'ringing' | 'missed' | 'left';
+
+const GROUP_STATUS_META: Record<DerivedRosterStatus, { label: string; color: string }> = {
   joined: { label: 'Joined', color: '#34C759' },
-  declined: { label: 'Declined', color: '#FF3B30' },
+  ringing: { label: 'Ringing…', color: '#E4B53B' },
+  missed: { label: 'Missed', color: '#FF3B30' },
+  left: { label: 'Left', color: '#8E8E93' },
 };
+
+// A 'pending' entry becomes "Missed" once this long passes with no answer
+// (the ring auto-times-out at ~35s; the grace avoids a premature flip).
+const MISSED_AFTER_MS = 40000;
+
+function deriveRosterStatus(r: CallRosterEntry, nowMs: number): DerivedRosterStatus {
+  if (r.status === 'joined') return 'joined';
+  if (r.status === 'left') return 'left';
+  if (r.status === 'declined' || r.status === 'missed') return 'missed';
+  // 'pending' → still ringing unless the ring window has elapsed unanswered.
+  const rang = r.rangAt ? Date.parse(r.rangAt) : 0;
+  if (rang && nowMs - rang > MISSED_AFTER_MS) return 'missed';
+  return 'ringing';
+}
+
+// Whether the "Dial again" affordance should be visible to THIS viewer for a
+// missed/left participant. Rule: if the person was added with the number
+// SHOWN, everyone in the call may re-dial them; if added with the number
+// HIDDEN, only the person who added them may re-dial.
+function canRedialEntry(r: CallRosterEntry, myId: string | null): boolean {
+  if (!r.hideNumber) return true;
+  return !!(myId && r.addedBy && r.addedBy === myId);
+}
 
 /** In-call UI (inside StreamCall context). */
 function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acceptedAt, room, myId, myName, myPhone, conversationId, isGroupCall, isGroupAdmin, adminIdentities, conversationName, onConnectedChange }: CallUIProps) {
@@ -674,13 +703,29 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
     };
   }, [connected, room, myId, showToast]);
 
+  // Roster with a derived per-viewer status, recomputed each poll so a
+  // 'pending' entry flips to "Missed" once the ring window elapses.
+  const rosterWithStatus = useMemo(
+    () => {
+      const now = Date.now();
+      return roster.map((r) => ({ ...r, derived: deriveRosterStatus(r, now) }));
+    },
+    [roster],
+  );
+
   const inCallIds = useMemo(() => {
     const s = new Set<string>();
     if (myId) s.add(myId);
     (participants || []).forEach((p: any) => p?.userId && s.add(String(p.userId)));
-    roster.forEach((r) => r.identity && s.add(r.identity));
+    // Only people who are actually here (joined) or still being rung count as
+    // "in call". Missed / left / declined entries are re-addable, so they must
+    // NOT block re-selection in the add picker (fixes the "stuck in list,
+    // can't re-add until removed" bug).
+    rosterWithStatus.forEach((r) => {
+      if (r.identity && (r.derived === 'joined' || r.derived === 'ringing')) s.add(r.identity);
+    });
     return s;
-  }, [myId, participants, roster]);
+  }, [myId, participants, rosterWithStatus]);
 
   // ── Group call: report MY status "joined" once connected so every
   // participant's waiting strip shows me green (mirrors the legacy WebRTC
@@ -693,23 +738,24 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
     void reportParticipantStatus({ streamRoom: room, identity: myId, status: 'joined', displayName: myName });
   }, [isGroupCall, connected, room, myId, myName]);
 
-  // Waiting strip: members who have NOT joined (pending/declined). Excludes me
-  // and anyone already joined so the strip only shows who we're still waiting on.
+  // Waiting strip: members who have NOT joined (ringing/missed/left). Excludes
+  // me and anyone already joined so the strip only shows who we're waiting on
+  // or can dial again.
   const waitingMembers = useMemo(
-    () => roster.filter((r) => r.identity && r.identity !== myId && r.status !== 'joined'),
-    [roster, myId],
+    () => rosterWithStatus.filter((r) => r.identity && r.identity !== myId && r.derived !== 'joined'),
+    [rosterWithStatus, myId],
   );
   const hasPendingOrDeclined = waitingMembers.length > 0;
 
   // Group summary counts for the participants pill: how many have joined
-  // (+1 for me, who is always joined) vs. how many are still ringing (pending).
+  // (+1 for me, who is always joined) vs. how many are still ringing.
   const groupJoinedCount = useMemo(
-    () => roster.filter((r) => r.identity && r.identity !== myId && r.status === 'joined').length + 1,
-    [roster, myId],
+    () => rosterWithStatus.filter((r) => r.identity && r.identity !== myId && r.derived === 'joined').length + 1,
+    [rosterWithStatus, myId],
   );
   const groupRingingCount = useMemo(
-    () => roster.filter((r) => r.identity && r.identity !== myId && r.status === 'pending').length,
-    [roster, myId],
+    () => rosterWithStatus.filter((r) => r.identity && r.identity !== myId && r.derived === 'ringing').length,
+    [rosterWithStatus, myId],
   );
 
   // Mid-call "Call Again" — re-ring ONLY the pending/declined members.
@@ -733,6 +779,48 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
       setCallingAgain(false);
     }
   }, [room, myId, callingAgain, conversationId, myName, myPhone, conversationName, videoMode, showToast]);
+
+  // Dial-again for a SINGLE missed/left participant. Re-rings just that person
+  // by re-running the add-participant flow (preserving their original
+  // show/hide-number choice), which resets their roster entry to 'pending'.
+  const [redialingIds, setRedialingIds] = useState<string[]>([]);
+  const handleRedial = useCallback(
+    async (entry: CallRosterEntry) => {
+      if (!room || !myId || !entry?.identity) return;
+      if (redialingIds.includes(entry.identity)) return;
+      setRedialingIds((prev) => [...prev, entry.identity]);
+      try {
+        // Resolve a direct conversation so the ring/answer deep-link opens a
+        // real context for the callee (any participant may create one).
+        let convForAdd = conversationId;
+        try {
+          const cid = await getOrCreateDirect({ otherUserId: entry.identity });
+          if (cid) convForAdd = String(cid);
+        } catch {
+          /* fall back to the current conversationId */
+        }
+        await addStreamParticipant({
+          streamRoom: room,
+          adderIdentity: myId,
+          adderDisplayName: myName,
+          adderPhone: myPhone || undefined,
+          calleeIdentity: entry.identity,
+          calleeDisplayName: entry.displayName || '',
+          calleePhone: entry.phoneNumber || undefined,
+          hideNumber: entry.hideNumber,
+          isVideo: videoMode,
+          conversationId: convForAdd,
+        });
+        showToast(`Ringing ${entry.displayName || 'them'} again…`);
+        fetchCallParticipants(room, myId).then(setRoster);
+      } catch (err: any) {
+        Alert.alert('Could not dial again', err?.message || 'Please try again.');
+      } finally {
+        setRedialingIds((prev) => prev.filter((id) => id !== entry.identity));
+      }
+    },
+    [room, myId, redialingIds, conversationId, myName, myPhone, videoMode, getOrCreateDirect, showToast],
+  );
 
   // ── Admin: incoming "request to add X" (from a non-admin) → Approve/Decline.
   const [addReq, setAddReq] = useState<PendingAddRequest | null>(getAddRequest());
@@ -1282,13 +1370,31 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
             contentContainerStyle={styles.waitStripContent}
           >
             {waitingMembers.map((m) => {
-              const meta = GROUP_STATUS_META[m.status] || GROUP_STATUS_META.pending;
+              const meta = GROUP_STATUS_META[m.derived] || GROUP_STATUS_META.ringing;
+              const showRedial = (m.derived === 'missed' || m.derived === 'left') && canRedialEntry(m, myId);
+              const canRemove =
+                (isGroupCall && isGroupAdmin) || (!!m.addedBy && !!myId && m.addedBy === myId);
+              const isRedialing = redialingIds.includes(m.identity);
               return (
                 <View key={m.identity} style={styles.waitChip} testID={`group-call-wait-chip-${m.identity}`}>
                   <View style={[styles.waitDot, { backgroundColor: meta.color }]} />
                   <Text style={styles.waitChipName} numberOfLines={1}>{m.displayName || 'Member'}</Text>
                   <Text style={[styles.waitChipStatus, { color: meta.color }]}>{meta.label}</Text>
-                  {isGroupAdmin ? (
+                  {showRedial ? (
+                    <Pressable
+                      hitSlop={8}
+                      onPress={() => handleRedial(m)}
+                      disabled={isRedialing}
+                      testID={`group-call-wait-redial-${m.identity}`}
+                    >
+                      {isRedialing ? (
+                        <ActivityIndicator size="small" color="#34C759" />
+                      ) : (
+                        <Ionicons name="call" size={16} color="#34C759" />
+                      )}
+                    </Pressable>
+                  ) : null}
+                  {canRemove ? (
                     <Pressable hitSlop={8} onPress={() => handleRemove(m)} testID={`group-call-wait-kick-${m.identity}`}>
                       <Ionicons name="close-circle" size={16} color="rgba(255,255,255,0.7)" />
                     </Pressable>
@@ -1519,22 +1625,30 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
             </View>
             <View style={styles.rosterList}>
               <RosterRow name={`${myName || 'You'} (you)`} phone={null} status={isGroupCall ? 'joined' : undefined} />
-              {roster
+              {rosterWithStatus
                 .filter((r) => r.identity && r.identity !== myId)
-                .map((r) => (
-                  <RosterRow
-                    key={r.identity}
-                    name={r.displayName || 'Smilers user'}
-                    phone={r.phoneNumber}
-                    hidden={r.hideNumber}
-                    status={isGroupCall ? r.status : undefined}
-                    onRemove={
-                      (isGroupCall && isGroupAdmin) || (r.addedBy && myId && r.addedBy === myId)
-                        ? () => handleRemove(r)
-                        : undefined
-                    }
-                  />
-                ))}
+                .map((r) => {
+                  const showRedial =
+                    isGroupCall &&
+                    (r.derived === 'missed' || r.derived === 'left') &&
+                    canRedialEntry(r, myId);
+                  return (
+                    <RosterRow
+                      key={r.identity}
+                      name={r.displayName || 'Smilers user'}
+                      phone={r.phoneNumber}
+                      hidden={r.hideNumber}
+                      status={isGroupCall ? r.derived : undefined}
+                      onRedial={showRedial ? () => handleRedial(r) : undefined}
+                      redialing={redialingIds.includes(r.identity)}
+                      onRemove={
+                        (isGroupCall && isGroupAdmin) || (r.addedBy && myId && r.addedBy === myId)
+                          ? () => handleRemove(r)
+                          : undefined
+                      }
+                    />
+                  );
+                })}
             </View>
             {isGroupCall && hasPendingOrDeclined ? (
               <Pressable
@@ -1577,12 +1691,16 @@ function RosterRow({
   hidden,
   onRemove,
   status,
+  onRedial,
+  redialing,
 }: {
   name: string;
   phone: string | null;
   hidden?: boolean;
   onRemove?: () => void;
-  status?: 'joined' | 'pending' | 'declined';
+  status?: DerivedRosterStatus;
+  onRedial?: () => void;
+  redialing?: boolean;
 }) {
   const meta = status ? GROUP_STATUS_META[status] : null;
   return (
@@ -1603,6 +1721,15 @@ function RosterRow({
           <View style={[styles.waitDot, { backgroundColor: meta.color }]} />
           <Text style={[styles.rosterStatusText, { color: meta.color }]}>{meta.label}</Text>
         </View>
+      ) : null}
+      {onRedial ? (
+        <TouchableOpacity style={styles.rosterRedialBtn} onPress={onRedial} disabled={redialing} hitSlop={8}>
+          {redialing ? (
+            <ActivityIndicator size="small" color="#34C759" />
+          ) : (
+            <Ionicons name="call" size={22} color="#34C759" />
+          )}
+        </TouchableOpacity>
       ) : null}
       {onRemove ? (
         <TouchableOpacity style={styles.rosterRemoveBtn} onPress={onRemove} hitSlop={8}>
@@ -2049,13 +2176,25 @@ export default function StreamCallInner() {
     // silent, while the side that didn't tap End still plays it even though the
     // remote (and thus live remoteConnected) has already gone.
     if (everConnectedRef.current) InCallAudio.playCallEndTone?.();
+    // Group call: tell everyone I've LEFT (so my roster tag flips Joined→Left
+    // and a Dial-again affordance appears per the number-visibility rules).
+    // Only when I actually connected — an unanswered/cancelled ring is handled
+    // by the missed-call path instead.
+    if (isGroupCall && everConnectedRef.current && streamCallId && me?._id) {
+      void reportParticipantStatus({
+        streamRoom: String(streamCallId),
+        identity: String(me._id),
+        status: 'left',
+        displayName: String(me?.name || me?.displayName || ''),
+      });
+    }
     const cid = liveCallIdRef.current || callId;
     if (cid) void endCall({ callId: String(cid) }).catch(() => {});
     try {
       call?.leave();
     } catch {}
     callHost.end();
-  }, [callId, call, endCall]);
+  }, [callId, call, endCall, isGroupCall, streamCallId, me]);
 
   // ── Call-waiting: surface a SECOND ringing call during an active call ──────
   const connectedNow = !!client && !!call;
@@ -2634,6 +2773,7 @@ const styles = StyleSheet.create({
   rosterRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 },
   rosterHidden: { color: '#777', fontSize: 13, fontStyle: 'italic', marginTop: 1 },
   rosterRemoveBtn: { padding: 4 },
+  rosterRedialBtn: { padding: 4, marginRight: 2 },
   rosterAddBtn: {
     flexDirection: 'row',
     alignItems: 'center',
