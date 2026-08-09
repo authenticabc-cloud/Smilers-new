@@ -1,5 +1,20 @@
 # Smilers Mobile App — PRD
 
+## iter-466 (Jun 2026): Sub Groups — Positions milestone (req 5) + "SUB" tag on nested rows
+
+POSITIONS (`subGroups.setPosition` / `setPositionVisibility` / `listPositions` / `positionsForMother`):
+- NEW `src/components/SubGroupPositionModal.tsx`: assign/update/clear a member's position title in a sub group. Preset chips (President, Vice President, Chairman, Secretary, Treasurer, Organizer) + custom TextInput. Any sub-group admin can set/clear a title; only the Chief Admin sees the "Show in mother group" Switch (`setPosition` includes `showInMother` only when `isChief`; clear = empty title).
+- `app/group/[id].tsx` now branches on `isSubGroup = !!conversation.parentConversationId`:
+  - SUB group: queries `listPositions({subGroupId})` → `subPositionMap` (userId → {title, showInMother}); renders a primary-colored "ribbon" position pill next to each member's name (+ an eye icon when showInMother is on). Sub-group admins get an "award" icon button per member (incl. self/chief) opening the position modal; `refetchPositions` on close.
+  - MOTHER group: queries `positionsForMother({parentConversationId})` → `motherPositionMap` (userId → title[]); renders a ribbon pill per exposed title next to the member's name in the mother member list (backend only returns titles the chief chose to expose, from active sub groups the caller belongs to).
+- `memberNameLine` already has flexWrap so multiple pills/badges wrap cleanly.
+
+"SUB" TAG: added a small grey "SUB" pill next to the sub-group name in BOTH the Groups-tab nested rows (`SubGroupList`) and the Group Info Sub Groups section (`SubGroupsSection`) so members instantly distinguish sub groups from the main group.
+
+Lint clean; app boots to Sign In. ⚠️ Positions/pills + tag are authenticated + live-backend — needs a signed-in session / device to verify. Sub Groups milestones 1+2 (iter-465) unchanged.
+
+
+
 ## iter-465 (Jun 2026): Sub Groups (groups within groups) — native UI milestones 1+2 (nesting + create) + enabled A/B flags
 
 Web team shipped & PUBLISHED the `subGroups.*` Convex module (foundation + positions + unread rollup). Contract fetched from `https://smilers-app.onhercules.app/native-sub-groups-contract.json` (v4). A sub group is a normal group conversation with `parentConversationId`; reuses ALL existing group functions (chat/calls/media/admin/E2EE) via the sub group's `_id`. Two new conversation fields: `parentConversationId`, `subGroupStatus` ('pending'|'active').

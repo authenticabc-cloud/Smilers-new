@@ -50,6 +50,7 @@ import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
 import { SubGroupsSection } from '../../src/components/SubGroupsSection';
+import { SubGroupPositionModal } from '../../src/components/SubGroupPositionModal';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { getResolvedDisplayName, getSavedContactRecord } from '../../src/lib/displayName';
@@ -359,6 +360,7 @@ function GroupInfoInner() {
   // Sub groups: only top-level groups can contain sub groups. The member picker
   // is restricted to this (mother) group's members per the backend contract.
   const isTopLevelGroup = !conversation?.parentConversationId;
+  const isSubGroup = !isTopLevelGroup;
   const motherMembers = useMemo(
     () =>
       (Array.isArray(members) ? members : [])
@@ -370,6 +372,42 @@ function GroupInfoInner() {
         .filter(Boolean) as { userId: string; name: string }[],
     [members, displayNameForMember],
   );
+
+  // -------- Positions (sub groups only) --------
+  // Inside a SUB group we manage/show each member's position title.
+  const { data: subPositions, refetch: refetchPositions } = useSafeConvexQuery<any[]>(
+    (api as any).subGroups?.listPositions,
+    isSubGroup && conversationId ? { subGroupId: conversationId } : {},
+    [],
+    isSubGroup && !!conversationId,
+  );
+  // Inside the MOTHER group we show titles that sub-group chiefs chose to expose.
+  const { data: motherPositions } = useSafeConvexQuery<Record<string, any[]>>(
+    (api as any).subGroups?.positionsForMother,
+    isTopLevelGroup && conversationId ? { parentConversationId: conversationId } : {},
+    {},
+    isTopLevelGroup && !!conversationId,
+  );
+
+  const subPositionMap = useMemo(() => {
+    const map = new Map<string, { title: string; showInMother: boolean }>();
+    (Array.isArray(subPositions) ? subPositions : []).forEach((p: any) => {
+      if (p?.userId && p?.title) map.set(String(p.userId), { title: String(p.title), showInMother: !!p.showInMother });
+    });
+    return map;
+  }, [subPositions]);
+
+  const motherPositionMap = useMemo(() => {
+    const map = new Map<string, string[]>();
+    const rec = (motherPositions && typeof motherPositions === 'object' ? motherPositions : {}) as Record<string, any[]>;
+    Object.keys(rec).forEach((uid) => {
+      const titles = (Array.isArray(rec[uid]) ? rec[uid] : []).map((e: any) => String(e?.title)).filter(Boolean);
+      if (titles.length) map.set(String(uid), titles);
+    });
+    return map;
+  }, [motherPositions]);
+
+  const [positionTarget, setPositionTarget] = useState<{ userId: string; name: string } | null>(null);
 
   const suspendedMap = useMemo(() => {
     const map = new Map<string, any>();
@@ -782,6 +820,25 @@ function GroupInfoInner() {
                         <Text style={styles.reserveBadgeText}>Reserve</Text>
                       </View>
                     ) : null}
+                    {isSubGroup && subPositionMap.get(mid)?.title ? (
+                      <View style={styles.positionPill} testID={`member-position-${mid}`}>
+                        <Ionicons name="ribbon" size={11} color={Colors.white} />
+                        <Text style={styles.positionPillText} numberOfLines={1}>
+                          {subPositionMap.get(mid)!.title}
+                        </Text>
+                        {subPositionMap.get(mid)!.showInMother ? (
+                          <Ionicons name="eye" size={10} color={Colors.white} />
+                        ) : null}
+                      </View>
+                    ) : null}
+                    {isTopLevelGroup && (motherPositionMap.get(mid) || []).map((t, i) => (
+                      <View key={`${mid}-pos-${i}`} style={styles.positionPill} testID={`member-mother-position-${mid}-${i}`}>
+                        <Ionicons name="ribbon" size={11} color={Colors.white} />
+                        <Text style={styles.positionPillText} numberOfLines={1}>
+                          {t}
+                        </Text>
+                      </View>
+                    ))}
                   </View>
                   <Text style={styles.memberBio} numberOfLines={1}>
                     {suspension
@@ -790,6 +847,15 @@ function GroupInfoInner() {
                   </Text>
                 </View>
                 </TouchableOpacity>
+                {isSubGroup && isAdmin ? (
+                  <TouchableOpacity
+                    style={styles.iconBtn}
+                    onPress={() => setPositionTarget({ userId: mid, name: isMe ? 'You' : resolvedName })}
+                    testID={`group-member-position-${mid}`}
+                  >
+                    <Feather name="award" size={20} color={Colors.primary} />
+                  </TouchableOpacity>
+                ) : null}
                 {isAdmin && !isMe && !isChiefMember ? (
                   <View style={styles.memberActions}>
                     {/* Promote / Demote (chief only for demote) */}
@@ -1070,6 +1136,24 @@ function GroupInfoInner() {
         </Pressable>
       </Modal>
 
+      {/* ----- Sub Group Position Modal ----- */}
+      {isSubGroup && conversationId ? (
+        <SubGroupPositionModal
+          visible={!!positionTarget}
+          subGroupId={conversationId}
+          userId={positionTarget?.userId || null}
+          memberName={positionTarget?.name || 'Member'}
+          currentTitle={positionTarget ? subPositionMap.get(positionTarget.userId)?.title || '' : ''}
+          currentShowInMother={positionTarget ? !!subPositionMap.get(positionTarget.userId)?.showInMother : false}
+          isChief={isChief}
+          onClose={() => {
+            setPositionTarget(null);
+            void refetchPositions?.();
+          }}
+        />
+      ) : null}
+
+
       {/* ----- Add Members Modal ----- */}
       <Modal visible={addMembersOpen} transparent animationType="slide" onRequestClose={() => setAddMembersOpen(false)}>
         <Pressable style={styles.modalBackdrop} onPress={() => setAddMembersOpen(false)}>
@@ -1314,6 +1398,17 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(120,120,120,0.15)',
   },
   reserveBadgeText: { fontSize: FontSize.xs, color: Colors.textSecondary, fontWeight: FontWeight.bold },
+  positionPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 10,
+    backgroundColor: Colors.primary,
+    maxWidth: 130,
+  },
+  positionPillText: { fontSize: FontSize.xs, color: Colors.white, fontWeight: FontWeight.bold, flexShrink: 1 },
   memberBio: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
   memberActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   iconBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },

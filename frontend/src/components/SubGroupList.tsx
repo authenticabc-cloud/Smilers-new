@@ -156,6 +156,9 @@ function SubGroupListInner({
                 <Text style={[styles.name, unread > 0 && styles.nameUnread]} numberOfLines={1}>
                   {item?.name || 'Sub group'}
                 </Text>
+                <View style={styles.subTag}>
+                  <Text style={styles.subTagText}>SUB</Text>
+                </View>
               </View>
               <Text style={[styles.sub, unread > 0 && styles.subUnread]} numberOfLines={1}>
                 {item?.lastMessageText ||
@@ -208,6 +211,13 @@ const styles = StyleSheet.create({
   mid: { flex: 1, gap: 1 },
   nameLine: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   branchIcon: { marginTop: 1 },
+  subTag: {
+    backgroundColor: Colors.textSecondary,
+    borderRadius: 6,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+  },
+  subTagText: { fontSize: 9, fontWeight: '800', color: Colors.white, letterSpacing: 0.5 },
   name: { fontSize: FontSize.base, fontWeight: FontWeight.medium, color: Colors.textPrimary, flexShrink: 1 },
   nameUnread: { fontWeight: FontWeight.bold },
   sub: { fontSize: FontSize.sm, color: Colors.textSecondary },

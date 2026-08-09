@@ -210,9 +210,14 @@ export function SubGroupsSection({
                 onPress={() => onOpenChat(id)}
                 activeOpacity={0.7}
               >
-                <Text style={styles.rowName} numberOfLines={1}>
-                  {item?.name || 'Sub group'}
-                </Text>
+                <View style={styles.rowNameLine}>
+                  <Text style={styles.rowName} numberOfLines={1}>
+                    {item?.name || 'Sub group'}
+                  </Text>
+                  <View style={styles.subTag}>
+                    <Text style={styles.subTagText}>SUB</Text>
+                  </View>
+                </View>
                 <Text style={styles.rowSub} numberOfLines={1}>
                   {pending
                     ? 'Awaiting approval'
@@ -361,7 +366,10 @@ const styles = StyleSheet.create({
   pendingAvatar: { backgroundColor: Colors.textSecondary },
   avatarText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.bold },
   rowMid: { flex: 1, gap: 2 },
-  rowName: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  rowNameLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  subTag: { backgroundColor: Colors.textSecondary, borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1 },
+  subTagText: { fontSize: 9, fontWeight: '800', color: Colors.white, letterSpacing: 0.5 },
+  rowName: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary, flexShrink: 1 },
   rowSub: { fontSize: FontSize.sm, color: Colors.textSecondary },
   pendingActions: { flexDirection: 'row', gap: 8 },
   pendBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
