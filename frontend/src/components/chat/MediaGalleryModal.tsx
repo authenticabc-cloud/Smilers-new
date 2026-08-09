@@ -22,11 +22,22 @@ import {
   setGalleryHostMounted,
   subscribeGallery,
 } from '../../lib/chat/mediaGalleryStore';
+import ZoomableImage from '../ZoomableImage';
 import { Colors } from '../../theme';
 
 export type GalleryItem = { msgId: string; type: 'image' | 'video'; msg: any };
 
-function GalleryImagePage({ msg, e2eeStatus, width }: { msg: any; e2eeStatus: any; width: number }) {
+function GalleryImagePage({
+  msg,
+  e2eeStatus,
+  width,
+  onZoomChange,
+}: {
+  msg: any;
+  e2eeStatus: any;
+  width: number;
+  onZoomChange?: (zoomed: boolean) => void;
+}) {
   const { url } = useDecryptedMediaUrl(msg, e2eeStatus);
   if (!url) {
     return (
@@ -37,7 +48,7 @@ function GalleryImagePage({ msg, e2eeStatus, width }: { msg: any; e2eeStatus: an
   }
   return (
     <View style={[styles.page, { width }]}>
-      <Image source={{ uri: url }} style={styles.media} resizeMode="contain" />
+      <ZoomableImage uri={url} enableClose={false} onZoomChange={onZoomChange} />
     </View>
   );
 }
@@ -103,6 +114,9 @@ export default function MediaGalleryModal({
   const [activeIndex, setActiveIndex] = useState(0);
   const [busy, setBusy] = useState<null | 'download' | 'share'>(null);
   const listRef = useRef<FlatList<GalleryItem>>(null);
+  // While any photo is pinch-zoomed we disable horizontal paging so the
+  // single-finger drag pans the zoomed image instead of flipping pages.
+  const [zoomActive, setZoomActive] = useState(false);
 
   useEffect(() => {
     if (controlled) return; // store not used in controlled mode
@@ -184,6 +198,7 @@ export default function MediaGalleryModal({
           data={items}
           horizontal
           pagingEnabled
+          scrollEnabled={!zoomActive}
           showsHorizontalScrollIndicator={false}
           keyExtractor={(it) => it.msgId}
           getItemLayout={(_d, i) => ({ length: width, offset: width * i, index: i })}
@@ -208,7 +223,7 @@ export default function MediaGalleryModal({
                 active={index === activeIndex}
               />
             ) : (
-              <GalleryImagePage msg={item.msg} e2eeStatus={e2eeStatus} width={width} />
+              <GalleryImagePage msg={item.msg} e2eeStatus={e2eeStatus} width={width} onZoomChange={setZoomActive} />
             )
           }
         />

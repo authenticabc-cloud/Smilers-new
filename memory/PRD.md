@@ -2415,3 +2415,8 @@ All lint clean; bundle compiles. Pinch is device-only. NOTE for button-overlay v
 
 ## iter-474 (fork) — Status/story photo pinch-zoom
 Added a fullscreen pinch-zoom preview for IMAGE stories in `app/status-view/[userId].tsx` (reuses `ZoomableImage`). Approach avoids conflict with the story tap-zones/auto-advance: `StoryContent` now reports its resolved image URI up via a new `onImageReady` prop; the viewer shows a maximize button (top bar, image stories only) → sets `paused=true` + opens a fullscreen `Modal` with ZoomableImage (pinch/pan/double-tap; close resumes the story via `closeZoom`). Styles `zoomBackdrop`/`zoomClose`. Video/text stories unaffected. Lint clean; bundle compiles. Device-only (pinch).
+
+## iter-475 (fork) — Chat photo swipe + pinch-zoom in the conversation gallery
+Swiping between all conversation photos ALREADY existed via `MediaGalleryModal` (horizontal pagingEnabled FlatList opened by `openGalleryFor(messageId)` from MediaBubble). The gallery images were static `<Image>`; added pinch-zoom:
+- `ZoomableImage` extended with `onZoomChange?(zoomed)` (reports via runOnJS on pinch-end/double-tap/reset) and `enableClose?` (default true; false = single tap does nothing, host owns close).
+- `MediaGalleryModal`: `GalleryImagePage` now renders `<ZoomableImage enableClose={false} onZoomChange={setZoomActive}>`; the pager sets `scrollEnabled={!zoomActive}` so while a photo is zoomed the single-finger drag PANS the image instead of flipping pages; zoom out (pinch-in/double-tap) re-enables swiping. Lint clean; bundle compiles. Device-only (pinch).

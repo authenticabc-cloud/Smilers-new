@@ -13,7 +13,20 @@ const AImage = Animated.createAnimatedComponent(Image);
  * Uses gesture-handler + reanimated (both already in the app). Wrapped in its
  * own GestureHandlerRootView so gestures work INSIDE the RN Modal on Android.
  */
-export default function ZoomableImage({ uri, onClose }: { uri: string; onClose?: () => void }) {
+export default function ZoomableImage({
+  uri,
+  onClose,
+  onZoomChange,
+  enableClose = true,
+}: {
+  uri: string;
+  onClose?: () => void;
+  /** Reports when the image crosses in/out of a zoomed state — used by the
+   *  gallery pager to disable horizontal paging while zoomed so pan works. */
+  onZoomChange?: (zoomed: boolean) => void;
+  /** When false, a single tap does nothing (host owns its own close button). */
+  enableClose?: boolean;
+}) {
   const { width, height } = useWindowDimensions();
   const scale = useSharedValue(1);
   const savedScale = useSharedValue(1);
@@ -21,6 +34,10 @@ export default function ZoomableImage({ uri, onClose }: { uri: string; onClose?:
   const ty = useSharedValue(0);
   const savedTx = useSharedValue(0);
   const savedTy = useSharedValue(0);
+
+  const reportZoom = (z: boolean) => {
+    onZoomChange?.(z);
+  };
 
   const resetAll = () => {
     'worklet';
@@ -30,6 +47,7 @@ export default function ZoomableImage({ uri, onClose }: { uri: string; onClose?:
     ty.value = withTiming(0);
     savedTx.value = 0;
     savedTy.value = 0;
+    runOnJS(reportZoom)(false);
   };
 
   const pinch = Gesture.Pinch()
@@ -38,7 +56,10 @@ export default function ZoomableImage({ uri, onClose }: { uri: string; onClose?:
     })
     .onEnd(() => {
       if (scale.value < 1) resetAll();
-      else savedScale.value = scale.value;
+      else {
+        savedScale.value = scale.value;
+        runOnJS(reportZoom)(scale.value > 1.05);
+      }
     });
 
   const pan = Gesture.Pan()
@@ -62,13 +83,14 @@ export default function ZoomableImage({ uri, onClose }: { uri: string; onClose?:
       } else {
         scale.value = withTiming(2.5);
         savedScale.value = 2.5;
+        runOnJS(reportZoom)(true);
       }
     });
 
   const singleTap = Gesture.Tap()
     .numberOfTaps(1)
     .onEnd(() => {
-      if (scale.value <= 1 && onClose) runOnJS(onClose)();
+      if (enableClose && scale.value <= 1 && onClose) runOnJS(onClose)();
     });
 
   const composed = Gesture.Simultaneous(pinch, pan, Gesture.Exclusive(doubleTap, singleTap));
