@@ -2404,3 +2404,11 @@ User (on device): (1) added participants can hear the first two, but the first t
 
 All four lint clean; bundle compiles. Items 1 & 2 are device-only (Stream media); item 3 pinch is device-only; item 4 verifiable on device. Test 1: 3-person call, mute state of added person on others' screens (see diagnostic).
 
+
+## iter-473 (fork) — Pinch-zoom extended to profile photos + ad image preview
+Reused `src/components/ZoomableImage.tsx` (pinch/pan/double-tap/single-tap-close) in:
+- `app/(tabs)/profile.tsx` — own profile photo viewer Modal (replaced static `<Image>`; reordered so ZoomableImage renders BEHIND the close/Save-to-gallery buttons so those stay tappable — single-tap-close only fires over non-button areas).
+- `app/user/[userId].tsx` — other user's avatar viewer Modal (image already rendered before the close/Save buttons, so order was fine).
+- `app/ads/create.tsx` — the selected Product Image preview is now tappable (`ad-image-preview`) → opens a fullscreen `Modal` with ZoomableImage + close button (`previewViewerBackdrop`/`previewViewerClose`). (Ads have no end-user fullscreen image viewer — browse cards just open the ad link — so the create-screen preview is the ad "image preview".)
+All lint clean; bundle compiles. Pinch is device-only. NOTE for button-overlay viewers: ZoomableImage must be the FIRST child so action buttons (rendered after) stay on top/tappable.
+

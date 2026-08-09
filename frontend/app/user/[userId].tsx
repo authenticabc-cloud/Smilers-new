@@ -43,6 +43,7 @@ import FilterIndicator from '../../src/components/FilterIndicator';
 import GroupInCommonRow from '../../src/components/user-profile/GroupInCommonRow';
 import MediaGrid, { MediaTabBtn } from '../../src/components/user-profile/MediaGrid';
 import MediaGalleryModal, { type GalleryItem } from '../../src/components/chat/MediaGalleryModal';
+import ZoomableImage from '../../src/components/ZoomableImage';
 import { useConversationE2EE } from '../../src/hooks/useConversationE2EE';
 import { shareMessage } from '../../src/lib/messageMedia';
 import type { MediaTab } from '../../src/components/user-profile/types';
@@ -974,7 +975,7 @@ export default function UserProfileScreen() {
       >
         <View style={styles.previewBackdrop}>
           {avatarUri ? (
-            <Image source={{ uri: avatarUri }} style={styles.previewImage} resizeMode="contain" />
+            <ZoomableImage uri={avatarUri} onClose={() => setAvatarViewerOpen(false)} />
           ) : null}
           <TouchableOpacity
             style={[styles.previewClose, { top: insets.top + 12 }]}

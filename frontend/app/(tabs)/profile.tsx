@@ -23,6 +23,7 @@ import { useConvex, useMutation, useQuery } from 'convex/react';
 import * as ImagePicker from 'expo-image-picker';
 import { pickImageLibrary, pickCamera } from '../../src/lib/nativePickers';
 import PhotoEditor from '../../src/components/photo-editor/PhotoEditor';
+import ZoomableImage from '../../src/components/ZoomableImage';
 import * as MediaLibrary from 'expo-media-library';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import Header from '../../src/components/Header';
@@ -344,6 +345,9 @@ export default function ProfileScreen() {
           onRequestClose={() => setViewerOpen(false)}
         >
           <View style={styles.viewerBackdrop}>
+            {avatarUri ? (
+              <ZoomableImage uri={avatarUri} onClose={() => setViewerOpen(false)} />
+            ) : null}
             <TouchableOpacity
               style={styles.viewerClose}
               onPress={() => setViewerOpen(false)}
@@ -352,9 +356,6 @@ export default function ProfileScreen() {
             >
               <Feather name="x" size={26} color={Colors.white} />
             </TouchableOpacity>
-            {avatarUri ? (
-              <Image source={{ uri: avatarUri }} style={styles.viewerImage} resizeMode="contain" />
-            ) : null}
             <TouchableOpacity
               style={styles.viewerDownload}
               onPress={saveProfilePhoto}

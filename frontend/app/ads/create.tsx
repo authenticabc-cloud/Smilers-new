@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   Alert,
   Image,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -17,6 +18,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { pickImageLibrary } from '../../src/lib/nativePickers';
 import Header from '../../src/components/Header';
 import CountrySelectorModal from '../../src/components/CountrySelectorModal';
+import ZoomableImage from '../../src/components/ZoomableImage';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import { api } from '../../src/convexApi';
 import { uploadFile } from '../../src/lib/uploadFile';
@@ -37,6 +39,7 @@ export default function CreateAdScreen() {
   const [externalLink, setExternalLink] = useState('');
   const [targetCountries, setTargetCountries] = useState<string[]>([]);
   const [imageAsset, setImageAsset] = useState<{ uri: string; mimeType?: string; fileSize?: number } | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const targetSummary = useMemo(() => {
     if (!targetCountries.length) return 'Worldwide';
@@ -123,7 +126,9 @@ export default function CreateAdScreen() {
         <View style={styles.section}>
           <Text style={styles.label}>Product Image (optional)</Text>
           {imageAsset?.uri ? (
-            <Image source={{ uri: imageAsset.uri }} style={styles.previewImage} resizeMode="cover" />
+            <TouchableOpacity activeOpacity={0.85} onPress={() => setPreviewOpen(true)} testID="ad-image-preview">
+              <Image source={{ uri: imageAsset.uri }} style={styles.previewImage} resizeMode="cover" />
+            </TouchableOpacity>
           ) : null}
           <TouchableOpacity style={styles.uploadZone} onPress={pickImage} activeOpacity={0.7} testID="ad-pick-image">
             <Feather name="upload" size={28} color={Colors.textMuted} />
@@ -167,6 +172,22 @@ export default function CreateAdScreen() {
         onApply={setTargetCountries}
         onClose={() => setShowCountryModal(false)}
       />
+
+      <Modal visible={previewOpen} transparent animationType="fade" onRequestClose={() => setPreviewOpen(false)}>
+        <View style={styles.previewViewerBackdrop}>
+          {imageAsset?.uri ? (
+            <ZoomableImage uri={imageAsset.uri} onClose={() => setPreviewOpen(false)} />
+          ) : null}
+          <TouchableOpacity
+            style={styles.previewViewerClose}
+            onPress={() => setPreviewOpen(false)}
+            hitSlop={12}
+            testID="ad-image-preview-close"
+          >
+            <Feather name="x" size={26} color={Colors.white} />
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -245,6 +266,18 @@ const styles = StyleSheet.create({
   },
   flexOne: { flex: 1 },
   previewImage: { width: '100%', height: 200, borderRadius: Radius.lg, marginBottom: Spacing.sm },
+  previewViewerBackdrop: { flex: 1, backgroundColor: '#000' },
+  previewViewerClose: {
+    position: 'absolute',
+    top: 48,
+    right: 20,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
   submitBtn: {
     minHeight: 48,
     marginTop: Spacing.xl,
