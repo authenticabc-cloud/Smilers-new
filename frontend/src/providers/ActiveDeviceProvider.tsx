@@ -55,6 +55,36 @@ type Phase = 'checking' | 'active' | 'takeover_prompt' | 'evicted' | 'kept_out';
 /** Prompt Face ID / biometrics. Returns true when the user passes (or when no
  * biometric hardware is enrolled — we don't want to hard-lock the user out on a
  * device without Face ID; the account phone-OTP already gates initial access). */
+/** Human-friendly platform label from the contract's raw platform string. */
+function platformLabel(platform?: string | null): string | null {
+  switch ((platform || '').toLowerCase()) {
+    case 'ios':
+      return 'iPhone / iPad';
+    case 'android':
+      return 'Android';
+    case 'web':
+      return 'Web';
+    default:
+      return null;
+  }
+}
+
+/** "just now" / "3 min ago" / "2 hr ago" / "yesterday" from an ISO timestamp. */
+function relativeTime(iso?: string | null): string | null {
+  if (!iso) return null;
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return null;
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (secs < 45) return 'just now';
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs} hr ago`;
+  const days = Math.round(hrs / 24);
+  if (days === 1) return 'yesterday';
+  return `${days} days ago`;
+}
+
 async function requireFaceId(): Promise<boolean> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -220,9 +250,24 @@ export function ActiveDeviceProvider({ children }: { children: React.ReactNode }
           <Text style={styles.emoji}>📱</Text>
           <Text style={styles.title}>Already signed in elsewhere</Text>
           <Text style={styles.body}>
-            Your Smilers account is active on {incumbent?.deviceName || 'another device'}. To use it
-            here, confirm it&apos;s you — the other device will be signed out.
+            Your Smilers account is active on another device. To use it here, confirm it&apos;s you —
+            the other device will be signed out.
           </Text>
+
+          <View style={styles.deviceCard} testID="active-device-incumbent-detail">
+            <Text style={styles.deviceIcon}>💻</Text>
+            <View style={styles.deviceInfo}>
+              <Text style={styles.deviceName} numberOfLines={1}>
+                {incumbent?.deviceName || 'Another device'}
+              </Text>
+              <Text style={styles.deviceMeta} numberOfLines={1}>
+                {[platformLabel(incumbent?.platform), relativeTime(incumbent?.lastHeartbeatAt) && `Active ${relativeTime(incumbent?.lastHeartbeatAt)}`]
+                  .filter(Boolean)
+                  .join('  •  ') || 'Currently signed in'}
+              </Text>
+            </View>
+          </View>
+
           <TouchableOpacity
             style={[styles.primaryBtn, busy && styles.btnDisabled]}
             onPress={doTakeover}
@@ -291,6 +336,22 @@ const styles = StyleSheet.create({
     zIndex: 9999,
   },
   emoji: { fontSize: 56 },
+  deviceCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    gap: Spacing.md,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    marginBottom: Spacing.md,
+    ...Shadow.sm,
+  },
+  deviceIcon: { fontSize: 30 },
+  deviceInfo: { flex: 1, gap: 2 },
+  deviceName: { fontSize: FontSize.lg, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
+  deviceMeta: { fontSize: FontSize.sm, color: Colors.textSecondary },
   title: {
     fontSize: FontSize.xxl,
     fontWeight: FontWeight.bold,
