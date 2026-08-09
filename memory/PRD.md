@@ -1,5 +1,11 @@
 # Smilers Mobile App — PRD
 
+## iter-473 (Jun 2026): Sub Groups — "You left" confirmation toast
+
+On successful leave (`app/group/[id].tsx`), instead of navigating back immediately, we now set `leaveToast` = `You left "<name>"` and delay `router.back()` by 1.3s so a dark rounded toast (check-circle, safe-area aware `bottom: insets.bottom + 32`) is visible first. Added `Shadow` to the theme import. Works for both groups and sub groups. Lint clean; frontend restarted.
+
+
+
 ## iter-472 (Jun 2026): Sub Groups — clear "Leave Sub Group" labelling
 
 The Leave action already worked for sub groups (they reuse `conversations.leaveGroup`), but was labelled generically. In `app/group/[id].tsx`, the footer button and its confirm alert now read "Leave Sub Group" / "Leave sub group?" when `isSubGroup`, and the chief's delete button reads "Delete Sub Group Permanently". Any member can leave without needing an admin. Lint clean; frontend restarted.

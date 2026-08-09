@@ -54,7 +54,7 @@ import { SubGroupPositionModal } from '../../src/components/SubGroupPositionModa
 import { BulkPositionsModal, type BulkPositionMember } from '../../src/components/BulkPositionsModal';
 import { SubGroupAppearancePicker } from '../../src/components/SubGroupAppearancePicker';
 import { ReorderBearersModal } from '../../src/components/ReorderBearersModal';
-import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
+import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../src/theme';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { getResolvedDisplayName, getSavedContactRecord } from '../../src/lib/displayName';
 
@@ -442,6 +442,7 @@ function GroupInfoInner() {
   // Sub-group synced icon/color (conversations.updateGroup).
   const subAppearance = (conversation?.appearance || {}) as { emoji?: string; color?: string };
   const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const [leaveToast, setLeaveToast] = useState<string | null>(null);
   const [apprEmoji, setApprEmoji] = useState<string | undefined>(undefined);
   const [apprColor, setApprColor] = useState<string | undefined>(undefined);
   const [apprSaving, setApprSaving] = useState(false);
@@ -722,7 +723,10 @@ function GroupInfoInner() {
         style: 'destructive',
         onPress: async () => {
           const ok = await callMutation('leaveGroup', leaveGroupM, { conversationId });
-          if (ok) router.back();
+          if (ok) {
+            setLeaveToast(`You left "${groupName}"`);
+            setTimeout(() => router.back(), 1300);
+          }
         },
       },
     ]);
@@ -1476,6 +1480,15 @@ function GroupInfoInner() {
           <ActivityIndicator size="large" color={Colors.primary} />
         </View>
       ) : null}
+
+      {leaveToast ? (
+        <View pointerEvents="none" style={[styles.leaveToast, { bottom: insets.bottom + 32 }]} testID="leave-toast">
+          <Feather name="check-circle" size={18} color={Colors.white} />
+          <Text style={styles.leaveToastText} numberOfLines={2}>
+            {leaveToast}
+          </Text>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -1669,6 +1682,20 @@ const styles = StyleSheet.create({
   apprHint: { fontSize: FontSize.sm, color: Colors.textSecondary },
   apprSaveBtn: { backgroundColor: Colors.primary, paddingVertical: 14, borderRadius: Radius.pill, alignItems: 'center' },
   apprSaveText: { color: Colors.white, fontSize: FontSize.lg, fontWeight: FontWeight.bold },
+  leaveToast: {
+    position: 'absolute',
+    left: Spacing.xl,
+    right: Spacing.xl,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: 'rgba(20,20,20,0.92)',
+    paddingVertical: 14,
+    paddingHorizontal: Spacing.lg,
+    borderRadius: Radius.md,
+    ...Shadow.md,
+  },
+  leaveToastText: { flex: 1, color: Colors.white, fontSize: FontSize.base, fontWeight: FontWeight.medium },
   manageBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   manageBtnText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.semibold },
   bearerAvatar: {
