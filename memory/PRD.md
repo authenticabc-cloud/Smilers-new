@@ -1,5 +1,21 @@
 # Smilers Mobile App — PRD
 
+## iter-468 (Jun 2026): Sub Groups — Search, Move/Add members, Office Bearers overview + seniority sort (Reorder needs backend)
+
+SUB-GROUP SEARCH (`SubGroupsSection`): a search box appears above the sub-group list once there are ≥4 sub groups; filters `listForParent` rows client-side by name, with clear button + "no match" empty state.
+
+MOVE/ADD MEMBERS (`SubGroupsSection`): each ACTIVE sub-group row (mother admins) gets a `person-add` icon → modal that queries `conversations.getGroupMembers({conversationId: subGroupId})` to know existing members, lists mother members NOT already in the sub group, multi-select, and bulk-calls `subGroups.addMember` per selection (Promise loop, failure count surfaced). NOTE: members stay in the mother group — the contract requires sub-group members to remain mother members, so this is add-to-sub-group (clarified in the sheet copy), not a remove-from-mother "move".
+
+OFFICE BEARERS OVERVIEW (`app/group/[id].tsx`): inside a SUB group, a new "OFFICE BEARERS (N)" section (above MEMBERS) lists every member who holds a position — avatar + name + ribbon title pill (+ eye icon when shown in mother) — ranked by seniority. Built from `subPositionMap` joined with a `nameById` map.
+
+SENIORITY SORT (interim for Reorder): added module-level `POSITION_RANK` (President→Vice President→Chairman→Secretary→Treasurer→Organizer, custom last alphabetical) + `sortTitles()`; applied to `motherPositionMap` pills and the office-bearers list so titles order sensibly everywhere.
+
+⚠️ REORDER POSITIONS (Chief-Admin manual ranking) NOT built — the contract's `subGroupPositions` / `positionsForMother` have NO `order`/`rank` field, and positionsForMother is per-viewer, so a custom rank can't sync to other members. Needs the web team to add an `order` field to `subGroupPositions` + a `setPositionOrder` mutation. Interim = automatic seniority sort above.
+
+Lint clean; app boots to Sign In. ⚠️ Authenticated + live-backend — verify on a signed-in session/device.
+
+
+
 ## iter-467 (Jun 2026): Sub Groups — Collapse toggle (Groups tab) + Leaders one-tap shortcut
 
 COLLAPSE TOGGLE (`src/components/SubGroupList.tsx`): the nested sub-group block now has a tappable header row ("▾ N sub groups" / "▸ N sub groups") that collapses/expands the mother group's sub groups on the Groups tab. State is persisted per mother-group id in AsyncStorage (`smilers.subgroups.collapsed.v1` via `readStoredString`/`writeStoredString`, module-cached map). Default = expanded (1b). When collapsed, the header surfaces a red badge with the SUM of unread across the caller's sub groups + a small primary dot when pending approvals exist, so nothing important is hidden.

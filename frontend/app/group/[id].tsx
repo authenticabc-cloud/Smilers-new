@@ -87,6 +87,26 @@ function getInitials(name?: string): string {
   return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
 }
 
+// Automatic seniority ordering for position titles (President highest). Custom
+// titles fall to the end, ordered alphabetically. NOTE: true Chief-Admin manual
+// ranking needs a backend `order` field on subGroupPositions (not in the current
+// contract) — this deterministic seniority sort is the interim.
+const POSITION_RANK: Record<string, number> = {
+  president: 0,
+  'vice president': 1,
+  chairman: 2,
+  chairperson: 2,
+  secretary: 3,
+  treasurer: 4,
+  organizer: 5,
+};
+function positionRank(title: string): number {
+  return POSITION_RANK[String(title || '').trim().toLowerCase()] ?? 100;
+}
+function sortTitles(titles: string[]): string[] {
+  return [...titles].sort((a, b) => positionRank(a) - positionRank(b) || a.localeCompare(b));
+}
+
 function extractConvexError(e: any): string {
   const code = e?.data?.code || e?.code || '';
   const message = e?.data?.message || e?.message || 'Unknown error';
@@ -408,10 +428,29 @@ function GroupInfoInner() {
     const rec = (motherPositions && typeof motherPositions === 'object' ? motherPositions : {}) as Record<string, any[]>;
     Object.keys(rec).forEach((uid) => {
       const titles = (Array.isArray(rec[uid]) ? rec[uid] : []).map((e: any) => String(e?.title)).filter(Boolean);
-      if (titles.length) map.set(String(uid), titles);
+      if (titles.length) map.set(String(uid), sortTitles(titles));
     });
     return map;
   }, [motherPositions]);
+
+  // Name lookup for the Office Bearers overview.
+  const nameById = useMemo(() => {
+    const map = new Map<string, string>();
+    (Array.isArray(members) ? members : []).forEach((m: any) => {
+      const uid = getContactUserId(m);
+      if (uid) map.set(uid, displayNameForMember(m));
+    });
+    return map;
+  }, [members, displayNameForMember]);
+
+  // Office bearers = sub-group members who hold a position, ranked by seniority.
+  const officeBearers = useMemo(() => {
+    const list: { userId: string; name: string; title: string; showInMother: boolean }[] = [];
+    subPositionMap.forEach((val, uid) => {
+      list.push({ userId: uid, name: nameById.get(uid) || 'Member', title: val.title, showInMother: val.showInMother });
+    });
+    return list.sort((a, b) => positionRank(a.title) - positionRank(b.title) || a.name.localeCompare(b.name));
+  }, [subPositionMap, nameById]);
 
   const [positionTarget, setPositionTarget] = useState<{ userId: string; name: string } | null>(null);
 
@@ -780,6 +819,30 @@ function GroupInfoInner() {
             onOpenChat={(sid) => router.push(`/chat/${sid}` as any)}
             onManage={(sid) => router.push(`/group/${sid}` as any)}
           />
+        ) : null}
+
+        {/* OFFICE BEARERS (sub group only) */}
+        {isSubGroup && officeBearers.length > 0 ? (
+          <View style={styles.section} testID="office-bearers-section">
+            <Text style={styles.sectionLabel}>OFFICE BEARERS ({officeBearers.length})</Text>
+            {officeBearers.map((ob) => (
+              <View key={ob.userId} style={styles.bearerRow} testID={`office-bearer-${ob.userId}`}>
+                <View style={styles.bearerAvatar}>
+                  <Text style={styles.memberAvatarText}>{getInitials(ob.name)}</Text>
+                </View>
+                <Text style={styles.bearerName} numberOfLines={1}>
+                  {ob.userId === myId ? 'You' : ob.name}
+                </Text>
+                <View style={styles.positionPill}>
+                  <Ionicons name="ribbon" size={11} color={Colors.white} />
+                  <Text style={styles.positionPillText} numberOfLines={1}>
+                    {ob.title}
+                  </Text>
+                  {ob.showInMother ? <Ionicons name="eye" size={10} color={Colors.white} /> : null}
+                </View>
+              </View>
+            ))}
+          </View>
         ) : null}
 
         {/* MEMBERS */}
@@ -1417,6 +1480,16 @@ const styles = StyleSheet.create({
     maxWidth: 130,
   },
   positionPillText: { fontSize: FontSize.xs, color: Colors.white, fontWeight: FontWeight.bold, flexShrink: 1 },
+  bearerRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, paddingVertical: 8 },
+  bearerAvatar: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bearerName: { flex: 1, fontSize: FontSize.base, fontWeight: FontWeight.medium, color: Colors.textPrimary },
   memberBio: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
   memberActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   iconBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
