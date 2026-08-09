@@ -1,5 +1,22 @@
 # Smilers Mobile App — PRD
 
+## iter-465 (Jun 2026): Sub Groups (groups within groups) — native UI milestones 1+2 (nesting + create) + enabled A/B flags
+
+Web team shipped & PUBLISHED the `subGroups.*` Convex module (foundation + positions + unread rollup). Contract fetched from `https://smilers-app.onhercules.app/native-sub-groups-contract.json` (v4). A sub group is a normal group conversation with `parentConversationId`; reuses ALL existing group functions (chat/calls/media/admin/E2EE) via the sub group's `_id`. Two new conversation fields: `parentConversationId`, `subGroupStatus` ('pending'|'active').
+
+BUILT THIS PASS (user chose scope 2b = nesting + create now, positions next; 1b = sub groups nested UNDER mother row, never standalone; 3b = also flip A/B flags):
+- NEW `src/components/SubGroupList.tsx`: renders sub groups NESTED under each mother-group row in the Groups tab (per-row live subscription to `subGroups.listForParent`, same pattern as GroupApprovalBadge). Active sub groups the caller belongs to render as indented rows (own unread badge from `unreadCounts[subGroupId]`, tap → `/chat/[subId]`). Pending ones (returned by backend only to creator/mother-admin) show Approve/Reject (`subGroups.approve`/`reject`). Excluded from `listGroups` by backend so they never appear standalone. Wired into `app/(tabs)/groups.tsx` renderItem (wrapped rows in a `<View>` + `<SubGroupList>` for both the unread-swipe and normal branches). Mother row keeps its aggregated badge — backend already sums sub-group unreads, so NO client double-count.
+- NEW `src/components/SubGroupsSection.tsx`: "Sub Groups" block in the mother Group Info screen (`app/group/[id].tsx`, shown only when `!conversation.parentConversationId` — can't nest under a sub group). Create modal: name + optional description + multi-select member picker RESTRICTED to mother-group members (`motherMembers` derived via `displayNameForMember`/`getContactUserId`). `subGroups.create` → admins get 'active' instantly, non-admins get 'pending' ("Request sub group" + awaiting-approval alert). Lists sub groups with Approve (admins) / Reject / cancel; tap → chat, gear → `/group/[subId]` to manage. Creator becomes Chief Admin + mother's admin ratio applies (backend-enforced).
+- Reqs 3 & 10 (everything-is-a-group incl. voice/video calls) are AUTOMATIC — the sub group's `_id` flows through the existing group chat/call/admin screens.
+
+FLAGS FLIPPED in `frontend/.env` (web team said A/B are live): `EXPO_PUBLIC_MARK_UNREAD_ENABLED=true`, `EXPO_PUBLIC_BATCH_TYPING_ENABLED=true` (backing `messages.markUnread` + `typing.getTypingForConversations` deployed), and NEW `EXPO_PUBLIC_SUB_GROUPS_ENABLED=true`.
+
+STILL OPEN (next pass): Positions milestone (req 5) — `setPosition`/`setPositionVisibility`/`listPositions` inside the sub-group info + `positionsForMother` labels in the mother member list.
+
+Lint clean; app boots to Sign In (all sub-group UI is authenticated + live-backend). ⚠️ Full flow (nesting, create, approve, unread rollup, calls) needs an authenticated session / real device — automated Google-OIDC login isn't feasible here, so user verification required.
+
+
+
 ## iter-464 (Jun 2026): One-active-device policy — synced client to web team's live `deviceSessions.*` contract + enabled flag
 
 Web team shipped `native-one-active-device-contract.json` (5 Convex fns). The contract's MODEL differs fundamentally from the iter-458 scaffold: there is NO "old device approves" prompt. The NEW device does Face ID and calls `confirmTakeover` UNILATERALLY, which revokes all other devices; the OLD device learns it's out via `heartbeat` → `{revoked:true}`.

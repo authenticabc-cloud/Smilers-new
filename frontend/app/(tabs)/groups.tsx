@@ -16,6 +16,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import GroupSwipeRow from '../../src/components/GroupSwipeRow';
 import { formatTypingLabel } from '../../src/components/ConversationRow';
 import { GroupApprovalBadge } from '../../src/components/GroupApprovalBadge';
+import { SubGroupList } from '../../src/components/SubGroupList';
 import DraggableFlatList, { ScaleDecorator, type RenderItemParams } from 'react-native-draggable-flatlist';
 import UndoSnackbar from '../../src/components/UndoSnackbar';
 import * as Haptics from 'expo-haptics';
@@ -734,22 +735,43 @@ export default function GroupsScreen() {
           );
           if (isGroupsTab && rowUnread > 0 && itemId) {
             return (
-              <GroupSwipeRow
-                onMarkRead={async () => {
-                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-                  markLocallyRead(itemId, conversationLastActivityMs(item));
-                  try {
-                    await markReadM({ conversationId: itemId });
-                  } catch {}
-                  setUndoReadId(itemId);
-                  try {
-                    const { clearConversationNotifications } = require('../../src/push/notifeeMessageDisplay');
-                    await clearConversationNotifications(itemId);
-                  } catch {}
-                }}
-              >
+              <View>
+                <GroupSwipeRow
+                  onMarkRead={async () => {
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+                    markLocallyRead(itemId, conversationLastActivityMs(item));
+                    try {
+                      await markReadM({ conversationId: itemId });
+                    } catch {}
+                    setUndoReadId(itemId);
+                    try {
+                      const { clearConversationNotifications } = require('../../src/push/notifeeMessageDisplay');
+                      await clearConversationNotifications(itemId);
+                    } catch {}
+                  }}
+                >
+                  {rowEl}
+                </GroupSwipeRow>
+                <SubGroupList
+                  parentConversationId={itemId}
+                  enabled={isGroupsTab}
+                  getUnread={effUnread}
+                  onOpen={(id) => router.push(`/chat/${id}` as any)}
+                />
+              </View>
+            );
+          }
+          if (isGroupsTab && itemId) {
+            return (
+              <View>
                 {rowEl}
-              </GroupSwipeRow>
+                <SubGroupList
+                  parentConversationId={itemId}
+                  enabled={isGroupsTab}
+                  getUnread={effUnread}
+                  onOpen={(id) => router.push(`/chat/${id}` as any)}
+                />
+              </View>
             );
           }
           return rowEl;

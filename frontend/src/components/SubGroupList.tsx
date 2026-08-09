@@ -1,0 +1,230 @@
+import React, { useCallback, useMemo, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useMutation } from 'convex/react';
+import { api } from '../convexApi';
+import { useReactiveSafeConvexQuery } from '../hooks/useReactiveSafeConvexQuery';
+import { Colors, FontSize, FontWeight, Radius, Spacing } from '../theme';
+
+const SUB_GROUPS_ENABLED = process.env.EXPO_PUBLIC_SUB_GROUPS_ENABLED !== 'false';
+
+function subId(item: any): string | null {
+  const v = item?._id || item?.id || item?.conversationId;
+  return v ? String(v) : null;
+}
+
+/**
+ * SubGroupList — renders the sub groups nested UNDER a mother-group row in the
+ * Groups tab. Sub groups never appear as standalone rows; they only show here,
+ * and only to users the backend allows to see them (active ones they belong to,
+ * plus pending ones the caller created or can approve as a mother-group admin).
+ *
+ * Backend contract: subGroups.listForParent / approve / reject.
+ * Each mother row owns its own live subscription (mounted only while on-screen).
+ */
+function SubGroupListInner({
+  parentConversationId,
+  enabled,
+  getUnread,
+  onOpen,
+}: {
+  parentConversationId: string;
+  enabled: boolean;
+  getUnread: (item: any) => number;
+  onOpen: (id: string) => void;
+}) {
+  const { data: subGroups } = useReactiveSafeConvexQuery<any[]>(
+    (api as any).subGroups?.listForParent,
+    parentConversationId ? { parentConversationId } : {},
+    [],
+    SUB_GROUPS_ENABLED && enabled && !!parentConversationId,
+  );
+
+  const approveM = useMutation((api as any).subGroups?.approve);
+  const rejectM = useMutation((api as any).subGroups?.reject);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const rows = useMemo(() => (Array.isArray(subGroups) ? subGroups.filter((s) => subId(s)) : []), [subGroups]);
+
+  const onApprove = useCallback(
+    async (id: string) => {
+      if (!approveM) return;
+      setBusyId(id);
+      try {
+        await approveM({ subGroupId: id });
+      } catch (e: any) {
+        Alert.alert('Could not approve', e?.data?.message || e?.message || 'Only a mother-group admin can approve.');
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [approveM],
+  );
+
+  const onReject = useCallback(
+    (id: string, name: string) => {
+      if (!rejectM) return;
+      Alert.alert('Reject sub group?', `"${name}" will be removed.`, [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reject',
+          style: 'destructive',
+          onPress: async () => {
+            setBusyId(id);
+            try {
+              await rejectM({ subGroupId: id });
+            } catch (e: any) {
+              Alert.alert('Could not reject', e?.data?.message || e?.message || 'Please try again.');
+            } finally {
+              setBusyId(null);
+            }
+          },
+        },
+      ]);
+    },
+    [rejectM],
+  );
+
+  if (rows.length === 0) return null;
+
+  return (
+    <View style={styles.wrap} testID={`sub-groups-${parentConversationId}`}>
+      {rows.map((item) => {
+        const id = subId(item)!;
+        const pending = item?.subGroupStatus === 'pending';
+        const unread = pending ? 0 : getUnread(item);
+        const memberCount = item?.memberCount || 0;
+        const initial = (item?.name || 'S').charAt(0).toUpperCase();
+        const busy = busyId === id;
+
+        if (pending) {
+          return (
+            <View key={id} style={[styles.row, styles.pendingRow]} testID={`sub-group-pending-${id}`}>
+              <View style={styles.connector} />
+              <View style={[styles.avatar, styles.pendingAvatar]}>
+                <Ionicons name="hourglass-outline" size={14} color={Colors.white} />
+              </View>
+              <View style={styles.mid}>
+                <Text style={styles.name} numberOfLines={1}>
+                  {item?.name || 'Sub group'}
+                </Text>
+                <Text style={styles.pendingLabel} numberOfLines={1}>
+                  Awaiting approval
+                </Text>
+              </View>
+              {busy ? (
+                <ActivityIndicator size="small" color={Colors.primary} />
+              ) : (
+                <View style={styles.pendingActions}>
+                  <TouchableOpacity
+                    onPress={() => onApprove(id)}
+                    style={[styles.pendBtn, styles.approveBtn]}
+                    testID={`sub-group-approve-${id}`}
+                    hitSlop={8}
+                  >
+                    <Ionicons name="checkmark" size={16} color={Colors.white} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => onReject(id, item?.name || 'Sub group')}
+                    style={[styles.pendBtn, styles.rejectBtn]}
+                    testID={`sub-group-reject-${id}`}
+                    hitSlop={8}
+                  >
+                    <Ionicons name="close" size={16} color={Colors.white} />
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+          );
+        }
+
+        return (
+          <TouchableOpacity
+            key={id}
+            style={styles.row}
+            onPress={() => onOpen(id)}
+            activeOpacity={0.7}
+            testID={`sub-group-${id}`}
+          >
+            <View style={styles.connector} />
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>{initial}</Text>
+            </View>
+            <View style={styles.mid}>
+              <View style={styles.nameLine}>
+                <Ionicons name="git-branch-outline" size={12} color={Colors.textSecondary} style={styles.branchIcon} />
+                <Text style={[styles.name, unread > 0 && styles.nameUnread]} numberOfLines={1}>
+                  {item?.name || 'Sub group'}
+                </Text>
+              </View>
+              <Text style={[styles.sub, unread > 0 && styles.subUnread]} numberOfLines={1}>
+                {item?.lastMessageText ||
+                  (memberCount > 0 ? `${memberCount} member${memberCount === 1 ? '' : 's'}` : 'Tap to open')}
+              </Text>
+            </View>
+            {unread > 0 ? (
+              <View style={styles.unreadBadge} testID={`sub-group-unread-${id}`}>
+                <Text style={styles.unreadBadgeText}>{unread > 99 ? '99+' : unread}</Text>
+              </View>
+            ) : null}
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
+export const SubGroupList = React.memo(SubGroupListInner);
+
+const AV = 30;
+const styles = StyleSheet.create({
+  wrap: { paddingLeft: Spacing.xl, backgroundColor: Colors.background },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingRight: Spacing.lg,
+    paddingLeft: Spacing.sm,
+    gap: Spacing.sm,
+  },
+  pendingRow: { opacity: 0.95 },
+  connector: {
+    width: 2,
+    height: AV,
+    backgroundColor: Colors.border || '#E5E1D8',
+    borderRadius: 1,
+    marginRight: 2,
+  },
+  avatar: {
+    width: AV,
+    height: AV,
+    borderRadius: AV / 2,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pendingAvatar: { backgroundColor: Colors.textSecondary },
+  avatarText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.bold },
+  mid: { flex: 1, gap: 1 },
+  nameLine: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  branchIcon: { marginTop: 1 },
+  name: { fontSize: FontSize.base, fontWeight: FontWeight.medium, color: Colors.textPrimary, flexShrink: 1 },
+  nameUnread: { fontWeight: FontWeight.bold },
+  sub: { fontSize: FontSize.sm, color: Colors.textSecondary },
+  subUnread: { color: Colors.textPrimary, fontWeight: FontWeight.medium },
+  pendingLabel: { fontSize: FontSize.sm, color: Colors.textSecondary, fontStyle: 'italic' },
+  pendingActions: { flexDirection: 'row', gap: 6 },
+  pendBtn: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  approveBtn: { backgroundColor: Colors.success || '#2E7D32' },
+  rejectBtn: { backgroundColor: Colors.danger || '#E53935' },
+  unreadBadge: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: Colors.danger || '#E53935',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  unreadBadgeText: { color: Colors.white, fontSize: 11, fontWeight: '700' },
+});

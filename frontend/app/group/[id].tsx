@@ -49,6 +49,7 @@ import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
+import { SubGroupsSection } from '../../src/components/SubGroupsSection';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { getResolvedDisplayName, getSavedContactRecord } from '../../src/lib/displayName';
@@ -354,6 +355,21 @@ function GroupInfoInner() {
       return String(a.name || '').localeCompare(String(b.name || ''));
     });
   }, [members, myId, chiefAdminId, adminIds]);
+
+  // Sub groups: only top-level groups can contain sub groups. The member picker
+  // is restricted to this (mother) group's members per the backend contract.
+  const isTopLevelGroup = !conversation?.parentConversationId;
+  const motherMembers = useMemo(
+    () =>
+      (Array.isArray(members) ? members : [])
+        .map((m: any) => {
+          const uid = getContactUserId(m);
+          if (!uid) return null;
+          return { userId: uid, name: displayNameForMember(m) };
+        })
+        .filter(Boolean) as { userId: string; name: string }[],
+    [members, displayNameForMember],
+  );
 
   const suspendedMap = useMemo(() => {
     const map = new Map<string, any>();
@@ -706,6 +722,18 @@ function GroupInfoInner() {
               />
             ) : null}
           </View>
+        ) : null}
+
+        {/* SUB GROUPS */}
+        {isTopLevelGroup && conversationId ? (
+          <SubGroupsSection
+            parentConversationId={conversationId}
+            motherMembers={motherMembers}
+            isMotherAdmin={isAdmin}
+            myId={myId}
+            onOpenChat={(sid) => router.push(`/chat/${sid}` as any)}
+            onManage={(sid) => router.push(`/group/${sid}` as any)}
+          />
         ) : null}
 
         {/* MEMBERS */}
