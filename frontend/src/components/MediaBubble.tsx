@@ -38,6 +38,7 @@ import {
   getTextSize,
 } from '../lib/chatAppearance';
 import { Colors, FontSize, FontWeight, Radius } from '../theme';
+import ZoomableImage from './ZoomableImage';
 import BubbleErrorBoundary from './BubbleErrorBoundary';
 import { getMessageDurationSec } from '../hooks/useResolvedStorageUrl';
 import { useDecryptedMediaUrl } from '../hooks/useDecryptedMediaUrl';
@@ -938,9 +939,9 @@ function ImageViewer({
   return (
     <Modal visible={visible} transparent={false} animationType="fade" onRequestClose={onClose}>
       <View style={styles.viewerWrap} testID="media-viewer">
-        <Pressable style={styles.viewerBackdrop} onPress={onClose}>
-          <Image source={{ uri }} style={styles.viewerImage} resizeMode="contain" />
-        </Pressable>
+        <View style={styles.viewerBackdrop}>
+          <ZoomableImage uri={uri} onClose={onClose} />
+        </View>
         <TouchableOpacity style={styles.viewerClose} onPress={onClose} hitSlop={12} testID="media-viewer-close">
           <Feather name="x" size={28} color={Colors.white} />
         </TouchableOpacity>

@@ -349,6 +349,11 @@ export default function ChatScreen() {
   // because a non-inverted virtualized list renders rows incrementally, so a
   // single scrollToEnd lands partway). See the initial-scroll effect below.
   const initialScrollDoneRef = useRef(false);
+  // iter-472: keep the message list hidden (opacity 0) until it has snapped to
+  // the newest message, so opening a conversation LANDS on the latest message
+  // instead of showing a visible scroll-down as virtualized batches render.
+  const [listReady, setListReady] = useState(false);
+  const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // iter-274: true while the user is actively dragging/flinging the list.
   // The auto-snap-to-bottom in onContentSizeChange must NOT fire during an
   // active scroll — virtualization + media loading change contentSize on
@@ -1654,6 +1659,7 @@ export default function ChatScreen() {
       (typeof initialSearchMid === 'string' && !!initialSearchMid);
     if (wantsJump) {
       initialScrollDoneRef.current = true; // jump effects own positioning
+      setListReady(true);
       return;
     }
     let attempts = 0;
@@ -1662,6 +1668,7 @@ export default function ChatScreen() {
       // Stop fighting the user the moment they start scrolling themselves.
       if (isUserScrollingRef.current) {
         initialScrollDoneRef.current = true;
+        setListReady(true);
         return;
       }
       try {
@@ -1675,6 +1682,7 @@ export default function ChatScreen() {
         timer = setTimeout(tick, 150);
       } else {
         initialScrollDoneRef.current = true;
+        setListReady(true);
       }
     };
     timer = setTimeout(tick, 60);
@@ -1687,6 +1695,7 @@ export default function ChatScreen() {
   // reuses this screen with a different conversationId).
   useEffect(() => {
     initialScrollDoneRef.current = false;
+    setListReady(false);
   }, [conversationId]);
 
   // iter-323 "Receive once" 🔂: tapping the "file deleted for multiple
@@ -4618,6 +4627,7 @@ export default function ChatScreen() {
             ref={listRef}
             data={timeline}
             keyExtractor={(item: any) => item._id}
+            style={{ opacity: listReady ? 1 : 0 }}
             contentContainerStyle={styles.listContent}
             ListHeaderComponent={
               hasMoreOlder ? (
@@ -4696,6 +4706,14 @@ export default function ChatScreen() {
               // every render batch until the real bottom is reached.
               if (!initialScrollDoneRef.current) {
                 listRef.current?.scrollToEnd({ animated: false });
+                // Reveal once the content stops growing (debounced): the last
+                // scrollToEnd has landed on the newest message, so we can show
+                // the list without the user ever seeing it scroll.
+                if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
+                revealTimerRef.current = setTimeout(() => {
+                  listRef.current?.scrollToEnd({ animated: false });
+                  setListReady(true);
+                }, 220);
                 return;
               }
               // iter-274: afterwards, only snap when the user is NEAR the

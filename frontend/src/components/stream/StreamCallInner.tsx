@@ -185,6 +185,81 @@ function isParticipantMuted(p: any): boolean {
   return !p?.audioStream; // fallback: no audio stream object → treat as muted
 }
 
+const GRID_PER_PAGE = 9; // max tiles a single page holds before paginating.
+
+/** Paginated, swipeable multi-party tile grid. Fits as many participants as a
+ *  page comfortably holds (auto columns/rows), then spills onto extra pages you
+ *  swipe left/right through — with page dots. Each tile shows the name, a
+ *  mute icon and an active-speaker highlight. */
+function ParticipantGridPager({ participants, width }: { participants: any[]; width: number }) {
+  const pages = useMemo(() => {
+    const out: any[][] = [];
+    for (let i = 0; i < participants.length; i += GRID_PER_PAGE) out.push(participants.slice(i, i + GRID_PER_PAGE));
+    return out;
+  }, [participants]);
+  const [page, setPage] = useState(0);
+
+  return (
+    <View style={StyleSheet.absoluteFill as any}>
+      <FlatList
+        data={pages}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        keyExtractor={(_, i) => `gridpage-${i}`}
+        onMomentumScrollEnd={(e) => setPage(Math.round(e.nativeEvent.contentOffset.x / Math.max(1, width)))}
+        renderItem={({ item }) => {
+          const n = item.length;
+          const cols = n <= 1 ? 1 : n <= 4 ? 2 : 3;
+          const rows = Math.ceil(n / cols);
+          const tW = `${100 / cols}%`;
+          const tH = `${100 / rows}%`;
+          return (
+            <View style={{ width, height: '100%', flexDirection: 'row', flexWrap: 'wrap' }}>
+              {item.map((p: any) => {
+                const pName = String(p?.name || p?.userId || 'Member');
+                const pMuted = isParticipantMuted(p);
+                const pSpeaking = !!p?.isSpeaking && !pMuted;
+                return (
+                  <View
+                    key={p.sessionId || p.userId}
+                    style={[styles.gridTile, { width: tW as any, height: tH as any }, pSpeaking ? styles.gridTileSpeaking : null]}
+                  >
+                    <ParticipantView
+                      participant={p}
+                      style={StyleSheet.absoluteFill as any}
+                      ParticipantLabel={null}
+                      ParticipantVideoFallback={() => (
+                        <View style={styles.gridFallback}>
+                          <View style={[styles.gridAvatar, pSpeaking ? styles.gridAvatarSpeaking : null]}>
+                            <Text style={styles.gridAvatarText}>{pName.trim().charAt(0).toUpperCase()}</Text>
+                          </View>
+                        </View>
+                      )}
+                      videoZOrder={0}
+                    />
+                    <View style={styles.gridNameBadge} pointerEvents="none">
+                      {pMuted ? <Ionicons name="mic-off" size={12} color="#FF6B6B" style={{ marginRight: 4 }} /> : null}
+                      <Text style={styles.gridNameText} numberOfLines={1}>{pName}</Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          );
+        }}
+      />
+      {pages.length > 1 ? (
+        <View style={styles.pagerDots} pointerEvents="none">
+          {pages.map((_, i) => (
+            <View key={`dot-${i}`} style={[styles.pagerDot, i === page ? styles.pagerDotActive : null]} />
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 /** In-call UI (inside StreamCall context). */
 function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acceptedAt, room, myId, myName, myPhone, conversationId, isGroupCall, isGroupAdmin, adminIdentities, conversationName, onConnectedChange }: CallUIProps) {
   const call = useCall();
@@ -383,6 +458,27 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
       } catch {}
     })();
   }, [call, isVideo, ensureCameraOn]);
+
+  // Self-heal a STUCK mic publish: symptom is "others can't hear the person who
+  // answered (esp. from the call notification)". If I intend mic ON and I'm
+  // connected, but my own local audio track isn't actually published a couple
+  // seconds after connecting, force a fresh publish (disable→enable). Gated on
+  // the actual publish state so it NEVER churns a healthy call, and capped at 2
+  // attempts so it can't loop.
+  const micHealRef = useRef(0);
+  useEffect(() => {
+    if (!call || !connected || !micOn) return;
+    const t = setTimeout(async () => {
+      try {
+        if (isParticipantMuted(local) && micHealRef.current < 2) {
+          micHealRef.current += 1;
+          await call.microphone.disable();
+          await call.microphone.enable();
+        }
+      } catch {}
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [call, connected, micOn, local]);
 
   useEffect(() => {
     if (!connected) return;
@@ -1207,52 +1303,12 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
             style={StyleSheet.absoluteFill as any}
           />
         ) : remoteParticipants.length > 1 ? (
-          // Multi-party (3+ in call): render EVERY remote participant in a
-          // grid. This is what registers each of them for Stream track
-          // subscription — with the old single-`remote` layout the 3rd+
-          // person was never rendered, so others neither saw their video nor
-          // heard their audio. Voice calls show an avatar tile (still
-          // subscribes audio); video calls show the live video.
-          <View style={styles.gridWrap}>
-            {remoteParticipants.map((p: any) => {
-              const tileCount = remoteParticipants.length;
-              const tileH = tileCount <= 2 ? '100%' : tileCount <= 4 ? '50%' : '33.33%';
-              const tileW = tileCount === 1 ? '100%' : tileCount <= 4 ? '50%' : '33.33%';
-              const pName = String(p?.name || p?.userId || 'Member');
-              const pMuted = isParticipantMuted(p);
-              const pSpeaking = !!p?.isSpeaking && !pMuted;
-              return (
-                <View
-                  key={p.sessionId || p.userId}
-                  style={[
-                    styles.gridTile,
-                    { width: tileW as any, height: tileH as any },
-                    pSpeaking ? styles.gridTileSpeaking : null,
-                  ]}
-                >
-                  <ParticipantView
-                    participant={p}
-                    style={StyleSheet.absoluteFill as any}
-                    ParticipantLabel={null}
-                    ParticipantVideoFallback={() => (
-                      <View style={styles.gridFallback}>
-                        <View style={[styles.gridAvatar, pSpeaking ? styles.gridAvatarSpeaking : null]}>
-                          <Text style={styles.gridAvatarText}>{pName.trim().charAt(0).toUpperCase()}</Text>
-                        </View>
-                      </View>
-                    )}
-                    videoZOrder={0}
-                  />
-                  <View style={styles.gridNameBadge} pointerEvents="none">
-                    {pMuted ? (
-                      <Ionicons name="mic-off" size={12} color="#FF6B6B" style={{ marginRight: 4 }} />
-                    ) : null}
-                    <Text style={styles.gridNameText} numberOfLines={1}>{pName}</Text>
-                  </View>
-                </View>
-              );
-            })}
-          </View>
+          // Multi-party (3+ in call): a paginated, swipeable grid. Rendering
+          // every remote is what registers each for Stream track subscription —
+          // with the old single-`remote` layout the 3rd+ person was neither
+          // seen nor heard. Tiles are compact so many fit per page; extra
+          // people spill onto swipeable pages.
+          <ParticipantGridPager participants={remoteParticipants} width={winW} />
         ) : showVideo && remote && remoteHasVideo ? (
           <ParticipantView
             participant={remote}
@@ -2733,6 +2789,17 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.55)',
   },
   gridNameText: { color: Colors.white, fontSize: 12, fontWeight: '600' },
+  pagerDots: {
+    position: 'absolute',
+    bottom: 8,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  pagerDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.35)' },
+  pagerDotActive: { backgroundColor: Colors.white, width: 9, height: 9, borderRadius: 5 },
   centerFill: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   avatarBig: {
     width: 120,
