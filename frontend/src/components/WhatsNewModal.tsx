@@ -16,8 +16,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   getCurrentAppVersion,
   compareVersions,
-  fetchAppVersion,
 } from '../lib/appVersion';
+import { getReleaseNotesFor, GENERIC_NOTES } from '../lib/changelog';
 import { Colors, FontSize, FontWeight, Spacing, Radius } from '../theme';
 
 /**
@@ -31,9 +31,9 @@ import { Colors, FontSize, FontWeight, Spacing, Radius } from '../theme';
  *   - Stored < current (app was updated) → show the modal, then store current.
  *   - Stored >= current → nothing to show.
  *
- * Release notes come from the backend /api/app-version (same source as the
- * Settings screen). If notes can't be fetched we skip the popup rather than
- * show an empty sheet.
+ * Release notes come from the bundled changelog (src/lib/changelog.ts) keyed by
+ * version, so the notes ALWAYS match the installed build (the old backend-driven
+ * notes were static and showed the same bullets for every new version).
  */
 const LAST_SEEN_KEY = 'whatsNew:lastSeenVersion';
 
@@ -64,7 +64,6 @@ export default function WhatsNewModal() {
 
   useEffect(() => {
     let cancelled = false;
-    const controller = new AbortController();
 
     (async () => {
       const current = getCurrentAppVersion();
@@ -89,28 +88,23 @@ export default function WhatsNewModal() {
       // Already up to date with what they've seen.
       if (compareVersions(lastSeen, current) >= 0) return;
 
-      // The app was updated — fetch notes and show the popup.
-      const info = await fetchAppVersion(controller.signal);
-      const lines = (info?.releaseNotes || '')
-        .split(/\r?\n|•/)
-        .map((l) => l.trim())
-        .filter(Boolean);
+      // The app was updated — show the notes bundled for THIS build version.
+      const lines = getReleaseNotesFor(current);
+      const finalLines = lines.length > 0 ? lines : GENERIC_NOTES;
 
-      // Persist now so the popup never shows twice for this version, even if
-      // notes were empty.
+      // Persist now so the popup never shows twice for this version.
       try {
         await AsyncStorage.setItem(LAST_SEEN_KEY, current);
       } catch {}
 
-      if (cancelled || lines.length === 0) return;
+      if (cancelled || finalLines.length === 0) return;
       setVersion(current);
-      setNotes(lines);
+      setNotes(finalLines);
       setVisible(true);
     })();
 
     return () => {
       cancelled = true;
-      controller.abort();
     };
   }, []);
 
