@@ -714,7 +714,8 @@ function GroupInfoInner() {
 
   const onLeave = () => {
     if (!conversationId) return;
-    Alert.alert('Leave group?', `You will no longer receive messages from "${groupName}".`, [
+    const label = isSubGroup ? 'sub group' : 'group';
+    Alert.alert(`Leave ${label}?`, `You will no longer receive messages from "${groupName}".`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Leave',
@@ -1090,12 +1091,12 @@ function GroupInfoInner() {
         <View style={styles.footerActions}>
           <TouchableOpacity style={styles.leaveBtn} onPress={onLeave} testID="group-info-leave">
             <Feather name="log-out" size={18} color="#D63030" />
-            <Text style={styles.leaveBtnText}>Leave Group</Text>
+            <Text style={styles.leaveBtnText}>{isSubGroup ? 'Leave Sub Group' : 'Leave Group'}</Text>
           </TouchableOpacity>
           {isChief ? (
             <TouchableOpacity style={styles.deleteBtn} onPress={onDelete} testID="group-info-delete">
               <Feather name="trash-2" size={18} color={Colors.white} />
-              <Text style={styles.deleteBtnText}>Delete Group Permanently</Text>
+              <Text style={styles.deleteBtnText}>{isSubGroup ? 'Delete Sub Group Permanently' : 'Delete Group Permanently'}</Text>
             </TouchableOpacity>
           ) : null}
         </View>

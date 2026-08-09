@@ -1,5 +1,11 @@
 # Smilers Mobile App — PRD
 
+## iter-472 (Jun 2026): Sub Groups — clear "Leave Sub Group" labelling
+
+The Leave action already worked for sub groups (they reuse `conversations.leaveGroup`), but was labelled generically. In `app/group/[id].tsx`, the footer button and its confirm alert now read "Leave Sub Group" / "Leave sub group?" when `isSubGroup`, and the chief's delete button reads "Delete Sub Group Permanently". Any member can leave without needing an admin. Lint clean; frontend restarted.
+
+
+
 ## iter-471 (Jun 2026): Sub Groups — synced appearance (v6) + drag-to-rank office bearers
 
 SYNCED APPEARANCE (contract v6): the sub-group icon/emoji+color is now the shared `appearance: { emoji?, color? }` field on the conversation doc (read from `listForParent`/`getConversation`; `avatar` image URL takes precedence). REPLACED the iter-469 device-local store:
