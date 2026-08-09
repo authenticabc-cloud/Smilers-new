@@ -1,5 +1,17 @@
 # Smilers Mobile App — PRD
 
+## iter-470 (Jun 2026): Sub Groups — Reorder positions wired to v5 backend (`setPositionOrder`), dropped interim seniority sort
+
+Web team shipped contract v5: NEW `subGroups.setPositionOrder({ subGroupId, orderedUserIds: Id[] })` → `{ ordered }`, added `order` field to `subGroupPositions`, and `listPositions` / `positionsForMother` are now PRE-SORTED by that order.
+
+CHANGES (`app/group/[id].tsx`):
+- REMOVED the iter-468 interim seniority sort (`POSITION_RANK`/`positionRank`/`sortTitles`). `officeBearers` now preserves the backend order (subPositions pre-sorted; subPositionMap Map keeps insertion order), and `motherPositionMap` keeps titles in backend order — so the Chief Admin's manual rank is the single source of truth everywhere.
+- ADDED Chief-Admin reorder UI: up/down chevrons on each Office Bearers row (shown when `isChief` && >1 bearer). `reorderBearer(index, dir)` swaps a local `localBearers` copy (synced from `officeBearers` via a `bearerKey` effect) optimistically, then calls `setPositionOrderM({ subGroupId, orderedUserIds })` and `refetchPositions` on success (reverts to backend order on failure). Hint text "Use the arrows to rank office bearers."
+
+Lint clean; app boots to Sign In. ⚠️ Authenticated + live-backend — verify reorder on a signed-in session/device. Sub-group icons/colors remain per-device pending a backend appearance field.
+
+
+
 ## iter-469 (Jun 2026): Sub Groups — Bulk positions, per-device icons/colors, full membership editor (add + remove)
 
 BULK POSITIONS (`src/components/BulkPositionsModal.tsx`): "Manage" button in the sub-group Info OFFICE BEARERS header (admins) opens one sheet listing all members with a title TextInput each; Chief Admin also gets a per-member "Show in mother group" switch (shown once a title is entered). Save loops `subGroups.setPosition` ONLY for changed rows (title or showInMother diff). Empty office-bearers state now renders for admins with a "Tap Manage" prompt. Wired in `app/group/[id].tsx` with `bulkPositionMembers` (members ∪ subPositionMap).

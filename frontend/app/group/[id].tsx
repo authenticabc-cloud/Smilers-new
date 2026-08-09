@@ -18,7 +18,7 @@
  *   - api.messageApproval.toggleApproval
  *   - api.groupSuspensions.suspendMember / liftSuspension
  */
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -86,26 +86,6 @@ function getInitials(name?: string): string {
   if (!parts.length) return '?';
   if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
   return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
-}
-
-// Automatic seniority ordering for position titles (President highest). Custom
-// titles fall to the end, ordered alphabetically. NOTE: true Chief-Admin manual
-// ranking needs a backend `order` field on subGroupPositions (not in the current
-// contract) — this deterministic seniority sort is the interim.
-const POSITION_RANK: Record<string, number> = {
-  president: 0,
-  'vice president': 1,
-  chairman: 2,
-  chairperson: 2,
-  secretary: 3,
-  treasurer: 4,
-  organizer: 5,
-};
-function positionRank(title: string): number {
-  return POSITION_RANK[String(title || '').trim().toLowerCase()] ?? 100;
-}
-function sortTitles(titles: string[]): string[] {
-  return [...titles].sort((a, b) => positionRank(a) - positionRank(b) || a.localeCompare(b));
 }
 
 function extractConvexError(e: any): string {
@@ -424,12 +404,13 @@ function GroupInfoInner() {
     return map;
   }, [subPositions]);
 
+  // positionsForMother is pre-sorted by the backend (order field) — preserve it.
   const motherPositionMap = useMemo(() => {
     const map = new Map<string, string[]>();
     const rec = (motherPositions && typeof motherPositions === 'object' ? motherPositions : {}) as Record<string, any[]>;
     Object.keys(rec).forEach((uid) => {
       const titles = (Array.isArray(rec[uid]) ? rec[uid] : []).map((e: any) => String(e?.title)).filter(Boolean);
-      if (titles.length) map.set(String(uid), sortTitles(titles));
+      if (titles.length) map.set(String(uid), titles);
     });
     return map;
   }, [motherPositions]);
@@ -444,17 +425,43 @@ function GroupInfoInner() {
     return map;
   }, [members, displayNameForMember]);
 
-  // Office bearers = sub-group members who hold a position, ranked by seniority.
+  // Office bearers = sub-group members who hold a position, in the backend's
+  // (Chief-Admin-controlled) order. subPositions is pre-sorted by `order`.
   const officeBearers = useMemo(() => {
     const list: { userId: string; name: string; title: string; showInMother: boolean }[] = [];
     subPositionMap.forEach((val, uid) => {
       list.push({ userId: uid, name: nameById.get(uid) || 'Member', title: val.title, showInMother: val.showInMother });
     });
-    return list.sort((a, b) => positionRank(a.title) - positionRank(b.title) || a.name.localeCompare(b.name));
+    return list;
   }, [subPositionMap, nameById]);
 
   const [positionTarget, setPositionTarget] = useState<{ userId: string; name: string } | null>(null);
   const [bulkPositionsOpen, setBulkPositionsOpen] = useState(false);
+  const setPositionOrderM = useMutation((api as any).subGroups?.setPositionOrder);
+  const [localBearers, setLocalBearers] = useState(officeBearers);
+
+  // Keep local order synced with the backend order, unless we're mid-reorder.
+  const bearerKey = useMemo(() => officeBearers.map((b) => b.userId).join('|'), [officeBearers]);
+  useEffect(() => {
+    setLocalBearers(officeBearers);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bearerKey]);
+
+  const reorderBearer = useCallback(
+    (index: number, dir: -1 | 1) => {
+      const j = index + dir;
+      if (j < 0 || j >= localBearers.length || !conversationId) return;
+      const next = [...localBearers];
+      [next[index], next[j]] = [next[j], next[index]];
+      setLocalBearers(next);
+      if (setPositionOrderM) {
+        void setPositionOrderM({ subGroupId: conversationId, orderedUserIds: next.map((b) => b.userId) })
+          .then(() => refetchPositions?.())
+          .catch(() => setLocalBearers(officeBearers));
+      }
+    },
+    [localBearers, conversationId, setPositionOrderM, officeBearers, refetchPositions],
+  );
 
   // Members list for the bulk positions editor (sub group only).
   const bulkPositionMembers = useMemo<BulkPositionMember[]>(
@@ -862,7 +869,10 @@ function GroupInfoInner() {
             {officeBearers.length === 0 ? (
               <Text style={styles.bearerEmpty}>No positions assigned yet. Tap Manage to add office bearers.</Text>
             ) : null}
-            {officeBearers.map((ob) => (
+            {isChief && localBearers.length > 1 ? (
+              <Text style={styles.bearerHint}>Use the arrows to rank office bearers.</Text>
+            ) : null}
+            {localBearers.map((ob, idx) => (
               <View key={ob.userId} style={styles.bearerRow} testID={`office-bearer-${ob.userId}`}>
                 <View style={styles.bearerAvatar}>
                   <Text style={styles.memberAvatarText}>{getInitials(ob.name)}</Text>
@@ -877,6 +887,32 @@ function GroupInfoInner() {
                   </Text>
                   {ob.showInMother ? <Ionicons name="eye" size={10} color={Colors.white} /> : null}
                 </View>
+                {isChief && localBearers.length > 1 ? (
+                  <View style={styles.bearerArrows}>
+                    <TouchableOpacity
+                      onPress={() => reorderBearer(idx, -1)}
+                      disabled={idx === 0}
+                      style={styles.arrowBtn}
+                      testID={`office-bearer-up-${ob.userId}`}
+                      hitSlop={6}
+                    >
+                      <Feather name="chevron-up" size={20} color={idx === 0 ? Colors.border : Colors.textSecondary} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => reorderBearer(idx, 1)}
+                      disabled={idx === localBearers.length - 1}
+                      style={styles.arrowBtn}
+                      testID={`office-bearer-down-${ob.userId}`}
+                      hitSlop={6}
+                    >
+                      <Feather
+                        name="chevron-down"
+                        size={20}
+                        color={idx === localBearers.length - 1 ? Colors.border : Colors.textSecondary}
+                      />
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
               </View>
             ))}
           </View>
@@ -1534,6 +1570,9 @@ const styles = StyleSheet.create({
   bearerRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, paddingVertical: 8 },
   bearerHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   bearerEmpty: { fontSize: FontSize.sm, color: Colors.textSecondary, fontStyle: 'italic', marginTop: 6 },
+  bearerHint: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 4, marginBottom: 2 },
+  bearerArrows: { flexDirection: 'row', alignItems: 'center', marginLeft: 4 },
+  arrowBtn: { paddingHorizontal: 2 },
   manageBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   manageBtnText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.semibold },
   bearerAvatar: {
