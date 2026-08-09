@@ -138,3 +138,15 @@ export async function getCachedUserName(
   await ensureUserLoaded();
   return (userMem && userMem[id]) || '';
 }
+
+/** Preload the persisted userId→name map into memory (call once on mount). */
+export async function preloadUserNameCache(): Promise<void> {
+  await ensureUserLoaded();
+}
+
+/** Synchronous cached-name lookup (returns '' until preloadUserNameCache resolves). */
+export function getCachedUserNameSync(userId: string | null | undefined): string {
+  const id = (userId || '').trim();
+  if (!id || !userMem) return '';
+  return userMem[id] || '';
+}

@@ -85,7 +85,7 @@ import { reportConvexUserIdForPush } from '../../src/push/useEmergentPush';
 import { findSavedContactDisplayName, getConversationDisplayName, getResolvedConversationDisplayName, getResolvedDisplayName, getDisplayInitials, getSavedContactRecord } from '../../src/lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { isSystemAction } from '../../src/lib/chat/systemMessage';
-import { cacheUserName } from '../../src/push/notificationNameCache';
+import { cacheUserName, getCachedUserNameSync, preloadUserNameCache } from '../../src/push/notificationNameCache';
 import { getLanguageByCode } from '../../src/lib/languages';
 import { getEffectivePreferredLanguage } from '../../src/lib/languages';
 import {
@@ -527,6 +527,16 @@ export default function ChatScreen() {
   // the group member's phone), falling back to the sender's Smilers/Google
   // account name — NOT the generic "Member" label. Mirrors group/[id].tsx's
   // displayNameForMember.
+  const [nameCacheReady, setNameCacheReady] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void preloadUserNameCache().then(() => {
+      if (alive) setNameCacheReady(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
   const resolveSenderName = useCallback(
     (senderId: any, fallbackName?: string): string => {
       const uid = String(senderId || '');
@@ -537,9 +547,14 @@ export default function ChatScreen() {
         (member?.name && String(member.name).trim()) ||
         (member?.displayName && String(member.displayName).trim()) ||
         '';
+      // For actors who are no longer current members (e.g. "X left"/removed),
+      // fall back to the persisted device-synced name we cached earlier so we
+      // never show the generic "Member" label when we know their name.
+      const cached = nameCacheReady ? getCachedUserNameSync(uid) : '';
       const fb =
         memberName ||
         (fallbackName && String(fallbackName).trim()) ||
+        cached ||
         'Member';
       // Merge the saved-contact record (viewer's phonebook) over the group
       // member profile so phone numbers from either source enable device lookup.
@@ -551,7 +566,7 @@ export default function ChatScreen() {
         fb,
       );
     },
-    [contacts, deviceContactIndex, groupMemberById],
+    [contacts, deviceContactIndex, groupMemberById, nameCacheReady],
   );
 
   // Persist each group member's resolved (device-contact-first) name by

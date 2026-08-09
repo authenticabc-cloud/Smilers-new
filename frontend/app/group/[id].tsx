@@ -760,9 +760,12 @@ function GroupInfoInner() {
     );
   }
 
+  // In a sub group the chief may hand off to ANY member (backend auto-promotes
+  // them); in a normal group only existing admins are eligible.
   const eligibleTransferAdmins = sortedMembers.filter((m: any) => {
     const mid = String(m._id || m.userId);
-    return adminIds.has(mid) && mid !== myId;
+    if (mid === myId) return false;
+    return isSubGroup ? true : adminIds.has(mid);
   });
 
   return (
@@ -1228,38 +1231,47 @@ function GroupInfoInner() {
         <Pressable style={styles.modalBackdrop} onPress={() => setTransferModalOpen(false)}>
           <Pressable style={[styles.modalCard, { paddingBottom: Spacing.lg + insets.bottom }]} onPress={() => {}}>
             <Text style={styles.modalTitle}>👑 Transfer Chief Admin</Text>
-            <Text style={styles.modalBody}>You can transfer Chief Admin to any admin in the group.</Text>
+            <Text style={styles.modalBody}>
+              {isSubGroup
+                ? 'You can transfer Chief Admin to any member of this sub group.'
+                : 'You can transfer Chief Admin to any admin in the group.'}
+            </Text>
             {eligibleTransferAdmins.length === 0 ? (
               <View style={styles.emptyModal}>
-                <Text style={styles.emptyModalTitle}>No eligible admins</Text>
-                <Text style={styles.emptyModalBody}>Promote someone to admin first.</Text>
+                <Text style={styles.emptyModalTitle}>{isSubGroup ? 'No other members' : 'No eligible admins'}</Text>
+                <Text style={styles.emptyModalBody}>
+                  {isSubGroup ? 'Add another member first.' : 'Promote someone to admin first.'}
+                </Text>
               </View>
             ) : (
               <FlatList
                 data={eligibleTransferAdmins}
                 keyExtractor={(m: any) => String(m._id || m.userId)}
-                renderItem={({ item }) => (
-                  <TouchableOpacity
-                    style={styles.transferRow}
-                    onPress={() =>
-                      Alert.alert('Transfer Chief Admin?', `${item?.name || 'this admin'} will become the new Chief Admin.`, [
-                        { text: 'Cancel', style: 'cancel' },
-                        {
-                          text: 'Transfer',
-                          style: 'destructive',
-                          onPress: () => onTransferChief(String(item._id || item.userId)),
-                        },
-                      ])
-                    }
-                    testID={`group-info-transfer-${String(item._id || item.userId)}`}
-                  >
-                    <View style={styles.memberAvatar}>
-                      <Text style={styles.memberAvatarText}>{getInitials(item?.name)}</Text>
-                    </View>
-                    <Text style={styles.transferName}>{item?.name || 'Admin'}</Text>
-                    <Feather name="chevron-right" size={18} color={Colors.textMuted} />
-                  </TouchableOpacity>
-                )}
+                renderItem={({ item }) => {
+                  const nm = displayNameForMember(item);
+                  return (
+                    <TouchableOpacity
+                      style={styles.transferRow}
+                      onPress={() =>
+                        Alert.alert('Transfer Chief Admin?', `${nm} will become the new Chief Admin.`, [
+                          { text: 'Cancel', style: 'cancel' },
+                          {
+                            text: 'Transfer',
+                            style: 'destructive',
+                            onPress: () => onTransferChief(String(item._id || item.userId)),
+                          },
+                        ])
+                      }
+                      testID={`group-info-transfer-${String(item._id || item.userId)}`}
+                    >
+                      <View style={styles.memberAvatar}>
+                        <Text style={styles.memberAvatarText}>{getInitials(nm)}</Text>
+                      </View>
+                      <Text style={styles.transferName}>{nm}</Text>
+                      <Feather name="chevron-right" size={18} color={Colors.textMuted} />
+                    </TouchableOpacity>
+                  );
+                }}
               />
             )}
           </Pressable>

@@ -1,5 +1,17 @@
 # Smilers Mobile App — PRD
 
+## iter-477 (Jun 2026): Sub Groups — fix "Member" name fallback in system messages + chief auto-succession wiring (v7)
+
+ISSUE 1 (names show "Member"): `resolveSenderName` in `app/chat/[conversationId].tsx` only resolved CURRENT group members, so system-message actors/targets who had LEFT (e.g. "X left", "X created the group") fell back to the literal "Member". FIX: added a persisted device-synced name cache fallback. `notificationNameCache.ts` gained `preloadUserNameCache()` + sync `getCachedUserNameSync(uid)`. The chat screen preloads the cache (`nameCacheReady` state) and `resolveSenderName` now uses `memberName || fallbackName || cachedName || 'Member'`. Existing effect already persists every current member's resolved (device-contact-first) name via `cacheUserName`, so former members resolve on subsequent renders/sessions.
+
+ISSUE 2 (chief auto-succession, contract v7): backend AUTO-picks a successor inside `leaveGroup`/`removeGroupMember` (earliest-joined remaining parent-group admin, else earliest-joined member) and emits a silent `chiefTransferred` event — NO new call. Native wiring:
+- `getConversation` is a live query + system messages render reactively, and `formatSystemMessage` already handles `chieftransferred` ("X transferred chief admin to Y"), so the new chief + message appear automatically.
+- Manual hand-off: in a SUB group the chief may transfer to ANY member (`groupAdmin.transferChiefAdmin`, backend auto-promotes). Updated `eligibleTransferAdmins` in `app/group/[id].tsx` to include all members (except self) when `isSubGroup`; transfer modal copy/empty-state now say "any member of this sub group" and rows use `displayNameForMember` (fixes raw "Admin"/"Member" labels there too).
+
+Lint clean; app boots to Sign In. ⚠️ Authenticated + live-backend — verify names + auto-succession on a signed-in session/device.
+
+
+
 ## iter-476 (Jun 2026): Fix "What's New" always showing old features — bundle version-keyed release notes
 
 ROOT CAUSE: `WhatsNewModal` announced the bundled build version (`Constants.expoConfig.version`, auto-bumped by the deploy pipeline, e.g. 2.3.63) but pulled its bullets from the backend `/api/app-version` `releaseNotes`, whose defaults are static (v2.2.20-era: "Google Play in-app updates", "Noise cancellation"…) and never set per release (`SMILERS_RELEASE_NOTES` unused). So every new version showed the same old bullets.
