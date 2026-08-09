@@ -28,6 +28,7 @@ import { getResolvedDisplayName, getSavedContactRecord } from '../../src/lib/dis
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../../src/theme';
 import { recordDiagnostic } from '../../src/lib/diagnostics';
 import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
+import ZoomableImage from '../../src/components/ZoomableImage';
 
 
 // Background palette for editing a text status (mirrors the composer).
@@ -268,6 +269,12 @@ function StatusViewScreenInner() {
 
   const [idx, setIdx] = useState(0);
   const [paused, setPaused] = useState(false);
+  const [currentImageUri, setCurrentImageUri] = useState<string | null>(null);
+  const [showZoom, setShowZoom] = useState(false);
+  const closeZoom = useCallback(() => {
+    setShowZoom(false);
+    setPaused(false);
+  }, []);
   const [reply, setReply] = useState('');
   const [showViewers, setShowViewers] = useState(false);
   // iter-315: KeyboardAvoidingView is unreliable on Android edge-to-edge (the
@@ -571,13 +578,26 @@ function StatusViewScreenInner() {
             <Feather name="trash-2" size={22} color="#FFFFFF" />
           </TouchableOpacity>
         ) : null}
+        {currentImageUri ? (
+          <TouchableOpacity
+            onPress={() => {
+              setPaused(true);
+              setShowZoom(true);
+            }}
+            hitSlop={12}
+            style={{ marginRight: 18 }}
+            testID="status-zoom"
+          >
+            <Feather name="maximize-2" size={22} color="#FFFFFF" />
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity onPress={() => router.back()} hitSlop={12} testID="status-close">
           <Feather name="x" size={26} color="#FFFFFF" />
         </TouchableOpacity>
       </View>
 
       <View style={styles.body}>
-        <StoryContent story={current} fg={fg} videoPlayerRef={videoPlayerRef} onVideoEnd={goNext} />
+        <StoryContent story={current} fg={fg} videoPlayerRef={videoPlayerRef} onVideoEnd={goNext} onImageReady={setCurrentImageUri} />
       </View>
 
       <View style={styles.tapZones}>
@@ -645,6 +665,15 @@ function StatusViewScreenInner() {
           <Feather name="chevron-up" size={16} color={Colors.white} />
         </TouchableOpacity>
       )}
+
+      <Modal visible={showZoom && !!currentImageUri} transparent animationType="fade" onRequestClose={closeZoom}>
+        <View style={styles.zoomBackdrop}>
+          {currentImageUri ? <ZoomableImage uri={currentImageUri} onClose={closeZoom} /> : null}
+          <TouchableOpacity style={styles.zoomClose} onPress={closeZoom} hitSlop={12} testID="story-zoom-close">
+            <Feather name="x" size={26} color="#FFFFFF" />
+          </TouchableOpacity>
+        </View>
+      </Modal>
 
       <Modal
         visible={showViewers}
@@ -763,11 +792,13 @@ function StoryContent({
   fg,
   videoPlayerRef,
   onVideoEnd,
+  onImageReady,
 }: {
   story: any;
   fg: string;
   videoPlayerRef: React.MutableRefObject<VideoPlayer | null>;
   onVideoEnd: () => void;
+  onImageReady?: (uri: string | null) => void;
 }) {
   // iter-235: the status kept "loading" forever for photo/video. Root cause:
   // unlike `messages.list` (which resolves a message's storageId → signed
@@ -826,6 +857,13 @@ function StoryContent({
     !resolvedStorageUrl &&
     (viaMessages.loading || viaStorage.loading || viaFiles.loading);
   const src = directUrl || resolvedStorageUrl;
+
+  // Report the resolved image URI (or null on text/video/unresolved) up to the
+  // viewer so it can offer a fullscreen pinch-zoom preview of image stories.
+  useEffect(() => {
+    if (!onImageReady) return;
+    onImageReady(readStoryType(story) === 'image' && src ? String(src) : null);
+  }, [src, story, onImageReady]);
 
   const retryResolve = useCallback(() => {
     viaMessages.refetch();
@@ -1205,6 +1243,18 @@ const styles = StyleSheet.create({
   },
   viewersText: { color: '#FFFFFF', fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   viewersBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  zoomBackdrop: { flex: 1, backgroundColor: '#000' },
+  zoomClose: {
+    position: 'absolute',
+    top: 48,
+    right: 20,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
   viewersSheet: {
     backgroundColor: Colors.surface,
     borderTopLeftRadius: 24,

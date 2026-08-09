@@ -2412,3 +2412,6 @@ Reused `src/components/ZoomableImage.tsx` (pinch/pan/double-tap/single-tap-close
 - `app/ads/create.tsx` — the selected Product Image preview is now tappable (`ad-image-preview`) → opens a fullscreen `Modal` with ZoomableImage + close button (`previewViewerBackdrop`/`previewViewerClose`). (Ads have no end-user fullscreen image viewer — browse cards just open the ad link — so the create-screen preview is the ad "image preview".)
 All lint clean; bundle compiles. Pinch is device-only. NOTE for button-overlay viewers: ZoomableImage must be the FIRST child so action buttons (rendered after) stay on top/tappable.
 
+
+## iter-474 (fork) — Status/story photo pinch-zoom
+Added a fullscreen pinch-zoom preview for IMAGE stories in `app/status-view/[userId].tsx` (reuses `ZoomableImage`). Approach avoids conflict with the story tap-zones/auto-advance: `StoryContent` now reports its resolved image URI up via a new `onImageReady` prop; the viewer shows a maximize button (top bar, image stories only) → sets `paused=true` + opens a fullscreen `Modal` with ZoomableImage (pinch/pan/double-tap; close resumes the story via `closeZoom`). Styles `zoomBackdrop`/`zoomClose`. Video/text stories unaffected. Lint clean; bundle compiles. Device-only (pinch).
