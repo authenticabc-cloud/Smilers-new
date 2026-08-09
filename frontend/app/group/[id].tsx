@@ -52,6 +52,8 @@ import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
 import { SubGroupsSection } from '../../src/components/SubGroupsSection';
 import { SubGroupPositionModal } from '../../src/components/SubGroupPositionModal';
 import { BulkPositionsModal, type BulkPositionMember } from '../../src/components/BulkPositionsModal';
+import { SubGroupAppearancePicker } from '../../src/components/SubGroupAppearancePicker';
+import { ReorderBearersModal } from '../../src/components/ReorderBearersModal';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { getResolvedDisplayName, getSavedContactRecord } from '../../src/lib/displayName';
@@ -437,8 +439,35 @@ function GroupInfoInner() {
 
   const [positionTarget, setPositionTarget] = useState<{ userId: string; name: string } | null>(null);
   const [bulkPositionsOpen, setBulkPositionsOpen] = useState(false);
+  // Sub-group synced icon/color (conversations.updateGroup).
+  const subAppearance = (conversation?.appearance || {}) as { emoji?: string; color?: string };
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const [apprEmoji, setApprEmoji] = useState<string | undefined>(undefined);
+  const [apprColor, setApprColor] = useState<string | undefined>(undefined);
+  const [apprSaving, setApprSaving] = useState(false);
+
+  const openAppearance = useCallback(() => {
+    setApprEmoji(subAppearance.emoji);
+    setApprColor(subAppearance.color);
+    setAppearanceOpen(true);
+  }, [subAppearance.emoji, subAppearance.color]);
+
+  const saveAppearance = useCallback(async () => {
+    if (!conversationId || !updateGroupM) return;
+    setApprSaving(true);
+    try {
+      const appearance = apprEmoji || apprColor ? { ...(apprEmoji ? { emoji: apprEmoji } : {}), ...(apprColor ? { color: apprColor } : {}) } : null;
+      await updateGroupM({ conversationId, appearance });
+      setAppearanceOpen(false);
+    } catch (e: any) {
+      Alert.alert('Could not update icon', e?.data?.message || e?.message || 'Please try again.');
+    } finally {
+      setApprSaving(false);
+    }
+  }, [conversationId, updateGroupM, apprEmoji, apprColor]);
   const setPositionOrderM = useMutation((api as any).subGroups?.setPositionOrder);
   const [localBearers, setLocalBearers] = useState(officeBearers);
+  const [reorderOpen, setReorderOpen] = useState(false);
 
   // Keep local order synced with the backend order, unless we're mid-reorder.
   const bearerKey = useMemo(() => officeBearers.map((b) => b.userId).join('|'), [officeBearers]);
@@ -447,20 +476,19 @@ function GroupInfoInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bearerKey]);
 
-  const reorderBearer = useCallback(
-    (index: number, dir: -1 | 1) => {
-      const j = index + dir;
-      if (j < 0 || j >= localBearers.length || !conversationId) return;
-      const next = [...localBearers];
-      [next[index], next[j]] = [next[j], next[index]];
+  const applyOrder = useCallback(
+    (orderedUserIds: string[]) => {
+      if (!conversationId) return;
+      const byId = new Map(localBearers.map((b) => [b.userId, b]));
+      const next = orderedUserIds.map((uid) => byId.get(uid)).filter(Boolean) as typeof localBearers;
       setLocalBearers(next);
       if (setPositionOrderM) {
-        void setPositionOrderM({ subGroupId: conversationId, orderedUserIds: next.map((b) => b.userId) })
+        void setPositionOrderM({ subGroupId: conversationId, orderedUserIds })
           .then(() => refetchPositions?.())
           .catch(() => setLocalBearers(officeBearers));
       }
     },
-    [localBearers, conversationId, setPositionOrderM, officeBearers, refetchPositions],
+    [conversationId, localBearers, setPositionOrderM, officeBearers, refetchPositions],
   );
 
   // Members list for the bulk positions editor (sub group only).
@@ -849,31 +877,62 @@ function GroupInfoInner() {
           />
         ) : null}
 
+        {/* GROUP ICON (sub group only) */}
+        {isSubGroup && isAdmin ? (
+          <View style={styles.section} testID="sub-group-icon-section">
+            <Text style={styles.sectionLabel}>GROUP ICON</Text>
+            <TouchableOpacity style={styles.iconEditRow} onPress={openAppearance} testID="sub-group-icon-edit">
+              <View style={[styles.iconPreview, subAppearance.color ? { backgroundColor: subAppearance.color } : null]}>
+                {subAppearance.emoji ? (
+                  <Text style={styles.iconPreviewEmoji}>{subAppearance.emoji}</Text>
+                ) : (
+                  <Text style={styles.memberAvatarText}>{getInitials(groupName)}</Text>
+                )}
+              </View>
+              <Text style={styles.iconEditText}>Change icon &amp; color</Text>
+              <Feather name="edit-2" size={16} color={Colors.primary} />
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
         {/* OFFICE BEARERS (sub group only) */}
         {isSubGroup && (officeBearers.length > 0 || isAdmin) ? (
           <View style={styles.section} testID="office-bearers-section">
             <View style={styles.bearerHeader}>
               <Text style={styles.sectionLabel}>OFFICE BEARERS ({officeBearers.length})</Text>
-              {isAdmin ? (
-                <TouchableOpacity
-                  style={styles.manageBtn}
-                  onPress={() => setBulkPositionsOpen(true)}
-                  testID="office-bearers-manage"
-                  hitSlop={8}
-                >
-                  <Feather name="edit-2" size={13} color={Colors.primary} />
-                  <Text style={styles.manageBtnText}>Manage</Text>
-                </TouchableOpacity>
-              ) : null}
+              <View style={styles.bearerHeaderActions}>
+                {isChief && localBearers.length > 1 ? (
+                  <TouchableOpacity
+                    style={styles.manageBtn}
+                    onPress={() => setReorderOpen(true)}
+                    testID="office-bearers-reorder"
+                    hitSlop={8}
+                  >
+                    <Feather name="bar-chart" size={13} color={Colors.primary} style={styles.reorderIcon} />
+                    <Text style={styles.manageBtnText}>Rank</Text>
+                  </TouchableOpacity>
+                ) : null}
+                {isAdmin ? (
+                  <TouchableOpacity
+                    style={styles.manageBtn}
+                    onPress={() => setBulkPositionsOpen(true)}
+                    testID="office-bearers-manage"
+                    hitSlop={8}
+                  >
+                    <Feather name="edit-2" size={13} color={Colors.primary} />
+                    <Text style={styles.manageBtnText}>Manage</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
             </View>
             {officeBearers.length === 0 ? (
               <Text style={styles.bearerEmpty}>No positions assigned yet. Tap Manage to add office bearers.</Text>
             ) : null}
-            {isChief && localBearers.length > 1 ? (
-              <Text style={styles.bearerHint}>Use the arrows to rank office bearers.</Text>
-            ) : null}
             {localBearers.map((ob, idx) => (
               <View key={ob.userId} style={styles.bearerRow} testID={`office-bearer-${ob.userId}`}>
+                {isChief && localBearers.length > 1 ? (
+                  <Text style={styles.bearerRank}>{idx + 1}</Text>
+                ) : null}
                 <View style={styles.bearerAvatar}>
                   <Text style={styles.memberAvatarText}>{getInitials(ob.name)}</Text>
                 </View>
@@ -887,32 +946,6 @@ function GroupInfoInner() {
                   </Text>
                   {ob.showInMother ? <Ionicons name="eye" size={10} color={Colors.white} /> : null}
                 </View>
-                {isChief && localBearers.length > 1 ? (
-                  <View style={styles.bearerArrows}>
-                    <TouchableOpacity
-                      onPress={() => reorderBearer(idx, -1)}
-                      disabled={idx === 0}
-                      style={styles.arrowBtn}
-                      testID={`office-bearer-up-${ob.userId}`}
-                      hitSlop={6}
-                    >
-                      <Feather name="chevron-up" size={20} color={idx === 0 ? Colors.border : Colors.textSecondary} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={() => reorderBearer(idx, 1)}
-                      disabled={idx === localBearers.length - 1}
-                      style={styles.arrowBtn}
-                      testID={`office-bearer-down-${ob.userId}`}
-                      hitSlop={6}
-                    >
-                      <Feather
-                        name="chevron-down"
-                        size={20}
-                        color={idx === localBearers.length - 1 ? Colors.border : Colors.textSecondary}
-                      />
-                    </TouchableOpacity>
-                  </View>
-                ) : null}
               </View>
             ))}
           </View>
@@ -1311,6 +1344,51 @@ function GroupInfoInner() {
         />
       ) : null}
 
+      {/* ----- Reorder Bearers (drag) Modal ----- */}
+      {isSubGroup ? (
+        <ReorderBearersModal
+          visible={reorderOpen}
+          bearers={localBearers.map((b) => ({ userId: b.userId, name: b.userId === myId ? 'You' : b.name, title: b.title }))}
+          onReorder={applyOrder}
+          onClose={() => setReorderOpen(false)}
+        />
+      ) : null}
+
+      {/* ----- Sub Group Appearance Modal ----- */}
+      {isSubGroup ? (
+        <Modal visible={appearanceOpen} transparent animationType="slide" onRequestClose={() => setAppearanceOpen(false)}>
+          <View style={styles.apprBackdrop}>
+            <View style={styles.apprCard}>
+              <View style={styles.apprHeader}>
+                <Text style={styles.apprTitle}>Group icon</Text>
+                <TouchableOpacity onPress={() => setAppearanceOpen(false)} hitSlop={8} testID="sub-group-icon-close">
+                  <Ionicons name="close" size={24} color={Colors.textPrimary} />
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.apprHint}>Pick an icon and color. Everyone in this sub group sees it.</Text>
+              <SubGroupAppearancePicker
+                emoji={apprEmoji}
+                color={apprColor}
+                onChangeEmoji={setApprEmoji}
+                onChangeColor={setApprColor}
+              />
+              <TouchableOpacity
+                style={[styles.apprSaveBtn, apprSaving && { opacity: 0.6 }]}
+                onPress={saveAppearance}
+                disabled={apprSaving}
+                testID="sub-group-icon-save"
+              >
+                {apprSaving ? (
+                  <ActivityIndicator color={Colors.white} />
+                ) : (
+                  <Text style={styles.apprSaveText}>Save</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+      ) : null}
+
 
       {/* ----- Add Members Modal ----- */}
       <Modal visible={addMembersOpen} transparent animationType="slide" onRequestClose={() => setAddMembersOpen(false)}>
@@ -1569,10 +1647,27 @@ const styles = StyleSheet.create({
   positionPillText: { fontSize: FontSize.xs, color: Colors.white, fontWeight: FontWeight.bold, flexShrink: 1 },
   bearerRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, paddingVertical: 8 },
   bearerHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  bearerHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
   bearerEmpty: { fontSize: FontSize.sm, color: Colors.textSecondary, fontStyle: 'italic', marginTop: 6 },
-  bearerHint: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 4, marginBottom: 2 },
-  bearerArrows: { flexDirection: 'row', alignItems: 'center', marginLeft: 4 },
-  arrowBtn: { paddingHorizontal: 2 },
+  bearerRank: { width: 18, textAlign: 'center', fontSize: FontSize.sm, fontWeight: FontWeight.bold, color: Colors.textSecondary },
+  reorderIcon: { transform: [{ rotate: '90deg' }] },
+  iconEditRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, paddingVertical: 8 },
+  iconPreview: { width: 44, height: 44, borderRadius: 22, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
+  iconPreviewEmoji: { fontSize: 22 },
+  iconEditText: { flex: 1, fontSize: FontSize.base, color: Colors.textPrimary, fontWeight: FontWeight.medium },
+  apprBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  apprCard: {
+    backgroundColor: Colors.background,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    padding: Spacing.lg,
+    gap: Spacing.md,
+  },
+  apprHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  apprTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  apprHint: { fontSize: FontSize.sm, color: Colors.textSecondary },
+  apprSaveBtn: { backgroundColor: Colors.primary, paddingVertical: 14, borderRadius: Radius.pill, alignItems: 'center' },
+  apprSaveText: { color: Colors.white, fontSize: FontSize.lg, fontWeight: FontWeight.bold },
   manageBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   manageBtnText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.semibold },
   bearerAvatar: {

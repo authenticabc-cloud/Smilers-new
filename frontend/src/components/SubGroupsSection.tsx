@@ -16,7 +16,6 @@ import { api } from '../convexApi';
 import { useReactiveSafeConvexQuery } from '../hooks/useReactiveSafeConvexQuery';
 import { useSafeConvexQuery } from '../hooks/useSafeConvexQuery';
 import { SubGroupAppearancePicker } from './SubGroupAppearancePicker';
-import { loadAppearanceMap, getAppearance, setAppearance } from '../lib/subGroupAppearance';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../theme';
 
 const SUB_GROUPS_ENABLED = process.env.EXPO_PUBLIC_SUB_GROUPS_ENABLED !== 'false';
@@ -88,17 +87,9 @@ export function SubGroupsSection({
   const [addSelected, setAddSelected] = useState<Set<string>>(new Set());
   const [addBusy, setAddBusy] = useState(false);
   const [addInit, setAddInit] = useState(false);
-  // Appearance (emoji/color) — local per-device.
+  // Appearance (emoji/color) — synced via subGroups.create / conversations.updateGroup.
   const [emoji, setEmoji] = useState<string | undefined>(undefined);
   const [color, setColor] = useState<string | undefined>(undefined);
-  const [apprVersion, setApprVersion] = useState(0);
-  const [apprTarget, setApprTarget] = useState<{ id: string; name: string } | null>(null);
-  const [apprEmoji, setApprEmoji] = useState<string | undefined>(undefined);
-  const [apprColor, setApprColor] = useState<string | undefined>(undefined);
-
-  useEffect(() => {
-    void loadAppearanceMap().then(() => setApprVersion((v) => v + 1));
-  }, []);
 
   // Existing members of the sub group being edited — used both to know who's
   // already in it (avoid re-adding) and to seed the membership toggles.
@@ -246,12 +237,8 @@ export function SubGroupsSection({
         name: trimmed,
         description: desc.trim() || undefined,
         memberIds: Array.from(selected),
+        ...(emoji || color ? { appearance: { ...(emoji ? { emoji } : {}), ...(color ? { color } : {}) } } : {}),
       });
-      const newId = res?.subGroupId ? String(res.subGroupId) : null;
-      if (newId && (emoji || color)) {
-        await setAppearance(newId, { emoji, color });
-        setApprVersion((v) => v + 1);
-      }
       setCreateOpen(false);
       resetCreate();
       if (res?.status === 'pending') {
@@ -263,20 +250,6 @@ export function SubGroupsSection({
       setBusy(false);
     }
   }, [name, desc, selected, emoji, color, createM, parentConversationId, resetCreate]);
-
-  const openAppearance = useCallback((id: string, label: string) => {
-    const cur = getAppearance(id);
-    setApprEmoji(cur.emoji);
-    setApprColor(cur.color);
-    setApprTarget({ id, name: label });
-  }, []);
-
-  const saveAppearance = useCallback(async () => {
-    if (!apprTarget?.id) return;
-    await setAppearance(apprTarget.id, { emoji: apprEmoji, color: apprColor });
-    setApprVersion((v) => v + 1);
-    setApprTarget(null);
-  }, [apprTarget?.id, apprEmoji, apprColor]);
 
   const onApprove = useCallback(
     async (id: string) => {
@@ -381,14 +354,11 @@ export function SubGroupsSection({
           const pending = item?.subGroupStatus === 'pending';
           const memberCount = item?.memberCount || 0;
           const rowBusy = busyId === id;
-          const appr = apprVersion >= 0 ? getAppearance(id) : {};
+          const appr = (item?.appearance || {}) as { emoji?: string; color?: string };
           return (
             <View key={id} style={styles.row} testID={`sub-group-row-${id}`}>
-              <TouchableOpacity
+              <View
                 style={[styles.avatar, pending && styles.pendingAvatar, appr.color ? { backgroundColor: appr.color } : null]}
-                disabled={pending}
-                onPress={() => openAppearance(id, item?.name || 'Sub group')}
-                testID={`sub-group-appearance-${id}`}
               >
                 {pending ? (
                   <Ionicons name="hourglass-outline" size={16} color={Colors.white} />
@@ -397,7 +367,7 @@ export function SubGroupsSection({
                 ) : (
                   <Text style={styles.avatarText}>{getInitials(item?.name)}</Text>
                 )}
-              </TouchableOpacity>
+              </View>
               <TouchableOpacity
                 style={styles.rowMid}
                 disabled={pending}
@@ -525,32 +495,6 @@ export function SubGroupsSection({
               testID="sub-group-add-submit"
             >
               {addBusy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.primaryBtnText}>Save members</Text>}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Appearance editor */}
-      <Modal visible={!!apprTarget} animationType="slide" transparent onRequestClose={() => setApprTarget(null)}>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle} numberOfLines={1}>
-                Appearance · {apprTarget?.name || 'sub group'}
-              </Text>
-              <TouchableOpacity onPress={() => setApprTarget(null)} hitSlop={8} testID="sub-group-appearance-close">
-                <Ionicons name="close" size={24} color={Colors.textPrimary} />
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.hint}>Pick an icon and color to spot this sub group quickly. Saved on this device.</Text>
-            <SubGroupAppearancePicker
-              emoji={apprEmoji}
-              color={apprColor}
-              onChangeEmoji={setApprEmoji}
-              onChangeColor={setApprColor}
-            />
-            <TouchableOpacity style={styles.primaryBtn} onPress={saveAppearance} testID="sub-group-appearance-save">
-              <Text style={styles.primaryBtnText}>Save</Text>
             </TouchableOpacity>
           </View>
         </View>

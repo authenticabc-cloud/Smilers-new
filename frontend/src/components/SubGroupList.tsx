@@ -5,7 +5,6 @@ import { useMutation } from 'convex/react';
 import { api } from '../convexApi';
 import { useReactiveSafeConvexQuery } from '../hooks/useReactiveSafeConvexQuery';
 import { readStoredString, writeStoredString } from '../lib/settingsStorage';
-import { loadAppearanceMap, getAppearance } from '../lib/subGroupAppearance';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../theme';
 
 const SUB_GROUPS_ENABLED = process.env.EXPO_PUBLIC_SUB_GROUPS_ENABLED !== 'false';
@@ -69,11 +68,6 @@ function SubGroupListInner({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const collapseLoaded = useRef(false);
-  const [apprReady, setApprReady] = useState(false);
-
-  useEffect(() => {
-    void loadAppearanceMap().then(() => setApprReady(true));
-  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -176,7 +170,7 @@ function SubGroupListInner({
         const memberCount = item?.memberCount || 0;
         const initial = (item?.name || 'S').charAt(0).toUpperCase();
         const busy = busyId === id;
-        const appr = apprReady ? getAppearance(id) : {};
+        const appr = (item?.appearance || {}) as { emoji?: string; color?: string };
 
         if (pending) {
           return (

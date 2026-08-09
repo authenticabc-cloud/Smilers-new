@@ -1,5 +1,20 @@
 # Smilers Mobile App — PRD
 
+## iter-471 (Jun 2026): Sub Groups — synced appearance (v6) + drag-to-rank office bearers
+
+SYNCED APPEARANCE (contract v6): the sub-group icon/emoji+color is now the shared `appearance: { emoji?, color? }` field on the conversation doc (read from `listForParent`/`getConversation`; `avatar` image URL takes precedence). REPLACED the iter-469 device-local store:
+- `subGroupAppearance.ts` trimmed to just `SUB_GROUP_EMOJIS`/`SUB_GROUP_COLORS` constants (removed AsyncStorage load/get/set).
+- `SubGroupsSection`: Create sheet passes `appearance` into `subGroups.create`; list rows + `SubGroupList` nested rows render `item.appearance` (color circle + emoji). Removed the device-local editor/tap-to-edit from the section.
+- `app/group/[id].tsx` (sub group's OWN Info, admin only): NEW "GROUP ICON" section with preview + pencil → modal using `SubGroupAppearancePicker` → saves via `conversations.updateGroup({ conversationId, appearance: {emoji?,color?} | null })` (null clears; hex validated backend-side). This matches web (edit lives on the sub-group info page for admins).
+
+DRAG-TO-RANK (`src/components/ReorderBearersModal.tsx`): replaced the iter-470 up/down arrows with a **Rank** button (Chief Admin, >1 bearer) opening a bottom-sheet `DraggableFlatList` (long-press + drag, `ScaleDecorator`, wrapped in `GestureHandlerRootView`). `onDragEnd` → `applyOrder(orderedUserIds)` optimistically reorders `localBearers` + calls `subGroups.setPositionOrder`, reverting on failure. Office Bearers list now shows a rank number (1,2,3…) for the chief. `setPositionOrder`/pre-sorted reads unchanged from iter-470.
+
+NOTE: v6 also enforces mother-group membership on addMember/addGroupMember/joinViaInviteLink (BAD_REQUEST) — the membership editor already surfaces per-member failures.
+
+Lint clean; app boots to Sign In. ⚠️ Authenticated + live-backend — verify on a signed-in session/device. No remaining backend-dependent sub-group items.
+
+
+
 ## iter-470 (Jun 2026): Sub Groups — Reorder positions wired to v5 backend (`setPositionOrder`), dropped interim seniority sort
 
 Web team shipped contract v5: NEW `subGroups.setPositionOrder({ subGroupId, orderedUserIds: Id[] })` → `{ ordered }`, added `order` field to `subGroupPositions`, and `listPositions` / `positionsForMother` are now PRE-SORTED by that order.
