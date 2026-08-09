@@ -113,6 +113,9 @@ export default function GroupCallScreen() {
   const [localStreamURL, setLocalStreamURL] = useState<string | null>(null);
   const [cameraEnabled, setCameraEnabled] = useState(wantsVideo);
   const [invitePickerVisible, setInvitePickerVisible] = useState(false);
+  // Active-speaker map from the mesh controller (per-peer audio-level > gate,
+  // plus __local for me) so each tile can highlight whoever is talking.
+  const [speaking, setSpeaking] = useState<Record<string, boolean>>({});
 
   // ── Immersive video: auto-hide header + controls ───────────────────────
   // In a group VIDEO call the header and bottom controls fade out after a few
@@ -219,6 +222,9 @@ export default function GroupCallScreen() {
             });
             setConnectedPeers(map);
             setRemoteStreamURLs(urls);
+          },
+          onSpeakingChange: (s) => {
+            if (!disposed) setSpeaking(s || {});
           },
           onError: () => {},
         });
@@ -564,9 +570,11 @@ export default function GroupCallScreen() {
             const isMe = item.userId === myUserId;
             const streamURL = isMe ? localStreamURL : remoteStreamURLs[item.userId];
             const showTileVideo = wantsVideo && !!streamURL && (isMe ? cameraEnabled : true);
+            const tileSpeaking =
+              (isMe ? !!speaking.__local : !!speaking[item.userId]) && !(isMe ? !micEnabled : item.isMuted);
             return (
               <Pressable
-                style={[styles.tile, wantsVideo ? styles.tileVideo : null]}
+                style={[styles.tile, wantsVideo ? styles.tileVideo : null, tileSpeaking ? styles.tileSpeaking : null]}
                 onPress={toggleControls}
                 testID={`group-call-tile-${item.userId}`}
               >
@@ -578,7 +586,7 @@ export default function GroupCallScreen() {
                     mirror={isMe}
                   />
                 ) : (
-                  <View style={[styles.avatar, item.connected ? styles.avatarConnected : null]}>
+                  <View style={[styles.avatar, item.connected ? styles.avatarConnected : null, tileSpeaking ? styles.avatarSpeaking : null]}>
                     <Text style={styles.avatarText}>{getDisplayInitials(item.name || 'U', 1)}</Text>
                   </View>
                 )}
@@ -725,6 +733,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     backgroundColor: '#000',
   },
+  tileSpeaking: { borderWidth: 2, borderColor: Colors.success },
   tileLabelOverlay: {
     position: 'absolute',
     left: 0,
@@ -747,6 +756,7 @@ const styles = StyleSheet.create({
     borderColor: 'transparent',
   },
   avatarConnected: { borderColor: Colors.success },
+  avatarSpeaking: { borderColor: Colors.success, borderWidth: 3 },
   avatarText: { color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold },
   tileName: { color: Colors.white, fontSize: FontSize.base, fontWeight: FontWeight.semibold, maxWidth: 130 },
   tileStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },

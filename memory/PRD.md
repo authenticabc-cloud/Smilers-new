@@ -2373,3 +2373,16 @@ ROOT CAUSES (both frontend, `StreamCallInner.tsx` `CallUI`):
 
 VALIDATION: frontend compiles & lints clean; device-only (Stream media). MUST test on a fresh Android build (also required for yesterday's native Kotlin streamRoom answer-route fix, iter-467, to take effect): 3-person voice call → all hear each other; 3-person video → all tiles visible; roster shows Joined/Left/Missed tags + Dial-again per show/hide-number rule.
 
+
+## iter-470 (fork) — Remote mute indicators + active-speaker highlighting (all call types, voice+video)
+User: (1) active-speaker highlight + mute indicators on each grid tile; (2) users must SEE when other participants mute themselves — in 1:1, multiparty (add-participant) and group calls, voice AND video.
+
+Call surfaces & what changed:
+- **`StreamCallInner.tsx`** (1:1 + add-participant multiparty via Stream) — previously showed NO remote mute/speaking state. Added module helper `isParticipantMuted(p)` = `!publishedTracks.includes(1)` (SFU AUDIO track = 1; VIDEO=2 already used); active-speaker uses Stream `participant.isSpeaking` (gated `&& !muted`).
+  - Multiparty GRID tiles: green border on speaking tile (`gridTileSpeaking`) + green ring on avatar fallback (`gridAvatarSpeaking`); red `mic-off` icon in the name badge when muted (badge now row layout).
+  - 1:1 single-remote: voice/avatar layout shows green ring on `avatarBig` (`avatarBigSpeaking`) when speaking + red `mic-off` before the name and "Muted" status when muted; video top bar shows red `mic-off` + "Muted". Top bar gated to `!isMultiParty` so grid owns per-tile names.
+- **`app/group-call/[conversationId].tsx`** (mesh WebRTC group calls) — ALREADY had per-tile mute icons (`item.isMuted`). Added active-speaker: wired the MeshController's existing `onSpeakingChange` (per-peer inbound audio-level gate + `__local`) into new `speaking` state; tiles/avatars get a green border (`tileSpeaking`/`avatarSpeaking`) when `speaking[userId]` (or `__local`) and not muted.
+- Study Room (`app/conference/.../room.tsx`) already had speaking highlight — untouched.
+
+VALIDATION: both files lint clean; bundle compiles. Device-only (Stream/WebRTC media). On a real build: mute yourself on one device → others see your mic-off badge + "Muted"; talk → your tile/avatar gets a green highlight. Works in 1:1, add-participant multiparty grid, and group calls, voice + video.
+

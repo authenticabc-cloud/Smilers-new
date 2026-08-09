@@ -176,6 +176,15 @@ function canRedialEntry(r: CallRosterEntry, myId: string | null): boolean {
   return !!(myId && r.addedBy && r.addedBy === myId);
 }
 
+/** True when a Stream participant's microphone is muted (no published audio
+ *  track). Stream SFU track types: AUDIO=1, VIDEO=2 — we already key video off
+ *  publishedTracks.includes(2), so audio is 1. */
+function isParticipantMuted(p: any): boolean {
+  const tracks = p?.publishedTracks;
+  if (Array.isArray(tracks)) return !tracks.includes(1);
+  return !p?.audioStream; // fallback: no audio stream object → treat as muted
+}
+
 /** In-call UI (inside StreamCall context). */
 function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acceptedAt, room, myId, myName, myPhone, conversationId, isGroupCall, isGroupAdmin, adminIdentities, conversationName, onConnectedChange }: CallUIProps) {
   const call = useCall();
@@ -316,6 +325,11 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   }, [connected, onConnectedChange]);
   const remoteHasVideo = !!(remote && ((remote as any).videoStream || (remote as any).publishedTracks?.includes?.(2)));
   const showVideo = (videoMode || remoteHasVideo) && !callVideoHidden;
+  // Remote mic / active-speaker state for the 1:1 (single-remote) layout so
+  // the user can see when the other person mutes themselves or is talking.
+  const remoteMuted = !!remote && isParticipantMuted(remote);
+  const remoteSpeaking = !!(remote as any)?.isSpeaking && !remoteMuted;
+  const isMultiParty = remoteParticipants.length > 1;
 
   // #4 FIX (self-view appears briefly then disappears): the local camera track
   // gets released by WebRTC whenever the app is backgrounded (and Stream can
@@ -1172,15 +1186,24 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
               const tileH = tileCount <= 2 ? '100%' : tileCount <= 4 ? '50%' : '33.33%';
               const tileW = tileCount === 1 ? '100%' : tileCount <= 4 ? '50%' : '33.33%';
               const pName = String(p?.name || p?.userId || 'Member');
+              const pMuted = isParticipantMuted(p);
+              const pSpeaking = !!p?.isSpeaking && !pMuted;
               return (
-                <View key={p.sessionId || p.userId} style={[styles.gridTile, { width: tileW as any, height: tileH as any }]}>
+                <View
+                  key={p.sessionId || p.userId}
+                  style={[
+                    styles.gridTile,
+                    { width: tileW as any, height: tileH as any },
+                    pSpeaking ? styles.gridTileSpeaking : null,
+                  ]}
+                >
                   <ParticipantView
                     participant={p}
                     style={StyleSheet.absoluteFill as any}
                     ParticipantLabel={null}
                     ParticipantVideoFallback={() => (
                       <View style={styles.gridFallback}>
-                        <View style={styles.gridAvatar}>
+                        <View style={[styles.gridAvatar, pSpeaking ? styles.gridAvatarSpeaking : null]}>
                           <Text style={styles.gridAvatarText}>{pName.trim().charAt(0).toUpperCase()}</Text>
                         </View>
                       </View>
@@ -1188,6 +1211,9 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
                     videoZOrder={0}
                   />
                   <View style={styles.gridNameBadge} pointerEvents="none">
+                    {pMuted ? (
+                      <Ionicons name="mic-off" size={12} color="#FF6B6B" style={{ marginRight: 4 }} />
+                    ) : null}
                     <Text style={styles.gridNameText} numberOfLines={1}>{pName}</Text>
                   </View>
                 </View>
@@ -1204,13 +1230,18 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
           />
         ) : (
           <View style={styles.centerFill}>
-            <View style={styles.avatarBig}>
+            <View style={[styles.avatarBig, remoteSpeaking ? styles.avatarBigSpeaking : null]}>
               <Ionicons name="person" size={64} color={Colors.white} />
             </View>
-            <Text style={styles.peerName} numberOfLines={1}>
-              {peerName}
-            </Text>
-            <Text style={styles.statusText}>{statusLine}</Text>
+            <View style={styles.peerNameRow}>
+              {remoteMuted && connected ? (
+                <Ionicons name="mic-off" size={16} color="#FF6B6B" style={{ marginRight: 6 }} />
+              ) : null}
+              <Text style={styles.peerName} numberOfLines={1}>
+                {peerName}
+              </Text>
+            </View>
+            <Text style={styles.statusText}>{remoteMuted && connected ? 'Muted' : statusLine}</Text>
           </View>
         )}
       </View>
@@ -1228,12 +1259,17 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
               {hasPublishedScreenShare ? 'You are sharing your screen' : `${peerName} is sharing their screen`}
             </Text>
           </View>
-        ) : showVideo && remote && remoteHasVideo ? (
+        ) : !isMultiParty && showVideo && remote && remoteHasVideo ? (
           <View style={styles.topBar} pointerEvents="none">
-            <Text style={styles.topName} numberOfLines={1}>
-              {peerName}
-            </Text>
-            <Text style={styles.topStatus}>{statusLine}</Text>
+            <View style={styles.topNameRow}>
+              {remoteMuted ? (
+                <Ionicons name="mic-off" size={15} color="#FF6B6B" style={{ marginRight: 6 }} />
+              ) : null}
+              <Text style={styles.topName} numberOfLines={1}>
+                {peerName}
+              </Text>
+            </View>
+            <Text style={styles.topStatus}>{remoteMuted ? 'Muted' : statusLine}</Text>
           </View>
         ) : null
       ) : null}
@@ -2639,6 +2675,7 @@ const styles = StyleSheet.create({
   remoteArea: { ...StyleSheet.absoluteFillObject },
   gridWrap: { ...StyleSheet.absoluteFillObject, flexDirection: 'row', flexWrap: 'wrap', backgroundColor: '#000' },
   gridTile: { padding: 1, backgroundColor: '#0B0B0B', overflow: 'hidden' },
+  gridTileSpeaking: { borderWidth: 2, borderColor: '#34C759', borderRadius: 6 },
   gridFallback: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#161616' },
   gridAvatar: {
     width: 72,
@@ -2648,12 +2685,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  gridAvatarSpeaking: { borderWidth: 3, borderColor: '#34C759' },
   gridAvatarText: { color: Colors.white, fontSize: 28, fontWeight: '700' },
   gridNameBadge: {
     position: 'absolute',
     left: 6,
     bottom: 6,
     maxWidth: '90%',
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 8,
@@ -2670,9 +2710,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 20,
   },
+  avatarBigSpeaking: { borderWidth: 4, borderColor: '#34C759' },
+  peerNameRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', maxWidth: '86%' },
   peerName: { color: Colors.white, fontSize: 24, fontWeight: '700' },
   statusText: { color: '#9CA3AF', fontSize: 16, marginTop: 8 },
   topBar: { position: 'absolute', top: 56, left: 0, right: 0, alignItems: 'center' },
+  topNameRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', maxWidth: '86%' },
   topName: { color: Colors.white, fontSize: 18, fontWeight: '700' },
   topStatus: { color: '#D1D5DB', fontSize: 14, marginTop: 2 },
   connQualityWrap: {
