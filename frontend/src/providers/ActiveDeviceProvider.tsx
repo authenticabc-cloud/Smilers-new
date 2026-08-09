@@ -1,51 +1,56 @@
 /**
- * ActiveDeviceProvider — CLIENT-SIDE scaffold for the "one active device only"
+ * ActiveDeviceProvider — CLIENT implementation of the "one active device only"
  * security policy (Bug 2b).
  *
  * Policy (as requested by the product owner):
  *   • A Smilers account may be actively signed in on ONE device at a time.
- *   • When a user signs in on a NEW device, the OLD device is WARNED and must
- *     CONFIRM the transfer; on confirmation the old device is signed out and
- *     access moves to the new device.
- *   • Claiming/taking over the active slot requires Face ID (biometric) on the
- *     NEW device.
+ *   • When a user signs in on a NEW device while another device is live, the NEW
+ *     device must pass Face ID (biometric) to TAKE OVER; taking over REVOKES the
+ *     old device, which is signed out on its next heartbeat.
+ *   • If Face ID is cancelled, the incumbent device stays active and the new
+ *     device is kept out (signed out).
  *
  * ─────────────────────────────────────────────────────────────────────────
- * BACKEND DEPENDENCY (owned by the web team's Convex repo — NOT in this app):
- * This scaffold calls the following endpoints IF they exist and no-ops safely
- * otherwise (so shipping this code cannot break anything before the backend is
- * ready). See docs/backend/one-active-device-spec.md for the full contract.
+ * BACKEND CONTRACT (native-one-active-device-contract.json, owned by the web
+ * team's Convex repo). All require an authenticated user. `deviceId` is a stable
+ * client-generated string.
  *
- *   query    api.deviceSessions.getActiveDevice()
- *              → { activeDeviceId, activeDeviceName, updatedAt,
- *                  pendingTakeover?: { deviceId, deviceName, requestedAt } } | null
- *   mutation api.deviceSessions.claimActiveDevice({ deviceId, deviceName,
- *                  platform, faceVerified, requestTakeover })
- *   mutation api.deviceSessions.confirmTakeover({ deviceId })   // OLD device approves
- *   mutation api.deviceSessions.denyTakeover({ deviceId })      // OLD device rejects
- *   mutation api.deviceSessions.heartbeat({ deviceId })          // optional keepalive
+ *   mutation deviceSessions.claimActiveDevice({ deviceId, deviceName?, platform? })
+ *     → { result: "active" }
+ *     | { result: "takeover_required",
+ *         currentDevice: { deviceId, deviceName, platform, lastHeartbeatAt } }
+ *   mutation deviceSessions.confirmTakeover({ deviceId })  → { result: "active" }   // after Face ID
+ *   mutation deviceSessions.denyTakeover({ deviceId })     → { result: "denied" }   // Face ID cancelled
+ *   mutation deviceSessions.heartbeat({ deviceId })        → { revoked, isActive }  // every ~30s
+ *   query    deviceSessions.getActiveDevice()  → null | { deviceId, deviceName, platform, status, claimedAt, lastHeartbeatAt }
  *
- * Enable with EXPO_PUBLIC_ONE_ACTIVE_DEVICE_ENABLED=true once the backend ships.
+ * Recommended flow: sign in → claimActiveDevice → if "active" proceed + heartbeat;
+ * if "takeover_required" prompt Face ID → confirmTakeover (proceed) or denyTakeover
+ * (stay out). While in-app, heartbeat every ~30s and log out on revoked:true.
+ *
+ * Enable with EXPO_PUBLIC_ONE_ACTIVE_DEVICE_ENABLED=true.
  * ─────────────────────────────────────────────────────────────────────────
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, AppState } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, AppState, Platform } from 'react-native';
 import { useMutation } from 'convex/react';
 
 import { api } from '../convexApi';
 import { useAuth } from './AuthProvider';
-import { useSafeConvexSubscription } from '../hooks/useSafeConvexQuery';
-import { getDeviceId, getDeviceName, getDevicePlatformLabel } from '../lib/deviceIdentity';
+import { getDeviceId, getDeviceName } from '../lib/deviceIdentity';
 import { Colors, FontSize, FontWeight, Spacing, Radius, Shadow } from '../theme';
 
 const FEATURE_ENABLED = process.env.EXPO_PUBLIC_ONE_ACTIVE_DEVICE_ENABLED === 'true';
+const HEARTBEAT_MS = 30_000;
 
-type ActiveDeviceState = {
-  activeDeviceId?: string | null;
-  activeDeviceName?: string | null;
-  updatedAt?: number;
-  pendingTakeover?: { deviceId: string; deviceName?: string; requestedAt?: number } | null;
-} | null;
+type IncumbentDevice = {
+  deviceId: string;
+  deviceName?: string | null;
+  platform?: string | null;
+  lastHeartbeatAt?: string | null;
+};
+
+type Phase = 'checking' | 'active' | 'takeover_prompt' | 'evicted' | 'kept_out';
 
 /** Prompt Face ID / biometrics. Returns true when the user passes (or when no
  * biometric hardware is enrolled — we don't want to hard-lock the user out on a
@@ -58,7 +63,7 @@ async function requireFaceId(): Promise<boolean> {
     const enrolled = await LocalAuthentication.isEnrolledAsync();
     if (!hasHardware || !enrolled) return true; // graceful — no biometrics set up
     const res = await LocalAuthentication.authenticateAsync({
-      promptMessage: 'Confirm it\'s you to use Smilers on this device',
+      promptMessage: "Confirm it's you to use Smilers on this device",
       cancelLabel: 'Cancel',
       disableDeviceFallback: false,
     });
@@ -71,22 +76,27 @@ async function requireFaceId(): Promise<boolean> {
 export function ActiveDeviceProvider({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, signOut } = useAuth();
 
-  const getActiveRef = (api as any)?.deviceSessions?.getActiveDevice;
   const claimM = useMutation((api as any)?.deviceSessions?.claimActiveDevice);
   const confirmM = useMutation((api as any)?.deviceSessions?.confirmTakeover);
   const denyM = useMutation((api as any)?.deviceSessions?.denyTakeover);
   const heartbeatM = useMutation((api as any)?.deviceSessions?.heartbeat);
 
-  const backendReady = FEATURE_ENABLED && !!getActiveRef && !!claimM;
+  const backendReady = FEATURE_ENABLED && !!claimM;
 
   const [deviceId, setDeviceId] = useState<string | null>(null);
-  const deviceName = useRef<string>('');
-  const platformLabel = useRef<string>('');
+  const deviceNameRef = useRef<string>('');
+  const platformRef = useRef<string>(Platform.OS);
+
+  const [phase, setPhase] = useState<Phase>('checking');
+  const [incumbent, setIncumbent] = useState<IncumbentDevice | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const claimedRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
-    deviceName.current = getDeviceName();
-    platformLabel.current = getDevicePlatformLabel();
+    deviceNameRef.current = getDeviceName();
+    platformRef.current = Platform.OS; // "ios" | "android" | "web" — matches contract
     void getDeviceId().then((id) => {
       if (alive) setDeviceId(id);
     });
@@ -95,166 +105,155 @@ export function ActiveDeviceProvider({ children }: { children: React.ReactNode }
     };
   }, []);
 
-  const { data: active } = useSafeConvexSubscription<ActiveDeviceState>(
-    getActiveRef,
-    {},
-    null,
-    backendReady && isAuthenticated,
-  );
-
-  const claimedRef = useRef(false);
-  const [takingOver, setTakingOver] = useState(false);
-  const [evicted, setEvicted] = useState(false);
-
-  // Reset transient UI state whenever the session/device changes.
+  // Reset transient state on session/device change so a re-login re-claims.
   useEffect(() => {
     claimedRef.current = false;
-    setEvicted(false);
-    setTakingOver(false);
+    setPhase('checking');
+    setIncumbent(null);
+    setBusy(false);
   }, [deviceId, isAuthenticated]);
 
-  const isActiveHere = !!deviceId && active?.activeDeviceId === deviceId;
-  const anotherActive = !!active?.activeDeviceId && !!deviceId && active.activeDeviceId !== deviceId;
+  const startActive = useCallback(() => {
+    setPhase('active');
+    setIncumbent(null);
+    setBusy(false);
+  }, []);
 
-  // ── First-run claim / takeover request ───────────────────────────────
+  // ── Sign-in claim ─────────────────────────────────────────────────────
   useEffect(() => {
     if (!backendReady || !isAuthenticated || !deviceId || claimedRef.current) return;
-
-    // Nobody is active yet → claim this slot (no takeover, no warning needed).
-    if (!active?.activeDeviceId) {
-      claimedRef.current = true;
-      void claimM({
-        deviceId,
-        deviceName: deviceName.current,
-        platform: platformLabel.current,
-        faceVerified: false,
-        requestTakeover: false,
-      }).catch(() => {
+    claimedRef.current = true;
+    (async () => {
+      try {
+        const res = await claimM({
+          deviceId,
+          deviceName: deviceNameRef.current,
+          platform: platformRef.current,
+        });
+        if (res?.result === 'takeover_required') {
+          setIncumbent(res.currentDevice || null);
+          setPhase('takeover_prompt');
+        } else {
+          startActive();
+        }
+      } catch {
+        // Backend error → fail open (don't lock the user out of their app).
         claimedRef.current = false;
-      });
-      return;
-    }
+        startActive();
+      }
+    })();
+  }, [backendReady, isAuthenticated, deviceId, claimM, startActive]);
 
-    // We're already the active device → ensure fresh heartbeat, nothing to do.
-    if (isActiveHere) {
-      claimedRef.current = true;
-      if (heartbeatM) void heartbeatM({ deviceId }).catch(() => {});
-      return;
-    }
-
-    // Another device holds the slot → request a takeover behind Face ID.
-    if (anotherActive && !takingOver) {
-      claimedRef.current = true;
-      setTakingOver(true);
-      (async () => {
-        const ok = await requireFaceId();
-        if (!ok) {
-          claimedRef.current = false;
-          setTakingOver(false);
-          return;
-        }
-        try {
-          await claimM({
-            deviceId,
-            deviceName: deviceName.current,
-            platform: platformLabel.current,
-            faceVerified: true,
-            requestTakeover: true,
-          });
-        } catch {
-          claimedRef.current = false;
-          setTakingOver(false);
-        }
-      })();
-    }
-  }, [backendReady, isAuthenticated, deviceId, active, isActiveHere, anotherActive, takingOver, claimM, heartbeatM]);
-
-  // ── Eviction detection ───────────────────────────────────────────────
-  // If we WERE the active device and the active slot moved to another device
-  // (the user approved a takeover elsewhere), sign out here.
-  const wasActiveRef = useRef(false);
+  // ── Heartbeat while active ────────────────────────────────────────────
   useEffect(() => {
-    if (isActiveHere) wasActiveRef.current = true;
-    if (wasActiveRef.current && anotherActive) {
-      setEvicted(true);
-    }
-  }, [isActiveHere, anotherActive]);
-
-  // Periodic heartbeat while we're the active device (keeps "last active" fresh
-  // so the backend can show accurate timing to the other device).
-  useEffect(() => {
-    if (!backendReady || !isActiveHere || !deviceId || !heartbeatM) return;
-    const tick = () => void heartbeatM({ deviceId }).catch(() => {});
-    const interval = setInterval(tick, 60_000);
+    if (!backendReady || phase !== 'active' || !deviceId || !heartbeatM) return;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const res = await heartbeatM({ deviceId });
+        if (!stopped && res?.revoked) {
+          setPhase('evicted');
+        }
+      } catch {
+        // ignore transient heartbeat errors
+      }
+    };
+    void tick();
+    const interval = setInterval(tick, HEARTBEAT_MS);
     const sub = AppState.addEventListener('change', (s) => {
-      if (s === 'active') tick();
+      if (s === 'active') void tick();
     });
     return () => {
+      stopped = true;
       clearInterval(interval);
       try {
         sub.remove();
       } catch {}
     };
-  }, [backendReady, isActiveHere, deviceId, heartbeatM]);
+  }, [backendReady, phase, deviceId, heartbeatM]);
 
   const doSignOut = useCallback(() => {
     void signOut();
   }, [signOut]);
 
-  // ── OLD device: incoming takeover request warning ─────────────────────
-  const pending = active?.pendingTakeover;
-  const showTakeoverPrompt =
-    backendReady && isActiveHere && !!pending?.deviceId && pending.deviceId !== deviceId;
-
-  const [resolving, setResolving] = useState(false);
-  const approveTakeover = useCallback(async () => {
-    if (!pending?.deviceId || !confirmM) return;
-    setResolving(true);
+  // ── NEW device: take over (Face ID) ──────────────────────────────────
+  const doTakeover = useCallback(async () => {
+    if (!deviceId || !confirmM || busy) return;
+    setBusy(true);
+    const ok = await requireFaceId();
+    if (!ok) {
+      // User cancelled Face ID → stay out; tell backend to drop pending intent.
+      try {
+        if (denyM) await denyM({ deviceId });
+      } catch {}
+      setPhase('kept_out');
+      setBusy(false);
+      return;
+    }
     try {
-      await confirmM({ deviceId: pending.deviceId });
-      // The getActiveDevice subscription will now report the new device as
-      // active → the eviction effect signs us out automatically.
+      await confirmM({ deviceId });
+      startActive();
     } catch {
-      setResolving(false);
+      setBusy(false);
     }
-  }, [pending?.deviceId, confirmM]);
-  const denyTakeover = useCallback(async () => {
-    if (!pending?.deviceId || !denyM) return;
-    setResolving(true);
+  }, [deviceId, confirmM, denyM, busy, startActive]);
+
+  const cancelTakeover = useCallback(async () => {
+    if (!deviceId || busy) {
+      doSignOut();
+      return;
+    }
+    setBusy(true);
     try {
-      await denyM({ deviceId: pending.deviceId });
-    } finally {
-      setResolving(false);
-    }
-  }, [pending?.deviceId, denyM]);
+      if (denyM) await denyM({ deviceId });
+    } catch {}
+    doSignOut();
+  }, [deviceId, denyM, busy, doSignOut]);
 
   return (
     <View style={styles.flex}>
       {children}
 
-      {/* NEW device is waiting for the old device to approve the takeover. */}
-      {backendReady && takingOver && anotherActive && !evicted ? (
-        <View style={styles.overlay} testID="active-device-waiting">
-          <ActivityIndicator size="large" color={Colors.primary} />
-          <Text style={styles.title}>Waiting for approval</Text>
+      {/* NEW device: another device is live — require Face ID to take over. */}
+      {backendReady && phase === 'takeover_prompt' ? (
+        <View style={styles.overlay} testID="active-device-takeover">
+          <Text style={styles.emoji}>📱</Text>
+          <Text style={styles.title}>Already signed in elsewhere</Text>
           <Text style={styles.body}>
-            You&apos;re already signed in on {active?.activeDeviceName || 'another device'}. We&apos;ve
-            asked that device to approve moving Smilers here. Approve it there to continue.
+            Your Smilers account is active on {incumbent?.deviceName || 'another device'}. To use it
+            here, confirm it&apos;s you — the other device will be signed out.
           </Text>
-          <TouchableOpacity style={styles.secondaryBtn} onPress={doSignOut} testID="active-device-waiting-signout">
+          <TouchableOpacity
+            style={[styles.primaryBtn, busy && styles.btnDisabled]}
+            onPress={doTakeover}
+            disabled={busy}
+            testID="active-device-takeover-confirm"
+          >
+            {busy ? (
+              <ActivityIndicator color={Colors.white} />
+            ) : (
+              <Text style={styles.primaryBtnText}>Use Smilers here (Face ID)</Text>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.secondaryBtn}
+            onPress={cancelTakeover}
+            disabled={busy}
+            testID="active-device-takeover-cancel"
+          >
             <Text style={styles.secondaryBtnText}>Cancel &amp; sign out</Text>
           </TouchableOpacity>
         </View>
       ) : null}
 
-      {/* This device was superseded — access moved elsewhere. */}
-      {backendReady && evicted ? (
+      {/* This device was revoked — access moved elsewhere. */}
+      {backendReady && phase === 'evicted' ? (
         <View style={styles.overlay} testID="active-device-evicted">
           <Text style={styles.emoji}>🔒</Text>
           <Text style={styles.title}>Signed in on another device</Text>
           <Text style={styles.body}>
             For your security, Smilers can only be active on one device at a time. Your account is now
-            active on {active?.activeDeviceName || 'a new device'}.
+            active on a different device.
           </Text>
           <TouchableOpacity style={styles.primaryBtn} onPress={doSignOut} testID="active-device-evicted-signout">
             <Text style={styles.primaryBtnText}>OK, sign out here</Text>
@@ -262,34 +261,17 @@ export function ActiveDeviceProvider({ children }: { children: React.ReactNode }
         </View>
       ) : null}
 
-      {/* OLD device: someone is trying to take over — warn and require confirm. */}
-      {showTakeoverPrompt && !evicted ? (
-        <View style={styles.overlay} testID="active-device-takeover-request">
-          <Text style={styles.emoji}>📱</Text>
-          <Text style={styles.title}>New sign-in request</Text>
+      {/* NEW device: user declined Face ID — kept out; incumbent stays active. */}
+      {backendReady && phase === 'kept_out' ? (
+        <View style={styles.overlay} testID="active-device-kept-out">
+          <Text style={styles.emoji}>🙅</Text>
+          <Text style={styles.title}>Not signed in here</Text>
           <Text style={styles.body}>
-            {pending?.deviceName || 'A new device'} wants to sign in to your Smilers account. If you
-            approve, you&apos;ll be signed out on this device.
+            You kept Smilers active on {incumbent?.deviceName || 'your other device'}. To use it on
+            this device instead, sign in again and confirm with Face ID.
           </Text>
-          <TouchableOpacity
-            style={[styles.primaryBtn, resolving && styles.btnDisabled]}
-            onPress={approveTakeover}
-            disabled={resolving}
-            testID="active-device-approve"
-          >
-            {resolving ? (
-              <ActivityIndicator color={Colors.white} />
-            ) : (
-              <Text style={styles.primaryBtnText}>Approve &amp; move to new device</Text>
-            )}
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.secondaryBtn}
-            onPress={denyTakeover}
-            disabled={resolving}
-            testID="active-device-deny"
-          >
-            <Text style={styles.secondaryBtnText}>No, keep me signed in here</Text>
+          <TouchableOpacity style={styles.primaryBtn} onPress={doSignOut} testID="active-device-kept-out-signout">
+            <Text style={styles.primaryBtnText}>Sign out</Text>
           </TouchableOpacity>
         </View>
       ) : null}

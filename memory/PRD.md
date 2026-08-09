@@ -1,5 +1,20 @@
 # Smilers Mobile App — PRD
 
+## iter-464 (Jun 2026): One-active-device policy — synced client to web team's live `deviceSessions.*` contract + enabled flag
+
+Web team shipped `native-one-active-device-contract.json` (5 Convex fns). The contract's MODEL differs fundamentally from the iter-458 scaffold: there is NO "old device approves" prompt. The NEW device does Face ID and calls `confirmTakeover` UNILATERALLY, which revokes all other devices; the OLD device learns it's out via `heartbeat` → `{revoked:true}`.
+
+REWROTE `src/providers/ActiveDeviceProvider.tsx` to match exactly:
+- On sign-in (authenticated + deviceId ready): `claimActiveDevice({deviceId, deviceName, platform})` where platform = `Platform.OS` ("ios"|"android"|"web"). `{result:"active"}` → phase `active` + start heartbeat. `{result:"takeover_required", currentDevice}` → phase `takeover_prompt`.
+- Takeover prompt (NEW device): "Use Smilers here (Face ID)" → `requireFaceId()` → pass → `confirmTakeover({deviceId})` → active. Cancel Face ID → `denyTakeover({deviceId})` → phase `kept_out` → signOut. "Cancel & sign out" → `denyTakeover` + signOut.
+- Heartbeat every 30s while `active` (+ on AppState→active); `{revoked:true}` → phase `evicted` → signOut overlay.
+- Backend errors FAIL OPEN (never lock the user out of their own app).
+- Dropped the old `getActiveDevice` subscription / pendingTakeover model (not how the contract works).
+
+Enabled `EXPO_PUBLIC_ONE_ACTIVE_DEVICE_ENABLED=true` in `frontend/.env` (endpoints are live). Lint clean; app boots to Sign In (provider is authenticated-gated → no unauth regression). ⚠️ Full 2-device + Face ID flow only verifiable on real device builds.
+
+
+
 ## iter-463 (Jun 2026): Android/iOS calls ending abruptly — interpreter Convex query error crashed the call (client-side fix)
 
 USER REPORT (Android): calls end with "Call ended unexpectedly … [CONVEX Q(callInterpreter:getForCall)] Server Error". Root cause (client): `useCallInterpreter` used raw `useQuery(api.callInterpreter.getForCall)`; convex/react THROWS a query Server Error into render, which bubbled to `CallErrorBoundary` (app/call/[conversationId].tsx) → whole call torn down. The interpreter is an OPTIONAL feature and must not be able to kill a call.
