@@ -17,7 +17,10 @@
 import { compareVersions } from './appVersion';
 
 export const CHANGELOG: Record<string, string[]> = {
-  '2.4.0': [
+  // Keyed just above the current live build (v2.3.63) so these show on the NEXT
+  // update and every build after it (the lookup picks the highest entry <= the
+  // running version). Add a NEW higher-keyed entry for the next feature release.
+  '2.3.64': [
     'Sub Groups — create groups within a group, with roles, ranking and synced icons',
     'One active device at a time for stronger account security',
     'Pinch-to-zoom photos across chats, profiles, stories and ads',

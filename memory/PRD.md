@@ -1,5 +1,17 @@
 # Smilers Mobile App — PRD
 
+## iter-476 (Jun 2026): Fix "What's New" always showing old features — bundle version-keyed release notes
+
+ROOT CAUSE: `WhatsNewModal` announced the bundled build version (`Constants.expoConfig.version`, auto-bumped by the deploy pipeline, e.g. 2.3.63) but pulled its bullets from the backend `/api/app-version` `releaseNotes`, whose defaults are static (v2.2.20-era: "Google Play in-app updates", "Noise cancellation"…) and never set per release (`SMILERS_RELEASE_NOTES` unused). So every new version showed the same old bullets.
+
+FIX: release notes now SHIP WITH THE BUNDLE. NEW `src/lib/changelog.ts` holds a `CHANGELOG: Record<version, string[]>` + `getReleaseNotesFor(version)` (returns the highest entry whose version <= the running build, so patch bumps still show latest feature notes) + `GENERIC_NOTES` fallback. `WhatsNewModal` now uses `getReleaseNotesFor(current)` instead of `fetchAppVersion`, falling back to GENERIC_NOTES (never stale). Backend `/api/app-version` still drives the update banner (unchanged).
+
+Seeded entry keyed at **2.3.64** (just above the current live 2.3.63, per user: version auto-bumps / "not sure") with the real recent features (Sub Groups, one-active-device, pinch-zoom, smoother chats, perf) — user approved bullets as-is. Future releases: add a new higher-keyed entry in changelog.ts.
+
+Lint clean; frontend restarted. Note: `fetchAppVersion` import removed from the modal (still used by `useUpdateBanner`).
+
+
+
 ## iter-475 (Jun 2026): Sub Groups — tappable "You joined" toast → opens the sub group
 
 `SubGroupList.onJoined` now passes `(name, id)`. `app/(tabs)/groups.tsx` stores `joinToast = { name, id }` and renders the toast as a `TouchableOpacity` with an "Open" CTA that navigates to `/chat/[id]` and dismisses (timeout extended to 4s). Lint clean; frontend restarted.
