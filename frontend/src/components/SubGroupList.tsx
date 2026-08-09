@@ -57,7 +57,7 @@ function SubGroupListInner({
   enabled: boolean;
   getUnread: (item: any) => number;
   onOpen: (id: string) => void;
-  onJoined?: (name: string) => void;
+  onJoined?: (name: string, id: string) => void;
 }) {
   const { data: subGroups } = useReactiveSafeConvexQuery<any[]>(
     (api as any).subGroups?.listForParent,
@@ -116,7 +116,7 @@ function SubGroupListInner({
     const newly = detectNewlyJoined(parentConversationId, currentIds);
     newly.forEach((id) => {
       const item = rows.find((r) => subId(r) === id);
-      onJoined(item?.name || 'sub group');
+      onJoined(item?.name || 'sub group', id);
     });
   }, [rows, trackerReady, onJoined, parentConversationId]);
 

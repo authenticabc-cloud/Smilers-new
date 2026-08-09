@@ -85,12 +85,12 @@ export default function GroupsScreen() {
   const [groupFilter, setGroupFilter] = useState<'all' | 'unread'>('all');
   const [inviteCode, setInviteCode] = useState('');
   const [undoReadId, setUndoReadId] = useState<string | null>(null);
-  const [joinToast, setJoinToast] = useState<string | null>(null);
+  const [joinToast, setJoinToast] = useState<{ name: string; id: string } | null>(null);
   const joinToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const showJoinToast = useCallback((name: string) => {
-    setJoinToast(`You joined "${name}"`);
+  const showJoinToast = useCallback((name: string, id: string) => {
+    setJoinToast({ name, id });
     if (joinToastTimer.current) clearTimeout(joinToastTimer.current);
-    joinToastTimer.current = setTimeout(() => setJoinToast(null), 3000);
+    joinToastTimer.current = setTimeout(() => setJoinToast(null), 4000);
   }, []);
 
   // Reactive so pin / unpin / reorder re-sorts the list live. The backend
@@ -927,12 +927,23 @@ export default function GroupsScreen() {
       />
 
       {joinToast ? (
-        <View pointerEvents="none" style={styles.joinToast} testID="join-toast">
+        <TouchableOpacity
+          activeOpacity={0.85}
+          style={styles.joinToast}
+          testID="join-toast"
+          onPress={() => {
+            const id = joinToast.id;
+            setJoinToast(null);
+            if (joinToastTimer.current) clearTimeout(joinToastTimer.current);
+            router.push(`/chat/${id}` as any);
+          }}
+        >
           <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
           <Text style={styles.joinToastText} numberOfLines={2}>
-            {joinToast}
+            You joined &quot;{joinToast.name}&quot;
           </Text>
-        </View>
+          <Text style={styles.joinToastCta}>Open</Text>
+        </TouchableOpacity>
       ) : null}
     </SafeAreaView>
   );
@@ -955,6 +966,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   joinToastText: { flex: 1, color: '#FFFFFF', fontSize: 15, fontWeight: '500' },
+  joinToastCta: { color: Colors.primary, fontSize: 14, fontWeight: '700' },
   whatsNewCard: {
     flexDirection: 'row',
     alignItems: 'flex-start',

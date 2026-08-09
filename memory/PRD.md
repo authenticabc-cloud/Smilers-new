@@ -1,5 +1,11 @@
 # Smilers Mobile App — PRD
 
+## iter-475 (Jun 2026): Sub Groups — tappable "You joined" toast → opens the sub group
+
+`SubGroupList.onJoined` now passes `(name, id)`. `app/(tabs)/groups.tsx` stores `joinToast = { name, id }` and renders the toast as a `TouchableOpacity` with an "Open" CTA that navigates to `/chat/[id]` and dismisses (timeout extended to 4s). Lint clean; frontend restarted.
+
+
+
 ## iter-474 (Jun 2026): Sub Groups — "You joined X" toast on new membership
 
 Since the added member doesn't take the action, detection is reactive: NEW `src/lib/subGroupJoinTracker.ts` persists per-mother the caller's active sub-group memberships (`smilers.subgroups.joined.v1`, module-cached). `detectNewlyJoined(parentId, currentIds)` seeds SILENTLY on first observation (no toast for existing memberships) and returns only genuinely-new ids afterward. `SubGroupList` gained an optional `onJoined(name)` prop + a tracker-ready effect that diffs active `isMember` rows and fires `onJoined` for new joins. `app/(tabs)/groups.tsx` passes `showJoinToast` (a 3s auto-clearing dark toast overlay, `checkmark-circle`) to both SubGroupList render branches. Symmetric to iter-473's "You left" toast. Lint clean; app boots to Sign In. ⚠️ Authenticated + live-backend — verify by having an admin add you to a sub group and watching for the toast on the Groups tab.
