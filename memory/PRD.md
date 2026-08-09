@@ -1,5 +1,15 @@
 # Smilers Mobile App — PRD
 
+## iter-467 (Jun 2026): Sub Groups — Collapse toggle (Groups tab) + Leaders one-tap shortcut
+
+COLLAPSE TOGGLE (`src/components/SubGroupList.tsx`): the nested sub-group block now has a tappable header row ("▾ N sub groups" / "▸ N sub groups") that collapses/expands the mother group's sub groups on the Groups tab. State is persisted per mother-group id in AsyncStorage (`smilers.subgroups.collapsed.v1` via `readStoredString`/`writeStoredString`, module-cached map). Default = expanded (1b). When collapsed, the header surfaces a red badge with the SUM of unread across the caller's sub groups + a small primary dot when pending approvals exist, so nothing important is hidden.
+
+LEADERS SHORTCUT (`src/components/SubGroupsSection.tsx`): a dashed "Create leaders sub group (N admins)" button pre-fills the create sheet — name = "<Group> Leaders", members pre-selected = all current admins/chief except self — so leaders spin up their private sub group in one tap (still respects create rules: admins active instantly, else pending). Added props `motherAdminIds` + `groupName`; `app/group/[id].tsx` computes `motherAdminIds` from `adminIds` ∪ `chiefAdminId`.
+
+Lint clean; app boots to Sign In. ⚠️ Authenticated + live-backend — verify collapse persistence and leaders pre-select on a signed-in session/device.
+
+
+
 ## iter-466 (Jun 2026): Sub Groups — Positions milestone (req 5) + "SUB" tag on nested rows
 
 POSITIONS (`subGroups.setPosition` / `setPositionVisibility` / `listPositions` / `positionsForMother`):

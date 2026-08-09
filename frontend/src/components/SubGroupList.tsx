@@ -1,12 +1,35 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation } from 'convex/react';
 import { api } from '../convexApi';
 import { useReactiveSafeConvexQuery } from '../hooks/useReactiveSafeConvexQuery';
+import { readStoredString, writeStoredString } from '../lib/settingsStorage';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../theme';
 
 const SUB_GROUPS_ENABLED = process.env.EXPO_PUBLIC_SUB_GROUPS_ENABLED !== 'false';
+const COLLAPSE_KEY = 'smilers.subgroups.collapsed.v1';
+
+let collapsedMapCache: Record<string, boolean> | null = null;
+async function loadCollapsedMap(): Promise<Record<string, boolean>> {
+  if (collapsedMapCache) return collapsedMapCache;
+  try {
+    const raw = await readStoredString(COLLAPSE_KEY);
+    collapsedMapCache = raw ? JSON.parse(raw) : {};
+  } catch {
+    collapsedMapCache = {};
+  }
+  return collapsedMapCache!;
+}
+async function persistCollapsed(parentId: string, collapsed: boolean) {
+  const map = await loadCollapsedMap();
+  if (collapsed) map[parentId] = true;
+  else delete map[parentId];
+  collapsedMapCache = map;
+  try {
+    await writeStoredString(COLLAPSE_KEY, JSON.stringify(map));
+  } catch {}
+}
 
 function subId(item: any): string | null {
   const v = item?._id || item?.id || item?.conversationId;
@@ -43,8 +66,37 @@ function SubGroupListInner({
   const approveM = useMutation((api as any).subGroups?.approve);
   const rejectM = useMutation((api as any).subGroups?.reject);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
+  const collapseLoaded = useRef(false);
+
+  useEffect(() => {
+    let alive = true;
+    void loadCollapsedMap().then((map) => {
+      if (alive && !collapseLoaded.current) {
+        collapseLoaded.current = true;
+        setCollapsed(!!map[parentConversationId]);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [parentConversationId]);
+
+  const toggleCollapse = useCallback(() => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      void persistCollapsed(parentConversationId, next);
+      return next;
+    });
+  }, [parentConversationId]);
 
   const rows = useMemo(() => (Array.isArray(subGroups) ? subGroups.filter((s) => subId(s)) : []), [subGroups]);
+
+  const collapsedUnread = useMemo(
+    () => rows.reduce((sum, item) => (item?.subGroupStatus === 'pending' ? sum : sum + getUnread(item)), 0),
+    [rows, getUnread],
+  );
+  const pendingCount = useMemo(() => rows.filter((r) => r?.subGroupStatus === 'pending').length, [rows]);
 
   const onApprove = useCallback(
     async (id: string) => {
@@ -89,7 +141,29 @@ function SubGroupListInner({
 
   return (
     <View style={styles.wrap} testID={`sub-groups-${parentConversationId}`}>
-      {rows.map((item) => {
+      <TouchableOpacity
+        style={styles.header}
+        onPress={toggleCollapse}
+        activeOpacity={0.7}
+        testID={`sub-groups-toggle-${parentConversationId}`}
+      >
+        <Ionicons name={collapsed ? 'chevron-forward' : 'chevron-down'} size={16} color={Colors.textSecondary} />
+        <Text style={styles.headerText}>
+          {rows.length} sub group{rows.length === 1 ? '' : 's'}
+        </Text>
+        {collapsed && collapsedUnread > 0 ? (
+          <View style={styles.headerBadge} testID={`sub-groups-collapsed-unread-${parentConversationId}`}>
+            <Text style={styles.headerBadgeText}>{collapsedUnread > 99 ? '99+' : collapsedUnread}</Text>
+          </View>
+        ) : null}
+        {collapsed && pendingCount > 0 ? (
+          <View style={styles.headerPendingDot} testID={`sub-groups-collapsed-pending-${parentConversationId}`} />
+        ) : null}
+      </TouchableOpacity>
+
+      {collapsed
+        ? null
+        : rows.map((item) => {
         const id = subId(item)!;
         const pending = item?.subGroupStatus === 'pending';
         const unread = pending ? 0 : getUnread(item);
@@ -182,6 +256,26 @@ export const SubGroupList = React.memo(SubGroupListInner);
 const AV = 30;
 const styles = StyleSheet.create({
   wrap: { paddingLeft: Spacing.xl, backgroundColor: Colors.background },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingLeft: Spacing.sm,
+    paddingRight: Spacing.lg,
+  },
+  headerText: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: FontWeight.semibold },
+  headerBadge: {
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: Colors.danger || '#E53935',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+  },
+  headerBadgeText: { color: Colors.white, fontSize: 10, fontWeight: '700' },
+  headerPendingDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.primary },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -361,6 +361,12 @@ function GroupInfoInner() {
   // is restricted to this (mother) group's members per the backend contract.
   const isTopLevelGroup = !conversation?.parentConversationId;
   const isSubGroup = !isTopLevelGroup;
+  const motherAdminIds = useMemo(() => {
+    const set = new Set<string>();
+    adminIds.forEach((a) => set.add(String(a)));
+    if (chiefAdminId) set.add(chiefAdminId);
+    return Array.from(set);
+  }, [adminIds, chiefAdminId]);
   const motherMembers = useMemo(
     () =>
       (Array.isArray(members) ? members : [])
@@ -767,6 +773,8 @@ function GroupInfoInner() {
           <SubGroupsSection
             parentConversationId={conversationId}
             motherMembers={motherMembers}
+            motherAdminIds={motherAdminIds}
+            groupName={groupName}
             isMotherAdmin={isAdmin}
             myId={myId}
             onOpenChat={(sid) => router.push(`/chat/${sid}` as any)}

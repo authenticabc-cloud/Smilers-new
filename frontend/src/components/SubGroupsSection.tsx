@@ -45,6 +45,8 @@ function getInitials(name?: string): string {
 export function SubGroupsSection({
   parentConversationId,
   motherMembers,
+  motherAdminIds,
+  groupName,
   isMotherAdmin,
   myId,
   onOpenChat,
@@ -52,6 +54,8 @@ export function SubGroupsSection({
 }: {
   parentConversationId: string;
   motherMembers: MotherMember[];
+  motherAdminIds: string[];
+  groupName: string;
   isMotherAdmin: boolean;
   myId: string | null;
   onOpenChat: (id: string) => void;
@@ -96,6 +100,23 @@ export function SubGroupsSection({
     setDesc('');
     setSelected(new Set());
   }, []);
+
+  // "Leaders" one-tap: pre-fill the create sheet with all current admins so
+  // group leaders can spin up their private sub group in a single step.
+  const openLeadersCreate = useCallback(() => {
+    const adminSet = new Set(
+      (motherAdminIds || []).map(String).filter((uid) => uid && uid !== myId),
+    );
+    setName(`${groupName} Leaders`.slice(0, 60));
+    setDesc('');
+    setSelected(adminSet);
+    setCreateOpen(true);
+  }, [motherAdminIds, myId, groupName]);
+
+  const leaderCount = useMemo(
+    () => (motherAdminIds || []).map(String).filter((uid) => uid && uid !== myId).length,
+    [motherAdminIds, myId],
+  );
 
   const submitCreate = useCallback(async () => {
     const trimmed = name.trim();
@@ -184,6 +205,15 @@ export function SubGroupsSection({
         Groups within this group. Members you add must belong to this group. Sub groups are only visible to their
         members.
       </Text>
+
+      {leaderCount > 0 ? (
+        <TouchableOpacity style={styles.leadersBtn} onPress={openLeadersCreate} testID="sub-group-leaders-shortcut">
+          <Ionicons name="star" size={15} color={Colors.primary} />
+          <Text style={styles.leadersBtnText}>
+            Create leaders sub group ({leaderCount} admin{leaderCount === 1 ? '' : 's'})
+          </Text>
+        </TouchableOpacity>
+      ) : null}
 
       {rows.length === 0 ? (
         <Text style={styles.empty} testID="sub-groups-empty">
@@ -359,6 +389,19 @@ const styles = StyleSheet.create({
   },
   createBtnText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   hint: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 6, lineHeight: 18 },
+  leadersBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: Spacing.sm,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    borderStyle: 'dashed',
+  },
+  leadersBtnText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.semibold },
   empty: { fontSize: FontSize.base, color: Colors.textSecondary, marginTop: Spacing.sm, fontStyle: 'italic' },
   row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, paddingVertical: 10 },
   avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
