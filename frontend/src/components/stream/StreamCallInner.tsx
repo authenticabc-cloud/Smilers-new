@@ -656,6 +656,39 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   // component (they hold a ref because showToast is declared after them).
   audioToastRef.current = showToast;
 
+  // Announce remote mic changes with a toast so people notice even when they
+  // aren't looking at that person's tile (1:1 and multiparty). A short
+  // per-participant grace after first sighting avoids spurious toasts while
+  // their audio publish is still settling right after they join.
+  const muteStateRef = useRef<Map<string, boolean>>(new Map());
+  const muteSeenAtRef = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    if (!connected) return;
+    const now = Date.now();
+    const prev = muteStateRef.current;
+    const seen = muteSeenAtRef.current;
+    const nextIds = new Set<string>();
+    remoteParticipants.forEach((p: any) => {
+      const id = String(p?.userId || p?.sessionId || '');
+      if (!id) return;
+      nextIds.add(id);
+      const muted = isParticipantMuted(p);
+      if (!seen.has(id)) seen.set(id, now);
+      const settled = now - (seen.get(id) as number) > 2500;
+      const was = prev.get(id);
+      if (was !== undefined && was !== muted && settled) {
+        showToast(`${String(p?.name || 'Participant')} ${muted ? 'muted' : 'unmuted'}`);
+      }
+      prev.set(id, muted);
+    });
+    for (const id of Array.from(prev.keys())) {
+      if (!nextIds.has(id)) {
+        prev.delete(id);
+        seen.delete(id);
+      }
+    }
+  }, [remoteParticipants, connected, showToast]);
+
   // iter-386 (enhancement): proactive WEAK-CONNECTION warning. When the
   // (weaker-of-both) connection quality sits at POOR (1) for >3s while
   // connected, surface a toast so the user knows audio may glitch and it isn't

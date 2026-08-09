@@ -116,6 +116,15 @@ export default function GroupCallScreen() {
   // Active-speaker map from the mesh controller (per-peer audio-level > gate,
   // plus __local for me) so each tile can highlight whoever is talking.
   const [speaking, setSpeaking] = useState<Record<string, boolean>>({});
+  // Brief toast (e.g. "Alice muted") so mic changes are noticed even when not
+  // looking at that person's tile.
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<any>(null);
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 3000);
+  }, []);
 
   // ── Immersive video: auto-hide header + controls ───────────────────────
   // In a group VIDEO call the header and bottom controls fade out after a few
@@ -474,6 +483,36 @@ export default function GroupCallScreen() {
     });
   }, [rawParticipants, connectedPeers, myUserId, deviceIndex, contactByUserId]);
 
+  // Announce remote mic changes with a toast. Grace after first sighting avoids
+  // spurious toasts from the initial roster load.
+  const muteStateRef = useRef<Map<string, boolean>>(new Map());
+  const muteSeenAtRef = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    const now = Date.now();
+    const prev = muteStateRef.current;
+    const seen = muteSeenAtRef.current;
+    const nextIds = new Set<string>();
+    roster.forEach((p) => {
+      const id = p.userId;
+      if (!id || id === myUserId) return; // never announce my own mute
+      nextIds.add(id);
+      const muted = !!p.isMuted;
+      if (!seen.has(id)) seen.set(id, now);
+      const settled = now - (seen.get(id) as number) > 2500;
+      const was = prev.get(id);
+      if (was !== undefined && was !== muted && settled) {
+        showToast(`${p.name || 'Participant'} ${muted ? 'muted' : 'unmuted'}`);
+      }
+      prev.set(id, muted);
+    });
+    for (const id of Array.from(prev.keys())) {
+      if (!nextIds.has(id)) {
+        prev.delete(id);
+        seen.delete(id);
+      }
+    }
+  }, [roster, myUserId, showToast]);
+
   if (isWeb) {
     return (
       <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -489,6 +528,11 @@ export default function GroupCallScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']} testID="group-call-screen">
       <CallBackground variant="warm" />
+      {toast ? (
+        <View style={styles.toastWrap} pointerEvents="none" testID="group-call-toast">
+          <Text style={styles.toastText}>{toast}</Text>
+        </View>
+      ) : null}
       {/* Background tap-catcher — toggles auto-hiding controls in video mode. */}
       {videoActive ? (
         <Pressable
@@ -734,6 +778,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
   tileSpeaking: { borderWidth: 2, borderColor: Colors.success },
+  toastWrap: {
+    position: 'absolute',
+    top: 90,
+    alignSelf: 'center',
+    zIndex: 50,
+    maxWidth: '86%',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.78)',
+  },
+  toastText: { color: Colors.white, fontSize: 14, fontWeight: '600', textAlign: 'center' },
   tileLabelOverlay: {
     position: 'absolute',
     left: 0,

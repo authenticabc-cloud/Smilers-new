@@ -2386,3 +2386,10 @@ Call surfaces & what changed:
 
 VALIDATION: both files lint clean; bundle compiles. Device-only (Stream/WebRTC media). On a real build: mute yourself on one device → others see your mic-off badge + "Muted"; talk → your tile/avatar gets a green highlight. Works in 1:1, add-participant multiparty grid, and group calls, voice + video.
 
+
+## iter-471 (fork) — Mute toast ("Alice muted" / "Alice unmuted")
+User: show a brief toast when a remote participant mutes/unmutes, so mic changes are noticed even when not looking at that tile.
+- **`StreamCallInner.tsx`** (1:1 + multiparty): new effect diffs each remote participant's `isParticipantMuted(p)` vs a `muteStateRef` map; on change → `showToast(`${name} ${muted?'muted':'unmuted'}`)`. A per-participant 2.5s grace (`muteSeenAtRef`) after first sighting suppresses spurious toasts while their audio publish settles on join; bookkeeping is pruned when a participant leaves. Never announces the local user.
+- **`app/group-call/[conversationId].tsx`** (mesh group calls): had no toast system — added a minimal `toast` state + `showToast` (3s) + a centered pill overlay (`toastWrap`/`toastText`) near the top. New effect diffs `roster` `isMuted` per userId (excludes `myUserId`) with the same 2.5s grace. Mute source is the Convex roster (`toggleSelfMute`), so it reflects real remote toggles.
+- Both lint clean; bundle compiles. Device-only (media). Verify on a build: mute/unmute on one phone → others see a brief "<name> muted/unmuted" toast in 1:1, multiparty, and group calls.
+
