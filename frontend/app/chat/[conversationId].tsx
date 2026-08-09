@@ -581,6 +581,33 @@ export default function ChatScreen() {
   }, [groupMemberById, resolveSenderName]);
 
   const refetchMessages = useCallback(async () => {}, []);
+
+  // Chief-admin change → toast (auto-succession or manual transfer). Seeds the
+  // previous chief silently on first load so we only toast a real change.
+  const [chiefToast, setChiefToast] = useState<string | null>(null);
+  const prevChiefRef = useRef<string | null>(null);
+  const chiefToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentChief =
+    ((groupAdminInfo as any)?.chiefAdmin && String((groupAdminInfo as any).chiefAdmin)) ||
+    (conversation?.chiefAdmin && String(conversation.chiefAdmin)) ||
+    '';
+  useEffect(() => {
+    if (!isGroupChat || !currentChief) return;
+    if (prevChiefRef.current === null) {
+      prevChiefRef.current = currentChief; // seed silently
+      return;
+    }
+    if (currentChief === prevChiefRef.current) return;
+    prevChiefRef.current = currentChief;
+    const msg =
+      currentChief === String(me?._id || '')
+        ? "You're now the Chief Admin"
+        : `${resolveSenderName(currentChief)} is now the Chief Admin`;
+    setChiefToast(msg);
+    if (chiefToastTimer.current) clearTimeout(chiefToastTimer.current);
+    chiefToastTimer.current = setTimeout(() => setChiefToast(null), 4000);
+  }, [currentChief, isGroupChat, me?._id, resolveSenderName]);
+
   const { data: conversationsForForward } = useSafeConvexQuery<any[]>(
     api.conversations.listConversations,
     {},
@@ -5623,6 +5650,14 @@ export default function ChatScreen() {
         recording={activeRecording}
         onClose={() => setActiveRecording(null)}
       />
+      {chiefToast ? (
+        <View pointerEvents="none" style={styles.chiefToast}>
+          <Text style={styles.chiefToastEmoji}>👑</Text>
+          <Text style={styles.chiefToastText} numberOfLines={2}>
+            {chiefToast}
+          </Text>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }

@@ -1,5 +1,11 @@
 # Smilers Mobile App — PRD
 
+## iter-478 (Jun 2026): Sub Groups — new Chief Admin toast (promoted member + everyone)
+
+`app/chat/[conversationId].tsx` now watches the current chief (`groupAdminInfo.chiefAdmin || conversation.chiefAdmin`) and, on a genuine change (seeded silently on first load via `prevChiefRef`), shows a 4s toast: "You're now the Chief Admin" to the promoted member, else "<Name> is now the Chief Admin" (name via `resolveSenderName`) to everyone. Fires for both auto-succession and manual transfer, in any group/sub group. Added `chiefToast`/`chiefToastEmoji`/`chiefToastText` styles to `chatScreenStyles.ts`. Lint clean; app boots to Sign In. ⚠️ Auth + live-backend — verify by transferring/auto-succeeding chief and watching the toast.
+
+
+
 ## iter-477 (Jun 2026): Sub Groups — fix "Member" name fallback in system messages + chief auto-succession wiring (v7)
 
 ISSUE 1 (names show "Member"): `resolveSenderName` in `app/chat/[conversationId].tsx` only resolved CURRENT group members, so system-message actors/targets who had LEFT (e.g. "X left", "X created the group") fell back to the literal "Member". FIX: added a persisted device-synced name cache fallback. `notificationNameCache.ts` gained `preloadUserNameCache()` + sync `getCachedUserNameSync(uid)`. The chat screen preloads the cache (`nameCacheReady` state) and `resolveSenderName` now uses `memberName || fallbackName || cachedName || 'Member'`. Existing effect already persists every current member's resolved (device-contact-first) name via `cacheUserName`, so former members resolve on subsequent renders/sessions.
