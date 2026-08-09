@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -15,6 +15,8 @@ import { useMutation } from 'convex/react';
 import { api } from '../convexApi';
 import { useReactiveSafeConvexQuery } from '../hooks/useReactiveSafeConvexQuery';
 import { useSafeConvexQuery } from '../hooks/useSafeConvexQuery';
+import { SubGroupAppearancePicker } from './SubGroupAppearancePicker';
+import { loadAppearanceMap, getAppearance, setAppearance } from '../lib/subGroupAppearance';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../theme';
 
 const SUB_GROUPS_ENABLED = process.env.EXPO_PUBLIC_SUB_GROUPS_ENABLED !== 'false';
@@ -73,6 +75,7 @@ export function SubGroupsSection({
   const approveM = useMutation((api as any).subGroups?.approve);
   const rejectM = useMutation((api as any).subGroups?.reject);
   const addMemberM = useMutation((api as any).subGroups?.addMember);
+  const removeMemberM = useMutation((api as any).conversations?.removeGroupMember);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState('');
@@ -84,9 +87,21 @@ export function SubGroupsSection({
   const [addTarget, setAddTarget] = useState<{ id: string; name: string } | null>(null);
   const [addSelected, setAddSelected] = useState<Set<string>>(new Set());
   const [addBusy, setAddBusy] = useState(false);
+  const [addInit, setAddInit] = useState(false);
+  // Appearance (emoji/color) — local per-device.
+  const [emoji, setEmoji] = useState<string | undefined>(undefined);
+  const [color, setColor] = useState<string | undefined>(undefined);
+  const [apprVersion, setApprVersion] = useState(0);
+  const [apprTarget, setApprTarget] = useState<{ id: string; name: string } | null>(null);
+  const [apprEmoji, setApprEmoji] = useState<string | undefined>(undefined);
+  const [apprColor, setApprColor] = useState<string | undefined>(undefined);
 
-  // Existing members of the sub group the admin is adding people to — so we
-  // don't offer members who are already in it. Only queried while the sheet is open.
+  useEffect(() => {
+    void loadAppearanceMap().then(() => setApprVersion((v) => v + 1));
+  }, []);
+
+  // Existing members of the sub group being edited — used both to know who's
+  // already in it (avoid re-adding) and to seed the membership toggles.
   const { data: targetMembers } = useSafeConvexQuery<any[]>(
     (api as any).conversations?.getGroupMembers,
     addTarget?.id ? { conversationId: addTarget.id } : {},
@@ -101,9 +116,23 @@ export function SubGroupsSection({
     });
     return set;
   }, [targetMembers]);
-  const addableMembers = useMemo(
-    () => motherMembers.filter((m) => m.userId && !targetMemberIds.has(m.userId)),
-    [motherMembers, targetMemberIds],
+
+  // Seed the toggles with the current members once, when the sheet opens.
+  useEffect(() => {
+    if (addTarget && !addInit && Array.isArray(targetMembers)) {
+      const seed = new Set<string>();
+      motherMembers.forEach((m) => {
+        if (m.userId !== myId && targetMemberIds.has(m.userId)) seed.add(m.userId);
+      });
+      setAddSelected(seed);
+      setAddInit(true);
+    }
+  }, [addTarget, addInit, targetMembers, targetMemberIds, motherMembers, myId]);
+
+  // All mother members (except me) are togglable — checked = in the sub group.
+  const membershipMembers = useMemo(
+    () => motherMembers.filter((m) => m.userId && m.userId !== myId),
+    [motherMembers, myId],
   );
 
   const selectableMembers = useMemo(
@@ -127,28 +156,45 @@ export function SubGroupsSection({
     });
   }, []);
 
-  const submitAddMembers = useCallback(async () => {
-    if (!addTarget?.id || !addMemberM || addSelected.size === 0) {
-      setAddTarget(null);
+  const closeAddSheet = useCallback(() => {
+    setAddTarget(null);
+    setAddInit(false);
+    setAddSelected(new Set());
+  }, []);
+
+  const submitMembership = useCallback(async () => {
+    if (!addTarget?.id) {
+      closeAddSheet();
       return;
     }
     setAddBusy(true);
-    const ids = Array.from(addSelected);
     let failed = 0;
-    for (const uid of ids) {
+    // Adds: selected but not currently a member.
+    const toAdd = Array.from(addSelected).filter((uid) => !targetMemberIds.has(uid));
+    // Removes: currently a member (and a togglable mother member) but unselected.
+    const toRemove = membershipMembers
+      .map((m) => m.userId)
+      .filter((uid) => targetMemberIds.has(uid) && !addSelected.has(uid));
+    for (const uid of toAdd) {
       try {
-        await addMemberM({ subGroupId: addTarget.id, userId: uid });
+        if (addMemberM) await addMemberM({ subGroupId: addTarget.id, userId: uid });
+      } catch {
+        failed += 1;
+      }
+    }
+    for (const uid of toRemove) {
+      try {
+        if (removeMemberM) await removeMemberM({ conversationId: addTarget.id, userId: uid });
       } catch {
         failed += 1;
       }
     }
     setAddBusy(false);
-    setAddTarget(null);
-    setAddSelected(new Set());
+    closeAddSheet();
     if (failed > 0) {
-      Alert.alert('Some members not added', `${ids.length - failed} added · ${failed} failed.`);
+      Alert.alert('Some changes failed', `${failed} member change${failed === 1 ? '' : 's'} could not be applied.`);
     }
-  }, [addTarget?.id, addMemberM, addSelected]);
+  }, [addTarget?.id, addSelected, targetMemberIds, membershipMembers, addMemberM, removeMemberM, closeAddSheet]);
 
   const toggle = useCallback((uid: string) => {
     setSelected((prev) => {
@@ -163,6 +209,8 @@ export function SubGroupsSection({
     setName('');
     setDesc('');
     setSelected(new Set());
+    setEmoji(undefined);
+    setColor(undefined);
   }, []);
 
   // "Leaders" one-tap: pre-fill the create sheet with all current admins so
@@ -174,6 +222,8 @@ export function SubGroupsSection({
     setName(`${groupName} Leaders`.slice(0, 60));
     setDesc('');
     setSelected(adminSet);
+    setEmoji('👑');
+    setColor('#F4B400');
     setCreateOpen(true);
   }, [motherAdminIds, myId, groupName]);
 
@@ -197,6 +247,11 @@ export function SubGroupsSection({
         description: desc.trim() || undefined,
         memberIds: Array.from(selected),
       });
+      const newId = res?.subGroupId ? String(res.subGroupId) : null;
+      if (newId && (emoji || color)) {
+        await setAppearance(newId, { emoji, color });
+        setApprVersion((v) => v + 1);
+      }
       setCreateOpen(false);
       resetCreate();
       if (res?.status === 'pending') {
@@ -207,7 +262,21 @@ export function SubGroupsSection({
     } finally {
       setBusy(false);
     }
-  }, [name, desc, selected, createM, parentConversationId, resetCreate]);
+  }, [name, desc, selected, emoji, color, createM, parentConversationId, resetCreate]);
+
+  const openAppearance = useCallback((id: string, label: string) => {
+    const cur = getAppearance(id);
+    setApprEmoji(cur.emoji);
+    setApprColor(cur.color);
+    setApprTarget({ id, name: label });
+  }, []);
+
+  const saveAppearance = useCallback(async () => {
+    if (!apprTarget?.id) return;
+    await setAppearance(apprTarget.id, { emoji: apprEmoji, color: apprColor });
+    setApprVersion((v) => v + 1);
+    setApprTarget(null);
+  }, [apprTarget?.id, apprEmoji, apprColor]);
 
   const onApprove = useCallback(
     async (id: string) => {
@@ -312,15 +381,23 @@ export function SubGroupsSection({
           const pending = item?.subGroupStatus === 'pending';
           const memberCount = item?.memberCount || 0;
           const rowBusy = busyId === id;
+          const appr = apprVersion >= 0 ? getAppearance(id) : {};
           return (
             <View key={id} style={styles.row} testID={`sub-group-row-${id}`}>
-              <View style={[styles.avatar, pending && styles.pendingAvatar]}>
+              <TouchableOpacity
+                style={[styles.avatar, pending && styles.pendingAvatar, appr.color ? { backgroundColor: appr.color } : null]}
+                disabled={pending}
+                onPress={() => openAppearance(id, item?.name || 'Sub group')}
+                testID={`sub-group-appearance-${id}`}
+              >
                 {pending ? (
                   <Ionicons name="hourglass-outline" size={16} color={Colors.white} />
+                ) : appr.emoji ? (
+                  <Text style={styles.avatarEmoji}>{appr.emoji}</Text>
                 ) : (
                   <Text style={styles.avatarText}>{getInitials(item?.name)}</Text>
                 )}
-              </View>
+              </TouchableOpacity>
               <TouchableOpacity
                 style={styles.rowMid}
                 disabled={pending}
@@ -372,13 +449,14 @@ export function SubGroupsSection({
                   {isMotherAdmin ? (
                     <TouchableOpacity
                       onPress={() => {
+                        setAddInit(false);
                         setAddSelected(new Set());
                         setAddTarget({ id, name: item?.name || 'Sub group' });
                       }}
                       hitSlop={8}
                       testID={`sub-group-add-members-${id}`}
                     >
-                      <Ionicons name="person-add-outline" size={20} color={Colors.primary} />
+                      <Ionicons name="people-outline" size={20} color={Colors.primary} />
                     </TouchableOpacity>
                   ) : null}
                   <TouchableOpacity onPress={() => onManage(id)} hitSlop={8} testID={`sub-group-manage-${id}`}>
@@ -391,29 +469,30 @@ export function SubGroupsSection({
         })
       )}
 
-      {/* Add members to a sub group */}
-      <Modal visible={!!addTarget} animationType="slide" transparent onRequestClose={() => setAddTarget(null)}>
+      {/* Manage members of a sub group (add + remove) */}
+      <Modal visible={!!addTarget} animationType="slide" transparent onRequestClose={closeAddSheet}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle} numberOfLines={1}>
-                Add to {addTarget?.name || 'sub group'}
+                Members · {addTarget?.name || 'sub group'}
               </Text>
-              <TouchableOpacity onPress={() => setAddTarget(null)} hitSlop={8} testID="sub-group-add-close">
+              <TouchableOpacity onPress={closeAddSheet} hitSlop={8} testID="sub-group-add-close">
                 <Ionicons name="close" size={24} color={Colors.textPrimary} />
               </TouchableOpacity>
             </View>
             <Text style={styles.hint}>
-              Pick members from this group. They stay in the main group too — sub groups only include current members.
+              Toggle members on to add them, off to remove them. Members always stay in the main group.
             </Text>
-            <Text style={styles.pickLabel}>Members ({addSelected.size} selected)</Text>
+            <Text style={styles.pickLabel}>{addSelected.size} in this sub group</Text>
             <FlatList
               style={styles.memberList}
-              data={addableMembers}
+              data={membershipMembers}
               keyExtractor={(m) => m.userId}
-              ListEmptyComponent={<Text style={styles.empty}>Everyone is already in this sub group.</Text>}
+              ListEmptyComponent={<Text style={styles.empty}>No other members in this group.</Text>}
               renderItem={({ item }) => {
                 const on = addSelected.has(item.userId);
+                const wasIn = targetMemberIds.has(item.userId);
                 return (
                   <TouchableOpacity
                     style={styles.pickRow}
@@ -423,9 +502,13 @@ export function SubGroupsSection({
                     <View style={styles.avatarSm}>
                       <Text style={styles.avatarText}>{getInitials(item.name)}</Text>
                     </View>
-                    <Text style={styles.pickName} numberOfLines={1}>
-                      {item.name}
-                    </Text>
+                    <View style={styles.pickNameWrap}>
+                      <Text style={styles.pickName} numberOfLines={1}>
+                        {item.name}
+                      </Text>
+                      {wasIn && !on ? <Text style={styles.willRemove}>Will be removed</Text> : null}
+                      {!wasIn && on ? <Text style={styles.willAdd}>Will be added</Text> : null}
+                    </View>
                     <Ionicons
                       name={on ? 'checkbox' : 'square-outline'}
                       size={22}
@@ -436,18 +519,38 @@ export function SubGroupsSection({
               }}
             />
             <TouchableOpacity
-              style={[styles.primaryBtn, (addBusy || addSelected.size === 0) && styles.btnDisabled]}
-              onPress={submitAddMembers}
-              disabled={addBusy || addSelected.size === 0}
+              style={[styles.primaryBtn, addBusy && styles.btnDisabled]}
+              onPress={submitMembership}
+              disabled={addBusy}
               testID="sub-group-add-submit"
             >
-              {addBusy ? (
-                <ActivityIndicator color={Colors.white} />
-              ) : (
-                <Text style={styles.primaryBtnText}>
-                  Add {addSelected.size > 0 ? addSelected.size : ''} member{addSelected.size === 1 ? '' : 's'}
-                </Text>
-              )}
+              {addBusy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.primaryBtnText}>Save members</Text>}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Appearance editor */}
+      <Modal visible={!!apprTarget} animationType="slide" transparent onRequestClose={() => setApprTarget(null)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle} numberOfLines={1}>
+                Appearance · {apprTarget?.name || 'sub group'}
+              </Text>
+              <TouchableOpacity onPress={() => setApprTarget(null)} hitSlop={8} testID="sub-group-appearance-close">
+                <Ionicons name="close" size={24} color={Colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.hint}>Pick an icon and color to spot this sub group quickly. Saved on this device.</Text>
+            <SubGroupAppearancePicker
+              emoji={apprEmoji}
+              color={apprColor}
+              onChangeEmoji={setApprEmoji}
+              onChangeColor={setApprColor}
+            />
+            <TouchableOpacity style={styles.primaryBtn} onPress={saveAppearance} testID="sub-group-appearance-save">
+              <Text style={styles.primaryBtnText}>Save</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -482,6 +585,8 @@ export function SubGroupsSection({
               maxLength={140}
               testID="sub-group-desc-input"
             />
+
+            <SubGroupAppearancePicker emoji={emoji} color={color} onChangeEmoji={setEmoji} onChangeColor={setColor} />
 
             <Text style={styles.pickLabel}>Add members ({selected.size} selected)</Text>
             <FlatList
@@ -585,6 +690,7 @@ const styles = StyleSheet.create({
   avatarSm: { width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
   pendingAvatar: { backgroundColor: Colors.textSecondary },
   avatarText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.bold },
+  avatarEmoji: { fontSize: 20 },
   rowMid: { flex: 1, gap: 2 },
   rowNameLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   subTag: { backgroundColor: Colors.textSecondary, borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1 },
@@ -619,7 +725,10 @@ const styles = StyleSheet.create({
   pickLabel: { fontSize: FontSize.sm, fontWeight: FontWeight.semibold, color: Colors.textSecondary, marginTop: Spacing.sm },
   memberList: { maxHeight: 260, marginVertical: Spacing.sm },
   pickRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, paddingVertical: 8 },
+  pickNameWrap: { flex: 1 },
   pickName: { flex: 1, fontSize: FontSize.base, color: Colors.textPrimary },
+  willRemove: { fontSize: FontSize.xs, color: Colors.danger, fontWeight: FontWeight.semibold },
+  willAdd: { fontSize: FontSize.xs, color: Colors.success || '#22C55E', fontWeight: FontWeight.semibold },
   primaryBtn: {
     backgroundColor: Colors.primary,
     paddingVertical: 14,

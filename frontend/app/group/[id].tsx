@@ -51,6 +51,7 @@ import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
 import ScreenErrorBoundary from '../../src/components/ScreenErrorBoundary';
 import { SubGroupsSection } from '../../src/components/SubGroupsSection';
 import { SubGroupPositionModal } from '../../src/components/SubGroupPositionModal';
+import { BulkPositionsModal, type BulkPositionMember } from '../../src/components/BulkPositionsModal';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../../src/theme';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import { getResolvedDisplayName, getSavedContactRecord } from '../../src/lib/displayName';
@@ -453,6 +454,26 @@ function GroupInfoInner() {
   }, [subPositionMap, nameById]);
 
   const [positionTarget, setPositionTarget] = useState<{ userId: string; name: string } | null>(null);
+  const [bulkPositionsOpen, setBulkPositionsOpen] = useState(false);
+
+  // Members list for the bulk positions editor (sub group only).
+  const bulkPositionMembers = useMemo<BulkPositionMember[]>(
+    () =>
+      (Array.isArray(members) ? members : [])
+        .map((m: any) => {
+          const uid = getContactUserId(m);
+          if (!uid) return null;
+          const pos = subPositionMap.get(uid);
+          return {
+            userId: uid,
+            name: displayNameForMember(m),
+            currentTitle: pos?.title || '',
+            currentShowInMother: !!pos?.showInMother,
+          };
+        })
+        .filter(Boolean) as BulkPositionMember[],
+    [members, displayNameForMember, subPositionMap],
+  );
 
   const suspendedMap = useMemo(() => {
     const map = new Map<string, any>();
@@ -822,9 +843,25 @@ function GroupInfoInner() {
         ) : null}
 
         {/* OFFICE BEARERS (sub group only) */}
-        {isSubGroup && officeBearers.length > 0 ? (
+        {isSubGroup && (officeBearers.length > 0 || isAdmin) ? (
           <View style={styles.section} testID="office-bearers-section">
-            <Text style={styles.sectionLabel}>OFFICE BEARERS ({officeBearers.length})</Text>
+            <View style={styles.bearerHeader}>
+              <Text style={styles.sectionLabel}>OFFICE BEARERS ({officeBearers.length})</Text>
+              {isAdmin ? (
+                <TouchableOpacity
+                  style={styles.manageBtn}
+                  onPress={() => setBulkPositionsOpen(true)}
+                  testID="office-bearers-manage"
+                  hitSlop={8}
+                >
+                  <Feather name="edit-2" size={13} color={Colors.primary} />
+                  <Text style={styles.manageBtnText}>Manage</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            {officeBearers.length === 0 ? (
+              <Text style={styles.bearerEmpty}>No positions assigned yet. Tap Manage to add office bearers.</Text>
+            ) : null}
             {officeBearers.map((ob) => (
               <View key={ob.userId} style={styles.bearerRow} testID={`office-bearer-${ob.userId}`}>
                 <View style={styles.bearerAvatar}>
@@ -1224,6 +1261,20 @@ function GroupInfoInner() {
         />
       ) : null}
 
+      {/* ----- Bulk Positions Modal ----- */}
+      {isSubGroup && conversationId ? (
+        <BulkPositionsModal
+          visible={bulkPositionsOpen}
+          subGroupId={conversationId}
+          members={bulkPositionMembers}
+          isChief={isChief}
+          onClose={() => {
+            setBulkPositionsOpen(false);
+            void refetchPositions?.();
+          }}
+        />
+      ) : null}
+
 
       {/* ----- Add Members Modal ----- */}
       <Modal visible={addMembersOpen} transparent animationType="slide" onRequestClose={() => setAddMembersOpen(false)}>
@@ -1481,6 +1532,10 @@ const styles = StyleSheet.create({
   },
   positionPillText: { fontSize: FontSize.xs, color: Colors.white, fontWeight: FontWeight.bold, flexShrink: 1 },
   bearerRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, paddingVertical: 8 },
+  bearerHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  bearerEmpty: { fontSize: FontSize.sm, color: Colors.textSecondary, fontStyle: 'italic', marginTop: 6 },
+  manageBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  manageBtnText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.semibold },
   bearerAvatar: {
     width: 34,
     height: 34,

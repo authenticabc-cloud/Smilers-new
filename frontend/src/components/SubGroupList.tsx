@@ -5,6 +5,7 @@ import { useMutation } from 'convex/react';
 import { api } from '../convexApi';
 import { useReactiveSafeConvexQuery } from '../hooks/useReactiveSafeConvexQuery';
 import { readStoredString, writeStoredString } from '../lib/settingsStorage';
+import { loadAppearanceMap, getAppearance } from '../lib/subGroupAppearance';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../theme';
 
 const SUB_GROUPS_ENABLED = process.env.EXPO_PUBLIC_SUB_GROUPS_ENABLED !== 'false';
@@ -68,6 +69,11 @@ function SubGroupListInner({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const collapseLoaded = useRef(false);
+  const [apprReady, setApprReady] = useState(false);
+
+  useEffect(() => {
+    void loadAppearanceMap().then(() => setApprReady(true));
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -170,6 +176,7 @@ function SubGroupListInner({
         const memberCount = item?.memberCount || 0;
         const initial = (item?.name || 'S').charAt(0).toUpperCase();
         const busy = busyId === id;
+        const appr = apprReady ? getAppearance(id) : {};
 
         if (pending) {
           return (
@@ -221,8 +228,8 @@ function SubGroupListInner({
             testID={`sub-group-${id}`}
           >
             <View style={styles.connector} />
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{initial}</Text>
+            <View style={[styles.avatar, appr.color ? { backgroundColor: appr.color } : null]}>
+              {appr.emoji ? <Text style={styles.avatarEmoji}>{appr.emoji}</Text> : <Text style={styles.avatarText}>{initial}</Text>}
             </View>
             <View style={styles.mid}>
               <View style={styles.nameLine}>
@@ -302,6 +309,7 @@ const styles = StyleSheet.create({
   },
   pendingAvatar: { backgroundColor: Colors.textSecondary },
   avatarText: { color: Colors.white, fontSize: FontSize.sm, fontWeight: FontWeight.bold },
+  avatarEmoji: { fontSize: 16 },
   mid: { flex: 1, gap: 1 },
   nameLine: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   branchIcon: { marginTop: 1 },

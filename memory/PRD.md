@@ -1,5 +1,21 @@
 # Smilers Mobile App — PRD
 
+## iter-469 (Jun 2026): Sub Groups — Bulk positions, per-device icons/colors, full membership editor (add + remove)
+
+BULK POSITIONS (`src/components/BulkPositionsModal.tsx`): "Manage" button in the sub-group Info OFFICE BEARERS header (admins) opens one sheet listing all members with a title TextInput each; Chief Admin also gets a per-member "Show in mother group" switch (shown once a title is entered). Save loops `subGroups.setPosition` ONLY for changed rows (title or showInMother diff). Empty office-bearers state now renders for admins with a "Tap Manage" prompt. Wired in `app/group/[id].tsx` with `bulkPositionMembers` (members ∪ subPositionMap).
+
+SUB-GROUP ICONS/COLORS (per-device, local — backend has no icon field):
+- NEW `src/lib/subGroupAppearance.ts`: emoji+color map persisted in AsyncStorage (`smilers.subgroups.appearance.v1`), module-cached, sync `getAppearance(id)` + async `setAppearance`.
+- NEW `src/components/SubGroupAppearancePicker.tsx`: horizontal emoji row (12) + color row (8) with "none" options.
+- `SubGroupsSection`: appearance picker in the Create sheet (persisted to the returned subGroupId); tap a sub group's avatar → Appearance editor modal. Leaders shortcut pre-sets 👑 + gold.
+- `SubGroupList` (Groups tab nested rows): renders the emoji/color avatar (loads the map on mount).
+
+FULL MEMBERSHIP EDITOR (Member Move — `SubGroupsSection`): the per-sub-group action (now a people icon) opens a membership sheet listing ALL mother members (except self) as toggles, seeded from the sub group's current members (`conversations.getGroupMembers`). Save diffs: newly-on → `subGroups.addMember`; turned-off (was a member) → `conversations.removeGroupMember`. "Will be added"/"Will be removed" hints per row. Members always remain in the mother group (contract requirement).
+
+Lint clean; app boots to Sign In. ⚠️ Authenticated + live-backend — verify on a signed-in session/device. NOTE: icons/colors are per-device (not synced to other members) until the web team adds an appearance field; manual position REORDER still needs a backend `order` field (iter-468 note).
+
+
+
 ## iter-468 (Jun 2026): Sub Groups — Search, Move/Add members, Office Bearers overview + seniority sort (Reorder needs backend)
 
 SUB-GROUP SEARCH (`SubGroupsSection`): a search box appears above the sub-group list once there are ≥4 sub groups; filters `listForParent` rows client-side by name, with clear button + "no match" empty state.
