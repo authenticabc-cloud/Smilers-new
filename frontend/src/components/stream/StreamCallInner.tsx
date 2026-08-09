@@ -713,6 +713,17 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
     [roster],
   );
 
+  // A "conference" is ANY multi-party call — a real group-conversation call OR
+  // a 1:1/direct call that had people ADDED into it (which is NOT a group
+  // conversation, so `isGroupCall` is false for it). The Joined/Missed/Left
+  // tags, Dial-again, the joined-report and the left-auto-detect must all be
+  // active for these added-participant calls too — gating them on `isGroupCall`
+  // was why none of it rendered for "scammers blacklist" (shown as "3 people").
+  const isConferenceCall =
+    isGroupCall ||
+    (remoteParticipants?.length || 0) > 1 ||
+    rosterWithStatus.some((r) => r.identity && r.identity !== myId);
+
   const inCallIds = useMemo(() => {
     const s = new Set<string>();
     if (myId) s.add(myId);
@@ -732,11 +743,11 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   // invite strip). Pending/declined come from the ring + decline signals.
   const reportedJoinedRef = useRef(false);
   useEffect(() => {
-    if (!isGroupCall || !connected || !room || !myId) return;
+    if (!isConferenceCall || !connected || !room || !myId) return;
     if (reportedJoinedRef.current) return;
     reportedJoinedRef.current = true;
     void reportParticipantStatus({ streamRoom: room, identity: myId, status: 'joined', displayName: myName });
-  }, [isGroupCall, connected, room, myId, myName]);
+  }, [isConferenceCall, connected, room, myId, myName]);
 
   // ── Backup "Left" auto-detection ─────────────────────────────────────────
   // The leaving participant reports 'left' on hangup, but a killed / crashed /
@@ -755,7 +766,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
   const absentSinceRef = useRef<Map<string, number>>(new Map());
   const leftReportedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!isGroupCall || !connected || !room || !myId) return;
+    if (!isConferenceCall || !connected || !room || !myId) return;
     const LEFT_GRACE_MS = 8000;
     const check = () => {
       const now = Date.now();
@@ -792,7 +803,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
     check();
     const iv = setInterval(check, 2000);
     return () => clearInterval(iv);
-  }, [isGroupCall, connected, room, myId, roster, presentUserIds]);
+  }, [isConferenceCall, connected, room, myId, roster, presentUserIds]);
 
   // Waiting strip: members who have NOT joined (ringing/missed/left). Excludes
   // me and anyone already joined so the strip only shows who we're waiting on
@@ -1148,6 +1159,41 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
             objectFit="contain"
             style={StyleSheet.absoluteFill as any}
           />
+        ) : remoteParticipants.length > 1 ? (
+          // Multi-party (3+ in call): render EVERY remote participant in a
+          // grid. This is what registers each of them for Stream track
+          // subscription — with the old single-`remote` layout the 3rd+
+          // person was never rendered, so others neither saw their video nor
+          // heard their audio. Voice calls show an avatar tile (still
+          // subscribes audio); video calls show the live video.
+          <View style={styles.gridWrap}>
+            {remoteParticipants.map((p: any) => {
+              const tileCount = remoteParticipants.length;
+              const tileH = tileCount <= 2 ? '100%' : tileCount <= 4 ? '50%' : '33.33%';
+              const tileW = tileCount === 1 ? '100%' : tileCount <= 4 ? '50%' : '33.33%';
+              const pName = String(p?.name || p?.userId || 'Member');
+              return (
+                <View key={p.sessionId || p.userId} style={[styles.gridTile, { width: tileW as any, height: tileH as any }]}>
+                  <ParticipantView
+                    participant={p}
+                    style={StyleSheet.absoluteFill as any}
+                    ParticipantLabel={null}
+                    ParticipantVideoFallback={() => (
+                      <View style={styles.gridFallback}>
+                        <View style={styles.gridAvatar}>
+                          <Text style={styles.gridAvatarText}>{pName.trim().charAt(0).toUpperCase()}</Text>
+                        </View>
+                      </View>
+                    )}
+                    videoZOrder={0}
+                  />
+                  <View style={styles.gridNameBadge} pointerEvents="none">
+                    <Text style={styles.gridNameText} numberOfLines={1}>{pName}</Text>
+                  </View>
+                </View>
+              );
+            })}
+          </View>
         ) : showVideo && remote && remoteHasVideo ? (
           <ParticipantView
             participant={remote}
@@ -1406,7 +1452,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
         >
           <Ionicons name="people" size={14} color={Colors.white} />
           <Text style={styles.participantsPillText}>
-            {isGroupCall
+            {isConferenceCall
               ? groupRingingCount > 0
                 ? `${groupJoinedCount} joined · ${groupRingingCount} ringing`
                 : `${groupJoinedCount} in call`
@@ -1418,7 +1464,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
       {/* Group-call waiting strip — mirrors the WebRTC invite strip: a live
           horizontal list of members we're still waiting on (Ringing/Declined),
           plus a "Call again" chip that re-rings only them. */}
-      {isGroupCall && !inPiP && !isMini && hasPendingOrDeclined ? (
+      {isConferenceCall && !inPiP && !isMini && hasPendingOrDeclined ? (
         <View style={styles.waitStrip} testID="group-call-waiting-strip">
           <ScrollView
             horizontal
@@ -1680,12 +1726,12 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
               </Pressable>
             </View>
             <View style={styles.rosterList}>
-              <RosterRow name={`${myName || 'You'} (you)`} phone={null} status={isGroupCall ? 'joined' : undefined} />
+              <RosterRow name={`${myName || 'You'} (you)`} phone={null} status={isConferenceCall ? 'joined' : undefined} />
               {rosterWithStatus
                 .filter((r) => r.identity && r.identity !== myId)
                 .map((r) => {
                   const showRedial =
-                    isGroupCall &&
+                    isConferenceCall &&
                     (r.derived === 'missed' || r.derived === 'left') &&
                     canRedialEntry(r, myId);
                   return (
@@ -1694,7 +1740,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
                       name={r.displayName || 'Smilers user'}
                       phone={r.phoneNumber}
                       hidden={r.hideNumber}
-                      status={isGroupCall ? r.derived : undefined}
+                      status={isConferenceCall ? r.derived : undefined}
                       onRedial={showRedial ? () => handleRedial(r) : undefined}
                       redialing={redialingIds.includes(r.identity)}
                       onRemove={
@@ -1706,7 +1752,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
                   );
                 })}
             </View>
-            {isGroupCall && hasPendingOrDeclined ? (
+            {isConferenceCall && hasPendingOrDeclined ? (
               <Pressable
                 style={styles.rosterAgainBtn}
                 onPress={handleCallAgain}
@@ -2211,7 +2257,9 @@ export default function StreamCallInner() {
     if (callId) void declineCall({ callId: String(callId) }).catch(() => {});
     // Group call: report my "declined" status so every participant's waiting
     // strip shows me red (mirrors the WebRTC invite strip).
-    if (isGroupCall && streamCallId && me?._id) {
+    // Conference call (group OR a call I was added into): report my "declined"
+    // status so the adder/participants see me flip to Missed with Dial-again.
+    if ((isGroupCall || !!streamRoomParam) && streamCallId && me?._id) {
       void reportParticipantStatus({
         streamRoom: String(streamCallId),
         identity: String(me._id),
@@ -2220,7 +2268,7 @@ export default function StreamCallInner() {
       });
     }
     callHost.end();
-  }, [callId, declineCall, isGroupCall, streamCallId, me]);
+  }, [callId, declineCall, isGroupCall, streamRoomParam, streamCallId, me]);
 
   const hangup = useCallback(() => {
     if (endedRef.current) return;
@@ -2236,7 +2284,12 @@ export default function StreamCallInner() {
     // and a Dial-again affordance appears per the number-visibility rules).
     // Only when I actually connected — an unanswered/cancelled ring is handled
     // by the missed-call path instead.
-    if (isGroupCall && everConnectedRef.current && streamCallId && me?._id) {
+    // Conference call (group OR a direct call I was added into): tell everyone
+    // I've LEFT (so my roster tag flips Joined→Left and a Dial-again affordance
+    // appears per the number-visibility rules). `streamRoomParam` marks that I
+    // joined via an add-participant invite, so this fires for added people too
+    // — not only group-conversation calls. Only when I actually connected.
+    if ((isGroupCall || !!streamRoomParam) && everConnectedRef.current && streamCallId && me?._id) {
       void reportParticipantStatus({
         streamRoom: String(streamCallId),
         identity: String(me._id),
@@ -2250,7 +2303,7 @@ export default function StreamCallInner() {
       call?.leave();
     } catch {}
     callHost.end();
-  }, [callId, call, endCall, isGroupCall, streamCallId, me]);
+  }, [callId, call, endCall, isGroupCall, streamRoomParam, streamCallId, me]);
 
   // ── Call-waiting: surface a SECOND ringing call during an active call ──────
   const connectedNow = !!client && !!call;
@@ -2584,6 +2637,29 @@ const styles = StyleSheet.create({
   waitingDecline: { backgroundColor: '#EF4444' },
   waitingBtnText: { color: Colors.white, fontSize: 15, fontWeight: '700' },
   remoteArea: { ...StyleSheet.absoluteFillObject },
+  gridWrap: { ...StyleSheet.absoluteFillObject, flexDirection: 'row', flexWrap: 'wrap', backgroundColor: '#000' },
+  gridTile: { padding: 1, backgroundColor: '#0B0B0B', overflow: 'hidden' },
+  gridFallback: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#161616' },
+  gridAvatar: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gridAvatarText: { color: Colors.white, fontSize: 28, fontWeight: '700' },
+  gridNameBadge: {
+    position: 'absolute',
+    left: 6,
+    bottom: 6,
+    maxWidth: '90%',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  gridNameText: { color: Colors.white, fontSize: 12, fontWeight: '600' },
   centerFill: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   avatarBig: {
     width: 120,

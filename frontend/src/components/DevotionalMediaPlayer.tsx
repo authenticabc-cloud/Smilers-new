@@ -29,6 +29,7 @@ import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { Colors, FontSize, FontWeight, Radius } from '../theme';
 import { ensureVoicePlaybackMode } from '../lib/audio/voicePlaybackMode';
+import { recordDiagnostic } from '../lib/diagnostics';
 
 interface Props {
   /** Optional — the raw storage ID. Kept for backwards compat / logs. */
@@ -56,12 +57,24 @@ function formatDuration(sec: number): string {
 function loadExpoAudio(): any {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    return require('expo-audio');
-  } catch (err) {
-    if (__DEV__) {
-      // eslint-disable-next-line no-console
-      console.warn('[DevotionalMediaPlayer] expo-audio require failed:', (err as Error)?.message);
+    const m = require('expo-audio');
+    if (!m?.createAudioPlayer) {
+      // Loaded, but the native side is missing/unlinked — this is what a
+      // silently-absent module looks like from JS. Report it.
+      recordDiagnostic({
+        tag: 'AUDIO',
+        source: 'DevotionalMediaPlayer',
+        message: 'expo-audio loaded but createAudioPlayer is missing (native module not linked?)',
+      });
     }
+    return m;
+  } catch (err) {
+    // Was __DEV__-only, so production had ZERO signal for dead audio.
+    recordDiagnostic({
+      tag: 'AUDIO',
+      source: 'DevotionalMediaPlayer',
+      message: `expo-audio require failed: ${(err as Error)?.message}`,
+    });
     return null;
   }
 }
