@@ -136,6 +136,11 @@ type CallUIProps = {
    * the instant the callee actually joins (not merely when the ring record
    * changes). */
   onConnectedChange?: (connected: boolean) => void;
+  /** True when THIS device joined an already-live call via the add-participant
+   * deep-link (carries a streamRoom param). Late joiners can hit a publish race
+   * where the pre-join mic.enable() never lands the audio track on the SFU, so
+   * others can't hear them — we force one fresh publish after connecting. */
+  isAddedParticipant: boolean;
 };
 
 // Visual mapping for group-call member DERIVED statuses shown in the live
@@ -263,7 +268,7 @@ function ParticipantGridPager({ participants, width }: { participants: any[]; wi
 }
 
 /** In-call UI (inside StreamCall context). */
-function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acceptedAt, room, myId, myName, myPhone, conversationId, isGroupCall, isGroupAdmin, adminIdentities, conversationName, onConnectedChange }: CallUIProps) {
+function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acceptedAt, room, myId, myName, myPhone, conversationId, isGroupCall, isGroupAdmin, adminIdentities, conversationName, onConnectedChange, isAddedParticipant }: CallUIProps) {
   const call = useCall();
   const { mode } = useCallHost();
   const isMini = mode === 'mini';
@@ -481,6 +486,36 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
     }, 2500);
     return () => clearTimeout(t);
   }, [call, connected, micOn, local]);
+
+  // ── FIX (added participants can't be heard) ────────────────────────────────
+  // When this device was ADDED into an already-live call, the pre-join
+  // `microphone.enable()` frequently races the SFU join negotiation: the local
+  // SDK marks the mic "unmuted" (publishedTracks reports audio) yet the audio
+  // track never actually lands on the SFU, so the ORIGINAL participants never
+  // hear the new person. The conditional self-heal above then no-ops because it
+  // trusts the (wrong) local publish state. So for late joiners we FORCE exactly
+  // one fresh publish (disable → short gap → enable) a moment after connecting,
+  // regardless of the reported track state. This re-runs the SFU publish
+  // negotiation and reliably delivers audio to everyone. Runs once; never
+  // touches the working 1:1 / original-participant paths.
+  const forcedRepublishRef = useRef(false);
+  useEffect(() => {
+    if (!call || !connected || !micOn || !isAddedParticipant) return;
+    if (forcedRepublishRef.current) return;
+    forcedRepublishRef.current = true;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        await call.microphone.disable();
+        await new Promise((r) => setTimeout(r, 250));
+        if (!cancelled) await call.microphone.enable();
+      } catch {}
+    }, 1500);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [call, connected, micOn, isAddedParticipant]);
 
   useEffect(() => {
     if (!connected) return;
@@ -2641,6 +2676,7 @@ export default function StreamCallInner() {
             adminIdentities={adminIdentities}
             conversationName={conversationName}
             onConnectedChange={handleConnectedChange}
+            isAddedParticipant={!!streamRoomParam}
           />
           {waitingBanner}
         </NoiseCancellationProvider>

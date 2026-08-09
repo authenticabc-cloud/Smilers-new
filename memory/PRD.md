@@ -1,5 +1,18 @@
 # Smilers Mobile App — PRD
 
+## iter-479 (Jun 2026): Stream call — 3 reported fixes (added-participant audio, framed tiles, caller+group name in call notif)
+
+Addressed the 3 items from the last user report:
+
+1. **Added participants unmuted but NOT heard by others (P0 audio fix)** — `StreamCallInner.tsx`. Late joiners (added into a live call via the add-participant deep-link, which carries `?streamRoom=…&answer=1`) hit a publish race: the pre-join `microphone.enable()` races the SFU join negotiation, the local SDK marks the mic "unmuted" (`publishedTracks` reports audio) yet the track never lands on the SFU → original participants never hear the new person. The existing conditional self-heal no-op'd because it trusted that (wrong) local state. FIX: new `isAddedParticipant` prop (`= !!streamRoomParam`) → a run-once effect FORCES one fresh publish (`microphone.disable()` → 250ms gap → `enable()`) 1.5s after connecting, regardless of the reported track state. Re-runs the SFU publish negotiation reliably. Never touches the working 1:1 / original-participant paths.
+
+2. **Framed video tiles like the self-view** — `ParticipantGridPager` tiles now wrap a `gridTileInner` (radius 14, 1px translucent border, 5px padding gutter; green 2px border when speaking); self-view bumped to 124×176 radius 14. (Edits from the prior session, verified + lint-clean this pass.)
+
+3. **Call notification shows caller name + group/sub-group name** — `backgroundTaskSetup.ts` now derives `isGroup` (`conversationType==='group'` or `group==='1'`) + `groupName` (`conversationName`) from the FCM group-ring payload (backend `_group_ring_push` already sends both) and passes them to `presentIncomingCallNotifeeWake`. `notifeeCallWake.ts` body → `"<Caller> in <GroupName>"` for group calls (1:1 unchanged: `"<Caller> is calling…"`); group name also threaded into the missed-call body + notif `data`. For groups the conversation-name cache no longer overwrites `callerName` (that's the group, not the caller); the caller's device-address-book name is resolved from `callerPhone` instead.
+
+Lint clean; app boots to Sign In. ⚠️ NATIVE — the audio republish + the call notification both require a real device build to verify (Stream is native-only; Expo Go/web can't reproduce a multiparty call or FCM call push).
+
+
 ## iter-478 (Jun 2026): Sub Groups — new Chief Admin toast (promoted member + everyone)
 
 `app/chat/[conversationId].tsx` now watches the current chief (`groupAdminInfo.chiefAdmin || conversation.chiefAdmin`) and, on a genuine change (seeded silently on first load via `prevChiefRef`), shows a 4s toast: "You're now the Chief Admin" to the promoted member, else "<Name> is now the Chief Admin" (name via `resolveSenderName`) to everyone. Fires for both auto-succession and manual transfer, in any group/sub group. Added `chiefToast`/`chiefToastEmoji`/`chiefToastText` styles to `chatScreenStyles.ts`. Lint clean; app boots to Sign In. ⚠️ Auth + live-backend — verify by transferring/auto-succeeding chief and watching the toast.

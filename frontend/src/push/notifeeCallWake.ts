@@ -377,6 +377,8 @@ export async function presentIncomingCallNotifeeWake(payload: IncomingCallPayloa
     twilio_is_video: isVideo ? '1' : '0',
     twilio_caller_identity: payload.callerIdentity || payload.callerId || '',
     action_url: payload.actionUrl || '',
+    isGroup: isGroupCall ? '1' : '0',
+    groupName: groupName || '',
   };
 
   console.log('[NOTIFEE-WAKE] calling displayNotification callId=', payload.callId, 'channelId=', callChannelId);
@@ -386,7 +388,7 @@ export async function presentIncomingCallNotifeeWake(payload: IncomingCallPayloa
   await native.notifee.displayNotification({
     id: `call-wake-${payload.callId}`,
     title: isVideo ? 'Incoming video call' : 'Incoming call',
-    body: `${callerName} is calling…`,
+    body: isGroupCall && groupName ? `${callerName} in ${groupName}` : `${callerName} is calling…`,
     data,
     android: {
       channelId: callChannelId,
@@ -440,10 +442,12 @@ async function presentMissedCallNotifee(native: any, data: any): Promise<void> {
     await ensureMissedChannel();
     const callId = String(data?.callId || '');
     const isVideo = String(data?.twilio_is_video) === '1' || String(data?.callType) === 'video';
+    const missedCaller = String(data?.callerName || 'Smilers user');
+    const missedGroup = String(data?.groupName || '');
     await native.notifee.displayNotification({
       id: `call-missed-${callId}`,
       title: isVideo ? 'Missed video call' : 'Missed call',
-      body: String(data?.callerName || 'Smilers user'),
+      body: String(data?.isGroup) === '1' && missedGroup ? `${missedCaller} in ${missedGroup}` : missedCaller,
       data: { ...data, type: 'missed-call' },
       android: {
         channelId: MISSED_CHANNEL_ID,

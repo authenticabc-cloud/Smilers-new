@@ -237,6 +237,16 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
       toNonEmptyString(payload.senderPhone) ||
       toNonEmptyString(payload.phone) ||
       '';
+    // Group call ring → show the caller's name AND the group/sub-group name.
+    // The backend group-ring push carries conversationType=group + the group's
+    // conversationName; the caller stays in `callerName`.
+    const isGroupCall =
+      toNonEmptyString(payload.conversationType) === 'group' ||
+      toNonEmptyString(payload.group) === '1';
+    const groupName =
+      toNonEmptyString(payload.conversationName) ||
+      toNonEmptyString(payload.groupName) ||
+      '';
 
     let notifeeOk = false;
     try {
@@ -253,6 +263,8 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
         twilioRoom,
         actionUrl,
         isVideo,
+        isGroup: isGroupCall,
+        groupName,
       });
       notifeeOk = true;
       console.log('[push] notifee call wake succeeded for callId:', callId);
