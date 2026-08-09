@@ -85,6 +85,13 @@ export default function GroupsScreen() {
   const [groupFilter, setGroupFilter] = useState<'all' | 'unread'>('all');
   const [inviteCode, setInviteCode] = useState('');
   const [undoReadId, setUndoReadId] = useState<string | null>(null);
+  const [joinToast, setJoinToast] = useState<string | null>(null);
+  const joinToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showJoinToast = useCallback((name: string) => {
+    setJoinToast(`You joined "${name}"`);
+    if (joinToastTimer.current) clearTimeout(joinToastTimer.current);
+    joinToastTimer.current = setTimeout(() => setJoinToast(null), 3000);
+  }, []);
 
   // Reactive so pin / unpin / reorder re-sorts the list live. The backend
   // returns groups already sorted (pinned first in pinOrder, then unpinned by
@@ -757,6 +764,7 @@ export default function GroupsScreen() {
                   enabled={isGroupsTab}
                   getUnread={effUnread}
                   onOpen={(id) => router.push(`/chat/${id}` as any)}
+                  onJoined={showJoinToast}
                 />
               </View>
             );
@@ -770,6 +778,7 @@ export default function GroupsScreen() {
                   enabled={isGroupsTab}
                   getUnread={effUnread}
                   onOpen={(id) => router.push(`/chat/${id}` as any)}
+                  onJoined={showJoinToast}
                 />
               </View>
             );
@@ -916,6 +925,15 @@ export default function GroupsScreen() {
         }}
         onDismiss={() => setUndoReadId(null)}
       />
+
+      {joinToast ? (
+        <View pointerEvents="none" style={styles.joinToast} testID="join-toast">
+          <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
+          <Text style={styles.joinToastText} numberOfLines={2}>
+            {joinToast}
+          </Text>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -923,6 +941,20 @@ export default function GroupsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
+  joinToast: {
+    position: 'absolute',
+    left: 24,
+    right: 24,
+    bottom: 90,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(20,20,20,0.92)',
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    borderRadius: 12,
+  },
+  joinToastText: { flex: 1, color: '#FFFFFF', fontSize: 15, fontWeight: '500' },
   whatsNewCard: {
     flexDirection: 'row',
     alignItems: 'flex-start',

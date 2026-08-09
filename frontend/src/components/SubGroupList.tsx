@@ -5,6 +5,7 @@ import { useMutation } from 'convex/react';
 import { api } from '../convexApi';
 import { useReactiveSafeConvexQuery } from '../hooks/useReactiveSafeConvexQuery';
 import { readStoredString, writeStoredString } from '../lib/settingsStorage';
+import { loadJoinTracker, detectNewlyJoined } from '../lib/subGroupJoinTracker';
 import { Colors, FontSize, FontWeight, Radius, Spacing } from '../theme';
 
 const SUB_GROUPS_ENABLED = process.env.EXPO_PUBLIC_SUB_GROUPS_ENABLED !== 'false';
@@ -50,11 +51,13 @@ function SubGroupListInner({
   enabled,
   getUnread,
   onOpen,
+  onJoined,
 }: {
   parentConversationId: string;
   enabled: boolean;
   getUnread: (item: any) => number;
   onOpen: (id: string) => void;
+  onJoined?: (name: string) => void;
 }) {
   const { data: subGroups } = useReactiveSafeConvexQuery<any[]>(
     (api as any).subGroups?.listForParent,
@@ -97,6 +100,25 @@ function SubGroupListInner({
     [rows, getUnread],
   );
   const pendingCount = useMemo(() => rows.filter((r) => r?.subGroupStatus === 'pending').length, [rows]);
+
+  // Detect a genuinely-new membership → "You joined X" toast (seeded silently
+  // on first load so existing memberships don't fire).
+  const [trackerReady, setTrackerReady] = useState(false);
+  useEffect(() => {
+    void loadJoinTracker().then(() => setTrackerReady(true));
+  }, []);
+  useEffect(() => {
+    if (!trackerReady || !onJoined || !parentConversationId) return;
+    const currentIds = rows
+      .filter((r) => r?.subGroupStatus !== 'pending' && r?.isMember)
+      .map((r) => subId(r))
+      .filter(Boolean) as string[];
+    const newly = detectNewlyJoined(parentConversationId, currentIds);
+    newly.forEach((id) => {
+      const item = rows.find((r) => subId(r) === id);
+      onJoined(item?.name || 'sub group');
+    });
+  }, [rows, trackerReady, onJoined, parentConversationId]);
 
   const onApprove = useCallback(
     async (id: string) => {
