@@ -71,6 +71,8 @@ type IncomingCallPayload = {
   twilioRoom?: string;
   actionUrl?: string;
   isVideo?: boolean;
+  isGroup?: boolean;
+  groupName?: string;
 };
 
 function safeRecord(message: string): void {
@@ -324,27 +326,36 @@ export async function presentIncomingCallNotifeeWake(payload: IncomingCallPayloa
   }
 
   let callerName = payload.callerName?.trim() || 'Smilers user';
+  const isGroupCall = payload.isGroup === true;
+  let groupName = payload.groupName?.trim() || '';
   // Prefer the DEVICE-CONTACT name over the caller's Google/account name.
-  // 1) Fast path: the chat-list cache (populated while the app was open).
-  // 2) Robust fallback: resolve directly from the device address book by the
-  //    caller's phone number — works even after a cold/killed start when the
-  //    in-memory cache is empty (requires the push to carry `callerPhone`).
+  //  • 1:1 call: the conversation name IS the other person → the chat-list cache
+  //    is a great caller-name source.
+  //  • GROUP call: the conversation name is the GROUP, NOT the caller — so we do
+  //    NOT let it override callerName; we surface it separately as groupName.
   try {
     const convId = (payload.conversationId || '').trim();
     if (convId) {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { getCachedConversationName } = require('./notificationNameCache');
-      const cachedName = await getCachedConversationName(convId);
-      if (cachedName) callerName = cachedName;
+      const cachedConvName = await getCachedConversationName(convId);
+      if (cachedConvName) {
+        if (isGroupCall) {
+          if (!groupName) groupName = cachedConvName;
+        } else {
+          callerName = cachedConvName;
+        }
+      }
     }
   } catch {
     /* keep account name */
   }
+  // Resolve the caller's OWN device-address-book name from their phone number
+  // (works for both 1:1 and group, and is the correct caller identity for groups).
   try {
     const callerPhone = (payload.callerPhone || '').trim();
-    // Only override with the address-book name when we still have the
-    // account-name default (the cache hit above already wins if present).
-    if (callerPhone && (!callerName || callerName === payload.callerName?.trim() || callerName === 'Smilers user')) {
+    const stillDefault = !callerName || callerName === payload.callerName?.trim() || callerName === 'Smilers user';
+    if (callerPhone && (isGroupCall || stillDefault)) {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { resolveDeviceNameByPhone } = require('./deviceNameResolver');
       const deviceName = await resolveDeviceNameByPhone(callerPhone);

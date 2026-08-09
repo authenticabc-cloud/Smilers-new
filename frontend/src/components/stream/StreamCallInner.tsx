@@ -223,24 +223,26 @@ function ParticipantGridPager({ participants, width }: { participants: any[]; wi
                 return (
                   <View
                     key={p.sessionId || p.userId}
-                    style={[styles.gridTile, { width: tW as any, height: tH as any }, pSpeaking ? styles.gridTileSpeaking : null]}
+                    style={[styles.gridTile, { width: tW as any, height: tH as any }]}
                   >
-                    <ParticipantView
-                      participant={p}
-                      style={StyleSheet.absoluteFill as any}
-                      ParticipantLabel={null}
-                      ParticipantVideoFallback={() => (
-                        <View style={styles.gridFallback}>
-                          <View style={[styles.gridAvatar, pSpeaking ? styles.gridAvatarSpeaking : null]}>
-                            <Text style={styles.gridAvatarText}>{pName.trim().charAt(0).toUpperCase()}</Text>
+                    <View style={[styles.gridTileInner, pSpeaking ? styles.gridTileSpeaking : null]}>
+                      <ParticipantView
+                        participant={p}
+                        style={StyleSheet.absoluteFill as any}
+                        ParticipantLabel={null}
+                        ParticipantVideoFallback={() => (
+                          <View style={styles.gridFallback}>
+                            <View style={[styles.gridAvatar, pSpeaking ? styles.gridAvatarSpeaking : null]}>
+                              <Text style={styles.gridAvatarText}>{pName.trim().charAt(0).toUpperCase()}</Text>
+                            </View>
                           </View>
-                        </View>
-                      )}
-                      videoZOrder={0}
-                    />
-                    <View style={styles.gridNameBadge} pointerEvents="none">
-                      {pMuted ? <Ionicons name="mic-off" size={12} color="#FF6B6B" style={{ marginRight: 4 }} /> : null}
-                      <Text style={styles.gridNameText} numberOfLines={1}>{pName}</Text>
+                        )}
+                        videoZOrder={0}
+                      />
+                      <View style={styles.gridNameBadge} pointerEvents="none">
+                        {pMuted ? <Ionicons name="mic-off" size={12} color="#FF6B6B" style={{ marginRight: 4 }} /> : null}
+                        <Text style={styles.gridNameText} numberOfLines={1}>{pName}</Text>
+                      </View>
                     </View>
                   </View>
                 );
@@ -2763,8 +2765,16 @@ const styles = StyleSheet.create({
   waitingBtnText: { color: Colors.white, fontSize: 15, fontWeight: '700' },
   remoteArea: { ...StyleSheet.absoluteFillObject },
   gridWrap: { ...StyleSheet.absoluteFillObject, flexDirection: 'row', flexWrap: 'wrap', backgroundColor: '#000' },
-  gridTile: { padding: 1, backgroundColor: '#0B0B0B', overflow: 'hidden' },
-  gridTileSpeaking: { borderWidth: 2, borderColor: '#34C759', borderRadius: 6 },
+  gridTile: { padding: 5 },
+  gridTileInner: {
+    flex: 1,
+    borderRadius: 14,
+    overflow: 'hidden',
+    backgroundColor: '#0B0B0B',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+  },
+  gridTileSpeaking: { borderWidth: 2, borderColor: '#34C759' },
   gridFallback: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#161616' },
   gridAvatar: {
     width: 72,
@@ -2848,9 +2858,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 60,
     right: 16,
-    width: 110,
-    height: 160,
-    borderRadius: 12,
+    width: 124,
+    height: 176,
+    borderRadius: 14,
     overflow: 'hidden',
     backgroundColor: '#111',
     borderWidth: 1,
