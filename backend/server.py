@@ -1101,6 +1101,14 @@ def _group_ring_push(*, conversation_id: str, stream_room: str, display_name: st
 async def group_ring(payload: GroupRingRequest, request: Request):
     now = datetime.now(timezone.utc)
     backend_url = _normalize_backend_url(payload.backend_url, request)
+    # Fresh call = fresh roster. This room id is DETERMINISTIC per conversation
+    # (smilers_conv_<id>), so a previous call's roster (added people, left/missed
+    # entries) would otherwise leak into this new call and wrongly offer redial.
+    # Wipe any stale roster for this room before seeding the current call.
+    try:
+        await db.twilio_call_participants.delete_many({"room_name": payload.stream_room})
+    except Exception:
+        logger.warning("group-ring: stale roster clear failed (non-fatal)")
     # Caller is already in → joined.
     await _upsert_roster_entry(
         payload.stream_room, payload.caller_identity,
@@ -1143,6 +1151,29 @@ async def group_ring(payload: GroupRingRequest, request: Request):
             logger.exception(f"group-ring: push failed (non-fatal): {exc}")
     return {"ok": True, "call_id": call_id, "rang": len(ring_targets),
             "token_count": token_count, "delivered": delivered}
+
+
+class ResetRosterRequest(BaseModel):
+    stream_room: str = Field(..., min_length=1, max_length=160)
+
+
+@api_router.post("/calls/reset-roster")
+async def reset_roster(payload: ResetRosterRequest):
+    """Wipe the participant roster for a room so each NEW call starts fresh.
+
+    The Stream room id is DETERMINISTIC per conversation (smilers_conv_<id>), so
+    without this a previous call's roster (added people, left/missed entries)
+    leaks into the next call in the same conversation and wrongly offers a
+    "redial" for people who were never part of the new call. The caller invokes
+    this the moment a fresh 1:1 call begins (group calls clear inside group-ring).
+    Idempotent and safe: an empty room is the correct starting state."""
+    try:
+        res = await db.twilio_call_participants.delete_many({"room_name": payload.stream_room})
+        return {"ok": True, "cleared": int(getattr(res, "deleted_count", 0) or 0)}
+    except Exception:
+        logger.warning("reset-roster: clear failed (non-fatal)")
+        return {"ok": False, "cleared": 0}
+
 
 
 class GroupAgainRequest(BaseModel):

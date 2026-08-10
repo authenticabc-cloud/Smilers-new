@@ -1,5 +1,20 @@
 # Smilers Mobile App — PRD
 
+## iter-480 (Jun 2026): Stream call — mute-label overlap, interpreter tab overlap, fresh-call roster + chief-election spec
+
+Four user reports:
+
+1. **"Muted" covered the call timer (fix)** — `StreamCallInner.tsx`. The 1:1 center + video top-bar status line showed `"Muted"` INSTEAD of the running call duration when the remote muted. Now the status line ALWAYS shows the timer/`statusLine`; muting is already indicated by the existing red `mic-off` icon next to the peer's name — so users keep seeing the call duration while still knowing the other person is muted.
+
+2. **"Call again" strip covered the interpreter tabs (fix)** — the conference waiting strip (`styles.waitStrip`, `top:92`, contains the "Call again" chip) overlapped the `InterpreterLayer` banner/tabs (`topOffset={90}`). Interpreter `topOffset` is now dynamic: `isConferenceCall && hasPendingOrDeclined ? 150 : 90`, so the interpreter tabs drop below the waiting strip only when both are present.
+
+3. **Stale roster leaked into the next call → wrong "redial" (fix, backend + client)** — the Stream room id is DETERMINISTIC per conversation (`smilers_conv_<id>`), and the FastAPI `twilio_call_participants` roster was never cleared, so a previous call's added/left/missed people reappeared with a redial option in the next call. FIX: (a) `/calls/group-ring` now `delete_many({room_name})` before seeding (fresh roster per group call); (b) NEW `POST /api/calls/reset-roster` (server.py) wipes a room's roster; (c) `twilioApi.resetCallRoster()` + the 1:1 CALLER fires it once at initiate (`!isGroupCall && canonicalRoom`) so every fresh 1:1 starts clean. Each call is now treated as new with only its actual participants. Verified: `curl /api/calls/reset-roster` → `{ok:true,cleared:0}`.
+
+4. **Chief-admin election by majority vote (BLOCKED — needs Convex)** — chief-admin logic lives in the web team's Convex repo (`api.groupAdmin.*`); vote storage/tally/assignment can't be done app-side (permission-gated). Wrote a full backend contract at `/app/CONVEX_BACKEND_SPEC_CHIEF_ADMIN_ELECTION.md` (tables `chiefElections`/`chiefElectionVotes`, mutations `proposeChiefAdmin`/`voteChiefAdmin`, query `getChiefElection`, simple-majority `floor(N/2)+1`, must not contradict auto-succession, applies to all existing chief-less groups). Mobile UI will be built once the web team ships it.
+
+Lint clean; app boots to Sign In. ⚠️ #1/#2 need a live call to see; #3 needs a real device build (Stream native) to fully verify end-to-end.
+
+
 ## iter-479 (Jun 2026): Stream call — 3 reported fixes (added-participant audio, framed tiles, caller+group name in call notif)
 
 Addressed the 3 items from the last user report:

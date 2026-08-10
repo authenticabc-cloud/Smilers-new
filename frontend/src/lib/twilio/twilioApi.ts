@@ -381,6 +381,23 @@ export async function reportParticipantStatus(args: {
   }
 }
 
+/** POST /api/calls/reset-roster — wipe the room's participant roster so a NEW
+ *  call starts fresh (no stale added/left/missed people from a previous call in
+ *  the same conversation). Best-effort; the caller fires it once at call start. */
+export async function resetCallRoster(streamRoom: string): Promise<void> {
+  if (!BACKEND_URL || !streamRoom) return;
+  try {
+    await fetch(`${BACKEND_URL}/api/calls/reset-roster`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stream_room: streamRoom }),
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+
 /** POST /api/calls/request-add — non-admin asks admins to approve adding X. */
 export async function requestAddParticipant(args: {
   streamRoom: string;

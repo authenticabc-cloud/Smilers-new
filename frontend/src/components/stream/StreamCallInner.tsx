@@ -53,7 +53,7 @@ import { getAddRequest, subscribeAddRequest, clearAddRequest, type PendingAddReq
 import { ControlBtn, AudioOutputMenu } from '../call/CallScreenComponents';
 import { useRingtonePlayer } from '../../lib/ringtone/useRingtonePlayer';
 import { useRingbackPlayer } from '../../lib/ringtone/useRingbackPlayer';
-import { addStreamParticipant, fetchCallParticipants, removeStreamParticipant, groupCallAgain, reportParticipantStatus, requestAddParticipant, declineAddRequest, adminKickParticipant, type CallRosterEntry } from '../../lib/twilio/twilioApi';
+import { addStreamParticipant, fetchCallParticipants, removeStreamParticipant, groupCallAgain, reportParticipantStatus, requestAddParticipant, declineAddRequest, adminKickParticipant, resetCallRoster, type CallRosterEntry } from '../../lib/twilio/twilioApi';
 import type { AudioOutputRoute } from '../call/callTypes';
 import * as Haptics from 'expo-haptics';
 import { Colors } from '../../theme';
@@ -1367,7 +1367,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
                 {peerName}
               </Text>
             </View>
-            <Text style={styles.statusText}>{remoteMuted && connected ? 'Muted' : statusLine}</Text>
+            <Text style={styles.statusText}>{statusLine}</Text>
           </View>
         )}
       </View>
@@ -1395,7 +1395,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
                 {peerName}
               </Text>
             </View>
-            <Text style={styles.topStatus}>{remoteMuted ? 'Muted' : statusLine}</Text>
+            <Text style={styles.topStatus}>{statusLine}</Text>
           </View>
         ) : null
       ) : null}
@@ -1586,7 +1586,7 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
           callId={callId}
           connected={connected}
           micMuted={!micOn}
-          topOffset={90}
+          topOffset={isConferenceCall && hasPendingOrDeclined ? 150 : 90}
           bottomOffset={150}
           onDuckRemote={(ducked) => {
             try {
@@ -2219,6 +2219,11 @@ export default function StreamCallInner() {
     if (activeCallLoading || activeCall) return; // wait for load; skip if a call exists
     initiatedRef.current = true;
     setDidInitiate(true);
+    // Fresh call ⇒ fresh roster. The room id is deterministic per conversation,
+    // so wipe any leftover roster from a PRIOR call in this conversation before
+    // this new one seeds (prevents stale added/left people offering a "redial").
+    // 1:1 only here — group calls clear inside /calls/group-ring at start.
+    if (!isGroupCall && canonicalRoom) void resetCallRoster(canonicalRoom);
     initiateCall({ conversationId, callType: isVideo ? 'video' : 'voice' })
       .then((id: any) => {
         if (id) setCreatedCallId(String(id));
@@ -2236,6 +2241,8 @@ export default function StreamCallInner() {
     initiateCall,
     isVideo,
     locallyAccepted,
+    isGroupCall,
+    canonicalRoom,
   ]);
 
   // 2) Callee (answered from the notification): accept the Convex call.
