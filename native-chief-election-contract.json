@@ -1,0 +1,101 @@
+{
+  "title": "Chief Admin election by vote",
+  "version": 1,
+  "updatedAt": "2026-08-10",
+  "status": "SHIPPED. Backend is live on the Convex deployment. Native builds the voting UI against the functions below.",
+  "summary": "A safety-net for groups (regular OR sub) that have NO current Chief Admin. Members propose THEMSELVES as candidates and the group votes; a candidate who reaches a simple majority of current members is installed as the new Chief Admin. Automatic succession (a new chief is picked when the old one leaves/is removed) already covers the normal case, so an election is only relevant for legacy 'chief-less' groups. Works for any group id, including sub group ids.",
+  "coreRules": {
+    "eligibility": "An election can only be OPENED while the group has no effective chief. 'Effective chief' = the stored chiefAdmin if still a member, else the creator if still a member. If either is present, startElection throws CONFLICT.",
+    "proposeYourself": "A member can only nominate THEMSELVES (proposeSelf). The person who starts the election is auto-nominated.",
+    "vote": "One vote per member, changeable at any time while the election is open (castVote just overwrites your previous vote).",
+    "majority": "A candidate wins immediately when their votes reach floor(memberCount / 2) + 1. If every member has voted and nobody reached that bar, the candidate with the most votes wins (ties broken by who declared candidacy first). Winning installs them as chiefAdmin and prepends them to the admin roster.",
+    "noClashWithAutoAssignment": "An election never runs while a chief exists. If the group regains a chief while an election is open (e.g. auto-succession fires because someone else left), the next castVote CANCELS the election and throws CONFLICT. Re-read state after a CONFLICT.",
+    "systemMessage": "When a winner is installed the backend emits the usual silent 'chiefTransferred' system message (actorId = targetIds[0] = the new chief), so render it like any chief change."
+  },
+  "functions": {
+    "chiefElections.getActiveElection": {
+      "type": "query",
+      "args": { "conversationId": "Id<conversations> (group or sub group)" },
+      "returnsWhenNoOpenElection": {
+        "election": "null",
+        "isMember": "boolean",
+        "hasChief": "boolean — whether the group currently has an effective chief",
+        "canStart": "boolean — true only if you are a member AND the group has no chief",
+        "memberCount": "number"
+      },
+      "returnsWhenOpenElection": {
+        "election": "{ _id, conversationId, status:'open', startedBy: Id<users>, startedAt: ISO }",
+        "candidates": "Array<{ userId: Id<users>, votes: number, proposedAt: ISO }> sorted by votes desc then earliest candidacy. Reflects live vote counts.",
+        "myVote": "Id<users> | null — the candidate you currently voted for",
+        "iAmCandidate": "boolean",
+        "isMember": "boolean",
+        "hasChief": "boolean",
+        "canStart": "false (one already open)",
+        "memberCount": "number",
+        "majorityThreshold": "number — votes needed to win outright (floor(memberCount/2)+1)"
+      },
+      "notes": "Reactive: subscribe to this to render the live ballot, tallies, and your current vote. Returns null only when unauthenticated / user not found / not a group."
+    },
+    "chiefElections.startElection": {
+      "type": "mutation",
+      "args": { "conversationId": "Id<conversations>" },
+      "returns": "{ electionId: Id<chiefElections> }",
+      "rules": [
+        "Caller must be a member of the group.",
+        "Throws CONFLICT if the group already has an effective chief.",
+        "Idempotent: if an election is already open it returns that election's id.",
+        "The starter is automatically added as a candidate (propose-yourself)."
+      ]
+    },
+    "chiefElections.proposeSelf": {
+      "type": "mutation",
+      "args": { "conversationId": "Id<conversations>" },
+      "returns": "{ candidateId: Id<users> } (always the caller)",
+      "rules": [
+        "Caller must be a member. Adds the CALLER as a candidate in the open election.",
+        "You can only nominate yourself. Idempotent if already a candidate.",
+        "Throws NOT_FOUND if there is no open election."
+      ]
+    },
+    "chiefElections.withdrawCandidacy": {
+      "type": "mutation",
+      "args": { "conversationId": "Id<conversations>" },
+      "returns": "{ withdrawn: boolean }",
+      "rules": [
+        "Removes the caller from the candidate list of the open election and deletes any votes that pointed at them.",
+        "Returns { withdrawn: false } if there is no open election or the caller was not a candidate."
+      ]
+    },
+    "chiefElections.castVote": {
+      "type": "mutation",
+      "args": { "conversationId": "Id<conversations>", "candidateId": "Id<users> (must be a current candidate + member)" },
+      "returns": "{ voted: true, winnerId: Id<users> | null }",
+      "rules": [
+        "Caller must be a member. One vote per member; calling again changes your vote.",
+        "candidateId must be a current member who has nominated themselves, else BAD_REQUEST.",
+        "If the group regained a chief since the election opened, this CANCELS the election and throws CONFLICT.",
+        "winnerId is non-null when this vote pushed a candidate to a win (election then closed)."
+      ]
+    },
+    "chiefElections.cancelElection": {
+      "type": "mutation",
+      "args": { "conversationId": "Id<conversations>" },
+      "returns": "{ cancelled: boolean }",
+      "rules": [
+        "Only the member who started the election OR any admin (chief/creator/admin) may cancel it.",
+        "Returns { cancelled: false } if there was no open election."
+      ]
+    }
+  },
+  "dataModel": {
+    "chiefElections": "{ conversationId, status:'open'|'closed', startedBy, startedAt, closedAt?, outcome?:'elected'|'cancelled', winnerId? }",
+    "chiefElectionCandidates": "{ electionId, conversationId, userId, proposedAt } — one row per self-nomination",
+    "chiefElectionVotes": "{ electionId, conversationId, voterId, candidateId, updatedAt } — one row per voter",
+    "note": "Votes/candidacies from members who have since left are ignored in tallies. You never write these tables directly; use the functions above."
+  },
+  "relationToOtherFeatures": {
+    "automaticSuccession": "See native-sub-groups-contract.json 'chiefSuccession'. That handles the chief LEAVING/being REMOVED and always installs a successor, so elections normally never trigger. Elections are the manual fallback for groups that are already chief-less.",
+    "manualTransfer": "A chief installed by election can still hand the role on via groupAdmin.transferChiefAdmin (sub-group relaxation applies)."
+  },
+  "backwardCompatible": true
+}

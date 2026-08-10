@@ -1,5 +1,19 @@
 # Smilers Mobile App — PRD
 
+## iter-481 (Jun 2026): Chief Admin election UI wired to web team's live `chiefElections.*` contract
+
+Web team SHIPPED the election backend (contract fetched + saved to `/app/native-chief-election-contract.json`, v1). Built the mobile UI:
+
+- NEW `src/components/ChiefElectionCard.tsx` — reactive `useSafeConvexQuery(chiefElections.getActiveElection, {conversationId})` drives everything. Renders NOTHING while the group has an effective Chief Admin (common case), so it never clashes with automatic succession. States:
+  - **Chief-less, no open election**: banner "No Chief Admin" + majority explainer (`floor(N/2)+1` of N) + "Propose myself as Chief Admin" (→ `startElection`, which auto-nominates the caller) when `canStart`.
+  - **Open election**: live candidate rows (name via `resolveName`, vote count, progress bar), your current vote highlighted (`myVote`), tap a row to `castVote({conversationId, candidateId})` (changeable). `castVote` returning `winnerId` → "elected" alert. "Propose myself" (`proposeSelf`) / "Withdraw" (`withdrawCandidacy`) footer; "Cancel" (`cancelElection`) shown to the starter or any admin.
+  - CONFLICT handling: if the group regained a chief mid-vote, the error surfaces "already has a Chief Admin now" and the reactive query refreshes.
+- Wired into `app/group/[id].tsx` right under the identity block (props: `conversationId`, `isSubGroup`, `resolveName = nameById.get||'Member'`, `isAdmin`, `myId`). Works for groups AND sub groups (same conversation id).
+- On a win the backend emits the usual silent `chiefTransferred` system message + the reactive `getGroupAdminInfo` updates, so the existing iter-478 "new Chief Admin" toast fires automatically — no extra plumbing.
+
+`api` is the dynamic `anyApi` proxy so `chiefElections.*` resolves at runtime. Lint clean; app boots to Sign In. ⚠️ Authenticated + live-backend — verify the full propose/vote/win flow on a signed-in session (ideally a real device build). This completes the 4th item from the earlier user report.
+
+
 ## iter-480 (Jun 2026): Stream call — mute-label overlap, interpreter tab overlap, fresh-call roster + chief-election spec
 
 Four user reports:

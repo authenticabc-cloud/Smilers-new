@@ -53,6 +53,7 @@ import { SubGroupsSection } from '../../src/components/SubGroupsSection';
 import { SubGroupPositionModal } from '../../src/components/SubGroupPositionModal';
 import { BulkPositionsModal, type BulkPositionMember } from '../../src/components/BulkPositionsModal';
 import { SubGroupAppearancePicker } from '../../src/components/SubGroupAppearancePicker';
+import ChiefElectionCard from '../../src/components/ChiefElectionCard';
 import { ReorderBearersModal } from '../../src/components/ReorderBearersModal';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../src/theme';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
@@ -812,6 +813,16 @@ function GroupInfoInner() {
             </Text>
           ) : null}
         </View>
+
+        {/* Chief Admin election — appears only when this group/sub group has no
+            effective Chief Admin (safety-net; never clashes with auto-succession). */}
+        <ChiefElectionCard
+          conversationId={conversationId}
+          isSubGroup={isSubGroup}
+          resolveName={(uid) => nameById.get(uid) || 'Member'}
+          isAdmin={isAdmin}
+          myId={myId}
+        />
 
         {/* ADMIN ACTIONS (only if admin) */}
         {isAdmin ? (
