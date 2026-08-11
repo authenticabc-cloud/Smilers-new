@@ -51,14 +51,20 @@ import type { MediaTab } from '../../src/components/user-profile/types';
 export default function UserProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { userId, conversationId } = useLocalSearchParams<{
+  const { userId, conversationId, fromGroup } = useLocalSearchParams<{
     userId: string;
     conversationId?: string;
+    fromGroup?: string;
   }>();
   const { isAuthenticated } = useAuth();
   const hasValidUserId =
     typeof userId === 'string' && userId.length > 5;
+  // When opened from a GROUP member list, the incoming conversationId is the
+  // GROUP — it must NOT be used as the 1:1 target for Chat/Call/Video. In that
+  // case we always resolve a DIRECT 1:1 conversation with this member instead.
+  const openedFromGroup = fromGroup === '1' || fromGroup === 'true';
   const hasValidConversationId =
+    !openedFromGroup &&
     typeof conversationId === 'string' && conversationId.length > 5;
 
   const getOrCreateDirect = useMutation(api.conversations.getOrCreateDirect);
@@ -522,12 +528,23 @@ export default function UserProfileScreen() {
     }
   };
 
-  const openCall = (type: 'voice' | 'video') => {
-    if (!hasValidConversationId) {
-      Alert.alert(
-        'Start a chat first',
-        'Open a conversation with this contact before placing a call.',
-      );
+  const openCall = async (type: 'voice' | 'video') => {
+    // Resolve the 1:1 conversation with THIS user. When the profile was opened
+    // from a group the incoming id is the group, so we always create/get the
+    // direct conversation → a true 1:1 call (never a group call).
+    let convId = hasValidConversationId ? String(conversationId) : '';
+    if (!convId) {
+      if (!userId) return;
+      try {
+        const result: any = await getOrCreateDirect({ otherUserId: userId });
+        convId = typeof result === 'string' ? result : result?._id || result?.conversationId || '';
+      } catch (e: any) {
+        Alert.alert('Could not start call', e?.message || 'Try again later.');
+        return;
+      }
+    }
+    if (!convId) {
+      Alert.alert('Could not start call', 'Please try again.');
       return;
     }
     // iter-234: route through Twilio (was navigating straight to the legacy
@@ -538,7 +555,7 @@ export default function UserProfileScreen() {
       callerIdentity: String((me as any)?._id || ''),
       callerDisplayName: getDisplayNameFromUser(me, ''),
       calleeIdentities: userId ? [String(userId)] : [],
-      conversationId: String(conversationId),
+      conversationId: convId,
       isVideo: type === 'video',
       displayName,
     });

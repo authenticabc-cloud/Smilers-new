@@ -41,6 +41,8 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
+import { startCall } from '../../src/lib/twilio/startCall';
+import { getDisplayNameFromUser } from '../../src/lib/displayName';
 import * as Clipboard from 'expo-clipboard';
 import QRCode from 'react-native-qrcode-svg';
 import * as MediaLibrary from 'expo-media-library';
@@ -180,6 +182,12 @@ function GroupInfoInner() {
     !!conversationId,
   );
   const deviceIndex = useDeviceContactIndex();
+  const { data: me } = useSafeConvexQuery<any | null>(
+    api.users.getCurrentUser,
+    {},
+    null,
+    true,
+  );
   const displayNameForContact = useCallback(
     (obj: any): string =>
       getResolvedDisplayName(
@@ -297,6 +305,52 @@ function GroupInfoInner() {
   );
 
   const groupName = conversation?.name || 'Group';
+
+  // Group call (voice/video) — UNIFIED on the Stream group path (startCall with
+  // isGroup:true), the SAME room + orchestration the answering members join.
+  // Previously "Group voice call" opened the legacy MESH screen while members
+  // answered into the Stream room → the caller sat alone in a different room and
+  // nobody could hear each other; the mesh single-call record also cancelled the
+  // ring for everyone once one person answered. Routing the caller through
+  // startCall({isGroup}) fixes both, for parent groups AND sub groups.
+  const handleGroupCall = useCallback(
+    (isVideo: boolean) => {
+      const callerId = myId || String(me?._id || '');
+      if (!callerId) {
+        Alert.alert('Group call', 'Still loading your profile — try again in a moment.');
+        return;
+      }
+      const groupMembers = (Array.isArray(members) ? members : [])
+        .map((m: any) => {
+          const identity = getContactUserId(m) || String(m?.userId || m?._id || '');
+          return {
+            identity,
+            displayName: displayNameForMember(m),
+            phone: m?.phone || m?.phoneE164 || undefined,
+          };
+        })
+        .filter((m) => m.identity && m.identity !== callerId);
+      if (groupMembers.length === 0) {
+        Alert.alert('Group call', 'No other members to ring in this group yet.');
+        return;
+      }
+      startCall({
+        router,
+        callerIdentity: callerId,
+        callerDisplayName: getDisplayNameFromUser(me, ''),
+        callerPhone: String(me?.phoneE164 || me?.phone || ''),
+        calleeIdentities: groupMembers.map((m) => m.identity),
+        conversationId: String(conversationId),
+        isVideo,
+        displayName: groupName,
+        isGroup: true,
+        groupMembers,
+        conversationName: groupName,
+      });
+    },
+    [myId, me, members, displayNameForMember, conversationId, groupName, router],
+  );
+
 
   // Group creator (resolved to each viewer's device-saved contact name) +
   // creation date — shown to ALL members. The Convex conversation doc carries
@@ -862,7 +916,7 @@ function GroupInfoInner() {
             <ActionRow
               icon="phone-call"
               label="Group voice call"
-              onPress={() => router.push(`/group-call/${conversationId}` as any)}
+              onPress={() => handleGroupCall(false)}
               testID="group-info-voice-call"
             />
             <ActionRow
@@ -986,7 +1040,7 @@ function GroupInfoInner() {
                   style={styles.memberTap}
                   activeOpacity={0.6}
                   onPress={() =>
-                    router.push(`/user/${mid}?conversationId=${conversationId}` as any)
+                    router.push(`/user/${mid}?conversationId=${conversationId}&fromGroup=1` as any)
                   }
                   testID={`group-member-open-${mid}`}
                 >

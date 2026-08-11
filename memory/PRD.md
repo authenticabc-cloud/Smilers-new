@@ -1,5 +1,18 @@
 # Smilers Mobile App — PRD
 
+## iter-482 (Aug 2026): Group calls unified to Stream (fixes admin-isolation + ring-cancel) + member-profile 1:1 routing + backend specs
+
+Report items #2, #3, #4 (frontend) fixed; #1, #5 + #4-chat-request specced for the web team.
+
+**#2 + #3 (SAME root cause — group call transport mismatch):** the Group Info "Group voice call" button opened the LEGACY MESH screen (`/group-call/[conversationId]`, `api.conference.*`/`signaling`/MeshController) while members who answered the FCM ring joined the STREAM room → the admin sat alone in a different room, nobody heard anyone; the mesh single Convex call record also cancelled the ring for everyone once one member answered. FIX (`app/group/[id].tsx`): new `handleGroupCall(isVideo)` routes through the EXISTING unified Stream group path `startCall({ isGroup:true, groupMembers, conversationName })` — same `grp_<conv>_<rand>` room the ring push threads to members (`&streamRoom=…&group=1`), independent per-member FCM ringing, and the full answer/decline/missed roster orchestration in StreamCallInner. Works for parent groups AND sub groups (sub group is just a conversation id). Added a `getCurrentUser` read + `startCall`/`getDisplayNameFromUser` imports to the screen. (Legacy `/group-call` screen left in place but no longer linked from Group Info.)
+
+**#4 (member profile from a group → Chat/Call/Video hit the GROUP):** `app/user/[userId].tsx` treated the incoming `conversationId` (the GROUP) as a 1:1 target. FIX: group member rows now navigate with `&fromGroup=1`; the profile sets `openedFromGroup` → `hasValidConversationId` is forced false so Chat and Call/Video ALWAYS resolve a DIRECT 1:1 (`getOrCreateDirect(userId)`). `openCall` is now async and creates/gets the direct conv before `startCall` (was dead-ending with "Start a chat first"). Contacts chat/call immediately. NON-CONTACT chat-request gate needs a Convex backend (none exists) — specced.
+
+**Backend specs written for web team** (`/app/CONVEX_BACKEND_SPEC_GROUP_INTEGRITY_AND_POSITIONS.md`): (1) sub-group membership integrity — migration to strip/reassign orphan chiefs + remove non-parent members, and a CASCADE removing members from all sub groups when they leave the parent (the ongoing hole); (2) positions/roles generalised to parent groups (`groupPositions.*` keyed by conversationId); (3) chat-request/approval (`chatRequests.*`) for #4's non-contact case. Chief-Admin election already works for parent+sub groups (iter-481); parent-group admin promote/demote/transfer already works — so #5's only missing backend piece is parent-group positions.
+
+Lint clean; app boots to Sign In. ⚠️ Group-call fixes + 1:1 profile calls are native Stream + authenticated — verify on a signed-in real-device build (2+ devices for the group call).
+
+
 ## iter-481 (Jun 2026): Chief Admin election UI wired to web team's live `chiefElections.*` contract
 
 Web team SHIPPED the election backend (contract fetched + saved to `/app/native-chief-election-contract.json`, v1). Built the mobile UI:

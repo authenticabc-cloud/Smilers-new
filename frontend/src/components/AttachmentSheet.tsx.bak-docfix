@@ -1,5 +1,5 @@
-import React, { useCallback, useRef } from 'react';
-import { Modal, Platform, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React from 'react';
+import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Colors, FontSize, FontWeight, Radius, Spacing, Shadow } from '../theme';
 
@@ -26,42 +26,8 @@ export default function AttachmentSheet({
   onShareLocation,
   onShareContact,
 }: Props) {
-  // iOS cannot present a view controller while another is still being
-  // dismissed. Firing a picker synchronously in onPress - while this Modal is
-  // mid-fade-out - makes that presentation fail silently. expo-document-picker
-  // never settles its promise in that case and latches its "pick in progress"
-  // flag, so EVERY later attempt fails with "Different document picking in
-  // progress" until the app restarts (expo-image-picker recovers, which is why
-  // photos worked and documents did not). Defer until the sheet is really gone.
-  const pendingRef = useRef<(() => void) | null>(null);
-
-  function flushPending() {
-    const fn = pendingRef.current;
-    pendingRef.current = null;
-    if (fn) fn();
-  }
-
-  const runAfterClose = useCallback(
-    (fn?: () => void) => {
-      if (!fn) return;
-      pendingRef.current = fn;
-      onClose();
-      if (Platform.OS !== 'ios') {
-        // Android has no Modal onDismiss; cover the fade with a delay.
-        setTimeout(flushPending, 350);
-      }
-    },
-    [onClose],
-  );
-
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-      onDismiss={Platform.OS === 'ios' ? flushPending : undefined}
-    >
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose}>
         <Pressable style={styles.sheetWrap} onPress={() => {}}>
           <View style={styles.sheet} testID="attachment-sheet">
@@ -71,7 +37,10 @@ export default function AttachmentSheet({
               icon="camera-outline"
               lib="ion"
               label="Take Photo"
-              onPress={() => runAfterClose(onTakePhoto)}
+              onPress={() => {
+                onClose();
+                onTakePhoto?.();
+              }}
               disabled={!onTakePhoto}
               testID="attach-take-photo"
             />
@@ -81,7 +50,10 @@ export default function AttachmentSheet({
               icon="image-outline"
               lib="ion"
               label="Photo from Gallery"
-              onPress={() => runAfterClose(onPickPhoto)}
+              onPress={() => {
+                onClose();
+                onPickPhoto();
+              }}
               testID="attach-photo"
             />
             <ActionRow
@@ -90,7 +62,10 @@ export default function AttachmentSheet({
               icon="video-library"
               lib="mc"
               label="Video from Gallery"
-              onPress={() => runAfterClose(onPickVideo)}
+              onPress={() => {
+                onClose();
+                onPickVideo();
+              }}
               testID="attach-video-gallery"
             />
             <ActionRow
@@ -99,7 +74,10 @@ export default function AttachmentSheet({
               icon="videocam-outline"
               lib="ion"
               label="Record Video"
-              onPress={() => runAfterClose(onRecordVideo)}
+              onPress={() => {
+                onClose();
+                onRecordVideo();
+              }}
               testID="attach-record-video"
             />
             <ActionRow
@@ -108,7 +86,10 @@ export default function AttachmentSheet({
               icon="file-document-outline"
               lib="mc"
               label="Document"
-              onPress={() => runAfterClose(onPickDocument)}
+              onPress={() => {
+                onClose();
+                onPickDocument?.();
+              }}
               disabled={!onPickDocument}
               testID="attach-document"
             />
@@ -118,7 +99,10 @@ export default function AttachmentSheet({
               icon="location-outline"
               lib="ion"
               label="Location"
-              onPress={() => runAfterClose(onShareLocation)}
+              onPress={() => {
+                onClose();
+                onShareLocation?.();
+              }}
               disabled={!onShareLocation}
               testID="attach-location"
             />
@@ -128,7 +112,10 @@ export default function AttachmentSheet({
               icon="account-arrow-right-outline"
               lib="mc"
               label="Contact"
-              onPress={() => runAfterClose(onShareContact)}
+              onPress={() => {
+                onClose();
+                onShareContact?.();
+              }}
               disabled={!onShareContact}
               testID="attach-contact"
             />
