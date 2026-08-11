@@ -101,3 +101,38 @@ export async function learnFromDiff(before: string, after: string): Promise<numb
   if (learned) await persist();
   return learned;
 }
+
+/** Learned correct spellings — fed to the recognizer as contextual strings so
+ *  it's biased toward words the user has taught it. */
+export function getCorrectionWords(): string[] {
+  return Array.from(new Set(Object.values(map))).filter(Boolean).slice(0, 100);
+}
+
+/**
+ * Parse a spoken voice-correction like:
+ *   "Santy is spelt S a n t i"  /  "Santy spelled s-a-n-t-i"
+ * Returns { misheard, correct } where `misheard` is the word as the system
+ * heard it and `correct` is the intended spelling (letters joined). Used by the
+ * voice "Edit" mode so users can fix + teach a word entirely by voice.
+ */
+export function parseSpellingCorrection(text: string): { misheard: string; correct: string } | null {
+  const s = String(text || '').trim();
+  const m = s.match(/^(.*?)\b(?:is\s+|it'?s\s+)?(?:spelt|spelled|spell|spelling)\b[:,\s]*(.*)$/i);
+  if (!m) return null;
+  const cleanCore = (w: string) => w.replace(/[^\p{L}\p{N}]/gu, '');
+  const misheard = cleanCore((m[1].trim().split(/\s+/).filter(Boolean).pop() || ''));
+  const rawTokens = m[2].trim().split(/[\s,.\-_]+/).filter(Boolean);
+  let correct = '';
+  // Letters spelled one-by-one → join first char of each short token.
+  const allShort = rawTokens.length > 1 && rawTokens.every((t) => cleanCore(t).length <= 2);
+  if (allShort) {
+    correct = rawTokens.map((t) => cleanCore(t).charAt(0)).join('');
+  } else {
+    correct = rawTokens.map(cleanCore).join('');
+  }
+  correct = cleanCore(correct);
+  if (!misheard || !correct || correct.length < 2) return null;
+  // Capitalise like a name if the misheard word was capitalised.
+  const out = /^[A-Z]/.test(misheard) ? correct.charAt(0).toUpperCase() + correct.slice(1) : correct;
+  return { misheard, correct: out };
+}

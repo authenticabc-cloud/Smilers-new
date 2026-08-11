@@ -26,7 +26,7 @@ import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../the
 import { useVoiceTyping } from '../../lib/voiceTyping/useVoiceTyping';
 import { spokenToEmoji } from '../../lib/voiceTyping/spokenToEmoji';
 import { EMOJI_PHRASE_LIST, EMOJI_TRIGGER_WORDS } from '../../lib/voiceTyping/spokenToEmoji';
-import { applyCorrections, learnFromDiff, loadCorrections } from '../../lib/voiceTyping/corrections';
+import { applyCorrections, learnFromDiff, loadCorrections, learnCorrection, parseSpellingCorrection, getCorrectionWords } from '../../lib/voiceTyping/corrections';
 import {
   VOICE_TYPING_LANGUAGES,
   ALL_VOICE_TYPING_CODES,
@@ -64,11 +64,15 @@ export function VoiceTypingButton({
   const editBeforeRef = useRef(''); // pre-edit text to diff for learning
   const dictatedRef = useRef(false); // any speech captured this session?
   const commandModeRef = useRef(false); // during the pause prompt, listen for "send"/"continue"
+  const voiceCorrectRef = useRef(false); // voice-driven "edit" correction mode
+  const [voiceCorrect, setVoiceCorrect] = useState(false);
+  const [correctNote, setCorrectNote] = useState<string | null>(null);
+  const [ctxWords, setCtxWords] = useState<string[]>([]);
 
   // Load the learned correction dictionary once so finalized speech is
   // auto-fixed for words the user previously corrected.
   useEffect(() => {
-    void loadCorrections();
+    void loadCorrections().then(() => setCtxWords(getCorrectionWords()));
   }, []);
 
   const isAuto = languageCode === AUTO_CODE;
@@ -92,6 +96,10 @@ export function VoiceTypingButton({
 
   const handleFinalText = useCallback(
     (t: string) => {
+      if (voiceCorrectRef.current) {
+        voiceCorrectionRef.current(t);
+        return;
+      }
       if (commandModeRef.current) {
         interpretCommandRef.current(t);
         return;
@@ -120,6 +128,7 @@ export function VoiceTypingButton({
     autoDetect: isAuto,
     allowedLanguages: ALL_VOICE_TYPING_CODES,
     onDetectLanguage: (c) => setDetectedLang(c),
+    contextualStrings: ctxWords,
   });
 
   const toggle = useCallback(() => {
@@ -176,9 +185,35 @@ export function VoiceTypingButton({
 
   const onStop = useCallback(() => {
     commandModeRef.current = false;
+    voiceCorrectRef.current = false;
+    setVoiceCorrect(false);
     setPausePrompt(false);
     setListening(false);
   }, []);
+
+  // Enter hands-free voice-correction mode from the pause prompt (spoken "edit"
+  // or the Edit button). Keeps the recognizer running to catch the spelling.
+  const startVoiceCorrect = useCallback(() => {
+    commandModeRef.current = false;
+    voiceCorrectRef.current = true;
+    setVoiceCorrect(true);
+    setPausePrompt(false);
+    setCorrectNote(null);
+    setListening(true);
+  }, []);
+
+  const exitVoiceCorrect = useCallback((thenSend?: boolean) => {
+    voiceCorrectRef.current = false;
+    setVoiceCorrect(false);
+    setCorrectNote(null);
+    if (thenSend) {
+      setListening(false);
+      onRequestSend();
+    } else {
+      dictatedRef.current = false;
+      setListening(true);
+    }
+  }, [onRequestSend]);
 
   // Third option on the pause prompt: hand-correct wrongly transcribed words.
   // Pauses the recognizer, opens an editor seeded with the current message.
@@ -216,13 +251,34 @@ export function VoiceTypingButton({
     [editValue, onReplaceText, onRequestSend],
   );
 
-  // Voice-sensitive prompt: interpret "send" / "continue" spoken during the pause.
+  // Voice-sensitive prompt: interpret "send" / "continue" / "edit" spoken during the pause.
   const interpretCommandRef = useRef<(t: string) => void>(() => {});
   interpretCommandRef.current = (text: string) => {
     if (!commandModeRef.current) return;
     const s = String(text || '').toLowerCase();
     if (/\bsend\b/.test(s)) onSend();
+    else if (/\b(edit|correct|correction|spelling|fix)\b/.test(s)) startVoiceCorrect();
     else if (/\b(continue|keep|talking|talk|resume)\b/.test(s)) onKeepTalking();
+  };
+
+  // Voice-correction mode: user says "<word> is spelt X y z" → learn + apply.
+  const voiceCorrectionRef = useRef<(t: string) => void>(() => {});
+  voiceCorrectionRef.current = (text: string) => {
+    if (!voiceCorrectRef.current) return;
+    const s = String(text || '').toLowerCase().trim();
+    if (/\b(done|finish|finished|stop|that'?s all)\b/.test(s) && !/spel/.test(s)) {
+      exitVoiceCorrect();
+      return;
+    }
+    const parsed = parseSpellingCorrection(text);
+    if (!parsed) {
+      setCorrectNote('Say: “<word> is spelt A B C”');
+      return;
+    }
+    void learnCorrection(parsed.misheard, parsed.correct).then(() => setCtxWords(getCorrectionWords()));
+    // Fix any occurrence already in the composer.
+    if (onReplaceText && currentText) onReplaceText(applyCorrections(currentText));
+    setCorrectNote(`Learned: “${parsed.misheard}” → “${parsed.correct}”`);
   };
   // Interim results give a snappier response than waiting for the final chunk.
   useEffect(() => {
@@ -248,8 +304,8 @@ export function VoiceTypingButton({
         )}
       </TouchableOpacity>
 
-      {/* Live listening banner (hidden while the pause prompt is up) */}
-      <Modal visible={listening && !pausePrompt} transparent animationType="fade" onRequestClose={onStop}>
+      {/* Live listening banner (hidden while the pause prompt / voice-correct is up) */}
+      <Modal visible={listening && !pausePrompt && !voiceCorrect} transparent animationType="fade" onRequestClose={onStop}>
         <View style={styles.bannerWrap} pointerEvents="box-none">
           <View style={styles.banner} testID="voice-typing-banner">
             <View style={styles.recDot} />
@@ -280,7 +336,7 @@ export function VoiceTypingButton({
             <Feather name="pause-circle" size={30} color={Colors.primary} />
             <Text style={styles.promptTitle}>You paused</Text>
             <Text style={styles.promptSub}>Send this message or keep talking?</Text>
-            <Text style={styles.promptHint}>🎙 Say “Send” or “Continue”</Text>
+            <Text style={styles.promptHint}>🎙 Say “Send”, “Continue” or “Edit”</Text>
             <View style={styles.promptRow}>
               <TouchableOpacity style={[styles.promptBtn, styles.promptGhost]} onPress={onKeepTalking} testID="voice-typing-continue">
                 <Feather name="mic" size={18} color={Colors.primary} />
@@ -334,6 +390,40 @@ export function VoiceTypingButton({
             </View>
           </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Voice-correction mode — teach a spelling entirely by voice. */}
+      <Modal visible={voiceCorrect} transparent animationType="fade" onRequestClose={() => exitVoiceCorrect(false)}>
+        <View style={styles.bannerWrap} pointerEvents="box-none">
+          <View style={styles.vcCard} testID="voice-correct-banner">
+            <View style={styles.vcHeaderRow}>
+              <View style={styles.recDot} />
+              <Text style={styles.vcTitle}>Voice correction</Text>
+            </View>
+            <Text style={styles.vcInstruction}>
+              Say the word, then spell it — e.g. “Santi is spelt S a n t i”.
+            </Text>
+            {partial ? (
+              <Text style={styles.vcPartial} numberOfLines={2}>{partial}</Text>
+            ) : null}
+            {correctNote ? (
+              <View style={styles.vcNote}>
+                <Feather name="check-circle" size={14} color="#34c759" />
+                <Text style={styles.vcNoteText} numberOfLines={2}>{correctNote}</Text>
+              </View>
+            ) : null}
+            <View style={styles.promptRow}>
+              <TouchableOpacity style={[styles.promptBtn, styles.promptGhost]} onPress={() => exitVoiceCorrect(false)} testID="voice-correct-done">
+                <Feather name="mic" size={18} color={Colors.primary} />
+                <Text style={styles.promptGhostText}>Done, keep talking</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.promptBtn, styles.promptSolid]} onPress={() => exitVoiceCorrect(true)} testID="voice-correct-send">
+                <Feather name="send" size={18} color={Colors.white} />
+                <Text style={styles.promptSolidText}>Send</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
       </Modal>
 
       {/* Language picker */}
@@ -483,6 +573,27 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   promptEditText: { color: Colors.textSecondary, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  vcCard: {
+    backgroundColor: '#1c1c1e',
+    borderRadius: Radius.lg,
+    padding: Spacing.base,
+    gap: 10,
+    ...Shadow.lg,
+  },
+  vcHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  vcTitle: { color: Colors.white, fontSize: FontSize.base, fontWeight: FontWeight.bold },
+  vcInstruction: { color: '#c7c7cc', fontSize: FontSize.sm, lineHeight: 19 },
+  vcPartial: { color: Colors.white, fontSize: FontSize.base, fontWeight: FontWeight.semibold },
+  vcNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(52,199,89,0.15)',
+    borderRadius: Radius.md,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  vcNoteText: { flex: 1, color: '#e6ffe9', fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   editBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   editCard: {
     backgroundColor: Colors.surface,

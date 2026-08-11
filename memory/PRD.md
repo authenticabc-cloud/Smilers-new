@@ -1,5 +1,16 @@
 # Smilers Mobile App — PRD
 
+## iter-488 (Aug 2026): Voice typing — spoken "Edit" spelling mode, noise handling, AirPods/Bluetooth mic
+
+Three voice-typing upgrades:
+
+1. **Spoken voice-correction mode** (`VoiceTypingButton.tsx` + `corrections.ts`). At the pause prompt the user can now SAY "Edit" (also "correct/fix/spelling") to enter a hands-free correction mode. They say e.g. "Santi is spelt S a n t i" → NEW `parseSpellingCorrection()` extracts the misheard word + joins the spelled letters, `learnCorrection()` stores it, and any occurrence already in the composer is fixed via `applyCorrections`. A dark banner shows live partial + a "Learned: X → Y" confirmation; "Done, keep talking" / "Send" exit. Multiple corrections per session; "done/stop" also exits by voice.
+2. **Noise handling + better accuracy** (`useVoiceTyping.ts`). `start()` now sets iOS `iosCategory { category:'playAndRecord', mode:'voiceChat', categoryOptions:['allowBluetooth','allowBluetoothA2DP','allowAirPlay','defaultToSpeaker'] }` — `voiceChat` engages Apple's voice-processing IO (echo + noise suppression) for noisy backgrounds. Also feeds learned words as `contextualStrings` (iOS) to bias recognition toward taught spellings/names. (Android applies its own noise suppression.)
+3. **AirPods / Bluetooth mic** — the `allowBluetooth`/`allowBluetoothA2DP`/`allowAirPlay` category options route dictation input through a connected headset, so the user can voice-type via AirPods with the phone across the room.
+
+Lint clean; babel-parse OK; app boots. ⚠️ Native-only (speech recognition + audio session) — verify on a real device: spoken "Edit" spelling flow, dictation in noise, and dictation via AirPods.
+
+
 ## iter-487 (Aug 2026): Voice typing — "Edit & correct" + self-learning correction dictionary
 
 Enhanced the chat-composer voice typing (`src/components/chat/VoiceTypingButton.tsx`):

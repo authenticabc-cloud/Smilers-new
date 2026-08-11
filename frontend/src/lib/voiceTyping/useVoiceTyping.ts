@@ -46,6 +46,8 @@ interface Args {
   allowedLanguages?: string[];
   /** Fired (Android) with the detected BCP-47 code while auto-detecting. */
   onDetectLanguage?: (code: string) => void;
+  /** iOS: bias recognition toward these words (learned corrections/names). */
+  contextualStrings?: string[];
 }
 
 export function useVoiceTyping({
@@ -57,6 +59,7 @@ export function useVoiceTyping({
   autoDetect = false,
   allowedLanguages,
   onDetectLanguage,
+  contextualStrings,
 }: Args) {
   const [partial, setPartial] = useState('');
   const runningRef = useRef(false);
@@ -67,6 +70,7 @@ export function useVoiceTyping({
   const detectCbRef = useRef(onDetectLanguage);
   const autoRef = useRef(autoDetect);
   const allowedRef = useRef(allowedLanguages);
+  const contextualRef = useRef(contextualStrings);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firedSilenceRef = useRef(false);
 
@@ -76,6 +80,7 @@ export function useVoiceTyping({
   detectCbRef.current = onDetectLanguage;
   autoRef.current = autoDetect;
   allowedRef.current = allowedLanguages;
+  contextualRef.current = contextualStrings;
 
   const clearTimer = () => {
     if (timerRef.current) {
@@ -109,6 +114,19 @@ export function useVoiceTyping({
         continuous: true,
         addsPunctuation: true,
         requiresOnDeviceRecognition: false,
+        // Bias recognition toward learned corrections / names (iOS).
+        ...(contextualRef.current && contextualRef.current.length
+          ? { contextualStrings: contextualRef.current.slice(0, 100) }
+          : {}),
+        // Noise handling + Bluetooth/AirPods routing (iOS): playAndRecord with
+        // the voiceChat mode enables Apple's voice-processing IO (echo + noise
+        // suppression), and the Bluetooth/AirPlay options let a connected
+        // headset's mic drive dictation when the phone is across the room.
+        iosCategory: {
+          category: 'playAndRecord',
+          categoryOptions: ['allowBluetooth', 'allowBluetoothA2DP', 'allowAirPlay', 'defaultToSpeaker'],
+          mode: 'voiceChat',
+        },
         ...(useAuto
           ? {
               androidIntentOptions: {
