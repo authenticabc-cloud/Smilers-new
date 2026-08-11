@@ -74,17 +74,44 @@ piece is positions/roles for parent groups (above).
 
 ## SPEC 3 — Chat request / approval (report item #4, non-contact case)
 
-When a user opens a group member's profile and taps **Chat** but that member is
-NOT in their contacts (and the member's number isn't shared), the user should be
-able to send a **chat request** the member must ACCEPT before a conversation opens.
-No such backend exists today.
+When a user opens a group member's profile and taps **Chat** but they have no
+existing relationship with that member, the user should send a **chat request**
+the member must ACCEPT before a conversation opens. No such backend exists today.
+
+### Definition of "contact" — WHEN the accept-first gate triggers  (web team's Q)
+The native app has THREE server-visible relationship signals (all owned by your
+Convex repo). **Open the chat DIRECTLY (NO request) when ANY of these is true;
+otherwise require a chat request:**
+
+1. **Existing conversation** — a 1:1 conversation already exists between the two
+   users (`getOrCreateDirect` would return an existing id, not create one).
+2. **Number saved on device** — `phoneSavedOnDevice === true`. This is the EXACT
+   same signal your `groupMemberProfile.getMemberProfile` already returns and that
+   drives the profile's "In your contacts" badge — reuse that logic verbatim so
+   the gate matches what the user sees. (This is the "if I have his number saved"
+   case from the report.)
+3. **Accepted app-contact** — a `contacts` row between the two users with
+   `contactStatus === 'accepted'` (same source as `contacts.getContacts`).
+
+So: `requiresChatRequest = !(existingConversation || phoneSavedOnDevice || acceptedContact)`.
+
+Notes:
+- `phoneSavedOnDevice` is authoritative server-side because the app already syncs
+  the viewer's device-contact index to the backend (that's how `getMemberProfile`
+  can return it). So the backend CAN evaluate the gate itself — but the client
+  will ALSO evaluate it (it has all three signals) and only call
+  `chatRequests.send` when `requiresChatRequest` is true.
+- Please make `getOrCreateDirect` KEEP working for the direct-open cases (1/2/3).
+  The request gate is only for genuine strangers.
 
 ### Functions
-- `chatRequests.send({ toUserId }) → { requestId }`
-  - Rejects if a conversation/contact already exists, if already requested
-    (idempotent → returns existing), or if `toUserId` blocked the caller.
+- `chatRequests.send({ toUserId }) → { requestId, status }`
+  - Server MUST re-check the gate: if any of (existing conversation / phoneSaved /
+    acceptedContact) holds, DON'T create a request — return `{ status:'auto' }` and
+    let the client open the chat. Reject if already requested (idempotent → return
+    existing), or if `toUserId` blocked the caller.
 - `chatRequests.getIncoming() → Array<{ _id, fromUserId, fromName, sentAt }>` (reactive)
-- `chatRequests.getOutgoingStatus({ toUserId }) → 'none'|'pending'|'accepted'|'declined'`
+- `chatRequests.getOutgoingStatus({ toUserId }) → 'none'|'pending'|'accepted'|'declined'|'auto'`
 - `chatRequests.accept({ requestId }) → { conversationId }`  // creates/returns the 1:1 conv
 - `chatRequests.decline({ requestId }) → { ok: true }`
 
@@ -93,11 +120,11 @@ No such backend exists today.
 indexed `by_to_status` + `by_pair`.
 
 ### Native UI (built once shipped)
-- Profile Chat button, non-contact → `chatRequests.send` → "Request sent, waiting for
-  <name> to accept." (uses `getOutgoingStatus` to show pending/accepted).
+- Profile Chat button → client computes `requiresChatRequest` (using the 3 signals
+  it already has). If false → open chat immediately (current behaviour). If true →
+  `chatRequests.send` → "Request sent, waiting for <name> to accept." (poll
+  `getOutgoingStatus`).
 - A "Chat requests" inbox (or a banner on Chats) driven by `getIncoming` with
   Accept/Decline; Accept opens the returned `conversationId`.
-- Contacts (or number already shared) skip the gate and chat opens immediately
-  (already implemented on native).
 
 Please confirm names/shapes.
