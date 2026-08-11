@@ -1,5 +1,17 @@
 # Smilers Mobile App — PRD
 
+## iter-483 (Aug 2026): "Ongoing group call" banner for members who miss/decline a group call
+
+New feature: a member who MISSES or DECLINES a group-call ring now sees a floating banner **"Ongoing group call · <group name>" / "Tap to join"** with a **"Can't join"** dismiss (hides that specific call forever for that user).
+
+- NEW `src/lib/call/ongoingGroupCallStore.ts` — persisted (AsyncStorage) store of group calls this device was rung into: `record`, `dismiss` (permanent per callId), `remove` (silent — call ended/joined), `getOngoingGroupCalls`, `subscribe`, `loadOngoingGroupCalls(force)`. 2h safety expiry; dedupe/dismiss keyed by the backend's shared `call_id` (`group_<room>_<ts>`, identical for all members).
+- Recording at push-receipt for `conversationType==='group'` pushes in BOTH `usePushNotifications.ts` (foreground/alive) and `backgroundTaskSetup.ts` (background/killed) — captures `{callId, conversationId, streamRoom(=stream_room), groupName(=conversationName), isVideo}`. AsyncStorage bridges the killed-context record to the foreground UI.
+- NEW `src/components/call/GroupCallBanner.tsx` — mounted in `app/(tabs)/_layout.tsx` (absolute overlay under the safe-area top, zIndex 1000). Polls the live FastAPI roster (`fetchCallParticipants(streamRoom, myId)`) every 6s: shows ONLY while someone is `joined` and I'm not; auto-clears (removeGroupCall) when the call ends (roster known + nobody joined) or once I've joined. Tap → `/call/<conv>?streamRoom=…&answer=1&type=…&group=1` (same join URL as the ring notification) + remove; "Can't join" → permanent dismiss. Reloads store on app-foreground (AppState active).
+- Works for parent groups AND sub groups (both ring via the same group-ring Stream path). The banner correctly persists after a DECLINE (we only gate on anyone-joined + not-me-joined, not on my own declined status).
+
+Lint clean; app boots to Sign In. ⚠️ Authenticated + native (FCM group ring + Stream roster) — verify on a real device build with 2+ accounts (start a group call, have one member decline/miss, confirm the banner appears, joins on tap, and "Can't join" hides it).
+
+
 ## iter-482 (Aug 2026): Group calls unified to Stream (fixes admin-isolation + ring-cancel) + member-profile 1:1 routing + backend specs
 
 Report items #2, #3, #4 (frontend) fixed; #1, #5 + #4-chat-request specced for the web team.

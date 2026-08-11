@@ -378,6 +378,20 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
     const callerIdentity = toNonEmptyString(payload.twilio_caller_identity) || '';
     const actionUrl = toNonEmptyString(payload.action_url) || '';
 
+    // Group call → record it so the "Ongoing group call · <name> — tap to join"
+    // banner can surface for members who miss/decline the ring (GroupCallBanner).
+    try {
+      if (toNonEmptyString(payload.conversationType) === 'group') {
+        const gRoom = toNonEmptyString(payload.stream_room) || '';
+        const gName = toNonEmptyString(payload.conversationName) || callerName;
+        if (gRoom && conversationId) {
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const { recordIncomingGroupCall } = require('../lib/call/ongoingGroupCallStore');
+          recordIncomingGroupCall({ callId, conversationId, streamRoom: gRoom, groupName: gName, isVideo });
+        }
+      }
+    } catch {}
+
     let notifeeOk = false;
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires

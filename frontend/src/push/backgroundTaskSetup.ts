@@ -248,6 +248,25 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
       toNonEmptyString(payload.groupName) ||
       '';
 
+    // Record group calls so the "Ongoing group call" banner can offer a
+    // second chance to join for members who miss/decline (GroupCallBanner).
+    try {
+      if (isGroupCall) {
+        const gRoom = toNonEmptyString(payload.stream_room) || '';
+        if (gRoom && conversationId) {
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const { recordIncomingGroupCall } = require('../lib/call/ongoingGroupCallStore');
+          recordIncomingGroupCall({
+            callId,
+            conversationId,
+            streamRoom: gRoom,
+            groupName: groupName || callerName,
+            isVideo,
+          });
+        }
+      }
+    } catch {}
+
     let notifeeOk = false;
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires

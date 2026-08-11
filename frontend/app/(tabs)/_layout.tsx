@@ -11,6 +11,7 @@ import { conversationLastActivityMs, effectiveUnread } from '../../src/lib/local
 import { callDebug } from '../../src/lib/callDebugLog';
 import { forceConvexReconnect } from '../../src/providers/useConvexAutoReconnect';
 import { ActiveDeviceProvider } from '../../src/providers/ActiveDeviceProvider';
+import GroupCallBanner from '../../src/components/call/GroupCallBanner';
 import { Colors, FontSize, FontWeight } from '../../src/theme';
 
 export default function TabsLayout() {
@@ -459,6 +460,7 @@ export default function TabsLayout() {
         }}
       />
     </Tabs>
+      <GroupCallBanner />
     </ActiveDeviceProvider>
   );
 }
