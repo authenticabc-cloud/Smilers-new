@@ -1,5 +1,10 @@
 # Smilers Mobile App — PRD
 
+## iter-486 (Aug 2026): Profile chat-request pending/incoming nudge
+
+On a user profile, when `chatEligibility.outgoingStatus === 'pending'` a "Chat request sent · waiting for X to accept" banner now shows and the Chat action relabels to "Requested" (reminds the sender they already reached out). Conversely, if `incomingStatus === 'pending'` (they requested ME), a green tappable "X sent you a chat request · Tap to respond" banner routes to `/chat-requests`. (Note: an initial insert_text landed inside JSX due to shifted line numbers and broke Metro with a SyntaxError at 1196 — caught via expo logs, removed the stray block, re-inserted the styles inside the real StyleSheet.create; verified with a babel parse + clean boot.)
+
+
 ## iter-485 (Aug 2026): Chat-request intro-note composer
 
 Sender can now add a short intro note when sending a chat request (backend `chatRequests.send` already accepts optional `message`, max 200 chars enforced client-side). In `app/user/[userId].tsx`: tapping Chat (or "Send request" from the Call/Video gate) on a non-contact now opens a bottom-sheet composer (`showRequestComposer`/`requestNote`) with a multiline note field + char counter; `sendChatRequest(message)` passes the trimmed note through. The recipient's inbox (`app/chat-requests.tsx`) already renders `item.message`, so the note shows on the Received tab. Note is optional (blank → plain request). Lint clean; app boots.

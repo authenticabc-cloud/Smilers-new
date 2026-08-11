@@ -822,11 +822,33 @@ export default function UserProfileScreen() {
             </View>
           ) : null}
 
+          {/* Pending chat-request nudge — reminds the sender they already
+              reached out (accept-first gate, #4). */}
+          {chatEligibility?.outgoingStatus === 'pending' ? (
+            <View style={styles.reqPendingBanner} testID="chat-request-pending-banner">
+              <Ionicons name="hourglass-outline" size={15} color={Colors.primary} />
+              <Text style={styles.reqPendingText} numberOfLines={2}>
+                Chat request sent · waiting for {displayName} to accept
+              </Text>
+            </View>
+          ) : chatEligibility?.incomingStatus === 'pending' ? (
+            <TouchableOpacity
+              style={styles.reqIncomingBanner}
+              onPress={() => router.push('/chat-requests' as any)}
+              testID="chat-request-incoming-banner"
+            >
+              <Ionicons name="mail-unread-outline" size={15} color="#fff" />
+              <Text style={styles.reqIncomingText} numberOfLines={2}>
+                {displayName} sent you a chat request · Tap to respond
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+
           {/* Action row */}
           <View style={styles.actionRow} testID="user-profile-actions">
             <ActionButton
               icon="message-square"
-              label="Chat"
+              label={chatEligibility?.outgoingStatus === 'pending' ? 'Requested' : 'Chat'}
               onPress={openChat}
               testID="user-profile-chat-btn"
             />
@@ -1192,6 +1214,35 @@ const HERO_HEIGHT = 220;
 const AVATAR_SIZE = 132;
 
 const styles = StyleSheet.create({
+  reqPendingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    alignSelf: 'stretch',
+    marginTop: 12,
+    marginHorizontal: 4,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: 'rgba(233,181,59,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(233,181,59,0.4)',
+  },
+  reqPendingText: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.textPrimary },
+  reqIncomingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    alignSelf: 'stretch',
+    marginTop: 12,
+    marginHorizontal: 4,
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: '#1f9d57',
+  },
+  reqIncomingText: { flex: 1, fontSize: 13, fontWeight: '700', color: '#fff' },
+
   reqBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
   reqCard: {
     backgroundColor: Colors.background,
