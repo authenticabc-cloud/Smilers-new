@@ -10,11 +10,13 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   FlatList,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -24,6 +26,7 @@ import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../the
 import { useVoiceTyping } from '../../lib/voiceTyping/useVoiceTyping';
 import { spokenToEmoji } from '../../lib/voiceTyping/spokenToEmoji';
 import { EMOJI_PHRASE_LIST, EMOJI_TRIGGER_WORDS } from '../../lib/voiceTyping/spokenToEmoji';
+import { applyCorrections, learnFromDiff, loadCorrections } from '../../lib/voiceTyping/corrections';
 import {
   VOICE_TYPING_LANGUAGES,
   ALL_VOICE_TYPING_CODES,
@@ -39,10 +42,16 @@ export function VoiceTypingButton({
   disabled,
   onAppendText,
   onRequestSend,
+  currentText = '',
+  onReplaceText,
 }: {
   disabled?: boolean;
   onAppendText: (text: string) => void;
   onRequestSend: () => void;
+  /** Current composer text — seeds the "Edit" corrector. */
+  currentText?: string;
+  /** Replace the whole composer text (used after an "Edit" correction). */
+  onReplaceText?: (text: string) => void;
 }) {
   const [languageCode, setLanguageCode] = useState<string>(defaultVoiceTypingCode());
   const [listening, setListening] = useState(false);
@@ -50,8 +59,17 @@ export function VoiceTypingButton({
   const [pausePrompt, setPausePrompt] = useState(false);
   const [detectedLang, setDetectedLang] = useState<string | null>(null);
   const [showCheat, setShowCheat] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editValue, setEditValue] = useState('');
+  const editBeforeRef = useRef(''); // pre-edit text to diff for learning
   const dictatedRef = useRef(false); // any speech captured this session?
   const commandModeRef = useRef(false); // during the pause prompt, listen for "send"/"continue"
+
+  // Load the learned correction dictionary once so finalized speech is
+  // auto-fixed for words the user previously corrected.
+  useEffect(() => {
+    void loadCorrections();
+  }, []);
 
   const isAuto = languageCode === AUTO_CODE;
   // On iOS the recognizer can't auto-detect, so "Auto" falls back to the
@@ -79,7 +97,7 @@ export function VoiceTypingButton({
         return;
       }
       dictatedRef.current = true;
-      onAppendText(spokenToEmoji(t));
+      onAppendText(spokenToEmoji(applyCorrections(t)));
     },
     [onAppendText],
   );
@@ -162,6 +180,42 @@ export function VoiceTypingButton({
     setListening(false);
   }, []);
 
+  // Third option on the pause prompt: hand-correct wrongly transcribed words.
+  // Pauses the recognizer, opens an editor seeded with the current message.
+  const onEdit = useCallback(() => {
+    commandModeRef.current = false;
+    setListening(false);
+    setPausePrompt(false);
+    editBeforeRef.current = currentText || '';
+    setEditValue(currentText || '');
+    setEditOpen(true);
+  }, [currentText]);
+
+  // Save the correction: push the edited text back to the composer AND learn
+  // the misheard→intended word mappings for next time. Then either keep
+  // talking or send.
+  const commitEdit = useCallback(
+    async (thenSend: boolean) => {
+      const edited = editValue;
+      onReplaceText?.(edited);
+      try {
+        await learnFromDiff(editBeforeRef.current, edited);
+      } catch {
+        /* ignore */
+      }
+      setEditOpen(false);
+      if (thenSend) {
+        setListening(false);
+        onRequestSend();
+      } else {
+        // resume dictation, appending after the corrected text
+        dictatedRef.current = false;
+        setListening(true);
+      }
+    },
+    [editValue, onReplaceText, onRequestSend],
+  );
+
   // Voice-sensitive prompt: interpret "send" / "continue" spoken during the pause.
   const interpretCommandRef = useRef<(t: string) => void>(() => {});
   interpretCommandRef.current = (text: string) => {
@@ -237,8 +291,49 @@ export function VoiceTypingButton({
                 <Text style={styles.promptSolidText}>Send</Text>
               </TouchableOpacity>
             </View>
+            <TouchableOpacity style={styles.promptEditBtn} onPress={onEdit} testID="voice-typing-edit">
+              <Feather name="edit-3" size={16} color={Colors.textSecondary} />
+              <Text style={styles.promptEditText}>Edit &amp; correct words</Text>
+            </TouchableOpacity>
           </Pressable>
         </Pressable>
+      </Modal>
+
+      {/* Edit & correct — hand-fix mis-transcribed words; corrections are learned. */}
+      <Modal visible={editOpen} transparent animationType="slide" onRequestClose={() => setEditOpen(false)}>
+        <KeyboardAvoidingView style={styles.editBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={styles.editCard} testID="voice-typing-edit-sheet">
+            <View style={styles.editHeader}>
+              <Text style={styles.editTitle}>Edit &amp; correct</Text>
+              <TouchableOpacity onPress={() => setEditOpen(false)} hitSlop={8} testID="voice-typing-edit-close">
+                <Feather name="x" size={22} color={Colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.editHint}>
+              Fix any wrongly heard words. Smilers remembers your fixes and transcribes them correctly next time.
+            </Text>
+            <TextInput
+              style={styles.editInput}
+              value={editValue}
+              onChangeText={setEditValue}
+              multiline
+              autoFocus
+              placeholder="Your dictated text…"
+              placeholderTextColor={Colors.textMuted}
+              testID="voice-typing-edit-input"
+            />
+            <View style={styles.promptRow}>
+              <TouchableOpacity style={[styles.promptBtn, styles.promptGhost]} onPress={() => void commitEdit(false)} testID="voice-typing-edit-continue">
+                <Feather name="mic" size={18} color={Colors.primary} />
+                <Text style={styles.promptGhostText}>Save &amp; talk</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.promptBtn, styles.promptSolid]} onPress={() => void commitEdit(true)} testID="voice-typing-edit-send">
+                <Feather name="send" size={18} color={Colors.white} />
+                <Text style={styles.promptSolidText}>Save &amp; send</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Language picker */}
@@ -380,6 +475,39 @@ const styles = StyleSheet.create({
   promptGhostText: { color: Colors.primary, fontWeight: FontWeight.bold },
   promptSolid: { backgroundColor: Colors.primary },
   promptSolidText: { color: Colors.white, fontWeight: FontWeight.bold },
+  promptEditBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 12,
+    paddingVertical: 6,
+  },
+  promptEditText: { color: Colors.textSecondary, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  editBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  editCard: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: Spacing.lg,
+    gap: Spacing.md,
+    ...Shadow.lg,
+  },
+  editHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  editTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.textPrimary },
+  editHint: { fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 19 },
+  editInput: {
+    backgroundColor: Colors.background,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border || '#E5E7EB',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 12,
+    fontSize: FontSize.base,
+    color: Colors.textPrimary,
+    minHeight: 96,
+    maxHeight: 220,
+    textAlignVertical: 'top',
+  },
   sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
   langSheet: {
     backgroundColor: Colors.surface,

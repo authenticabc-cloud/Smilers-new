@@ -5334,6 +5334,8 @@ export default function ChatScreen() {
                   })
                 }
                 onRequestSend={handleSend}
+                currentText={text}
+                onReplaceText={(t) => setText(t)}
               />
             </View>
           ) : null}

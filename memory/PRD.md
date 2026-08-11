@@ -1,5 +1,14 @@
 # Smilers Mobile App — PRD
 
+## iter-487 (Aug 2026): Voice typing — "Edit & correct" + self-learning correction dictionary
+
+Enhanced the chat-composer voice typing (`src/components/chat/VoiceTypingButton.tsx`):
+- **Third pause-prompt option "Edit & correct"** — alongside Keep talking / Send. Pauses the recognizer and opens a bottom-sheet editor seeded with the current composer text (new `currentText` + `onReplaceText` props, wired to `text`/`setText` in `app/chat/[conversationId].tsx`). User hand-fixes wrongly transcribed words, then "Save & talk" (resume dictation) or "Save & send".
+- **Self-learning correction dictionary** — NEW `src/lib/voiceTyping/corrections.ts` (AsyncStorage `smilers_voice_corrections.v1`, cap 500). On save, `learnFromDiff(before, after)` learns whole-word substitutions (only when word counts match → unambiguous 1:1 fixes). `applyCorrections()` is applied to every finalized speech chunk in `handleFinalText` BEFORE it lands in the composer, so a previously-corrected word is auto-fixed next time without editing. Conservative: whole-word, single-token, case-preserving; never rewrites words the user didn't explicitly correct.
+
+Lint clean; babel-parse OK; app boots. ⚠️ Native-only (speech recognition needs a real build) — verify dictation + edit + re-dictation of a corrected word on a device.
+
+
 ## iter-486 (Aug 2026): Profile chat-request pending/incoming nudge
 
 On a user profile, when `chatEligibility.outgoingStatus === 'pending'` a "Chat request sent · waiting for X to accept" banner now shows and the Chat action relabels to "Requested" (reminds the sender they already reached out). Conversely, if `incomingStatus === 'pending'` (they requested ME), a green tappable "X sent you a chat request · Tap to respond" banner routes to `/chat-requests`. (Note: an initial insert_text landed inside JSX due to shifted line numbers and broke Metro with a SyntaxError at 1196 — caught via expo logs, removed the stray block, re-inserted the styles inside the real StyleSheet.create; verified with a babel parse + clean boot.)
