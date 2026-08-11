@@ -1,0 +1,175 @@
+{
+  "title": "Sub groups (groups within groups)",
+  "version": 8,
+  "updatedAt": "2026-08-11",
+  "status": "SHIPPED and PUBLISHED to production. All backend is live on the Convex deployment. Web UI is live too; native builds its own UI against the functions below.",
+  "summary": "A sub group is a full 'group' conversation with parentConversationId pointing at a mother group. It reuses ALL existing group behavior (messages, calls, media, admin ratio, E2EE, invite links, etc.) via the SAME functions you already call for groups — pass the sub group's conversation _id anywhere you pass a group id. The only new backend surface is the subGroups.* module below, plus two new conversation fields.",
+  "newConversationFields": {
+    "parentConversationId": "optional Id<conversations>. Present ONLY on sub groups; points at the mother group. Normal groups omit it.",
+    "subGroupStatus": "optional 'pending' | 'active'. 'pending' = created by a non-admin member, awaiting a mother-group admin's approval; 'active' = usable. Absent on normal groups.",
+    "appearance": "optional { emoji?: string, color?: string }. SYNCED shared avatar styling for the group (used mainly by sub groups). `emoji` is a single glyph; `color` is a hex string like '#4F46E5'. The uploaded image `avatar` (a URL) takes precedence when present; otherwise render the emoji on a circle filled with `color`, falling back to a default when neither is set."
+  },
+  "appearance": {
+    "concept": "Sub-group icons (emoji + color) now sync across all members via the shared `appearance` field on the conversation. Replaces any device-only styling.",
+    "read": "Read conversation.appearance from getConversation / listForParent (both already include it). Render emoji over the color circle; prefer conversation.avatar (image URL) if set.",
+    "setAtCreation": "subGroups.create accepts an optional `appearance: { emoji?, color? }`.",
+    "editLater": "Use the EXISTING conversations.updateGroup mutation (admin only). It now accepts `appearance: { emoji?, color? } | null`. Pass the object to set it, pass null to clear it. Empty/whitespace emoji and empty color are dropped; color must be a #RGB or #RRGGBB hex or it throws BAD_REQUEST. Editing appearance emits a silent 'groupIconChanged' system message.",
+    "worksForAnyGroup": "The field and updateGroup support exist for all groups, not just sub groups, but the web UI only exposes the picker on sub groups."
+  },
+  "chiefSuccession": {
+    "concept": "When a sub group's Chief Admin LEAVES or is REMOVED without first transferring the role, the backend now AUTOMATICALLY appoints a successor. There is no new function to call — this happens inside the existing conversations.leaveGroup and conversations.removeGroupMember mutations. The client just re-reads the conversation and shows the updated chief.",
+    "rule": "For a sub group the successor is: (1) the FIRST (earliest-joined) remaining member who is also an admin of the MOTHER/parent group; else (2) if no mother-group admin is present, the earliest-joined remaining member. Regular (non-sub) groups keep their existing rule: the next admin in appointment order, else the earliest-joined member.",
+    "joinOrder": "'Earliest-joined' is the order of the conversation.participants array (append-on-join, filter-on-leave), so it reflects arrival order.",
+    "notification": "The automatic hand-off emits a silent 'chiefTransferred' system message whose actorId and targetIds[0] are the NEW chief, in addition to the usual 'memberLeft'/'memberRemoved' message. Render it like any chiefTransferred event.",
+    "reRead": "After leaveGroup/removeGroupMember, read conversation.chiefAdmin (via getConversation) to get the new chief. The new chief is also added to admins/adminOrder automatically.",
+    "manualTransfer": {
+      "who": "The auto-assigned chief (or any current chief) can still hand the role to any member.",
+      "how": "Call groupAdmin.transferChiefAdmin (unchanged name/args).",
+      "subGroupRelaxation": "In a SUB GROUP the chief may now transfer to ANY member of the sub group — the target no longer has to already be an admin, and the creator-only restriction does NOT apply. The new chief is promoted into the admin roster automatically. Regular groups keep the old restrictions (target must be an existing admin; a non-creator chief can only pass back to the creator)."
+    }
+  },
+  "positions": {
+    "concept": "Sub-group members can be assigned a position title (President, Chairman, Secretary, etc.) shown against their name inside the sub group. The sub group's Chief Admin can additionally allow a member's position to appear against their name in the MOTHER group.",
+    "table": "subGroupPositions { conversationId (the sub group), userId, title, showInMother (boolean), order (optional number), assignedBy, updatedAt }",
+    "ordering": "Positions have an optional numeric `order` (lower = higher up). listPositions and positionsForMother already return rows pre-sorted by this manual order, then alphabetically by title as a fallback. New positions are appended to the end of the current order. Use subGroups.setPositionOrder to drag-to-rank.",
+    "functions": {
+      "subGroups.setPosition": {
+        "type": "mutation",
+        "args": {
+          "subGroupId": "Id<conversations>",
+          "userId": "Id<users> (must be a member of the sub group)",
+          "title": "string; pass empty/whitespace to CLEAR the position",
+          "showInMother": "optional boolean; only the sub-group Chief Admin may set this true"
+        },
+        "returns": "{ cleared: boolean }",
+        "rules": ["Any sub-group admin may assign/update/clear a title.", "Only the Chief Admin may set showInMother = true."]
+      },
+      "subGroups.setPositionVisibility": {
+        "type": "mutation",
+        "args": { "subGroupId": "Id<conversations>", "userId": "Id<users>", "showInMother": "boolean" },
+        "returns": "{ showInMother: boolean }",
+        "rules": ["Sub-group Chief Admin only. Requires an existing position for that member."]
+      },
+      "subGroups.listPositions": {
+        "type": "query",
+        "args": { "subGroupId": "Id<conversations>" },
+        "returns": "Array<{ userId: Id<users>, title: string, showInMother: boolean, order: number | null }>, pre-sorted by manual order then title. Empty unless the caller is a sub-group member.",
+        "notes": "Use to render position labels next to member names inside the sub group. Render in array order."
+      },
+      "subGroups.setPositionOrder": {
+        "type": "mutation",
+        "args": {
+          "subGroupId": "Id<conversations>",
+          "orderedUserIds": "Id<users>[] — the members' ids in the desired top-to-bottom order"
+        },
+        "returns": "{ ordered: number }",
+        "rules": [
+          "Sub-group Chief Admin only.",
+          "Assigns an increasing `order` to each listed member's position. Members with a position but not listed keep a stable order after the explicit ones. Ids without a position are ignored.",
+          "This is the drag-to-rank backend the native app requested."
+        ]
+      },
+      "subGroups.positionsForMother": {
+        "type": "query",
+        "args": { "parentConversationId": "Id<conversations> (the mother group)" },
+        "returns": "Record<userId, Array<{ title: string, subGroupId: Id<conversations>, subGroupName: string }>>",
+        "notes": "Positions to show against member names in the MOTHER group. Only includes positions whose showInMother is true, and only from active sub groups the CALLER belongs to (so labels stay private to sub-group members). A member may appear with multiple titles if they hold positions in more than one visible sub group."
+      }
+    }
+  },
+  "visibilityRules": [
+    "Sub groups are EXCLUDED from the standalone groups list (conversations.listGroups no longer returns them).",
+    "Show a sub group nested inside its mother group, and only to users who are participants of that sub group (plus mother-group admins/creator can see PENDING ones for approval).",
+    "Everything else (opening the chat, sending, calling) uses the normal group functions with the sub group's _id."
+  ],
+  "functions": {
+    "subGroups.create": {
+      "type": "mutation",
+      "args": {
+        "parentConversationId": "Id<conversations> (the mother group)",
+        "name": "string",
+        "description": "optional string",
+        "memberIds": "optional string[] of user ids to add at creation (must be mother-group members; others are dropped)",
+        "appearance": "optional { emoji?: string, color?: string } — synced icon styling (see the appearance section)"
+      },
+      "returns": "{ subGroupId: Id<conversations>, status: 'pending' | 'active' }",
+      "rules": [
+        "Caller must be a member of the mother group.",
+        "Creator becomes the sub group's Chief Admin; the mother group's admin-to-member ratio applies (same rules as normal groups).",
+        "If the caller is a mother-group admin (chief/admin/creator) -> status 'active' immediately. Otherwise -> 'pending' until approved.",
+        "Only mother-group members can be added; foreign/duplicate/self ids are dropped.",
+        "Mother group must itself be a top-level group (cannot nest a sub group under a sub group)."
+      ]
+    },
+    "subGroups.listForParent": {
+      "type": "query",
+      "args": { "parentConversationId": "Id<conversations>" },
+      "returns": "Array of sub-group conversation docs, each enriched with { memberCount: number, isMember: boolean }. Empty if the caller is not a mother-group member.",
+      "notes": "Returns the sub groups the caller may see: active ones they belong to, plus pending ones if they are the creator or a mother-group admin. Use this to render the nested list inside the mother group."
+    },
+    "subGroups.approve": {
+      "type": "mutation",
+      "args": { "subGroupId": "Id<conversations>" },
+      "returns": "{ status: 'active' }",
+      "rules": ["Mother-group admin only. Flips a pending sub group to active. Idempotent if already active."]
+    },
+    "subGroups.reject": {
+      "type": "mutation",
+      "args": { "subGroupId": "Id<conversations>" },
+      "returns": "{ deleted: boolean }",
+      "rules": ["Mother-group admin can reject any pending sub group; the creator can cancel their own pending request. Deletes the pending sub group."]
+    },
+    "subGroups.addMember": {
+      "type": "mutation",
+      "args": { "subGroupId": "Id<conversations>", "userId": "Id<users>" },
+      "returns": "void",
+      "rules": ["Sub-group admin only. The user MUST already be a member of the mother group, else BAD_REQUEST. Admin ratio recomputed like normal groups."]
+    },
+    "groupAdmin.transferChiefAdmin": {
+      "type": "mutation",
+      "args": { "conversationId": "Id<conversations> (the sub group's _id)", "newChiefAdminId": "Id<users>" },
+      "returns": "void",
+      "rules": [
+        "Caller must be the current Chief Admin.",
+        "SUB GROUP: newChiefAdminId can be ANY member of the sub group; they are auto-promoted into admins. No creator-only restriction.",
+        "Emits a 'chiefTransferred' system message.",
+        "This is also the function the auto-assigned successor uses to hand the role onward."
+      ]
+    }
+  },
+  "membershipEnforcement": "A sub group can ONLY contain members of its mother group. This is now enforced on EVERY path: subGroups.create (drops foreign ids), subGroups.addMember, the generic conversations.addGroupMember, AND groupAdmin.joinViaInviteLink all throw BAD_REQUEST ('Only members of the mother group can join...') if the target user is not in the mother group. Handle that error in the add-member and invite-link join flows.",
+  "cascadeOnMotherDeparture": {
+    "concept": "Because a sub group may only contain mother-group members, leaving or being removed from the MOTHER group now automatically removes the user from EVERY sub group under it. No new call is needed — this happens inside the existing conversations.leaveGroup and conversations.removeGroupMember mutations when they run on a top-level group.",
+    "effects": [
+      "The user is removed from each sub group they were in; a silent 'memberLeft' (if they left) or 'memberRemoved' (if an admin removed them) system message is emitted in each affected sub group.",
+      "If the user was a sub group's Chief Admin, a successor is auto-appointed (see chiefSuccession) and a 'chiefTransferred' event is emitted there too.",
+      "If a sub group becomes empty as a result, it is deleted."
+    ],
+    "clientTip": "After a member leaves/is removed from a mother group, re-read subGroups.listForParent and the affected sub-group conversations to reflect the cascaded changes."
+  },
+  "cleanupExistingBadData": {
+    "function": "subGroups.cleanupOrphans",
+    "type": "mutation",
+    "args": { "parentConversationId": "Id<conversations> (the mother group)" },
+    "returns": "{ removedMemberships: number, affectedSubGroups: number }",
+    "rules": [
+      "Mother-group admin only (chief/creator/admin).",
+      "Scans every sub group under the mother and removes any participant who is NOT a member of the mother group, reusing the same removal logic (admin recompute, chief succession, empty-group deletion, system messages).",
+      "Use this ONCE to repair legacy sub groups that still contain orphaned members; going forward the cascade above prevents new orphans."
+    ]
+  },
+  "reuseExistingGroupFunctions": [
+    "Messaging: messages.* with the sub group's conversationId.",
+    "Calls (voice/video, group mesh): the same call/stream functions with the sub group's conversationId.",
+    "Admin management: groupAdmin.promoteToAdmin / demoteFromAdmin / transferChiefAdmin / getGroupAdminInfo.",
+    "Membership: conversations.removeGroupMember, conversations.leaveGroup, conversations.getGroupMembers, conversations.updateGroup.",
+    "Unread + typing: messages.getUnreadCounts and typing.* already include the sub group as an ordinary conversation."
+  ],
+  "unreadRollup": {
+    "concept": "A sub group has no standalone row, so its unread count is ALSO added onto its mother group's row. messages.getUnreadCounts still returns an entry for the sub group's own _id (use it to badge the nested sub-group list); the mother group's _id entry now equals (mother's own unread) + (sum of the caller's unread across the sub groups they belong to under that mother).",
+    "privacy": "Because the rollup only sums conversations the caller is a participant of, the mother-group badge only reflects sub groups the caller actually belongs to. Non-members never see it.",
+    "renderingTip": "Show the mother group's red count from counts[motherId] as usual. When you open the mother group, use counts[subGroupId] to badge each nested sub group. Do not add counts[subGroupId] to counts[motherId] again on the client — the backend already did."
+  },
+  "notYetImplemented": [],
+  "backwardCompatible": true
+}

@@ -437,13 +437,18 @@ function GroupInfoInner() {
     [members, displayNameForMember],
   );
 
-  // -------- Positions (sub groups only) --------
-  // Inside a SUB group we manage/show each member's position title.
+  // -------- Positions / office bearers (sub groups AND top-level groups) --------
+  // Sub groups use api.subGroups.*(subGroupId); top-level groups use
+  // api.groupPositions.*(conversationId) (SPEC 5). Both return { userId, title,
+  // order } (top-level has no showInMother concept).
+  const positionsRef = isSubGroup
+    ? (api as any).subGroups?.listPositions
+    : (api as any).groupPositions?.listPositions;
   const { data: subPositions, refetch: refetchPositions } = useSafeConvexQuery<any[]>(
-    (api as any).subGroups?.listPositions,
-    isSubGroup && conversationId ? { subGroupId: conversationId } : {},
+    positionsRef,
+    conversationId ? (isSubGroup ? { subGroupId: conversationId } : { conversationId }) : {},
     [],
-    isSubGroup && !!conversationId,
+    !!conversationId,
   );
   // Inside the MOTHER group we show titles that sub-group chiefs chose to expose.
   const { data: motherPositions } = useSafeConvexQuery<Record<string, any[]>>(
@@ -521,7 +526,9 @@ function GroupInfoInner() {
       setApprSaving(false);
     }
   }, [conversationId, updateGroupM, apprEmoji, apprColor]);
-  const setPositionOrderM = useMutation((api as any).subGroups?.setPositionOrder);
+  const setPositionOrderM = useMutation(
+    isSubGroup ? (api as any).subGroups?.setPositionOrder : (api as any).groupPositions?.setPositionOrder,
+  );
   const [localBearers, setLocalBearers] = useState(officeBearers);
   const [reorderOpen, setReorderOpen] = useState(false);
 
@@ -539,12 +546,14 @@ function GroupInfoInner() {
       const next = orderedUserIds.map((uid) => byId.get(uid)).filter(Boolean) as typeof localBearers;
       setLocalBearers(next);
       if (setPositionOrderM) {
-        void setPositionOrderM({ subGroupId: conversationId, orderedUserIds })
+        void setPositionOrderM(
+          isSubGroup ? { subGroupId: conversationId, orderedUserIds } : { conversationId, orderedUserIds },
+        )
           .then(() => refetchPositions?.())
           .catch(() => setLocalBearers(officeBearers));
       }
     },
-    [conversationId, localBearers, setPositionOrderM, officeBearers, refetchPositions],
+    [conversationId, localBearers, setPositionOrderM, officeBearers, refetchPositions, isSubGroup],
   );
 
   // Members list for the bulk positions editor (sub group only).
@@ -968,8 +977,8 @@ function GroupInfoInner() {
           </View>
         ) : null}
 
-        {/* OFFICE BEARERS (sub group only) */}
-        {isSubGroup && (officeBearers.length > 0 || isAdmin) ? (
+        {/* OFFICE BEARERS (top-level groups AND sub groups) */}
+        {officeBearers.length > 0 || isAdmin ? (
           <View style={styles.section} testID="office-bearers-section">
             <View style={styles.bearerHeader}>
               <Text style={styles.sectionLabel}>OFFICE BEARERS ({officeBearers.length})</Text>
@@ -1070,7 +1079,7 @@ function GroupInfoInner() {
                         <Text style={styles.reserveBadgeText}>Reserve</Text>
                       </View>
                     ) : null}
-                    {isSubGroup && subPositionMap.get(mid)?.title ? (
+                    {subPositionMap.get(mid)?.title ? (
                       <View style={styles.positionPill} testID={`member-position-${mid}`}>
                         <Ionicons name="ribbon" size={11} color={Colors.white} />
                         <Text style={styles.positionPillText} numberOfLines={1}>
@@ -1097,7 +1106,7 @@ function GroupInfoInner() {
                   </Text>
                 </View>
                 </TouchableOpacity>
-                {isSubGroup && isAdmin ? (
+                {isAdmin ? (
                   <TouchableOpacity
                     style={styles.iconBtn}
                     onPress={() => setPositionTarget({ userId: mid, name: isMe ? 'You' : resolvedName })}
@@ -1395,11 +1404,13 @@ function GroupInfoInner() {
         </Pressable>
       </Modal>
 
-      {/* ----- Sub Group Position Modal ----- */}
-      {isSubGroup && conversationId ? (
+      {/* ----- Position Modal (sub group + top-level group) ----- */}
+      {conversationId ? (
         <SubGroupPositionModal
           visible={!!positionTarget}
           subGroupId={conversationId}
+          backend={isSubGroup ? 'subGroups' : 'groupPositions'}
+          allowVisibility={isSubGroup}
           userId={positionTarget?.userId || null}
           memberName={positionTarget?.name || 'Member'}
           currentTitle={positionTarget ? subPositionMap.get(positionTarget.userId)?.title || '' : ''}
@@ -1412,11 +1423,13 @@ function GroupInfoInner() {
         />
       ) : null}
 
-      {/* ----- Bulk Positions Modal ----- */}
-      {isSubGroup && conversationId ? (
+      {/* ----- Bulk Positions Modal (sub group + top-level group) ----- */}
+      {conversationId ? (
         <BulkPositionsModal
           visible={bulkPositionsOpen}
           subGroupId={conversationId}
+          backend={isSubGroup ? 'subGroups' : 'groupPositions'}
+          allowVisibility={isSubGroup}
           members={bulkPositionMembers}
           isChief={isChief}
           onClose={() => {
@@ -1427,7 +1440,7 @@ function GroupInfoInner() {
       ) : null}
 
       {/* ----- Reorder Bearers (drag) Modal ----- */}
-      {isSubGroup ? (
+      {officeBearers.length > 1 ? (
         <ReorderBearersModal
           visible={reorderOpen}
           bearers={localBearers.map((b) => ({ userId: b.userId, name: b.userId === myId ? 'You' : b.name, title: b.title }))}

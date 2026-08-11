@@ -590,6 +590,7 @@ export default function RootLayout() {
               <Stack.Screen name="scheduled" />
               <Stack.Screen name="chat-once" />
               <Stack.Screen name="search" />
+              <Stack.Screen name="chat-requests" />
               <Stack.Screen name="starred" />
               <Stack.Screen name="archived" />
               <Stack.Screen name="encryption" />

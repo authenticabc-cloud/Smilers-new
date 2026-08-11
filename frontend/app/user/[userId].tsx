@@ -68,6 +68,23 @@ export default function UserProfileScreen() {
     typeof conversationId === 'string' && conversationId.length > 5;
 
   const getOrCreateDirect = useMutation(api.conversations.getOrCreateDirect);
+  // Chat-request (accept-first for non-contacts). Backend contract:
+  // native-chat-requests-contract.json.
+  const chatEligibility = useQuery(
+    (api as any).chatRequests?.getChatEligibility,
+    isAuthenticated && hasValidUserId ? { otherUserId: userId } : 'skip',
+  ) as
+    | {
+        requiresChatRequest: boolean;
+        existingConversation: boolean;
+        phoneSavedOnDevice: boolean;
+        acceptedContact: boolean;
+        outgoingStatus: 'none' | 'pending' | 'accepted' | 'declined';
+        incomingStatus: 'none' | 'pending' | 'accepted' | 'declined';
+      }
+    | undefined;
+  const sendChatRequestM = useMutation((api as any).chatRequests?.send);
+  const [chatReqBusy, setChatReqBusy] = useState(false);
   // My own identity — required to route calls through Twilio (iter-234).
   const { data: me } = useSafeConvexQuery<any | null>(
     api.users.getCurrentUser,
@@ -508,12 +525,42 @@ export default function UserProfileScreen() {
   }, [phoneReqStatus, displayName]);
 
   // --- Actions ------------------------------------------------------------
+  // Send a chat request (accept-first) and route/notify based on the outcome.
+  const sendChatRequest = async (): Promise<boolean> => {
+    if (!userId || chatReqBusy || !sendChatRequestM) return false;
+    setChatReqBusy(true);
+    try {
+      const res: any = await sendChatRequestM({ toUserId: userId });
+      const status = res?.status;
+      if ((status === 'accepted' || status === 'already_contact') && res?.conversationId) {
+        router.push(`/chat/${res.conversationId}` as any);
+        return true;
+      }
+      Alert.alert('Chat request sent', `We'll open the chat once ${displayName} accepts.`);
+      return false;
+    } catch (e: any) {
+      Alert.alert('Could not send request', e?.data?.message || e?.message || 'Try again later.');
+      return false;
+    } finally {
+      setChatReqBusy(false);
+    }
+  };
+
   const openChat = async () => {
     if (hasValidConversationId) {
       router.push(`/chat/${conversationId}` as any);
       return;
     }
     if (!userId) return;
+    // Non-contact stranger → accept-first chat request (contract SPEC 3/#4).
+    if (chatEligibility?.requiresChatRequest) {
+      if (chatEligibility.outgoingStatus === 'pending') {
+        Alert.alert('Request pending', `Waiting for ${displayName} to accept your chat request.`);
+        return;
+      }
+      await sendChatRequest();
+      return;
+    }
     try {
       const result: any = await getOrCreateDirect({ otherUserId: userId });
       const newConvId =
@@ -535,6 +582,23 @@ export default function UserProfileScreen() {
     let convId = hasValidConversationId ? String(conversationId) : '';
     if (!convId) {
       if (!userId) return;
+      // Accept-first: a non-contact can't be called until they accept a chat
+      // request (contract note — call/video only offered once the conv exists).
+      if (chatEligibility?.requiresChatRequest) {
+        Alert.alert(
+          'Send a chat request first',
+          chatEligibility.outgoingStatus === 'pending'
+            ? `Waiting for ${displayName} to accept your chat request. You can call once they accept.`
+            : `${displayName} isn't in your contacts. Send a chat request — you can call once they accept.`,
+          chatEligibility.outgoingStatus === 'pending'
+            ? [{ text: 'OK' }]
+            : [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Send request', onPress: () => void sendChatRequest() },
+              ],
+        );
+        return;
+      }
       try {
         const result: any = await getOrCreateDirect({ otherUserId: userId });
         convId = typeof result === 'string' ? result : result?._id || result?.conversationId || '';

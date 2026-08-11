@@ -32,6 +32,8 @@ const PRESET_TITLES = [
 export function SubGroupPositionModal({
   visible,
   subGroupId,
+  backend = 'subGroups',
+  allowVisibility = true,
   userId,
   memberName,
   currentTitle,
@@ -41,6 +43,11 @@ export function SubGroupPositionModal({
 }: {
   visible: boolean;
   subGroupId: string;
+  /** 'subGroups' (default, uses subGroupId) or 'groupPositions' (top-level group,
+   *  uses conversationId). Both take { userId, title }. */
+  backend?: 'subGroups' | 'groupPositions';
+  /** Top-level groups have no "show in mother" concept → hide that toggle. */
+  allowVisibility?: boolean;
   userId: string | null;
   memberName: string;
   currentTitle: string;
@@ -48,8 +55,10 @@ export function SubGroupPositionModal({
   isChief: boolean;
   onClose: () => void;
 }) {
-  const setPositionM = useMutation((api as any).subGroups?.setPosition);
-  const setVisibilityM = useMutation((api as any).subGroups?.setPositionVisibility);
+  const positionApi = backend === 'groupPositions' ? (api as any).groupPositions : (api as any).subGroups;
+  const setPositionM = useMutation(positionApi?.setPosition);
+  const idArg = backend === 'groupPositions' ? { conversationId: subGroupId } : { subGroupId };
+  const canShowVisibility = allowVisibility && backend === 'subGroups';
 
   const [title, setTitle] = useState(currentTitle);
   const [showInMother, setShowInMother] = useState(currentShowInMother);
@@ -67,10 +76,10 @@ export function SubGroupPositionModal({
     setBusy(true);
     try {
       await setPositionM({
-        subGroupId,
+        ...idArg,
         userId,
         title: title.trim(),
-        ...(isChief ? { showInMother } : {}),
+        ...(canShowVisibility && isChief ? { showInMother } : {}),
       });
       onClose();
     } catch (e: any) {
@@ -78,20 +87,20 @@ export function SubGroupPositionModal({
     } finally {
       setBusy(false);
     }
-  }, [userId, setPositionM, subGroupId, title, isChief, showInMother, onClose]);
+  }, [userId, setPositionM, idArg, title, canShowVisibility, isChief, showInMother, onClose]);
 
   const clear = useCallback(async () => {
     if (!userId || !setPositionM) return;
     setBusy(true);
     try {
-      await setPositionM({ subGroupId, userId, title: '' });
+      await setPositionM({ ...idArg, userId, title: '' });
       onClose();
     } catch (e: any) {
       Alert.alert('Could not clear', e?.data?.message || e?.message || 'Please try again.');
     } finally {
       setBusy(false);
     }
-  }, [userId, setPositionM, subGroupId, onClose]);
+  }, [userId, setPositionM, idArg, onClose]);
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -132,7 +141,7 @@ export function SubGroupPositionModal({
             testID="position-title-input"
           />
 
-          {isChief ? (
+          {canShowVisibility && isChief ? (
             <View style={styles.switchRow}>
               <View style={styles.switchTextWrap}>
                 <Text style={styles.switchLabel}>Show in mother group</Text>

@@ -1,0 +1,51 @@
+{
+  "title": "Parent (top-level) group positions / office bearers",
+  "version": 1,
+  "updatedAt": "2026-08-11",
+  "status": "SHIPPED backend on the Convex deployment. Native builds its own UI against the functions below. Election + admin controls already existed for parent groups; this adds ONLY the position/role designation (SPEC 5).",
+  "concept": "Assign role titles (President, Chairman, Secretary, Treasurer, etc.) to members of a TOP-LEVEL group (a normal group, i.e. a 'group' conversation with NO parentConversationId). This mirrors the existing sub-group positions feature but for regular groups. There is NO 'show in mother' concept here (parent groups have no mother).",
+  "storage": "Rows live in the same underlying table as sub-group positions, keyed by the group's conversationId. Do not read the table directly; use the functions below.",
+  "roles": {
+    "assignOrClear": "Any group admin (chief admin, creator, or admin) may assign/update/clear a position.",
+    "reorder": "Only the Chief Admin (or creator) may reorder positions."
+  },
+  "functions": {
+    "setPosition": {
+      "type": "mutation",
+      "ref": "api.groupPositions.setPosition",
+      "args": {
+        "conversationId": "Id<conversations> (the top-level group)",
+        "userId": "Id<users> (member to assign; must be a participant of the group)",
+        "title": "string. Non-empty to set/update (max 60 chars). Empty/whitespace CLEARS the position."
+      },
+      "returns": "{ cleared: boolean } — cleared:true when the title was empty and any existing position was removed; cleared:false when a position was set/updated.",
+      "errors": [
+        "UNAUTHENTICATED — not signed in",
+        "NOT_FOUND — group not found / not a group",
+        "BAD_REQUEST — conversation is a sub group (use subGroups.setPosition instead), or user is not a member of the group",
+        "FORBIDDEN — caller is not a group admin"
+      ]
+    },
+    "listPositions": {
+      "type": "query",
+      "ref": "api.groupPositions.listPositions",
+      "args": { "conversationId": "Id<conversations> (the top-level group)" },
+      "returns": "Array<{ userId: Id<users>, title: string, order: number | null }> sorted by manual order (lower first), then title, then creation time. Returns [] if the caller is not a member or the conversation is not a top-level group.",
+      "notes": "Reactive. Use this to render role labels against member names in the group."
+    },
+    "setPositionOrder": {
+      "type": "mutation",
+      "ref": "api.groupPositions.setPositionOrder",
+      "args": {
+        "conversationId": "Id<conversations> (the top-level group)",
+        "orderedUserIds": "Array<Id<users>> — full desired top-to-bottom order of members who hold positions. Members without a position are ignored. Any positioned members omitted keep their relative order but sort below the listed ones."
+      },
+      "returns": "{ ordered: number } — count of position rows that were assigned an order.",
+      "errors": [
+        "UNAUTHENTICATED, NOT_FOUND, BAD_REQUEST (sub group)",
+        "FORBIDDEN — caller is not the chief admin/creator"
+      ]
+    }
+  },
+  "relationshipToSubGroups": "For SUB groups, keep using api.subGroups.setPosition / listPositions / setPositionVisibility / setPositionOrder (those still have the showInMother option). For TOP-LEVEL groups, use api.groupPositions.* documented here. Calling a subGroups position function on a top-level group throws, and vice versa."
+}

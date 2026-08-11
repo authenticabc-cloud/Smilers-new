@@ -1,0 +1,124 @@
+{
+  "title": "Chat requests (accept-first messaging for non-contacts)",
+  "version": 1,
+  "updatedAt": "2026-08-11",
+  "status": "SHIPPED backend on the Convex deployment. Native builds its own UI against the functions below.",
+  "concept": "When a user taps Chat / Call / Video on someone who is NOT a contact, do NOT open the conversation directly. Instead send a chat request; the recipient accepts (which opens/creates the 1:1) or declines. Contacts keep opening the chat directly with no request.",
+  "contactDefinition": {
+    "opensDirectlyWhenAnyTrue": [
+      "existingConversation — a 1:1 already exists between the two users",
+      "phoneSavedOnDevice — the SAME signal groupMemberProfile.getMemberProfile returns (a matched synced device contact). Enforced server-side.",
+      "acceptedContact — a contacts row (mine -> them) with status 'accepted' (same source as contacts.getContacts)"
+    ],
+    "rule": "requiresChatRequest = !(existingConversation || phoneSavedOnDevice || acceptedContact)",
+    "note": "The backend evaluates this itself on every send/accept, so the gate can never be bypassed by a stale client. The client should still call getChatEligibility first to decide whether to open the chat or show the request UI."
+  },
+  "flow": [
+    "1. On tapping Chat/Call/Video, call chatRequests.getChatEligibility({ otherUserId }).",
+    "2. If requiresChatRequest is false → open the chat directly (use conversations.getOrCreateDirect as before).",
+    "3. If requiresChatRequest is true → show the request composer and call chatRequests.send({ toUserId, message? }).",
+    "4. Recipient sees pending requests via chatRequests.listIncoming and accepts (chatRequests.accept) or declines (chatRequests.decline).",
+    "5. On accept, the 1:1 conversation is created/opened and its id is returned."
+  ],
+  "functions": {
+    "getChatEligibility": {
+      "type": "query",
+      "ref": "api.chatRequests.getChatEligibility",
+      "args": { "otherUserId": "Id<users>" },
+      "returns": {
+        "requiresChatRequest": "boolean",
+        "existingConversation": "boolean",
+        "phoneSavedOnDevice": "boolean",
+        "acceptedContact": "boolean",
+        "outgoingStatus": "'none' | 'pending' | 'accepted' | 'declined' — status of a request I sent them",
+        "incomingStatus": "'none' | 'pending' | 'accepted' | 'declined' — status of a request they sent me"
+      },
+      "notes": "Reactive. Returns all-false/none defaults when unauthenticated."
+    },
+    "send": {
+      "type": "mutation",
+      "ref": "api.chatRequests.send",
+      "args": {
+        "toUserId": "Id<users>",
+        "message": "string (optional intro note, max 1000 chars)"
+      },
+      "returns": {
+        "status": "'pending' | 'accepted' | 'already_contact'",
+        "requestId": "Id<chatRequests> | null",
+        "conversationId": "Id<conversations> | null — set when status is 'accepted' or 'already_contact'"
+      },
+      "behavior": [
+        "already_contact: the two are actually contacts → no request created; conversationId is the (opened) 1:1. Just navigate there.",
+        "accepted: the other user had ALREADY sent me a pending request → mutual intent auto-accepts and opens the conversation.",
+        "pending: a new (or re-sent) request is now pending. Idempotent — re-sending updates the existing row rather than duplicating.",
+        "A previously declined outgoing request can be re-sent (goes back to pending)."
+      ],
+      "errors": [
+        "UNAUTHENTICATED, NOT_FOUND (target missing/system user)",
+        "BAD_REQUEST — sending to yourself, or message too long",
+        "FORBIDDEN — either user has blocked the other"
+      ]
+    },
+    "accept": {
+      "type": "mutation",
+      "ref": "api.chatRequests.accept",
+      "args": { "requestId": "Id<chatRequests>" },
+      "returns": { "conversationId": "Id<conversations>" },
+      "errors": [
+        "NOT_FOUND — request missing",
+        "FORBIDDEN — caller is not the recipient, or a block exists"
+      ],
+      "notes": "Idempotent: accepting an already-accepted request returns the same conversationId."
+    },
+    "decline": {
+      "type": "mutation",
+      "ref": "api.chatRequests.decline",
+      "args": { "requestId": "Id<chatRequests>" },
+      "returns": { "declined": true },
+      "notes": "Recipient only. Row is kept as 'declined' so repeat sends don't spam.",
+      "errors": ["NOT_FOUND", "FORBIDDEN — caller is not the recipient"]
+    },
+    "cancel": {
+      "type": "mutation",
+      "ref": "api.chatRequests.cancel",
+      "args": { "requestId": "Id<chatRequests>" },
+      "returns": { "cancelled": true },
+      "notes": "Sender only. Deletes the outgoing request row.",
+      "errors": ["NOT_FOUND", "FORBIDDEN — caller is not the sender"]
+    },
+    "listIncoming": {
+      "type": "query",
+      "ref": "api.chatRequests.listIncoming",
+      "args": {},
+      "returns": "Array<RequestView> — pending requests addressed to me, newest first."
+    },
+    "listOutgoing": {
+      "type": "query",
+      "ref": "api.chatRequests.listOutgoing",
+      "args": {},
+      "returns": "Array<RequestView> — requests I've sent, any status, newest first."
+    },
+    "incomingCount": {
+      "type": "query",
+      "ref": "api.chatRequests.incomingCount",
+      "args": {},
+      "returns": "number — count of pending incoming requests (for a badge)."
+    }
+  },
+  "types": {
+    "RequestView": {
+      "requestId": "Id<chatRequests>",
+      "otherUserId": "Id<users>",
+      "otherUserName": "string — resolved to the name the viewer knows them by",
+      "otherUserAvatar": "string | undefined",
+      "status": "'pending' | 'accepted' | 'declined'",
+      "message": "string | null",
+      "conversationId": "Id<conversations> | null",
+      "createdAt": "string (ISO)"
+    }
+  },
+  "notes": [
+    "conversations.getOrCreateDirect is unchanged and still works for contacts (cases 1-3). The request gate is only for genuine strangers.",
+    "The same accept-first gate applies to Chat, Call, and Video: for a non-contact, send a chat request first; a call/video should only be offered once the conversation exists (i.e. after acceptance)."
+  ]
+}

@@ -40,17 +40,24 @@ function getInitials(name?: string): string {
 export function BulkPositionsModal({
   visible,
   subGroupId,
+  backend = 'subGroups',
+  allowVisibility = true,
   members,
   isChief,
   onClose,
 }: {
   visible: boolean;
   subGroupId: string;
+  backend?: 'subGroups' | 'groupPositions';
+  allowVisibility?: boolean;
   members: BulkPositionMember[];
   isChief: boolean;
   onClose: () => void;
 }) {
-  const setPositionM = useMutation((api as any).subGroups?.setPosition);
+  const positionApi = backend === 'groupPositions' ? (api as any).groupPositions : (api as any).subGroups;
+  const setPositionM = useMutation(positionApi?.setPosition);
+  const idArg = backend === 'groupPositions' ? { conversationId: subGroupId } : { subGroupId };
+  const canShowVisibility = allowVisibility && backend === 'subGroups';
   const [draft, setDraft] = useState<Record<string, { title: string; showInMother: boolean }>>({});
   const [busy, setBusy] = useState(false);
 
@@ -78,14 +85,14 @@ export function BulkPositionsModal({
     for (const m of members) {
       const d = draft[m.userId] || { title: '', showInMother: false };
       const titleChanged = (d.title || '').trim() !== (m.currentTitle || '').trim();
-      const showChanged = isChief && !!d.showInMother !== !!m.currentShowInMother;
+      const showChanged = canShowVisibility && isChief && !!d.showInMother !== !!m.currentShowInMother;
       if (!titleChanged && !showChanged) continue;
       try {
         await setPositionM({
-          subGroupId,
+          ...idArg,
           userId: m.userId,
           title: (d.title || '').trim(),
-          ...(isChief ? { showInMother: !!d.showInMother } : {}),
+          ...(canShowVisibility && isChief ? { showInMother: !!d.showInMother } : {}),
         });
       } catch {
         failed += 1;
@@ -94,7 +101,7 @@ export function BulkPositionsModal({
     setBusy(false);
     onClose();
     if (failed > 0) Alert.alert('Some positions failed', `${failed} could not be saved.`);
-  }, [setPositionM, members, draft, isChief, subGroupId, onClose]);
+  }, [setPositionM, members, draft, canShowVisibility, isChief, idArg, onClose]);
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -132,7 +139,7 @@ export function BulkPositionsModal({
                       maxLength={40}
                       testID={`bulk-position-input-${item.userId}`}
                     />
-                    {isChief && d.title.trim() ? (
+                    {canShowVisibility && isChief && d.title.trim() ? (
                       <View style={styles.showRow}>
                         <Text style={styles.showLabel}>Show in mother group</Text>
                         <Switch

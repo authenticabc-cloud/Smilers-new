@@ -1,5 +1,16 @@
 # Smilers Mobile App — PRD
 
+## iter-484 (Aug 2026): Parent-group positions (#5) + chat-request accept-first for non-contacts (#4) — built against live Convex contracts
+
+Web team shipped 3 backends (contracts saved to `/app/native-*-contract.json`). #1 (sub-groups v8 cleanup+cascade) is backend-only (no native UI). Built #5 and #4:
+
+**#5 — Positions/office bearers for TOP-LEVEL groups** (`api.groupPositions.*`, keyed by `conversationId`; sub groups still use `api.subGroups.*` with `subGroupId`). In `app/group/[id].tsx`: `listPositions`/`setPositionOrder` now pick the backend + id-arg by `isSubGroup` and are enabled for both; the OFFICE BEARERS section, per-member position pill, and the award/Manage/Rank controls are un-gated from `isSubGroup` (show for top-level too). `SubGroupPositionModal` + `BulkPositionsModal` got `backend?: 'subGroups'|'groupPositions'` + `allowVisibility?` props — they call the right `setPosition` with the right id key and HIDE the "Show in mother group" toggle for top-level groups (no mother concept). `ReorderBearersModal` was already backend-agnostic (calls back `onReorder`). Election + admin promote/demote already worked for parent groups (iter-481), so this completes #5.
+
+**#4 — Chat-request accept-first for non-contacts** (`api.chatRequests.*`). In `app/user/[userId].tsx`: `getChatEligibility({otherUserId})` gates the actions — if `requiresChatRequest` (stranger: no existing conv, not phone-saved, not accepted contact), Chat sends `chatRequests.send` ("request sent, waiting for X to accept"; auto-opens if status is `accepted`/`already_contact`), and Call/Video are blocked with a "send a chat request first" prompt (call only after the conv exists). Contacts/existing convs open directly as before. NEW `app/chat-requests.tsx` inbox (Received/Sent tabs): incoming pending → Accept (`accept` → opens the 1:1) / Decline; outgoing → status + Cancel while pending. Chats-tab header gained a person-add icon with an unread badge (`chatRequests.incomingCount`) → `/chat-requests`; route registered in `app/_layout.tsx`.
+
+`api` is the dynamic `anyApi` proxy so all `groupPositions.*`/`chatRequests.*` resolve at runtime. Lint clean; app boots to Sign In. ⚠️ Authenticated + live-backend — verify on a signed-in session/device (assign a role in a normal group; and from a stranger's profile send a chat request, then Accept it on the other account).
+
+
 ## iter-483 (Aug 2026): "Ongoing group call" banner for members who miss/decline a group call
 
 New feature: a member who MISSES or DECLINES a group-call ring now sees a floating banner **"Ongoing group call · <group name>" / "Tap to join"** with a **"Can't join"** dismiss (hides that specific call forever for that user).

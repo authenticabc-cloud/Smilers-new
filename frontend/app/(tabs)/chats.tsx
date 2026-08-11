@@ -192,6 +192,7 @@ export default function ChatsScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me?._id]);
   const archivedIds = useQuery((api as any).archives.getArchivedIds, {}) as string[] | undefined;
+  const chatRequestCount = useQuery((api as any).chatRequests?.incomingCount, {}) as number | undefined;
 
   // Per-conversation unread counts { convId: count } — drives the "Mark all as
   // read" menu action.
@@ -642,7 +643,15 @@ export default function ChatsScreen() {
         }
         right={
           <>
-            <TouchableOpacity onPress={() => router.push('/search' as any)} testID="search-btn">
+            <TouchableOpacity onPress={() => router.push('/chat-requests' as any)} testID="chat-requests-btn">
+              <Ionicons name="person-add-outline" size={22} color={Colors.textPrimary} />
+              {chatRequestCount && chatRequestCount > 0 ? (
+                <View style={styles.reqBadge}>
+                  <Text style={styles.reqBadgeText}>{chatRequestCount > 9 ? '9+' : chatRequestCount}</Text>
+                </View>
+              ) : null}
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => router.push('/search' as any)} testID="search-btn" style={{ marginLeft: 16 }}>
               <Ionicons name="search-outline" size={22} color={Colors.textPrimary} />
             </TouchableOpacity>
             <TouchableOpacity
@@ -1082,6 +1091,20 @@ function PinnedRow({
 
 
 const styles = StyleSheet.create({
+  reqBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -8,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#e53935',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  reqBadgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
+
   container: { flex: 1, backgroundColor: Colors.background },
   listContent: { paddingBottom: 180 },
   archivedBanner: {
