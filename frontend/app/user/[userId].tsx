@@ -5,10 +5,12 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  KeyboardAvoidingView,
   Modal,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -85,6 +87,8 @@ export default function UserProfileScreen() {
     | undefined;
   const sendChatRequestM = useMutation((api as any).chatRequests?.send);
   const [chatReqBusy, setChatReqBusy] = useState(false);
+  const [showRequestComposer, setShowRequestComposer] = useState(false);
+  const [requestNote, setRequestNote] = useState('');
   // My own identity — required to route calls through Twilio (iter-234).
   const { data: me } = useSafeConvexQuery<any | null>(
     api.users.getCurrentUser,
@@ -526,11 +530,12 @@ export default function UserProfileScreen() {
 
   // --- Actions ------------------------------------------------------------
   // Send a chat request (accept-first) and route/notify based on the outcome.
-  const sendChatRequest = async (): Promise<boolean> => {
+  const sendChatRequest = async (message?: string): Promise<boolean> => {
     if (!userId || chatReqBusy || !sendChatRequestM) return false;
     setChatReqBusy(true);
     try {
-      const res: any = await sendChatRequestM({ toUserId: userId });
+      const note = (message || '').trim();
+      const res: any = await sendChatRequestM({ toUserId: userId, ...(note ? { message: note } : {}) });
       const status = res?.status;
       if ((status === 'accepted' || status === 'already_contact') && res?.conversationId) {
         router.push(`/chat/${res.conversationId}` as any);
@@ -546,6 +551,13 @@ export default function UserProfileScreen() {
     }
   };
 
+  // Open the intro-note composer before sending (so the recipient knows who
+  // this is). Falls back to a plain send if they skip the note.
+  const promptChatRequest = () => {
+    setRequestNote('');
+    setShowRequestComposer(true);
+  };
+
   const openChat = async () => {
     if (hasValidConversationId) {
       router.push(`/chat/${conversationId}` as any);
@@ -558,7 +570,7 @@ export default function UserProfileScreen() {
         Alert.alert('Request pending', `Waiting for ${displayName} to accept your chat request.`);
         return;
       }
-      await sendChatRequest();
+      promptChatRequest();
       return;
     }
     try {
@@ -594,7 +606,7 @@ export default function UserProfileScreen() {
             ? [{ text: 'OK' }]
             : [
                 { text: 'Cancel', style: 'cancel' },
-                { text: 'Send request', onPress: () => void sendChatRequest() },
+                { text: 'Send request', onPress: () => promptChatRequest() },
               ],
         );
         return;
@@ -1047,7 +1059,58 @@ export default function UserProfileScreen() {
         />
       ) : null}
 
-      {/* iter-226: profile-photo viewer (enlarge + policy-gated save) */}
+      {/* Chat-request intro-note composer — so the recipient knows who this is. */}
+      <Modal
+        visible={showRequestComposer}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowRequestComposer(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.reqBackdrop}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.reqCard}>
+            <View style={styles.reqHeader}>
+              <Text style={styles.reqTitle} numberOfLines={1}>Chat request · {displayName}</Text>
+              <TouchableOpacity onPress={() => setShowRequestComposer(false)} hitSlop={8} testID="chat-request-composer-close">
+                <Ionicons name="close" size={24} color={Colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.reqHint}>
+              Add a short note so {displayName} knows who you are. They must accept before you can chat.
+            </Text>
+            <TextInput
+              style={styles.reqInput}
+              placeholder="Hi, I'm… (optional)"
+              placeholderTextColor={Colors.textSecondary}
+              value={requestNote}
+              onChangeText={setRequestNote}
+              maxLength={200}
+              multiline
+              testID="chat-request-note-input"
+            />
+            <Text style={styles.reqCount}>{requestNote.length}/200</Text>
+            <TouchableOpacity
+              style={[styles.reqSendBtn, chatReqBusy && { opacity: 0.6 }]}
+              disabled={chatReqBusy}
+              onPress={async () => {
+                const note = requestNote;
+                setShowRequestComposer(false);
+                await sendChatRequest(note);
+              }}
+              testID="chat-request-send"
+            >
+              {chatReqBusy ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.reqSendText}>Send request</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
       <Modal
         visible={avatarViewerOpen}
         transparent
@@ -1129,6 +1192,40 @@ const HERO_HEIGHT = 220;
 const AVATAR_SIZE = 132;
 
 const styles = StyleSheet.create({
+  reqBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  reqCard: {
+    backgroundColor: Colors.background,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    gap: 12,
+  },
+  reqHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  reqTitle: { flex: 1, fontSize: 18, fontWeight: '800', color: Colors.textPrimary },
+  reqHint: { fontSize: 13, lineHeight: 19, color: Colors.textSecondary },
+  reqInput: {
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border || '#E5E7EB',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: Colors.textPrimary,
+    minHeight: 80,
+    textAlignVertical: 'top',
+  },
+  reqCount: { fontSize: 11, color: Colors.textSecondary, textAlign: 'right', marginTop: -4 },
+  reqSendBtn: {
+    backgroundColor: Colors.primary,
+    paddingVertical: 14,
+    borderRadius: 999,
+    alignItems: 'center',
+    minHeight: 50,
+    justifyContent: 'center',
+  },
+  reqSendText: { color: '#fff', fontSize: 16, fontWeight: '800' },
+
   container: { flex: 1, backgroundColor: Colors.background },
   scrollWrap: { flex: 1 },
   scrollContent: { paddingBottom: 80 },

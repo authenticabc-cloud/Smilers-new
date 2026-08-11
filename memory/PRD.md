@@ -1,5 +1,10 @@
 # Smilers Mobile App — PRD
 
+## iter-485 (Aug 2026): Chat-request intro-note composer
+
+Sender can now add a short intro note when sending a chat request (backend `chatRequests.send` already accepts optional `message`, max 200 chars enforced client-side). In `app/user/[userId].tsx`: tapping Chat (or "Send request" from the Call/Video gate) on a non-contact now opens a bottom-sheet composer (`showRequestComposer`/`requestNote`) with a multiline note field + char counter; `sendChatRequest(message)` passes the trimmed note through. The recipient's inbox (`app/chat-requests.tsx`) already renders `item.message`, so the note shows on the Received tab. Note is optional (blank → plain request). Lint clean; app boots.
+
+
 ## iter-484 (Aug 2026): Parent-group positions (#5) + chat-request accept-first for non-contacts (#4) — built against live Convex contracts
 
 Web team shipped 3 backends (contracts saved to `/app/native-*-contract.json`). #1 (sub-groups v8 cleanup+cascade) is backend-only (no native UI). Built #5 and #4:
