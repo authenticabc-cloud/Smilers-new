@@ -15,12 +15,47 @@
  * message bubble.
  */
 import { useCallback, useMemo } from 'react';
-import { Alert, Share } from 'react-native';
+import { Alert, Linking, Share } from 'react-native';
+import * as Contacts from 'expo-contacts';
 import { useRouter } from 'expo-router';
 import { useConvex, useMutation, useQuery } from 'convex/react';
 import { api } from '../convexApi';
 import { lookupUsersByPhones } from './phoneLookup';
 import { buildInviteMessage } from './inviteLink';
+
+/**
+ * Open the native phonebook to save a phone number — the OS "new contact" form
+ * (prefilled with the number) lets the user create a new contact OR add it to an
+ * existing one. Requests contacts permission contextually, with a Settings
+ * fallback if permanently denied.
+ */
+async function saveNumberToDevice(number: string): Promise<void> {
+  try {
+    let perm = await Contacts.getPermissionsAsync();
+    if (perm.status !== 'granted' && perm.canAskAgain !== false) {
+      perm = await Contacts.requestPermissionsAsync();
+    }
+    if (perm.status !== 'granted') {
+      Alert.alert(
+        'Contacts permission needed',
+        'Allow contacts access so we can add this number to your phonebook.',
+        perm.canAskAgain === false
+          ? [
+              { text: 'Not now', style: 'cancel' },
+              { text: 'Open Settings', onPress: () => Linking.openSettings() },
+            ]
+          : [{ text: 'OK' }],
+      );
+      return;
+    }
+    await Contacts.presentFormAsync(null, {
+      [Contacts.Fields.PhoneNumbers]: [{ label: 'mobile', number }],
+      contactType: Contacts.ContactTypes.Person,
+    });
+  } catch {
+    Alert.alert('Could not open contacts', 'Please try adding the number manually.');
+  }
+}
 
 /** Find phone-number-like substrings. Matches an optional leading + then a
  *  run of digits, spaces, dashes, dots and parentheses. Validated by digit
@@ -143,6 +178,7 @@ export function usePhoneMessageActions() {
         const sm = serverMatch;
         Alert.alert(sm.displayName || number, 'This number is on Smilers.', [
           { text: 'Cancel', style: 'cancel' },
+          { text: 'Save to contacts', onPress: () => void saveNumberToDevice(number) },
           { text: 'Message', onPress: () => openChatWith(sm.userId) },
         ]);
         return;
@@ -170,6 +206,7 @@ export function usePhoneMessageActions() {
         `${number} isn't on Smilers. Invite them to join?`,
         [
           { text: 'Cancel', style: 'cancel' },
+          { text: 'Save to contacts', onPress: () => void saveNumberToDevice(number) },
           {
             text: 'Invite',
             onPress: async () => {
@@ -186,7 +223,7 @@ export function usePhoneMessageActions() {
         ],
       );
     },
-    [convex, contactByDigits, openChatWith],
+    [convex, contactByDigits, openChatWith, ownLast10],
   );
 
   return { onPhonePress };

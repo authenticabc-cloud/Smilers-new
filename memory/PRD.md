@@ -1,5 +1,10 @@
 # Smilers Mobile App — PRD
 
+## iter-489 (Aug 2026): "Save to contacts" option on tapped phone numbers
+
+Tapping any phone number in a message (`src/lib/usePhoneMessageActions.ts`) now offers a **Save to contacts** option alongside Cancel/Invite (not-on-Smilers branch) and Cancel/Message (on-Smilers-but-not-a-local-contact branch). New `saveNumberToDevice(number)` helper requests contacts permission contextually (Open Settings fallback if permanently denied) then calls `Contacts.presentFormAsync(null, { PhoneNumbers:[{label:'mobile', number}] })`, which opens the native phonebook form prefilled with the number so the user can create a new contact OR add to an existing one. Already-saved local contacts (branch 1) keep just Cancel/Message. iOS `NSContactsUsageDescription` + Android READ/WRITE_CONTACTS already present. Lint clean; app boots. ⚠️ Native-only (device phonebook) — verify on a real device.
+
+
 ## iter-488 (Aug 2026): Voice typing — spoken "Edit" spelling mode, noise handling, AirPods/Bluetooth mic
 
 Three voice-typing upgrades:
