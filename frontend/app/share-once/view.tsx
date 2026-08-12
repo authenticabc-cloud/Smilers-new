@@ -4,7 +4,7 @@
  * forward to chats, re-post, and delete (full 1:1 parity).
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View, FlatList, TextInput } from 'react-native';
+import { ActivityIndicator, Alert, Image, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View, FlatList, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,6 +17,7 @@ import { api } from '../../src/convexApi';
 import Header from '../../src/components/Header';
 import { Colors } from '../../src/theme';
 import AudiencePicker, { AudienceSelection } from '../../src/components/shareOnce/AudiencePicker';
+import ZoomableImage from '../../src/components/ZoomableImage';
 
 export default function ShareOnceView() {
   const router = useRouter();
@@ -34,6 +35,7 @@ export default function ShareOnceView() {
 
   const [fwdOpen, setFwdOpen] = useState(false);
   const [repostOpen, setRepostOpen] = useState(false);
+  const [zoomOpen, setZoomOpen] = useState(false);
   const [fwdSel, setFwdSel] = useState<Record<string, boolean>>({});
   const [fwdQ, setFwdQ] = useState('');
 
@@ -134,7 +136,10 @@ export default function ShareOnceView() {
         ) : (
           <>
             {post.type === 'image' && post.mediaUrl ? (
-              <Image source={{ uri: post.mediaUrl }} style={styles.media} resizeMode="contain" />
+              <TouchableOpacity activeOpacity={0.9} onPress={() => setZoomOpen(true)} testID="share-once-image">
+                <Image source={{ uri: post.mediaUrl }} style={styles.media} resizeMode="contain" />
+                <View style={styles.zoomHint}><Ionicons name="expand" size={14} color="#fff" /><Text style={styles.zoomHintText}>Tap to zoom</Text></View>
+              </TouchableOpacity>
             ) : post.type === 'video' && post.mediaUrl ? (
               <VideoView player={player} style={styles.media} nativeControls allowsFullscreen />
             ) : (post.type === 'audio' || post.type === 'voice') && post.mediaUrl ? (
@@ -190,6 +195,16 @@ export default function ShareOnceView() {
       ) : null}
 
       <AudiencePicker visible={repostOpen} onClose={() => setRepostOpen(false)} onConfirm={confirmRepost} confirmLabel="Re-post" />
+
+      {/* Full-screen pinch-to-zoom photo viewer */}
+      <Modal visible={zoomOpen} transparent animationType="fade" onRequestClose={() => setZoomOpen(false)}>
+        <View style={styles.zoomRoot}>
+          {post.mediaUrl ? <ZoomableImage uri={post.mediaUrl} onClose={() => setZoomOpen(false)} /> : null}
+          <TouchableOpacity style={styles.zoomClose} onPress={() => setZoomOpen(false)} testID="share-once-zoom-close">
+            <Ionicons name="close" size={28} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -208,6 +223,10 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.background },
   muted: { color: Colors.textSecondary, fontSize: 15 },
   media: { width: '100%', height: 320, borderRadius: 12, backgroundColor: '#000' },
+  zoomHint: { position: 'absolute', bottom: 10, right: 10, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
+  zoomHintText: { color: '#fff', fontSize: 11, fontWeight: '700' },
+  zoomRoot: { flex: 1, backgroundColor: '#000' },
+  zoomClose: { position: 'absolute', top: 44, right: 20, width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
   body: { fontSize: 16, color: Colors.textPrimary, marginTop: 14, lineHeight: 22 },
   fw: { fontSize: 12, color: Colors.textSecondary, marginTop: 8, fontStyle: 'italic' },
   tombstone: { fontSize: 15, color: Colors.textSecondary, fontStyle: 'italic', textAlign: 'center', padding: 30 },

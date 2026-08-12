@@ -1,5 +1,11 @@
 # Smilers Mobile App — PRD
 
+## iter-493 (Aug 2026): Share Once photo pinch-zoom (#2) + invite-into-1:1 spec (#1)
+
+- **#2 Pinch-to-zoom**: `app/share-once/view.tsx` image is now tappable ("Tap to zoom" hint) → opens a full-screen `Modal` with the existing `ZoomableImage` (pinch/pan) + close button. Lint clean; app boots.
+- **#1 Invite lands in each viewer's 1:1 chat as a tap-to-view card**: BLOCKED on backend — `createPost` returns only `{postId, shareToken, viewerCount}` (no recipient user-ids for fan-out) and the chat message `type` is a server-validated enum, so a new `shareOnceInvite` subtype must be created + delivered by Convex. Wrote `/app/CONVEX_BACKEND_SPEC_SHARE_ONCE_INVITE_MESSAGE.md` (on createPost/repost, insert one `shareOnceInvite` message into each viewer's 1:1 with `shareOnceToken`/`shareOnceContentType`/`shareOnceAuthorId` + fallback text + push + unread parity + delete tombstone). Native will render the chat bubble as "This is a <type> message — tap to view" → routes `/share-once/view?t=<token>` once the subtype ships.
+
+
 ## iter-492 (Aug 2026): "Share Once" feature built against live `api.shareOnce.*` contract
 
 New post-once feature (contract saved `/app/native-share-once-contract.json`). Entry: "Share Once" row added just below "Chat Once" in `app/(tabs)/chats.tsx` → `/share-once`. Routes registered in `app/_layout.tsx` (share-once/index, /compose, /view).
