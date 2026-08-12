@@ -1130,6 +1130,24 @@ async def group_ring(payload: GroupRingRequest, request: Request):
 
     display_name = payload.caller_display_name or "Smilers User"
     call_id = f"group_{payload.stream_room}_{int(now.timestamp())}"
+    # Persist lightweight call metadata so the "ongoing group call" banner can be
+    # driven from the SERVER (works even when the ring push arrives while the app
+    # is foregrounded, which the local push-recorder misses).
+    try:
+        await db.group_call_meta.update_one(
+            {"room_name": payload.stream_room},
+            {"$set": {
+                "room_name": payload.stream_room,
+                "conversation_id": payload.conversation_id,
+                "group_name": payload.conversation_name or "",
+                "is_video": bool(payload.is_video),
+                "call_id": call_id,
+                "created_at": now,
+            }},
+            upsert=True,
+        )
+    except Exception:
+        logger.warning("group-ring: meta upsert failed (non-fatal)")
     push_data = _group_ring_push(
         conversation_id=payload.conversation_id, stream_room=payload.stream_room,
         display_name=display_name, caller_identity=payload.caller_identity,
@@ -1173,6 +1191,47 @@ async def reset_roster(payload: ResetRosterRequest):
     except Exception:
         logger.warning("reset-roster: clear failed (non-fatal)")
         return {"ok": False, "cleared": 0}
+
+
+@api_router.get("/calls/active-group-calls")
+async def active_group_calls(identity: str):
+    """Live group calls this user was rung into but hasn't joined yet.
+
+    Drives the "Ongoing group call — tap to join" banner reliably from the
+    server (independent of whether the ring push was recorded on-device). A call
+    is 'live' while at least one participant is 'joined'; we surface it to a user
+    whose own roster entry exists and is NOT joined/left (i.e. they missed or
+    declined). Auto-limited to calls started in the last 2 hours."""
+    identity = (identity or "").strip()
+    if not identity:
+        return {"calls": []}
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+    out: List[dict] = []
+    try:
+        metas = await db.group_call_meta.find({"created_at": {"$gte": cutoff}}).to_list(length=50)
+        for meta in metas:
+            room = meta.get("room_name")
+            if not room:
+                continue
+            roster = await db.twilio_call_participants.find({"room_name": room}).to_list(length=100)
+            anyone_joined = any((r.get("status") == "joined") for r in roster)
+            mine = next((r for r in roster if r.get("identity") == identity), None)
+            if not anyone_joined or not mine:
+                continue
+            if mine.get("status") in ("joined", "left"):
+                continue
+            out.append({
+                "callId": meta.get("call_id") or f"group_{room}",
+                "room": room,
+                "conversationId": meta.get("conversation_id") or "",
+                "groupName": meta.get("group_name") or "",
+                "isVideo": bool(meta.get("is_video")),
+            })
+    except Exception:
+        logger.warning("active-group-calls: query failed (non-fatal)")
+        return {"calls": []}
+    return {"calls": out}
+
 
 
 

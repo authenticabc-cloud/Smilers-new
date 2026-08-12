@@ -1,5 +1,14 @@
 # Smilers Mobile App — PRD
 
+## iter-490 (Aug 2026): Group-call banner made reliable (server-driven)
+
+The iter-483 "Ongoing group call" banner wasn't showing because it depended on the ring push being recorded on-device — which is skipped when the app receives the push while FOREGROUNDED (the foreground call handler in usePushNotifications didn't record). Reworked it to be SERVER-DRIVEN:
+- Backend: `group_ring` now upserts `group_call_meta` `{room_name, conversation_id, group_name, is_video, call_id, created_at}`. NEW `GET /api/calls/active-group-calls?identity=` returns live group calls (≤2h old) where someone is `joined` AND the caller's own roster entry exists but is NOT joined/left (i.e. they missed/declined). Verified: returns `{calls:[]}` for unknown identity.
+- Frontend: `twilioApi.fetchActiveGroupCalls(identity)`; `GroupCallBanner` rewritten to poll it every 7s (+ on mount/foreground) using `me._id`, instead of relying on the local push-recorder. Works for parent groups AND sub groups regardless of app state, and on missed OR declined. "Can't join" still dismisses permanently per callId (persisted via `getDismissedCallIds`/`dismissGroupCall`). Tap → joins the shared `grp_…` room.
+
+Lint clean; backend+frontend boot. ⚠️ Native/live-backend — verify on a device: start a group call on account A, miss/decline on account B, and confirm B sees the banner within ~7s, joins on tap, and "Can't join" hides it.
+
+
 ## iter-489 (Aug 2026): "Save to contacts" option on tapped phone numbers
 
 Tapping any phone number in a message (`src/lib/usePhoneMessageActions.ts`) now offers a **Save to contacts** option alongside Cancel/Invite (not-on-Smilers branch) and Cancel/Message (on-Smilers-but-not-a-local-contact branch). New `saveNumberToDevice(number)` helper requests contacts permission contextually (Open Settings fallback if permanently denied) then calls `Contacts.presentFormAsync(null, { PhoneNumbers:[{label:'mobile', number}] })`, which opens the native phonebook form prefilled with the number so the user can create a new contact OR add to an existing one. Already-saved local contacts (branch 1) keep just Cancel/Message. iOS `NSContactsUsageDescription` + Android READ/WRITE_CONTACTS already present. Lint clean; app boots. ⚠️ Native-only (device phonebook) — verify on a real device.

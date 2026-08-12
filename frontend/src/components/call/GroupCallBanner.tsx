@@ -4,11 +4,12 @@
  * to join while the call is still live. "Can't join" dismisses it permanently
  * for that specific call.
  *
- * Data: ongoingGroupCallStore (recorded at push-receipt). We poll the live
- * FastAPI roster to (a) only show while someone is actually in the call and
- * (b) auto-clear once the call ends or this user has joined.
+ * SERVER-DRIVEN (reliable): polls GET /api/calls/active-group-calls, which
+ * returns live group calls this user was rung into but hasn't joined — so it
+ * works whether or not the ring push was recorded on-device, and for both
+ * parent groups and sub groups. The "Can't join" dismiss is persisted per-call.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -16,17 +17,22 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery } from 'convex/react';
 import { api } from '../../convexApi';
 import { useAuth } from '../../providers/AuthProvider';
-import { fetchCallParticipants } from '../../lib/twilio/twilioApi';
+import { fetchActiveGroupCalls } from '../../lib/twilio/twilioApi';
 import {
-  getOngoingGroupCalls,
   loadOngoingGroupCalls,
-  removeGroupCall,
   dismissGroupCall,
-  subscribeOngoingGroupCalls,
-  type OngoingGroupCall,
+  getDismissedCallIds,
 } from '../../lib/call/ongoingGroupCallStore';
 
-const POLL_MS = 6000;
+const POLL_MS = 7000;
+
+type ActiveCall = {
+  callId: string;
+  room: string;
+  conversationId: string;
+  groupName: string;
+  isVideo: boolean;
+};
 
 export default function GroupCallBanner() {
   const router = useRouter();
@@ -35,89 +41,62 @@ export default function GroupCallBanner() {
   const insets = useSafeAreaInsets();
   const myId = me && (me as any)._id ? String((me as any)._id) : '';
 
-  const [, force] = useState(0);
-  const rerender = useCallback(() => force((n) => n + 1), []);
-
-  // Load persisted state + subscribe; reload when the app comes to foreground
-  // (records may have been written by the background/killed JS context).
-  useEffect(() => {
-    void loadOngoingGroupCalls();
-    const unsub = subscribeOngoingGroupCalls(rerender);
-    const appSub = AppState.addEventListener('change', (s) => {
-      if (s === 'active') void loadOngoingGroupCalls(true);
-    });
-    return () => {
-      unsub();
-      appSub.remove();
-    };
-  }, [rerender]);
-
-  // Newest not-dismissed candidate (recomputed on every store change / rerender).
-  const candidates = getOngoingGroupCalls();
-  const candidate: OngoingGroupCall | null = candidates.length ? candidates[0] : null;
-  const candidateKey = candidate ? candidate.callId : '';
-  const candidateRoom = candidate ? candidate.streamRoom : '';
-
-  const [ongoing, setOngoing] = useState(false);
+  const [call, setCall] = useState<ActiveCall | null>(null);
   const [busy, setBusy] = useState(false);
+  const dismissedRef = useRef<Set<string>>(new Set());
 
-  // Poll the live roster: show only while someone is joined AND I'm not; clear
-  // when the call ends or I've joined.
+  // Prime the persisted "Can't join" dismiss set (honour across launches).
   useEffect(() => {
-    if (!candidateKey || !candidateRoom || !myId) {
-      setOngoing(false);
+    void loadOngoingGroupCalls().then(() => {
+      getDismissedCallIds().forEach((id) => dismissedRef.current.add(id));
+    });
+  }, []);
+
+  const poll = useCallback(async () => {
+    if (!myId) {
+      setCall(null);
       return;
     }
-    let cancelled = false;
-    const check = async () => {
-      try {
-        const roster = await fetchCallParticipants(candidateRoom, myId);
-        if (cancelled) return;
-        const anyoneIn = roster.some((r) => r.status === 'joined');
-        const iJoined = roster.some((r) => r.identity === myId && r.status === 'joined');
-        if (iJoined) {
-          removeGroupCall(candidateKey);
-          setOngoing(false);
-          return;
-        }
-        // If the roster is fully known and NOBODY is in the call, it ended.
-        if (roster.length > 0 && !anyoneIn) {
-          removeGroupCall(candidateKey);
-          setOngoing(false);
-          return;
-        }
-        setOngoing(anyoneIn);
-      } catch {
-        // keep last state on transient errors
-      }
-    };
-    void check();
-    const t = setInterval(check, POLL_MS);
+    const calls = await fetchActiveGroupCalls(myId);
+    const dismissed = dismissedRef.current;
+    const next = calls.find((c) => !dismissed.has(c.callId)) || null;
+    setCall(next);
+  }, [myId]);
+
+  useEffect(() => {
+    if (!myId) return;
+    void poll();
+    const t = setInterval(poll, POLL_MS);
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') void poll();
+    });
     return () => {
-      cancelled = true;
       clearInterval(t);
+      sub.remove();
     };
-  }, [candidateKey, candidateRoom, myId]);
+  }, [myId, poll]);
 
   const join = useCallback(() => {
-    if (!candidate || busy) return;
+    if (!call || busy) return;
     setBusy(true);
-    const type = candidate.isVideo ? 'video' : 'voice';
-    removeGroupCall(candidate.callId);
+    const type = call.isVideo ? 'video' : 'voice';
+    setCall(null);
     try {
       router.push(
-        `/call/${candidate.conversationId}?streamRoom=${encodeURIComponent(candidate.streamRoom)}&answer=1&type=${type}&group=1&displayName=${encodeURIComponent(candidate.groupName || '')}` as any,
+        `/call/${call.conversationId}?streamRoom=${encodeURIComponent(call.room)}&answer=1&type=${type}&group=1&displayName=${encodeURIComponent(call.groupName || '')}` as any,
       );
     } catch {}
     setTimeout(() => setBusy(false), 1200);
-  }, [candidate, busy, router]);
+  }, [call, busy, router]);
 
   const cantJoin = useCallback(() => {
-    if (!candidate) return;
-    dismissGroupCall(candidate.callId);
-  }, [candidate]);
+    if (!call) return;
+    dismissedRef.current.add(call.callId);
+    dismissGroupCall(call.callId); // persist across launches
+    setCall(null);
+  }, [call]);
 
-  if (!candidate || !ongoing) return null;
+  if (!call) return null;
 
   return (
     <View pointerEvents="box-none" style={[styles.wrap, { top: insets.top + 6 }]}>
@@ -127,12 +106,12 @@ export default function GroupCallBanner() {
             {busy ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
-              <Ionicons name={candidate.isVideo ? 'videocam' : 'call'} size={18} color="#fff" />
+              <Ionicons name={call.isVideo ? 'videocam' : 'call'} size={18} color="#fff" />
             )}
           </View>
           <View style={styles.textWrap}>
             <Text style={styles.title} numberOfLines={1}>
-              Ongoing group call{candidate.groupName ? ` · ${candidate.groupName}` : ''}
+              Ongoing group call{call.groupName ? ` · ${call.groupName}` : ''}
             </Text>
             <Text style={styles.subtitle} numberOfLines={1}>
               Tap to join

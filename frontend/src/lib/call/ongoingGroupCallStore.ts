@@ -96,6 +96,12 @@ export function getOngoingGroupCalls(): OngoingGroupCall[] {
   return list.filter((e) => !dismissed.includes(e.callId) && now - e.ts < MAX_AGE_MS);
 }
 
+/** Persisted "Can't join" dismissals (used by the server-driven banner to
+ *  honour dismissals across app launches). */
+export function getDismissedCallIds(): string[] {
+  return [...dismissed];
+}
+
 export function subscribeOngoingGroupCalls(cb: () => void): () => void {
   listeners.add(cb);
   return () => {

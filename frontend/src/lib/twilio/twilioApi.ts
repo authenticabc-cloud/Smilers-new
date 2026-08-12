@@ -381,6 +381,24 @@ export async function reportParticipantStatus(args: {
   }
 }
 
+/** GET /api/calls/active-group-calls — live group calls this user was rung into
+ *  but hasn't joined (drives the "Ongoing group call" banner, server-driven). */
+export async function fetchActiveGroupCalls(identity: string): Promise<
+  { callId: string; room: string; conversationId: string; groupName: string; isVideo: boolean }[]
+> {
+  if (!BACKEND_URL || !identity) return [];
+  try {
+    const res = await fetch(
+      `${BACKEND_URL}/api/calls/active-group-calls?identity=${encodeURIComponent(identity)}`,
+    );
+    if (!res.ok) return [];
+    const json = await res.json();
+    return Array.isArray(json?.calls) ? json.calls : [];
+  } catch {
+    return [];
+  }
+}
+
 /** POST /api/calls/reset-roster — wipe the room's participant roster so a NEW
  *  call starts fresh (no stale added/left/missed people from a previous call in
  *  the same conversation). Best-effort; the caller fires it once at call start. */
