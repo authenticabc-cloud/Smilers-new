@@ -1,5 +1,10 @@
 # Smilers Mobile App — PRD
 
+## iter-491 (Aug 2026): Composer actions row no longer hidden by keyboard while typing
+
+The attachment/GIF/clipboard/format/mic/palette/voice-typing row (`webToolbarRow`) sat BELOW the input, so when the keyboard opened it was covered (only the formatting bar, which is above the input, stayed visible). Moved the actions row to render ABOVE the input bar (right after the formatting block, before `<View style={styles.inputBar}>`) in `app/chat/[conversationId].tsx` — so it stays in the visible zone above the keyboard, like the formatting toolbar. Resting layout now shows the actions row just above the input. Babel-parse OK; lint clean; app boots.
+
+
 ## iter-490 (Aug 2026): Group-call banner made reliable (server-driven)
 
 The iter-483 "Ongoing group call" banner wasn't showing because it depended on the ring push being recorded on-device — which is skipped when the app receives the push while FOREGROUNDED (the foreground call handler in usePushNotifications didn't record). Reworked it to be SERVER-DRIVEN:

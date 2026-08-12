@@ -5122,6 +5122,85 @@ export default function ChatScreen() {
             </View>
           ) : null}
 
+          {!isRecording ? (
+            <View style={styles.webToolbarRow} testID="composer-web-toolbar-row">
+              <TouchableOpacity
+                style={styles.webToolBtn}
+                onPress={() => setShowAttachSheet(true)}
+                disabled={!isConversationAvailable || uploading}
+                testID="composer-toolbar-apps"
+              >
+                <Ionicons name="apps-outline" size={20} color={Colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.webToolBtn}
+                onPress={onPickGif}
+                disabled={!isConversationAvailable || uploading}
+                testID="composer-toolbar-gif"
+              >
+                <Text style={styles.webToolGifLabel}>GIF</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.webToolBtn}
+                onPress={() => setShowTemplatePicker(true)}
+                disabled={!isConversationAvailable || uploading}
+                testID="composer-toolbar-templates"
+              >
+                <Ionicons name="clipboard-outline" size={20} color={Colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.webToolBtn}
+                onPress={() => {
+                  setShowComposerFormattingPinned((current) => {
+                    const nextValue = !current;
+                    if (nextValue) {
+                      InteractionManager.runAfterInteractions(() => {
+                        setTimeout(() => messageInputRef.current?.focus(), 80);
+                      });
+                    } else {
+                      setShowColorPicker(false);
+                      messageInputRef.current?.blur();
+                      Keyboard.dismiss();
+                    }
+                    return nextValue;
+                  });
+                }}
+                disabled={!isConversationAvailable || uploading}
+                testID="composer-toolbar-tools"
+              >
+                <Feather name="sliders" size={18} color={Colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.webToolBtn, text.trim().length > 0 ? styles.webToolBtnDisabled : null]}
+                onPress={startRecording}
+                disabled={!isConversationAvailable || uploading || text.trim().length > 0}
+                testID="composer-toolbar-mic"
+              >
+                <Feather name="mic" size={18} color={text.trim().length > 0 ? Colors.textMuted : Colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.webToolBtn}
+                onPress={() => setShowEmojiPicker(true)}
+                disabled={!isConversationAvailable || uploading}
+                testID="composer-toolbar-palette"
+              >
+                <Ionicons name="color-palette-outline" size={20} color={Colors.textSecondary} />
+              </TouchableOpacity>
+              <VoiceTypingButton
+                disabled={!isConversationAvailable || uploading || pendingImages.length > 0}
+                onAppendText={(t) =>
+                  setText((prev) => {
+                    const base = String(prev || '').trim();
+                    return base ? base + ' ' + t : t;
+                  })
+                }
+                onRequestSend={handleSend}
+                currentText={text}
+                onReplaceText={(t) => setText(t)}
+              />
+            </View>
+          ) : null}
+
           <View style={styles.inputBar}>
           {reviewUri ? (
             <View style={styles.recordingRow}>
@@ -5260,85 +5339,6 @@ export default function ChatScreen() {
             </>
           )}
           </View>
-
-          {!isRecording ? (
-            <View style={styles.webToolbarRow} testID="composer-web-toolbar-row">
-              <TouchableOpacity
-                style={styles.webToolBtn}
-                onPress={() => setShowAttachSheet(true)}
-                disabled={!isConversationAvailable || uploading}
-                testID="composer-toolbar-apps"
-              >
-                <Ionicons name="apps-outline" size={20} color={Colors.textSecondary} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.webToolBtn}
-                onPress={onPickGif}
-                disabled={!isConversationAvailable || uploading}
-                testID="composer-toolbar-gif"
-              >
-                <Text style={styles.webToolGifLabel}>GIF</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.webToolBtn}
-                onPress={() => setShowTemplatePicker(true)}
-                disabled={!isConversationAvailable || uploading}
-                testID="composer-toolbar-templates"
-              >
-                <Ionicons name="clipboard-outline" size={20} color={Colors.textSecondary} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.webToolBtn}
-                onPress={() => {
-                  setShowComposerFormattingPinned((current) => {
-                    const nextValue = !current;
-                    if (nextValue) {
-                      InteractionManager.runAfterInteractions(() => {
-                        setTimeout(() => messageInputRef.current?.focus(), 80);
-                      });
-                    } else {
-                      setShowColorPicker(false);
-                      messageInputRef.current?.blur();
-                      Keyboard.dismiss();
-                    }
-                    return nextValue;
-                  });
-                }}
-                disabled={!isConversationAvailable || uploading}
-                testID="composer-toolbar-tools"
-              >
-                <Feather name="sliders" size={18} color={Colors.textSecondary} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.webToolBtn, text.trim().length > 0 ? styles.webToolBtnDisabled : null]}
-                onPress={startRecording}
-                disabled={!isConversationAvailable || uploading || text.trim().length > 0}
-                testID="composer-toolbar-mic"
-              >
-                <Feather name="mic" size={18} color={text.trim().length > 0 ? Colors.textMuted : Colors.textSecondary} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.webToolBtn}
-                onPress={() => setShowEmojiPicker(true)}
-                disabled={!isConversationAvailable || uploading}
-                testID="composer-toolbar-palette"
-              >
-                <Ionicons name="color-palette-outline" size={20} color={Colors.textSecondary} />
-              </TouchableOpacity>
-              <VoiceTypingButton
-                disabled={!isConversationAvailable || uploading || pendingImages.length > 0}
-                onAppendText={(t) =>
-                  setText((prev) => {
-                    const base = String(prev || '').trim();
-                    return base ? base + ' ' + t : t;
-                  })
-                }
-                onRequestSend={handleSend}
-                currentText={text}
-                onReplaceText={(t) => setText(t)}
-              />
-            </View>
-          ) : null}
             </>
           )}
         </View>
