@@ -1,5 +1,16 @@
 # Smilers Mobile App — PRD
 
+## iter-492 (Aug 2026): "Share Once" feature built against live `api.shareOnce.*` contract
+
+New post-once feature (contract saved `/app/native-share-once-contract.json`). Entry: "Share Once" row added just below "Chat Once" in `app/(tabs)/chats.tsx` → `/share-once`. Routes registered in `app/_layout.tsx` (share-once/index, /compose, /view).
+- `app/share-once/index.tsx` — My posts / Received tabs (`listMyPosts`/`listReceived`), compose FAB, and a pending-delete-request banner (`getPendingDeletionRequests` + `respondToDeletionRequest`).
+- `app/share-once/compose.tsx` — text + attach via camera/photo/video (expo-image-picker) and file/audio (expo-document-picker); media uploaded with the shared `uploadFile()` (3-step) + `computeFileHashFromUri`; audience via AudiencePicker → `createPost`.
+- `src/components/shareOnce/AudiencePicker.tsx` — modes all/trustees/voiceTask/specific/allExcept + group multi-select + name search (`getAudienceOptions`); returns the exact createPost/repost shape. Reused for re-post.
+- `app/share-once/view.tsx` — opens by `?t=<token>` (`getPostByToken`) or `?postId=` (`getPost`); `markViewed` on open; image (contain), video (expo-video VideoView), audio/voice (expo-video player toggle), file box; Save (download+share via expo-file-system/legacy + expo-sharing), Forward to chats (`listForwardTargets` + `forwardToConversations`, ≤10), Re-post (`repostToShareOnce`), and full-parity Delete (author: for-everyone/for-receivers/for-me; viewer: for-me/ask-author via `requestDeletion`) with tombstone rendering.
+Groups are selectable in the audience picker (both compose + re-post). Lint clean; babel-parse OK; app boots.
+⚠️ Authenticated + live-backend + native media — verify on a signed-in device. FOLLOW-UP (not yet built, budget): sending the tappable invite link via push (in-app Received tab delivers now); pinch-zoom for photos (currently contain-fit + Save).
+
+
 ## iter-491 (Aug 2026): Composer actions row no longer hidden by keyboard while typing
 
 The attachment/GIF/clipboard/format/mic/palette/voice-typing row (`webToolbarRow`) sat BELOW the input, so when the keyboard opened it was covered (only the formatting bar, which is above the input, stayed visible). Moved the actions row to render ABOVE the input bar (right after the formatting block, before `<View style={styles.inputBar}>`) in `app/chat/[conversationId].tsx` — so it stays in the visible zone above the keyboard, like the formatting toolbar. Resting layout now shows the actions row just above the input. Babel-parse OK; lint clean; app boots.

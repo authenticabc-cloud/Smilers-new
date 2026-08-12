@@ -860,6 +860,15 @@ export default function ChatsScreen() {
               onPress={() => router.push('/chat-once' as any)}
               testID="chat-once"
             />
+            <PinnedRow
+              iconBg={Colors.primary}
+              iconBgDark={Colors.primaryDark || Colors.primary}
+              icon={<Feather name="send" size={22} color={Colors.white} />}
+              title="Share Once"
+              subtitle="Post a file once — pick exactly who can view it"
+              onPress={() => router.push('/share-once' as any)}
+              testID="share-once"
+            />
             {/* iter-364: "Archived" — restyled as a vibrant floating gradient
                 banner. It serves as the visual BORDERLINE between the feature
                 rows above (Smilers AI, Diary, Devotion, Chat Once) and the real

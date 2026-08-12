@@ -1,0 +1,203 @@
+{
+  "title": "Share Once — post-once board with per-post audience selection",
+  "version": 3,
+  "status": "COMPLETE — all three milestones SHIPPED on the Convex deployment. Milestone 1: create posts + audience resolution + author/received lists + audience picker options. Milestone 2: open a post from an invite link, mark viewed, forward a post into chats, re-post to my own Share Once page, list forward targets. Milestone 3: full delete + tombstone parity with 1:1 chat (delete for me / for receiver / for everyone) plus viewer-initiated delete requests the author accepts or declines.",
+  "concept": "Share Once sits just below Chat Once. The author posts ONE item of any content type (text/photo/video/audio/voice/scanned document/file) and picks exactly who can view it. Each selected viewer gets a tappable invite link (shareToken) that opens the author's Share Once page to view that specific post. Purpose: avoid forwarding the same file one-by-one, and avoid filling recipients' storage.",
+  "menuPlacement": "Add a 'Share Once' entry directly BELOW the existing 'Chat Once' entry.",
+  "contentModel": {
+    "types": ["text", "image", "video", "audio", "file", "voice"],
+    "mediaUpload": "Same 3-step flow as chat media: (1) api.messages.generateUploadUrl() -> upload URL string; (2) POST the bytes with Content-Type header -> { storageId }; (3) pass storageId to shareOnce.createPost. Photos taken, videos recorded, documents scanned, audio recorded, and picked files all become one of the types above.",
+    "fields": "text (body or caption), storageId, mediaUrl (alt to storageId), fileName, fileSize, mimeType, duration, fileHash (SHA-256 hex of plaintext bytes, same 'receive once' meaning as messages.fileHash)."
+  },
+  "audience": {
+    "modes": {
+      "all": "Everyone in my connections (contacts + prior 1:1s + matched synced device contacts, minus blocked/system/self).",
+      "trustees": "Only my trustees (trustees table).",
+      "voiceTask": "Only my voice-task users (voiceTaskContacts table).",
+      "allExcept": "Everyone in my connections EXCEPT audienceExceptIds (the tick boxes you untick).",
+      "specific": "Exactly audienceUserIds (the tick boxes you tick)."
+    },
+    "groups": "audienceGroupIds is merged into the viewer set for EVERY mode (same procedure as selecting users). Members of each selected group you belong to become viewers.",
+    "search": "getAudienceOptions returns the full connections list; filter by name client-side for the search box.",
+    "security": "The audience is resolved SERVER-SIDE on every createPost. A tampered client can never widen its own audience. Blocked users, system accounts and the author are always excluded."
+  },
+  "functions": {
+    "getAudienceOptions": {
+      "type": "query",
+      "ref": "api.shareOnce.getAudienceOptions",
+      "args": {},
+      "returns": {
+        "connections": "Array<{ userId: Id<users>, name: string, avatar?: string }> — sorted by name, for the searchable tick list",
+        "trusteeIds": "Id<users>[] — highlight/preview which connections are trustees",
+        "voiceTaskIds": "Id<users>[] — same for voice-task users",
+        "groups": "Array<{ groupId: Id<conversations>, name: string, memberCount: number }>"
+      }
+    },
+    "createPost": {
+      "type": "mutation",
+      "ref": "api.shareOnce.createPost",
+      "args": {
+        "type": "'text' | 'image' | 'video' | 'audio' | 'file' | 'voice'",
+        "text": "string (optional; REQUIRED and non-empty for type 'text'; caption otherwise)",
+        "storageId": "Id<_storage> (required for non-text unless mediaUrl is given)",
+        "mediaUrl": "string (optional CDN url alternative to storageId)",
+        "fileName": "string (optional)",
+        "fileSize": "number (optional)",
+        "mimeType": "string (optional)",
+        "duration": "number (optional; seconds for audio/voice/video)",
+        "fileHash": "string (optional; SHA-256 hex of plaintext bytes)",
+        "audienceMode": "'all' | 'trustees' | 'voiceTask' | 'allExcept' | 'specific'",
+        "audienceUserIds": "Id<users>[] (only for 'specific')",
+        "audienceExceptIds": "Id<users>[] (only for 'allExcept')",
+        "audienceGroupIds": "Id<conversations>[] (optional, any mode)"
+      },
+      "returns": { "postId": "Id<shareOncePosts>", "shareToken": "string", "viewerCount": "number" },
+      "notes": "The invite link to deliver to each viewer is `<app-origin>/share-once/view?t=<shareToken>` (web). Native should send its own tappable deep link carrying the shareToken to every resolved viewer. Viewer rows are materialized immediately; viewerCount is how many people can now view.",
+      "errors": ["UNAUTHENTICATED", "FORBIDDEN (phone not verified)", "BAD_REQUEST (empty text / missing media / oversized text or file name)"]
+    },
+    "listMyPosts": {
+      "type": "query",
+      "ref": "api.shareOnce.listMyPosts",
+      "args": {},
+      "returns": "Array<ContentView & { viewerCount: number, viewedCount: number }> — my own posts, newest first, excluding ones I deleted for myself"
+    },
+    "listPostViewers": {
+      "type": "query",
+      "ref": "api.shareOnce.listPostViewers",
+      "args": { "postId": "Id<shareOncePosts>" },
+      "returns": "Array<{ viewerId, name, avatar?, viewedAt: string|null, deleted: boolean }> — author only; who can view and who has viewed"
+    },
+    "listReceived": {
+      "type": "query",
+      "ref": "api.shareOnce.listReceived",
+      "args": {},
+      "returns": "Array<ContentView & { authorId, authorName, authorAvatar?, viewed: boolean }> — posts shared WITH me, newest first. Hidden once I or the author deleted it for me, unless it is a delete-for-everyone tombstone (isDeleted true), which stays visible as a tombstone."
+    },
+    "getPostByToken": {
+      "type": "query",
+      "ref": "api.shareOnce.getPostByToken",
+      "args": { "shareToken": "string (the ?t=<shareToken> from the invite link)" },
+      "returns": "ViewerAccess | null — null when the token is unknown or I am neither the author nor in the audience (or I deleted it for myself). Use this to open a post from a tapped invite link.",
+      "notes": "Does NOT mark the post viewed. Call markViewed separately after opening."
+    },
+    "getPost": {
+      "type": "query",
+      "ref": "api.shareOnce.getPost",
+      "args": { "postId": "Id<shareOncePosts>" },
+      "returns": "ViewerAccess | null — same authorization as getPostByToken but keyed by post id."
+    },
+    "markViewed": {
+      "type": "mutation",
+      "ref": "api.shareOnce.markViewed",
+      "args": { "postId": "Id<shareOncePosts>" },
+      "returns": { "viewed": "boolean (false if I am not in the audience, e.g. the author)" },
+      "notes": "Idempotent. Records the ISO timestamp the first time I open a received post; no-op afterwards. Call once when a viewer opens the post."
+    },
+    "forwardToConversations": {
+      "type": "mutation",
+      "ref": "api.shareOnce.forwardToConversations",
+      "args": {
+        "postId": "Id<shareOncePosts>",
+        "targetConversationIds": "Id<conversations>[] (1..10 of my chats; use listForwardTargets)"
+      },
+      "returns": { "forwardedTo": "number (how many chats actually received it)" },
+      "notes": "Forwards the post into my 1:1/group chats as normal chat messages. Reuses the SAME global 'FW' counter and 'receive once' file dedup as messages.forwardMessage, so recipients who already have the file see it auto-hidden. Author OR audience member may forward. Skips any target I'm not a participant of.",
+      "errors": ["UNAUTHENTICATED", "NOT_FOUND", "FORBIDDEN (not author/audience)", "BAD_REQUEST (0 or >10 targets, or deleted post)"]
+    },
+    "repostToShareOnce": {
+      "type": "mutation",
+      "ref": "api.shareOnce.repostToShareOnce",
+      "args": {
+        "postId": "Id<shareOncePosts> (the post I'm re-sharing)",
+        "audienceMode": "'all' | 'trustees' | 'voiceTask' | 'allExcept' | 'specific'",
+        "audienceUserIds": "Id<users>[] (only for 'specific')",
+        "audienceExceptIds": "Id<users>[] (only for 'allExcept')",
+        "audienceGroupIds": "Id<conversations>[] (optional, any mode)"
+      },
+      "returns": { "postId": "Id<shareOncePosts>", "shareToken": "string", "viewerCount": "number" },
+      "notes": "Creates a NEW post on MY OWN Share Once page carrying the original content, with a fresh audience I choose, stamped as forwarded (isForwarded true, incrementing 'FW'). This is what backs offering 'Share Once' as a forward target. Author OR audience member may re-post.",
+      "errors": ["UNAUTHENTICATED", "NOT_FOUND", "FORBIDDEN (phone not verified, or not author/audience)", "BAD_REQUEST (deleted post)"]
+    },
+    "listForwardTargets": {
+      "type": "query",
+      "ref": "api.shareOnce.listForwardTargets",
+      "args": {},
+      "returns": "Array<{ conversationId: Id<conversations>, name: string, avatar?: string, isGroup: boolean }> — my 1:1 chats and groups, sorted by name, for the 'forward to chats' picker. Filter by name client-side for search."
+    },
+    "deletePost": {
+      "type": "mutation",
+      "ref": "api.shareOnce.deletePost",
+      "args": {
+        "postId": "Id<shareOncePosts>",
+        "forEveryone": "boolean (optional; author only)",
+        "forReceiver": "boolean (optional; author only)",
+        "forReceiverIds": "Id<users>[] (optional; subset of viewers for forReceiver, defaults to ALL viewers)"
+      },
+      "returns": { "ok": true },
+      "notes": "EXACT parity with messages.deleteMessage. forEveryone (author only): wipes storageId/mediaUrl/fileName/fileSize/mimeType/duration and sets isDeleted=true + text='This post was deleted' — every viewer keeps seeing that tombstone. forReceiver (author only): sets shareOnceAudience.deleted=true for the targeted viewers (or all), hiding it from them while the author keeps it. Neither flag = delete-for-me: the author sets deletedForAuthor (hidden from their own page, viewers unaffected); a viewer sets their own shareOnceAudience.deleted (hidden for them, unless it later becomes a global tombstone).",
+      "errors": ["UNAUTHENTICATED", "NOT_FOUND", "FORBIDDEN (forEveryone/forReceiver by a non-author)"]
+    },
+    "requestDeletion": {
+      "type": "mutation",
+      "ref": "api.shareOnce.requestDeletion",
+      "args": { "postId": "Id<shareOncePosts>" },
+      "returns": { "ok": true },
+      "notes": "A viewer asks the author to delete the post for everyone (parity with messages.requestDeletion). Inserts a pending shareOnceDeletionRequests row. One pending request per (viewer, post).",
+      "errors": ["UNAUTHENTICATED", "NOT_FOUND", "BAD_REQUEST (you are the author)", "FORBIDDEN (post not shared with you)", "CONFLICT (already requested)"]
+    },
+    "getPendingDeletionRequests": {
+      "type": "query",
+      "ref": "api.shareOnce.getPendingDeletionRequests",
+      "args": {},
+      "returns": "Array<{ _id: Id<shareOnceDeletionRequests>, postId, requesterId, requesterName, requesterAvatar?, postPreview, postType, createdAt: number }> — pending delete requests on MY posts, newest first. Show these to the author so they can accept/decline.",
+      "notes": "createdAt is the row's _creationTime (ms epoch)."
+    },
+    "respondToDeletionRequest": {
+      "type": "mutation",
+      "ref": "api.shareOnce.respondToDeletionRequest",
+      "args": {
+        "requestId": "Id<shareOnceDeletionRequests>",
+        "accept": "boolean"
+      },
+      "returns": { "ok": true },
+      "notes": "Author accepts or declines. Accept performs the SAME wipe as deletePost forEveryone (tombstone for all viewers) and marks the request accepted; decline just marks it declined.",
+      "errors": ["UNAUTHENTICATED", "NOT_FOUND", "FORBIDDEN (not your request)", "CONFLICT (already handled)"]
+    }
+  },
+  "types": {
+    "ContentView": {
+      "_id": "Id<shareOncePosts>",
+      "shareToken": "string",
+      "type": "'text' | 'image' | 'video' | 'audio' | 'file' | 'voice'",
+      "text": "string | null",
+      "mediaUrl": "string | null (signed URL resolved from storageId; null when deleted)",
+      "fileName": "string | null",
+      "fileSize": "number | null",
+      "mimeType": "string | null",
+      "duration": "number | null",
+      "fileHash": "string | null",
+      "isForwarded": "boolean",
+      "forwardCount": "number | null (the 'FW<N>' number)",
+      "isDeleted": "boolean (true = delete-for-everyone tombstone)",
+      "createdAt": "string (ISO)",
+      "preview": "string (chats-list style preview, e.g. '📷 Photo', or the tombstone text when deleted)"
+    },
+    "ViewerAccess": {
+      "post": "ContentView",
+      "authorId": "Id<users>",
+      "authorName": "string",
+      "authorAvatar": "string | undefined",
+      "isAuthor": "boolean (true if the current user is the author)",
+      "viewed": "boolean (true if I have already opened it)"
+    }
+  },
+  "viewerCapabilities": "When viewing a post (getPostByToken/getPost): open & zoom photos/documents, play/watch MP3/MP4 via mediaUrl, download the file, forward to my chats (forwardToConversations), and re-post to my own Share Once page (repostToShareOnce). Call markViewed once on open.",
+  "webRoutes": {
+    "author": "/share-once (compose + your posts + delete-request banner + a 'Received' tab)",
+    "viewer": "/share-once/view?t=<shareToken> (opens a specific post from an invite link; header menu has delete-for-me / delete-for-receivers / delete-for-everyone for the author, and delete-for-me / ask-author-to-delete for a viewer)"
+  },
+  "notes": [
+    "Share Once is offered as a forward TARGET when forwarding messages/files to contacts via repostToShareOnce (carries content + a fresh audience).",
+    "Delete behaves exactly like 1:1 chat: delete for me / for receiver / for everyone, leaving a 'This post was deleted' tombstone; viewers can request the author delete for everyone."
+  ]
+}

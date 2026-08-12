@@ -589,6 +589,9 @@ export default function RootLayout() {
               <Stack.Screen name="templates" />
               <Stack.Screen name="scheduled" />
               <Stack.Screen name="chat-once" />
+              <Stack.Screen name="share-once/index" />
+              <Stack.Screen name="share-once/compose" />
+              <Stack.Screen name="share-once/view" />
               <Stack.Screen name="search" />
               <Stack.Screen name="chat-requests" />
               <Stack.Screen name="starred" />
