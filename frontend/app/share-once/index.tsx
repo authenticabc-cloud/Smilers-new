@@ -11,6 +11,7 @@ import { useMutation, useQuery } from 'convex/react';
 import { api } from '../../src/convexApi';
 import Header from '../../src/components/Header';
 import { Colors } from '../../src/theme';
+import AudiencePicker, { AudienceSelection } from '../../src/components/shareOnce/AudiencePicker';
 
 function iconFor(type: string) {
   return type === 'image' ? 'image' : type === 'video' ? 'videocam' : type === 'audio' || type === 'voice' ? 'musical-notes' : type === 'file' ? 'document' : 'chatbubble-ellipses';
@@ -23,9 +24,32 @@ export default function ShareOnceHome() {
   const received = useQuery(api.shareOnce.listReceived, {}) as any[] | undefined;
   const pending = useQuery(api.shareOnce.getPendingDeletionRequests, {}) as any[] | undefined;
   const respond = useMutation(api.shareOnce.respondToDeletionRequest);
+  const repost = useMutation(api.shareOnce.repostToShareOnce);
+  const deletePost = useMutation(api.shareOnce.deletePost);
+
+  // A post that hasn't been shared with anyone yet (e.g. forwarded from chat) —
+  // the author picks its audience via the picker below.
+  const [shareDraft, setShareDraft] = useState<any | null>(null);
 
   const data = tab === 'mine' ? mine : received;
   const loading = data === undefined;
+
+  const shareDraftAudience = async (sel: AudienceSelection) => {
+    const post = shareDraft;
+    setShareDraft(null);
+    if (!post) return;
+    try {
+      const res: any = await repost({ postId: post._id, ...sel });
+      // The draft (0 viewers) has now been shared as a fresh post; remove the
+      // leftover draft from my page to avoid a confusing duplicate.
+      try {
+        await deletePost({ postId: post._id });
+      } catch {}
+      Alert.alert('Shared', `${res?.viewerCount ?? 0} people can now view this.`);
+    } catch (e: any) {
+      Alert.alert('Could not share', e?.data?.message || e?.message || 'Try again.');
+    }
+  };
 
   const handleReq = (req: any) => {
     Alert.alert('Delete request', `${req.requesterName} asked to delete "${req.postPreview}". Delete it for them?`, [
@@ -74,6 +98,16 @@ export default function ShareOnceHome() {
                   ? `${item.viewedCount ?? 0}/${item.viewerCount ?? 0} viewed`
                   : item.preview}
               </Text>
+              {tab === 'mine' && (item.viewerCount ?? 0) === 0 && !item.isDeleted ? (
+                <TouchableOpacity
+                  style={styles.notSharedBadge}
+                  onPress={() => setShareDraft(item)}
+                  testID={`share-once-choose-audience-${item._id}`}
+                >
+                  <Ionicons name="people" size={13} color="#b26a00" />
+                  <Text style={styles.notSharedText} numberOfLines={1}>Not shared yet — tap to choose who can view</Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
             {tab === 'received' && !item.viewed ? <View style={styles.dot} /> : null}
             <Ionicons name="chevron-forward" size={18} color={Colors.textSecondary} />
@@ -91,6 +125,13 @@ export default function ShareOnceHome() {
       <TouchableOpacity style={styles.fab} onPress={() => router.push('/share-once/compose' as any)} testID="share-once-fab">
         <Ionicons name="add" size={30} color="#fff" />
       </TouchableOpacity>
+
+      <AudiencePicker
+        visible={!!shareDraft}
+        onClose={() => setShareDraft(null)}
+        onConfirm={shareDraftAudience}
+        confirmLabel="Share"
+      />
     </SafeAreaView>
   );
 }
@@ -108,6 +149,8 @@ const styles = StyleSheet.create({
   rowIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(233,181,59,0.15)', alignItems: 'center', justifyContent: 'center' },
   rowTitle: { fontSize: 15, fontWeight: '700', color: Colors.textPrimary },
   rowSub: { fontSize: 13, color: Colors.textSecondary, marginTop: 2 },
+  notSharedBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', marginTop: 6, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, backgroundColor: 'rgba(233,181,59,0.18)', borderWidth: 1, borderColor: 'rgba(233,181,59,0.5)' },
+  notSharedText: { fontSize: 11, fontWeight: '700', color: '#b26a00', maxWidth: 240 },
   dot: { width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.primary },
   empty: { alignItems: 'center', gap: 10, padding: 24 },
   emptyText: { fontSize: 14, color: Colors.textSecondary, textAlign: 'center' },

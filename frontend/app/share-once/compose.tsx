@@ -2,7 +2,7 @@
  * Share Once — compose a post (any content type) + pick who can view it.
  * Uses the same 3-step media upload as chat (uploadFile → storageId).
  */
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Image, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -38,6 +38,12 @@ export default function ShareOnceCompose() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
+  // Optional silence trimming: when ON, recording auto-stops after 3s of
+  // continuous silence, so long trailing dead-air is never captured. Pauses
+  // shorter than 3s (deliberate) are preserved. Turn OFF to keep the original.
+  const [autoTrim, setAutoTrim] = useState(true);
+  const silenceStartRef = useRef<number | null>(null);
+  const hasSpokenRef = useRef(false);
   const recorder = useAudioRecorder(VOICE_RECORDING_OPTIONS);
   const recorderState = useAudioRecorderState(recorder, 250);
   // Playback preview of a recorded/attached voice/audio clip before posting.
@@ -163,6 +169,37 @@ export default function ShareOnceCompose() {
     [recorder, recorderState.durationMillis],
   );
 
+  // Auto-stop on ≥3s of continuous silence (only after the user has started
+  // speaking, so leading pause before the first word doesn't count). Runs on
+  // each metering tick while recording with the "trim silence" toggle on.
+  useEffect(() => {
+    if (!recording) {
+      silenceStartRef.current = null;
+      hasSpokenRef.current = false;
+      return;
+    }
+    if (!autoTrim) {
+      silenceStartRef.current = null;
+      return;
+    }
+    const level = typeof recorderState.metering === 'number' ? recorderState.metering : -160;
+    const SPEECH_DB = -40; // above this = audible sound present
+    if (level > SPEECH_DB) {
+      hasSpokenRef.current = true;
+      silenceStartRef.current = null;
+      return;
+    }
+    if (!hasSpokenRef.current) return;
+    const now = Date.now();
+    if (silenceStartRef.current == null) {
+      silenceStartRef.current = now;
+      return;
+    }
+    if (now - silenceStartRef.current >= 3000) {
+      void stopRecording('save');
+    }
+  }, [recording, autoTrim, recorderState.metering, recorderState.durationMillis, stopRecording]);
+
   const post = async () => {
     if (busy) return;
     if (!att && !text.trim()) {
@@ -272,6 +309,10 @@ export default function ShareOnceCompose() {
             </View>
             <Text style={styles.recTimer}>{fmtDur(Math.round((recorderState.durationMillis || 0) / 1000))}</Text>
             <Text style={styles.recHint}>Recording voice note…</Text>
+            <TouchableOpacity style={styles.recTrimRow} onPress={() => setAutoTrim((v) => !v)} testID="share-once-autotrim">
+              <Ionicons name={autoTrim ? 'checkbox' : 'square-outline'} size={20} color={autoTrim ? Colors.primary : Colors.textSecondary} />
+              <Text style={styles.recTrimText}>Auto-stop after 3s of silence</Text>
+            </TouchableOpacity>
             <View style={styles.recBtnRow}>
               <TouchableOpacity style={[styles.recBtn, styles.recCancel]} onPress={() => void stopRecording('cancel')} testID="share-once-rec-cancel">
                 <Text style={styles.recCancelText}>Cancel</Text>
@@ -318,7 +359,9 @@ const styles = StyleSheet.create({
   recCard: { width: '100%', maxWidth: 340, backgroundColor: '#fff', borderRadius: 20, padding: 24, alignItems: 'center' },
   recPulse: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#e53935', alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
   recTimer: { fontSize: 30, fontWeight: '800', color: Colors.textPrimary, fontVariant: ['tabular-nums'] },
-  recHint: { fontSize: 13, color: Colors.textSecondary, marginTop: 4, marginBottom: 20 },
+  recHint: { fontSize: 13, color: Colors.textSecondary, marginTop: 4, marginBottom: 12 },
+  recTrimRow: { flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'center', marginBottom: 16, paddingVertical: 4 },
+  recTrimText: { fontSize: 13, fontWeight: '600', color: Colors.textPrimary },
   recBtnRow: { flexDirection: 'row', gap: 12, alignSelf: 'stretch' },
   recBtn: { flex: 1, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 },
   recCancel: { backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border || '#e5e7eb' },
