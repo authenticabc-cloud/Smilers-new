@@ -3,6 +3,7 @@ import { Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { CallPill } from './CallPill';
 import { SwipeToReply } from './SwipeToReply';
+import ShareOnceInvitePreview from './ShareOnceInvitePreview';
 import MediaBubble from '../MediaBubble';
 import { startCall } from '../../lib/twilio/startCall';
 import { formatChatDayChip, isSameCalendarDay } from '../../lib/chatFormat';
@@ -222,9 +223,7 @@ function ChatMessageRowBase({
             style={[styles.shareOnceCard, isSelected ? { borderColor: '#E9B53B', backgroundColor: 'rgba(233,181,59,0.12)' } : null]}
             testID={`share-once-invite-${item._id}`}
           >
-            <View style={styles.shareOnceIcon}>
-              <Ionicons name={icon as any} size={22} color="#fff" />
-            </View>
+            <ShareOnceInvitePreview contentType={ct} shareToken={String(item.shareOnceToken)} icon={icon} />
             <View style={{ flex: 1 }}>
               <Text style={styles.shareOnceTitle} numberOfLines={2}>
                 {item.text || 'Shared a message with you — tap to view'}
