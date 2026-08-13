@@ -30,8 +30,18 @@ export default function ShareOnceHome() {
   // A post that hasn't been shared with anyone yet (e.g. forwarded from chat) —
   // the author picks its audience via the picker below.
   const [shareDraft, setShareDraft] = useState<any | null>(null);
+  // Quick filter within My posts: show everything or only unshared drafts.
+  const [mineFilter, setMineFilter] = useState<'all' | 'drafts'>('all');
 
-  const data = tab === 'mine' ? mine : received;
+  const isDraft = (p: any) => (p?.viewerCount ?? 0) === 0 && !p?.isDeleted;
+  const draftCount = (mine || []).filter(isDraft).length;
+
+  const data =
+    tab === 'mine'
+      ? mineFilter === 'drafts'
+        ? (mine || []).filter(isDraft)
+        : mine
+      : received;
   const loading = data === undefined;
 
   const shareDraftAudience = async (sel: AudienceSelection) => {
@@ -77,6 +87,28 @@ export default function ShareOnceHome() {
         ))}
       </View>
 
+      {tab === 'mine' ? (
+        <View style={styles.filterRow}>
+          <TouchableOpacity
+            style={[styles.filterChip, mineFilter === 'all' && styles.filterChipActive]}
+            onPress={() => setMineFilter('all')}
+            testID="share-once-filter-all"
+          >
+            <Text style={[styles.filterChipText, mineFilter === 'all' && styles.filterChipTextActive]}>All</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.filterChip, mineFilter === 'drafts' && styles.filterChipActive]}
+            onPress={() => setMineFilter('drafts')}
+            testID="share-once-filter-drafts"
+          >
+            <Ionicons name="cloud-offline-outline" size={13} color={mineFilter === 'drafts' ? '#fff' : '#b26a00'} />
+            <Text style={[styles.filterChipText, mineFilter === 'drafts' && styles.filterChipTextActive]}>
+              Drafts{draftCount > 0 ? ` (${draftCount})` : ''}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       <FlatList
         data={data || []}
         keyExtractor={(i) => i._id}
@@ -116,7 +148,7 @@ export default function ShareOnceHome() {
         ListEmptyComponent={
           <View style={styles.empty}>
             <Ionicons name="share-social-outline" size={40} color={Colors.textSecondary} />
-            <Text style={styles.emptyText}>{loading ? 'Loading…' : tab === 'mine' ? 'You haven\u2019t shared anything yet.' : 'Nothing shared with you yet.'}</Text>
+            <Text style={styles.emptyText}>{loading ? 'Loading…' : tab === 'mine' ? (mineFilter === 'drafts' ? 'No drafts — everything you\u2019ve posted is shared.' : 'You haven\u2019t shared anything yet.') : 'Nothing shared with you yet.'}</Text>
           </View>
         }
         contentContainerStyle={data && data.length === 0 ? { flexGrow: 1, justifyContent: 'center' } : { paddingVertical: 8 }}
@@ -145,6 +177,11 @@ const styles = StyleSheet.create({
   tabActive: { backgroundColor: Colors.primary },
   tabText: { fontSize: 14, fontWeight: '700', color: Colors.textPrimary },
   tabTextActive: { color: '#fff' },
+  filterRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingBottom: 6 },
+  filterChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 14, paddingVertical: 6, borderRadius: 16, backgroundColor: 'rgba(0,0,0,0.05)' },
+  filterChipActive: { backgroundColor: '#b26a00' },
+  filterChipText: { fontSize: 13, fontWeight: '700', color: Colors.textSecondary },
+  filterChipTextActive: { color: '#fff' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 12 },
   rowIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(233,181,59,0.15)', alignItems: 'center', justifyContent: 'center' },
   rowTitle: { fontSize: 15, fontWeight: '700', color: Colors.textPrimary },
