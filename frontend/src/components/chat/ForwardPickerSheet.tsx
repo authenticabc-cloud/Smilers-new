@@ -38,6 +38,7 @@ export function ForwardPickerSheet({
   onForwardTo,
   onForwardToMany,
   onSaveToDiary,
+  onShareOnce,
   forwarding,
   progress,
 }: {
@@ -50,6 +51,7 @@ export function ForwardPickerSheet({
   onForwardTo: (conversationId: string) => void;
   onForwardToMany?: (conversationIds: string[]) => void;
   onSaveToDiary: () => void;
+  onShareOnce?: () => void;
   forwarding?: boolean;
   progress?: { done: number; total: number };
 }) {
@@ -108,20 +110,38 @@ export function ForwardPickerSheet({
             keyExtractor={(item: any) => item._id}
             contentContainerStyle={styles.forwardListContent}
             ListHeaderComponent={
-              <TouchableOpacity
-                style={[styles.forwardRow, styles.forwardRowDiary]}
-                onPress={onSaveToDiary}
-                disabled={forwarding}
-                testID="forward-target-diary"
-              >
-                <View style={[styles.forwardAvatar, styles.forwardAvatarDiary]}>
-                  <MaterialCommunityIcons name="book-account-outline" size={20} color={Colors.warningDark} />
-                </View>
-                <View style={styles.flexOne}>
-                  <Text style={styles.forwardName} numberOfLines={1}>Diary</Text>
-                  <Text style={styles.forwardPreview} numberOfLines={1}>Save to your personal diary</Text>
-                </View>
-              </TouchableOpacity>
+              <>
+                <TouchableOpacity
+                  style={[styles.forwardRow, styles.forwardRowDiary]}
+                  onPress={onSaveToDiary}
+                  disabled={forwarding}
+                  testID="forward-target-diary"
+                >
+                  <View style={[styles.forwardAvatar, styles.forwardAvatarDiary]}>
+                    <MaterialCommunityIcons name="book-account-outline" size={20} color={Colors.warningDark} />
+                  </View>
+                  <View style={styles.flexOne}>
+                    <Text style={styles.forwardName} numberOfLines={1}>Diary</Text>
+                    <Text style={styles.forwardPreview} numberOfLines={1}>Save to your personal diary</Text>
+                  </View>
+                </TouchableOpacity>
+                {onShareOnce ? (
+                  <TouchableOpacity
+                    style={[styles.forwardRow, styles.forwardRowShareOnce]}
+                    onPress={onShareOnce}
+                    disabled={forwarding}
+                    testID="forward-target-share-once"
+                  >
+                    <View style={[styles.forwardAvatar, styles.forwardAvatarShareOnce]}>
+                      <MaterialCommunityIcons name="share-variant-outline" size={20} color={Colors.primary} />
+                    </View>
+                    <View style={styles.flexOne}>
+                      <Text style={styles.forwardName} numberOfLines={1}>Share Once</Text>
+                      <Text style={styles.forwardPreview} numberOfLines={1}>Save to your Share Once page — pick who later</Text>
+                    </View>
+                  </TouchableOpacity>
+                ) : null}
+              </>
             }
             renderItem={({ item }: any) => {
               const deviceName = getResolvedConversationDisplayName(
@@ -234,6 +254,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   forwardAvatarDiary: { backgroundColor: Colors.warningLight },
+  forwardRowShareOnce: {
+    backgroundColor: 'rgba(233,181,59,0.10)',
+    borderBottomColor: 'transparent',
+    marginBottom: 4,
+    borderRadius: Radius.md,
+    paddingHorizontal: 12,
+  },
+  forwardAvatarShareOnce: { backgroundColor: Colors.primaryLight },
   forwardAvatarText: { color: Colors.primary, fontWeight: FontWeight.bold },
   forwardName: { fontSize: FontSize.base, fontWeight: FontWeight.semibold, color: Colors.textPrimary },
   forwardSub: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },

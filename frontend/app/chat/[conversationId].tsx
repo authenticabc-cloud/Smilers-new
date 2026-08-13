@@ -902,6 +902,10 @@ export default function ChatScreen() {
   // calling the wrong name is why reactions returned a generic Convex
   // "Server Error" for so long, iter-320).
   const addReaction = useMutation(api.messages.addReaction);
+  // Forward-to-Share-Once: create a Share Once post from a chat message,
+  // visible to nobody (audience 'specific' with an empty list) so it lands on
+  // the user's own Share Once page as a draft; they pick the audience later.
+  const createShareOncePost = useMutation((api as any).shareOnce.createPost);
   // Cloud diary append — used when forwarding a message to Diary so the entry
   // syncs to the web app (previously forward-to-Diary wrote LOCAL-ONLY, so those
   // notes never appeared on the web/other devices).
@@ -3749,13 +3753,64 @@ export default function ChatScreen() {
     [collectMsgsToForward, forwardMsgsToTarget, multiSelectIds]
   );
 
+  // Forward the collected message(s) to the user's OWN Share Once page as a
+  // private draft (no audience yet). They open Share Once and pick who can view.
+  const doShareOnce = useCallback(async () => {
+    const msgsToForward = collectMsgsToForward();
+    setShowForwardPicker(false);
+    closeActionSheet();
+    if (msgsToForward.length === 0) return;
+    let ok = 0;
+    let failed = 0;
+    for (const msg of msgsToForward) {
+      const t = String(msg.type || 'text');
+      const soType =
+        t === 'image' || t === 'photo' ? 'image'
+        : t === 'video' ? 'video'
+        : t === 'voice' ? 'voice'
+        : t === 'audio' ? 'audio'
+        : t === 'file' || t === 'document' ? 'file'
+        : 'text';
+      const args: any = { type: soType, audienceMode: 'specific', audienceUserIds: [] };
+      const text = stripRichTextTags(msg.text) || '';
+      if (text) args.text = text;
+      if (soType !== 'text') {
+        if (msg.storageId) args.storageId = msg.storageId;
+        else if (msg.mediaUrl) args.mediaUrl = msg.mediaUrl;
+        if (msg.fileName) args.fileName = msg.fileName;
+        if (msg.fileSize) args.fileSize = msg.fileSize;
+        if (msg.mimeType) args.mimeType = msg.mimeType;
+        if (msg.duration) args.duration = msg.duration;
+        if (msg.fileHash) args.fileHash = msg.fileHash;
+      }
+      // A text post needs non-empty text; a media post needs a source.
+      if (soType === 'text' && !text) { failed += 1; continue; }
+      if (soType !== 'text' && !args.storageId && !args.mediaUrl) { failed += 1; continue; }
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await (createShareOncePost as any)(args);
+        ok += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    if (multiSelectIds && multiSelectIds.length > 0) setMultiSelectIds(null);
+    if (ok > 0) {
+      Alert.alert(
+        ok === 1 ? 'Saved to Share Once' : `${ok} saved to Share Once`,
+        'Open Share Once from the Chats tab to choose who can view it.' + (failed > 0 ? ` (${failed} could not be saved)` : ''),
+      );
+    } else {
+      Alert.alert('Could not save', 'These items could not be saved to Share Once.');
+    }
+  }, [collectMsgsToForward, createShareOncePost, multiSelectIds]);
+
   const onStar = useCallback(async () => {
     const msg = selectedMsg;
     if (!msg) return;
     closeActionSheet();
     try {
-      await toggleStar({ messageId: msg._id });
-        await refetchMessages();
+      await toggleStar({ messageId: msg._id });        await refetchMessages();
     } catch (e: any) {
       console.warn('star failed:', e?.message);
     }
@@ -5546,6 +5601,7 @@ export default function ChatScreen() {
         onClose={() => setShowForwardPicker(false)}
         onForwardTo={doForwardTo}
         onForwardToMany={doForwardToMany}
+        onShareOnce={doShareOnce}
         forwarding={!!forwardProgress}
         progress={forwardProgress || undefined}
         onSaveToDiary={async () => {

@@ -365,6 +365,7 @@ export const styles = StyleSheet.create({
   shareOnceHint: { fontSize: 12, color: '#E9B53B', fontWeight: '700', marginTop: 2 },
   shareOnceThumbWrap: { width: 44, height: 44, borderRadius: 10, overflow: 'hidden', backgroundColor: '#000' },
   shareOnceThumb: { width: 44, height: 44 },
+  shareOnceThumbPlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.25)' },
   shareOnceReactionsRow: { flexDirection: 'row', gap: 4, alignSelf: 'center', width: '86%', marginTop: -2, marginBottom: 6 },
   shareOnceReactionChip: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 12, backgroundColor: '#fff', borderWidth: 1, borderColor: 'rgba(0,0,0,0.12)', gap: 2 },
   shareOnceReactionChipMine: { borderColor: '#E9B53B', backgroundColor: 'rgba(233,181,59,0.12)' },

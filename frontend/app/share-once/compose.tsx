@@ -2,7 +2,7 @@
  * Share Once — compose a post (any content type) + pick who can view it.
  * Uses the same 3-step media upload as chat (uploadFile → storageId).
  */
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Image, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -10,7 +10,7 @@ import { Ionicons, Feather } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
-import { requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
+import { requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
 import { useConvex, useMutation } from 'convex/react';
 import { api } from '../../src/convexApi';
 import Header from '../../src/components/Header';
@@ -40,6 +40,26 @@ export default function ShareOnceCompose() {
   const [recording, setRecording] = useState(false);
   const recorder = useAudioRecorder(VOICE_RECORDING_OPTIONS);
   const recorderState = useAudioRecorderState(recorder, 250);
+  // Playback preview of a recorded/attached voice/audio clip before posting.
+  const playSource = useMemo(
+    () => (att && (att.type === 'voice' || att.type === 'audio') ? { uri: att.uri } : null),
+    [att],
+  );
+  const player = useAudioPlayer(playSource);
+  const playStatus = useAudioPlayerStatus(player);
+  const togglePlay = useCallback(() => {
+    if (!player) return;
+    try {
+      if (playStatus?.playing) {
+        player.pause();
+      } else {
+        const dur = playStatus?.duration || 0;
+        const cur = playStatus?.currentTime || 0;
+        if (playStatus?.didJustFinish || (dur > 0 && cur >= dur - 0.05)) player.seekTo(0);
+        player.play();
+      }
+    } catch {}
+  }, [player, playStatus]);
 
   const pickMedia = async (mediaTypes: 'images' | 'videos') => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -196,15 +216,27 @@ export default function ShareOnceCompose() {
             <View style={styles.attWrap}>
               {att.type === 'image' ? (
                 <Image source={{ uri: att.uri }} style={styles.attImg} />
+              ) : att.type === 'voice' || att.type === 'audio' ? (
+                <View style={styles.attFile}>
+                  <TouchableOpacity style={styles.playBtn} onPress={togglePlay} testID="share-once-play">
+                    <Ionicons name={playStatus?.playing ? 'pause' : 'play'} size={22} color="#fff" />
+                  </TouchableOpacity>
+                  <Text style={styles.attName} numberOfLines={1}>
+                    {att.type === 'voice' ? `Voice note · ${fmtDur(att.duration || 0)}` : att.name || 'Audio'}
+                  </Text>
+                  {att.type === 'voice' ? (
+                    <TouchableOpacity onPress={() => { player?.pause?.(); void startRecording(); }} testID="share-once-rerecord">
+                      <Text style={styles.rerecordText}>Re-record</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
               ) : (
                 <View style={styles.attFile}>
-                  <Ionicons name={att.type === 'video' ? 'videocam' : att.type === 'audio' || att.type === 'voice' ? 'musical-notes' : 'document'} size={26} color={Colors.primary} />
-                  <Text style={styles.attName} numberOfLines={1}>
-                    {att.type === 'voice' ? `Voice note · ${fmtDur(att.duration || 0)}` : att.name || att.type}
-                  </Text>
+                  <Ionicons name={att.type === 'video' ? 'videocam' : 'document'} size={26} color={Colors.primary} />
+                  <Text style={styles.attName} numberOfLines={1}>{att.name || att.type}</Text>
                 </View>
               )}
-              <TouchableOpacity style={styles.attRemove} onPress={() => setAtt(null)}>
+              <TouchableOpacity style={styles.attRemove} onPress={() => { player?.pause?.(); setAtt(null); }}>
                 <Ionicons name="close-circle" size={24} color="#e53935" />
               </TouchableOpacity>
             </View>
@@ -275,6 +307,8 @@ const styles = StyleSheet.create({
   attImg: { width: '100%', height: 220, borderRadius: 12, backgroundColor: '#000' },
   attFile: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16, borderRadius: 12, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border || '#e5e7eb' },
   attName: { flex: 1, fontSize: 15, color: Colors.textPrimary },
+  playBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
+  rerecordText: { fontSize: 13, fontWeight: '800', color: Colors.primary },
   attRemove: { position: 'absolute', top: 8, right: 8, backgroundColor: '#fff', borderRadius: 12 },
   audienceBtn: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 20, padding: 14, borderRadius: 12, backgroundColor: 'rgba(233,181,59,0.12)', borderWidth: 1, borderColor: 'rgba(233,181,59,0.35)' },
   audienceText: { flex: 1, fontSize: 15, fontWeight: '700', color: Colors.textPrimary },
