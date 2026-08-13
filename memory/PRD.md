@@ -1,5 +1,15 @@
 # Smilers Mobile App — PRD
 
+## iter-494 (Aug 2026): Share Once invite renders as tap-to-view card in 1:1 chats
+
+Web team shipped v4 backend delivery (`shareOnceInvite` messages materialized into each viewer's 1:1 with fields `shareOnceToken`, `shareOnceContentType`, `shareOnceAuthorId`, all on `messages.list` + push + unread + tombstone). Wired the app render:
+- `src/components/chat/ChatMessageRow.tsx` — new branch: `item.type === 'shareOnceInvite' && item.shareOnceToken` renders a tappable card (icon per `shareOnceContentType` photo/video/audio/voice/file/contact; body = `item.text` fallback "This is a … message — tap to view"; "Tap to view" hint) → `router.push('/share-once/view?t=<shareOnceToken>')`. Placed before the default bubble; keeps the day-chip.
+- `chatScreenStyles.ts` — `shareOnceCard`/`shareOnceIcon`/`shareOnceTitle`/`shareOnceHint`.
+- Message pipeline spreads raw msg (`{...msg}`), so the new fields reach `item` unchanged.
+(Fixed a mid-edit JSX slip where the default branch's `<>`+day-chip opener was removed; restored, babel-parse OK.)
+Lint clean; app boots. Recipients are now alerted in their 1:1 chat (not just the Received tab). ⚠️ Verify on a signed-in device: post to a contact → they see the "tap to view" card in the 1:1 → tapping opens the sender's Share Once post.
+
+
 ## iter-493 (Aug 2026): Share Once photo pinch-zoom (#2) + invite-into-1:1 spec (#1)
 
 - **#2 Pinch-to-zoom**: `app/share-once/view.tsx` image is now tappable ("Tap to zoom" hint) → opens a full-screen `Modal` with the existing `ZoomableImage` (pinch/pan) + close button. Lint clean; app boots.

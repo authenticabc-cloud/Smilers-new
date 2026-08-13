@@ -99,6 +99,29 @@ export default function AudiencePicker({
               {opts?.groups?.length ? (
                 <>
                   <Text style={styles.sectionLbl}>GROUPS (added to any mode)</Text>
+                  {(() => {
+                    const allIds = opts.groups.map((g) => g.groupId);
+                    const allSelected = allIds.every((id) => groups[id]);
+                    return (
+                      <TouchableOpacity
+                        style={styles.row}
+                        onPress={() =>
+                          setGroups(() => {
+                            if (allSelected) return {};
+                            const next: Record<string, boolean> = {};
+                            allIds.forEach((id) => {
+                              next[id] = true;
+                            });
+                            return next;
+                          })
+                        }
+                        testID="audience-select-all-groups"
+                      >
+                        <Ionicons name={allSelected ? 'checkbox' : 'square-outline'} size={22} color={allSelected ? Colors.primary : Colors.textSecondary} />
+                        <Text style={[styles.name, { fontWeight: '700' }]} numberOfLines={1}>Select all groups</Text>
+                      </TouchableOpacity>
+                    );
+                  })()}
                   {opts.groups.map((g) => (
                     <TouchableOpacity key={g.groupId} style={styles.row} onPress={() => setGroups((p) => ({ ...p, [g.groupId]: !p[g.groupId] }))}>
                       <Ionicons name={groups[g.groupId] ? 'checkbox' : 'square-outline'} size={22} color={groups[g.groupId] ? Colors.primary : Colors.textSecondary} />

@@ -1,7 +1,7 @@
 {
   "title": "Share Once — post-once board with per-post audience selection",
-  "version": 3,
-  "status": "COMPLETE — all three milestones SHIPPED on the Convex deployment. Milestone 1: create posts + audience resolution + author/received lists + audience picker options. Milestone 2: open a post from an invite link, mark viewed, forward a post into chats, re-post to my own Share Once page, list forward targets. Milestone 3: full delete + tombstone parity with 1:1 chat (delete for me / for receiver / for everyone) plus viewer-initiated delete requests the author accepts or declines.",
+  "version": 4,
+  "status": "COMPLETE — all three milestones SHIPPED on the Convex deployment, PLUS the invite-in-chat delivery (v4). Milestone 1: create posts + audience resolution + author/received lists + audience picker options. Milestone 2: open a post from an invite link, mark viewed, forward a post into chats, re-post to my own Share Once page, list forward targets. Milestone 3: full delete + tombstone parity with 1:1 chat. v4: when a post is created (or re-posted), a tappable 'tap to view' message is dropped into each selected viewer's 1:1 chat with the author, counts as unread, and fires a push.",
   "concept": "Share Once sits just below Chat Once. The author posts ONE item of any content type (text/photo/video/audio/voice/scanned document/file) and picks exactly who can view it. Each selected viewer gets a tappable invite link (shareToken) that opens the author's Share Once page to view that specific post. Purpose: avoid forwarding the same file one-by-one, and avoid filling recipients' storage.",
   "menuPlacement": "Add a 'Share Once' entry directly BELOW the existing 'Chat Once' entry.",
   "contentModel": {
@@ -52,7 +52,7 @@
         "audienceGroupIds": "Id<conversations>[] (optional, any mode)"
       },
       "returns": { "postId": "Id<shareOncePosts>", "shareToken": "string", "viewerCount": "number" },
-      "notes": "The invite link to deliver to each viewer is `<app-origin>/share-once/view?t=<shareToken>` (web). Native should send its own tappable deep link carrying the shareToken to every resolved viewer. Viewer rows are materialized immediately; viewerCount is how many people can now view.",
+      "notes": "AUTOMATICALLY delivers the invite: for every resolved viewer, the backend gets-or-creates the author↔viewer 1:1 conversation and inserts ONE tappable `shareOnceInvite` chat message (see the `inviteMessage` section) that counts as unread and fires a normal 1:1 push. You do NOT need to fan out invites client-side. The web invite link is `<app-origin>/share-once/view?t=<shareToken>`; native should open its own view screen with the shareToken. Viewer rows are materialized immediately; viewerCount is how many people can now view.",
       "errors": ["UNAUTHENTICATED", "FORBIDDEN (phone not verified)", "BAD_REQUEST (empty text / missing media / oversized text or file name)"]
     },
     "listMyPosts": {
@@ -115,7 +115,7 @@
         "audienceGroupIds": "Id<conversations>[] (optional, any mode)"
       },
       "returns": { "postId": "Id<shareOncePosts>", "shareToken": "string", "viewerCount": "number" },
-      "notes": "Creates a NEW post on MY OWN Share Once page carrying the original content, with a fresh audience I choose, stamped as forwarded (isForwarded true, incrementing 'FW'). This is what backs offering 'Share Once' as a forward target. Author OR audience member may re-post.",
+      "notes": "Creates a NEW post on MY OWN Share Once page carrying the original content, with a fresh audience I choose, stamped as forwarded (isForwarded true, incrementing 'FW'). This is what backs offering 'Share Once' as a forward target. Author OR audience member may re-post. Like createPost, it AUTOMATICALLY delivers a `shareOnceInvite` chat message to every new viewer.",
       "errors": ["UNAUTHENTICATED", "NOT_FOUND", "FORBIDDEN (phone not verified, or not author/audience)", "BAD_REQUEST (deleted post)"]
     },
     "listForwardTargets": {
@@ -191,6 +191,21 @@
       "viewed": "boolean (true if I have already opened it)"
     }
   },
+  "inviteMessage": {
+    "summary": "When a Share Once post is created or re-posted, the backend drops ONE tappable chat message into each selected viewer's 1:1 conversation with the author. It is a normal `messages` row, so it counts toward the unread badge, appears in the chat list preview, and fires the standard 1:1 push (web + native Emergent relay). No client fan-out is required.",
+    "messageType": "shareOnceInvite",
+    "extraFields": {
+      "shareOnceToken": "string — the post's shareToken. Open the author's Share Once post with this (web: /share-once/view?t=<shareOnceToken>).",
+      "shareOnceContentType": "'text' | 'photo' | 'video' | 'audio' | 'voice' | 'file' | 'contact' — pick the emoji/label and icon for the tap-to-view card.",
+      "shareOnceAuthorId": "Id<users> — the Share Once post's author (equals the message senderId)."
+    },
+    "text": "The message's `text` is the ready-made fallback wording, e.g. '📷 This is a photo message — tap to view', '🎥 This is a video message — tap to view', '🎵 This is an audio message — tap to listen', '🎤 This is a voice message — tap to listen', '📄 This is a document — tap to view', '💬 Shared a message with you — tap to view'. Render this text if you don't build a custom card.",
+    "rendering": "Render `type === 'shareOnceInvite'` as a tap-to-view card. On tap, open the author's Share Once post using `shareOnceToken` (web route /share-once/view?t=<shareOnceToken>, or getPostByToken). The web app already renders this card in the 1:1 chat.",
+    "reads": "messages.list (and any conversation message query) returns `shareOnceToken`, `shareOnceContentType`, and `shareOnceAuthorId` on these messages, plus the normal message fields.",
+    "notifications": "Push respects the viewer's 1:1 notification preference (notifMessages) and conversation mute. Tapping the push opens the real 1:1 chat (action_url /chat/<conversationId>) where the tap-to-view card lives.",
+    "idempotency": "At most one invite per (viewer, post): a retry of createPost will not create duplicates. Blocked users (either direction) are skipped.",
+    "deletion": "If the author deletes the post for everyone, opening the invite resolves via getPostByToken to a tombstone (isDeleted true, 'This post was deleted'); the media is gone. The invite chat message itself is a normal message and can be deleted like any other via messages.deleteMessage."
+  },
   "viewerCapabilities": "When viewing a post (getPostByToken/getPost): open & zoom photos/documents, play/watch MP3/MP4 via mediaUrl, download the file, forward to my chats (forwardToConversations), and re-post to my own Share Once page (repostToShareOnce). Call markViewed once on open.",
   "webRoutes": {
     "author": "/share-once (compose + your posts + delete-request banner + a 'Received' tab)",
@@ -198,6 +213,7 @@
   },
   "notes": [
     "Share Once is offered as a forward TARGET when forwarding messages/files to contacts via repostToShareOnce (carries content + a fresh audience).",
-    "Delete behaves exactly like 1:1 chat: delete for me / for receiver / for everyone, leaving a 'This post was deleted' tombstone; viewers can request the author delete for everyone."
+    "Delete behaves exactly like 1:1 chat: delete for me / for receiver / for everyone, leaving a 'This post was deleted' tombstone; viewers can request the author delete for everyone.",
+    "v4: each selected viewer receives a tappable 'tap to view' invite (type 'shareOnceInvite') directly in their 1:1 chat with the author — see the `inviteMessage` section. This is the alert path (unread + push); the Received tab is now secondary."
   ]
 }

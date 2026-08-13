@@ -1218,11 +1218,7 @@ async def active_group_calls(identity: str):
             mine = next((r for r in roster if r.get("identity") == identity), None)
             if not anyone_joined or not mine:
                 continue
-            # Show the banner whenever the user is NOT currently in the call.
-            # This includes missed/declined/pending AND joined-then-left, so the
-            # banner reappears if they drop out of a still-live call. Only a
-            # client-side "Can't join" dismiss (or the call ending) hides it.
-            if mine.get("status") == "joined":
+            if mine.get("status") in ("joined", "left"):
                 continue
             out.append({
                 "callId": meta.get("call_id") or f"group_{room}",
@@ -2692,180 +2688,6 @@ class RegisterPushBody(BaseModel):
     notification_prefs: dict | None = None
 
 
-# ── Direct APNs sender (iOS only) ──────────────────────────────────────────────────
-# WHY: iOS registers a RAW APNs device token (64 hex chars) through
-# expo-notifications getDevicePushTokenAsync(). Firebase only accepts its own
-# registration-token format, so EVERY iOS push was rejected server-side with
-#   "InvalidArgumentError: The registration token is not a valid FCM
-#    registration token"
-# while Android (which registers a real FCM token) delivered fine. Confirmed in
-# production: same minute, same code path — Android success=1, iOS error=1.
-# Rather than change the app, deliver iOS pushes to Apple directly.
-#
-# Config — ALL OPTIONAL. While unset, apns_configured() is False and callers
-# fall back to the previous FCM behaviour, so this change is inert until the
-# .p8 key is installed.
-#   APNS_KEY_ID       10-char Key ID of the .p8 auth key
-#   APNS_TEAM_ID      10-char Apple Team ID (A7W96FN66D)
-#   APNS_PRIVATE_KEY  full contents of AuthKey_XXXXXXXXXX.p8 (PEM text)
-#   APNS_TOPIC        bundle id (default com.smilers.app)
-#   APNS_USE_SANDBOX  "1" to target the sandbox gateway.
-#                     LEAVE UNSET for TestFlight/App Store — those builds carry
-#                     aps-environment=production; sandbox would silently drop.
-APNS_KEY_ID = os.environ.get("APNS_KEY_ID", "")
-APNS_TEAM_ID = os.environ.get("APNS_TEAM_ID", "")
-APNS_PRIVATE_KEY = os.environ.get("APNS_PRIVATE_KEY", "")
-APNS_TOPIC = os.environ.get("APNS_TOPIC", "com.smilers.app")
-APNS_HOST = (
-    "https://api.sandbox.push.apple.com"
-    if os.environ.get("APNS_USE_SANDBOX") == "1"
-    else "https://api.push.apple.com"
-)
-
-_apns_client: httpx.AsyncClient | None = None
-_apns_jwt: tuple[str, float] | None = None
-
-
-def apns_configured() -> bool:
-    return bool(APNS_KEY_ID and APNS_TEAM_ID and APNS_PRIVATE_KEY)
-
-
-def _apns_auth_token() -> str:
-    """ES256 JWT for APNs, reused ~40 min. Apple rejects tokens older than 60
-    minutes AND refreshes made more often than every 20 minutes."""
-    global _apns_jwt
-    now = time.time()
-    if _apns_jwt and (now - _apns_jwt[1]) < 2400:
-        return _apns_jwt[0]
-    token = jwt.encode(
-        {"iss": APNS_TEAM_ID, "iat": int(now)},
-        APNS_PRIVATE_KEY,
-        algorithm="ES256",
-        headers={"kid": APNS_KEY_ID},
-    )
-    _apns_jwt = (token, now)
-    return token
-
-
-def _get_apns_client() -> httpx.AsyncClient:
-    global _apns_client
-    if _apns_client is None:
-        # APNs requires HTTP/2 — h2 is already in requirements.txt.
-        _apns_client = httpx.AsyncClient(http2=True, base_url=APNS_HOST, timeout=10.0)
-    return _apns_client
-
-
-async def apns_send(
-    device_token: str,
-    title: str,
-    message: str,
-    data: dict | None = None,
-    include_alert: bool = True,
-    ttl_seconds: int | None = None,
-    is_call: bool = False,
-) -> tuple[bool, str | None]:
-    """Deliver one push straight to Apple.
-
-    Returns the SAME (ok, error_message) contract as fcm_send_v1 so it drops
-    into the existing asyncio.gather() without changing the caller's bookkeeping.
-    """
-    if not apns_configured():
-        return False, "APNs not configured (APNS_KEY_ID/APNS_TEAM_ID/APNS_PRIVATE_KEY unset)"
-    if not device_token:
-        return False, "empty device token"
-
-    payload: dict = {"aps": {}}
-    if include_alert:
-        # An APNs push with NO alert block displays nothing on iOS. Message
-        # pushes previously had their alert suppressed, which is why nothing
-        # ever appeared even when delivery worked.
-        payload["aps"]["alert"] = {"title": title, "body": message}
-        payload["aps"]["sound"] = "default"
-        if is_call:
-            # Surfaces the banner even in Focus/Do-Not-Disturb.
-            payload["aps"]["interruption-level"] = "time-sensitive"
-    else:
-        payload["aps"]["content-available"] = 1
-    for k, v in (data or {}).items():
-        if k != "aps":
-            payload[k] = v
-
-    headers = {
-        "authorization": "bearer " + _apns_auth_token(),
-        "apns-topic": APNS_TOPIC,
-        "apns-push-type": "alert" if include_alert else "background",
-        "apns-priority": "10" if include_alert else "5",
-    }
-    if ttl_seconds:
-        headers["apns-expiration"] = str(int(time.time()) + int(ttl_seconds))
-
-    try:
-        resp = await _get_apns_client().post(
-            "/3/device/" + device_token, json=payload, headers=headers
-        )
-    except Exception as e:
-        return False, "APNs request failed: " + str(e)
-
-    if resp.status_code == 200:
-        return True, None
-    try:
-        reason = (resp.json() or {}).get("reason", "")
-    except Exception:
-        reason = (resp.text or "")[:120]
-    # Common reasons worth recognising:
-    #   BadDeviceToken     token/environment mismatch (sandbox vs production)
-    #   TopicDisallowed    apns-topic does not match the key's app
-    #   ExpiredProviderToken  JWT too old — handled by the 40-min refresh above
-    return False, "APNs " + str(resp.status_code) + ": " + str(reason)
-
-
-async def _dispatch_push(
-    token_doc: dict,
-    title: str,
-    message: str,
-    data: dict | None,
-    android_channel_id: str,
-    ttl_seconds: int | None,
-    android_data_only: bool,
-    include_ios_alert: bool,
-    apns_include_alert: bool,
-    is_call: bool,
-) -> tuple[bool, str | None]:
-    """Pick the delivery transport for ONE token.
-
-    iOS tokens are raw APNs tokens and Firebase rejects them outright, so they
-    go straight to Apple when APNs is configured. Everything else keeps the
-    exact previous fcm_send_v1 call — Android behaviour is unchanged, and if
-    APNs is not configured iOS also falls back to the old path so this change
-    is a no-op until the .p8 key is installed.
-    """
-    if str(token_doc.get("platform") or "").lower() == "ios" and apns_configured():
-        return await apns_send(
-            device_token=token_doc.get("device_token") or "",
-            title=title,
-            message=message,
-            data=data,
-            # Messages previously had their iOS alert suppressed so the app
-            # could render its own. Nothing was ever delivered, and a killed
-            # iOS app cannot run JS to render anything, so the alert block is
-            # the only thing that can actually show. Only true silent-control
-            # pushes stay alert-less.
-            include_alert=apns_include_alert,
-            ttl_seconds=ttl_seconds,
-            is_call=is_call,
-        )
-    return await fcm_send_v1(
-        device_token=token_doc.get("device_token") or "",
-        title=title,
-        message=message,
-        data=data,
-        android_channel_id=android_channel_id,
-        ttl_seconds=ttl_seconds,
-        android_data_only=android_data_only,
-        include_ios_alert=include_ios_alert,
-    )
-
-
 @api_router.post("/register-push", status_code=201)
 async def register_push(body: RegisterPushBody):
     """
@@ -3615,8 +3437,8 @@ async def send_push(
                     )
 
                 send_tasks = [
-                    _dispatch_push(
-                        token_doc=t,
+                    fcm_send_v1(
+                        device_token=t["device_token"],
                         title=title,
                         message=message,
                         data=fcm_data,
@@ -3654,11 +3476,6 @@ async def send_push(
                         # notification). Calls + emergency/login alerts keep the
                         # APNS alert so they still surface on iOS.
                         include_ios_alert=not (is_message_push or is_silent_control),
-                        # APNs path: only genuine silent-control pushes stay
-                        # alert-less. Messages and calls MUST carry an alert or
-                        # iOS displays nothing at all.
-                        apns_include_alert=not is_silent_control,
-                        is_call=is_call_push,
                     )
                     for t, ch in zip(tokens, resolved_channels)
                 ]

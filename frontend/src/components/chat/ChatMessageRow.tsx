@@ -1,5 +1,6 @@
 import React from 'react';
-import { Text, View } from 'react-native';
+import { Text, TouchableOpacity, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { CallPill } from './CallPill';
 import { SwipeToReply } from './SwipeToReply';
 import MediaBubble from '../MediaBubble';
@@ -164,6 +165,90 @@ function ChatMessageRowBase({
           }}
           testID={`chat-call-pill-${item._id}`}
         />
+      </>
+    );
+  }
+  // Share Once invite — a tap-to-view card that opens the author's post.
+  // Wrapped with the SAME message affordances as a normal bubble: swipe-to-reply,
+  // long-press context menu (copy/forward/react/…), multi-select, and reaction chips.
+  if (item?.type === 'shareOnceInvite' && item?.shareOnceToken) {
+    const ct = String(item.shareOnceContentType || 'text');
+    const icon =
+      ct === 'photo' ? 'image' : ct === 'video' ? 'videocam' : ct === 'audio' || ct === 'voice' ? 'musical-notes' : ct === 'file' ? 'document' : ct === 'contact' ? 'person' : 'share-social';
+    const isSelected = multiSelectIds ? multiSelectIds.includes(String(item._id)) : false;
+    // Aggregate reactions the same way MediaBubble does.
+    const reactionMap = new Map<string, { emoji: string; count: number; mine: boolean }>();
+    (Array.isArray(item.reactions) ? item.reactions : []).forEach((r: any) => {
+      const cur = reactionMap.get(r.emoji) || { emoji: r.emoji, count: 0, mine: false };
+      cur.count += 1;
+      if (effectiveMe?._id && r.userId === effectiveMe._id) cur.mine = true;
+      reactionMap.set(r.emoji, cur);
+    });
+    const reactionSummary = Array.from(reactionMap.values());
+    return (
+      <>
+        {showDayChip ? (
+          <View style={styles.dayChipWrap} testID={`chat-day-chip-${item._id}`}>
+            <Text style={styles.dayChipText}>{formatChatDayChip(item?._creationTime)}</Text>
+          </View>
+        ) : null}
+        <SwipeToReply
+          enabled={!viewerSuspension && !isBroadcastReadOnly && !multiSelectIds && !item.deletedAt && !item.__outbox && isConversationAvailable}
+          onReply={() => {
+            setReplyTo(item);
+            messageInputRef.current?.focus();
+          }}
+        >
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => {
+              if (multiSelectIds) {
+                onToggleMultiSelect(String(item._id));
+                return;
+              }
+              router.push(`/share-once/view?t=${encodeURIComponent(String(item.shareOnceToken))}` as any);
+            }}
+            onLongPress={
+              viewerSuspension || isBroadcastReadOnly
+                ? undefined
+                : () => {
+                    if (multiSelectIds) {
+                      onToggleMultiSelect(String(item._id));
+                      return;
+                    }
+                    onLongPressMessage(item);
+                  }
+            }
+            style={[styles.shareOnceCard, isSelected ? { borderColor: '#E9B53B', backgroundColor: 'rgba(233,181,59,0.12)' } : null]}
+            testID={`share-once-invite-${item._id}`}
+          >
+            <View style={styles.shareOnceIcon}>
+              <Ionicons name={icon as any} size={22} color="#fff" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.shareOnceTitle} numberOfLines={2}>
+                {item.text || 'Shared a message with you — tap to view'}
+              </Text>
+              <Text style={styles.shareOnceHint}>Tap to view</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#9aa0a6" />
+          </TouchableOpacity>
+          {reactionSummary.length > 0 ? (
+            <View style={styles.shareOnceReactionsRow}>
+              {reactionSummary.map((r) => (
+                <TouchableOpacity
+                  key={r.emoji}
+                  style={[styles.shareOnceReactionChip, r.mine ? styles.shareOnceReactionChipMine : null]}
+                  onPress={() => onToggleMyReaction(item._id, r.emoji)}
+                  testID={`share-once-react-${r.emoji}`}
+                >
+                  <Text style={styles.shareOnceReactionEmoji}>{r.emoji}</Text>
+                  {r.count > 1 ? <Text style={styles.shareOnceReactionCount}>{r.count}</Text> : null}
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : null}
+        </SwipeToReply>
       </>
     );
   }
