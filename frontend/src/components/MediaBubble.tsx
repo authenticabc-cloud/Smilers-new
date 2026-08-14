@@ -1670,6 +1670,11 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
         } catch {}
         stopPlaybackNotification();
       } else {
+        // Configure the iOS audio session for PLAYBACK *before* starting, and
+        // await it. A prior recording (chat composer, diary, calls, etc.) leaves
+        // the session in PlayAndRecord which routes to the earpiece at near-zero
+        // volume — the "taps but doesn't play" symptom. Reapplying first fixes it.
+        await ensureVoicePlaybackMode();
         // If we reached the end, rewind before playing again.
         try {
           const dur = typeof player.duration === 'number' ? player.duration : 0;
@@ -1685,7 +1690,6 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
         try {
           player.play();
         } catch {}
-        ensureVoicePlaybackMode();
         CURRENT_SOUND = player;
         CURRENT_STOP = () => setIsPlaying(false);
         startPlaybackNotification('Voice message');
@@ -2042,7 +2046,7 @@ function VoiceTranslationPill({ msg }: { msg: any }) {
     };
   }, [releaseAsCurrent]);
 
-  const toggleSpeak = useCallback(() => {
+  const toggleSpeak = useCallback(async () => {
     const uri = result?.audioUri;
     if (!uri) return;
     try {
@@ -2097,7 +2101,8 @@ function VoiceTranslationPill({ msg }: { msg: any }) {
         try {
           if (typeof player.seekTo === 'function') player.seekTo(0);
         } catch {}
-        ensureVoicePlaybackMode();
+        // Await the playback-session config before starting (see VoiceMessage).
+        await ensureVoicePlaybackMode();
         player.play();
         setSpeaking(true);
         startPlaybackNotification(`Translated message · ${targetName}`);
