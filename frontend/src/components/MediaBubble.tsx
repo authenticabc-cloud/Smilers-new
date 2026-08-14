@@ -49,6 +49,7 @@ import { ForwardedTag } from './chat/ForwardedTag';
 import { getLanguageByCode, getEffectivePreferredLanguage } from '../lib/languages';
 import { getOrCreateVoiceTranslation, type VoiceTranslation } from '../lib/voiceTranslation';
 import { ensureVoicePlaybackMode } from '../lib/audio/voicePlaybackMode';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   startPlaybackNotification,
   stopPlaybackNotification,
@@ -102,13 +103,43 @@ let CURRENT_STOP: (() => void) | null = null;
 
 // Auto-advance registry — every mounted voice message registers its play()
 // function keyed by message id + creation time. When one finishes, we start
-// the next voice message (by chronological order) so they chain like WhatsApp.
+// the next UNPLAYED voice message (by chronological order) so they chain like
+// WhatsApp without ever re-playing notes you've already heard.
 type VoiceReg = { id: string; creationTime: number; play: () => void };
 const VOICE_REGISTRY = new Map<string, VoiceReg>();
+
+// Persisted set of voice-note ids the user has already played, so the
+// auto-advance "seen filter" survives across sessions. Loaded once at startup.
+const PLAYED_VOICE_IDS = new Set<string>();
+const PLAYED_VOICE_KEY = 'sml.playedVoiceIds.v1';
+let playedVoiceLoaded = false;
+async function loadPlayedVoiceIds(): Promise<void> {
+  if (playedVoiceLoaded) return;
+  playedVoiceLoaded = true;
+  try {
+    const raw = await AsyncStorage.getItem(PLAYED_VOICE_KEY);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) arr.forEach((x) => PLAYED_VOICE_IDS.add(String(x)));
+    }
+  } catch {}
+}
+void loadPlayedVoiceIds();
+function markVoicePlayed(id: string): void {
+  if (!id || PLAYED_VOICE_IDS.has(id)) return;
+  PLAYED_VOICE_IDS.add(id);
+  try {
+    // Cap to the most recent 2000 ids to keep the stored blob small.
+    const capped = Array.from(PLAYED_VOICE_IDS).slice(-2000);
+    void AsyncStorage.setItem(PLAYED_VOICE_KEY, JSON.stringify(capped));
+  } catch {}
+}
+
 function playNextVoiceAfter(creationTime: number, currentId: string): void {
   let best: VoiceReg | null = null;
   for (const reg of VOICE_REGISTRY.values()) {
     if (reg.id === currentId) continue;
+    if (PLAYED_VOICE_IDS.has(reg.id)) continue; // seen filter: skip already-played
     if (reg.creationTime > creationTime && (!best || reg.creationTime < best.creationTime)) {
       best = reg;
     }
@@ -1676,7 +1707,9 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
           CURRENT_STOP = null;
         }
         stopPlaybackNotification();
-        // WhatsApp-style: chain to the next voice message once this one ends.
+        // Mark this note played so the seen-filter skips it in future chains,
+        // then chain to the next UNPLAYED voice message.
+        markVoicePlayed(String(msg?._id || ''));
         playNextVoiceAfter(msg?._creationTime || 0, String(msg?._id || ''));
       }
     });
