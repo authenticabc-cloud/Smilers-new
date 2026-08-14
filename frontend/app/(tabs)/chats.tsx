@@ -15,7 +15,7 @@ import { LiveLocationRequestBanner } from '../../src/components/LiveLocationRequ
 import { PhotoSaveRequestBanner } from '../../src/components/PhotoSaveRequestBanner';
 import { PhoneViewRequestBanner } from '../../src/components/PhoneViewRequestBanner';
 import { api } from '../../src/convexApi';
-import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
+import { useSafeConvexQuery, useSafeConvexSubscription } from '../../src/hooks/useSafeConvexQuery';
 import { readCacheMeta, writeCache } from '../../src/lib/offlineCache';
 import { loadAllChatDrafts, type DraftPreview } from '../../src/lib/chatDrafts';
 import { getMutedConversations } from '../../src/lib/mutedConversations';
@@ -201,6 +201,16 @@ export default function ChatsScreen() {
     | undefined;
   const markRead = useMutation(api.messages.markRead);
   const markUnread = useMutation((api as any).messages.markUnread);
+  // Per-conversation count of RECEIVED voice notes the user hasn't played yet,
+  // { convId: count }. Backend-driven off the same consumption data as
+  // markConsumed. useSafeConvexSubscription degrades gracefully to {} until the
+  // web team deploys api.messages.getUnplayedVoiceCounts (no error/retry storm).
+  const { data: unplayedVoiceCounts } = useSafeConvexSubscription<Record<string, number>>(
+    (api as any).messages?.getUnplayedVoiceCounts,
+    {},
+    {},
+    !!me?._id,
+  );
   // iter-340: on-device read overlay so opening a chat clears its list badge
   // instantly even when the backend unread count is slow/inconsistent.
   const localRead = useLocalReadMap();
@@ -945,6 +955,7 @@ export default function ChatsScreen() {
               draft={drafts[String(item._id)]}
               unreadCount={rowUnread}
               muted={mutedIds.has(String(item._id))}
+              unplayedVoiceCount={Number((unplayedVoiceCounts as any)?.[String(item._id)]) || 0}
               typingFromParent={BATCH_TYPING_ENABLED}
               typingLabel={
                 BATCH_TYPING_ENABLED

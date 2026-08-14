@@ -71,6 +71,8 @@ type Props = {
   unreadCount?: number;
   /** iter-404: show a muted-bell indicator when this conversation is muted. */
   muted?: boolean;
+  /** Count of received voice notes the user hasn't played yet (backend-driven). */
+  unplayedVoiceCount?: number;
   onPress: () => void;
   /** When true, typing state comes from `typingLabel` (a single list-level
    * query) instead of this row opening its own Convex subscription. */
@@ -85,6 +87,7 @@ function ConversationRow({
   draft,
   unreadCount = 0,
   muted = false,
+  unplayedVoiceCount = 0,
   onPress,
   typingFromParent = false,
   typingLabel: typingLabelProp = null,
@@ -222,6 +225,12 @@ function ConversationRow({
               <Text style={styles.youPillText}>You</Text>
             </View>
           ) : null}
+          {unplayedVoiceCount > 0 ? (
+            <View style={styles.voicePill} testID={`conv-unplayed-voice-${item._id}`}>
+              <Feather name="mic" size={11} color={Colors.white} />
+              <Text style={styles.voicePillText}>{unplayedVoiceCount > 99 ? '99+' : unplayedVoiceCount}</Text>
+            </View>
+          ) : null}
           {hasUnread ? (
             <View style={styles.unreadPill} testID={`conv-unread-${item._id}`}>
               <Text style={styles.unreadPillText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
@@ -243,6 +252,7 @@ function ConversationRow({
  */
 function rowPropsEqual(prev: Props, next: Props): boolean {
   if (prev.unreadCount !== next.unreadCount) return false;
+  if (prev.unplayedVoiceCount !== next.unplayedVoiceCount) return false;
   if (prev.muted !== next.muted) return false;
   if (prev.currentUserId !== next.currentUserId) return false;
   if (prev.contacts !== next.contacts) return false;
@@ -321,4 +331,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   unreadPillText: { fontSize: 11, fontWeight: '700', color: Colors.white },
+  voicePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#2f9bff',
+    borderRadius: 11,
+    paddingHorizontal: 7,
+    height: 20,
+  },
+  voicePillText: { fontSize: 11, fontWeight: '700', color: Colors.white },
 });
