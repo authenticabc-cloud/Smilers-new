@@ -113,6 +113,15 @@ const VOICE_REGISTRY = new Map<string, VoiceReg>();
 const PLAYED_VOICE_IDS = new Set<string>();
 const PLAYED_VOICE_KEY = 'sml.playedVoiceIds.v1';
 let playedVoiceLoaded = false;
+// Subscribers (voice bubbles) that re-check their played state when it changes.
+const playedVoiceListeners = new Set<() => void>();
+function notifyPlayedVoiceChange(): void {
+  playedVoiceListeners.forEach((fn) => {
+    try {
+      fn();
+    } catch {}
+  });
+}
 async function loadPlayedVoiceIds(): Promise<void> {
   if (playedVoiceLoaded) return;
   playedVoiceLoaded = true;
@@ -123,6 +132,7 @@ async function loadPlayedVoiceIds(): Promise<void> {
       if (Array.isArray(arr)) arr.forEach((x) => PLAYED_VOICE_IDS.add(String(x)));
     }
   } catch {}
+  notifyPlayedVoiceChange();
 }
 void loadPlayedVoiceIds();
 function markVoicePlayed(id: string): void {
@@ -133,6 +143,7 @@ function markVoicePlayed(id: string): void {
     const capped = Array.from(PLAYED_VOICE_IDS).slice(-2000);
     void AsyncStorage.setItem(PLAYED_VOICE_KEY, JSON.stringify(capped));
   } catch {}
+  notifyPlayedVoiceChange();
 }
 
 function playNextVoiceAfter(creationTime: number, currentId: string): void {
@@ -1629,6 +1640,18 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
   const [posSec, setPosSec] = useState(0);
   // Playback speed: cycles 1x → 1.5x → 2x. Persisted only for this bubble.
   const [rate, setRate] = useState(1);
+  // Unplayed indicator: true until the user has listened to this note (only
+  // meaningful for received notes). Reactive to the shared played-set.
+  const [voicePlayed, setVoicePlayed] = useState(() => PLAYED_VOICE_IDS.has(String(msg?._id || '')));
+  useEffect(() => {
+    const id = String(msg?._id || '');
+    const update = () => setVoicePlayed(PLAYED_VOICE_IDS.has(id));
+    update();
+    playedVoiceListeners.add(update);
+    return () => {
+      playedVoiceListeners.delete(update);
+    };
+  }, [msg?._id]);
   // Stable handle the auto-advance registry calls to start THIS note.
   const startPlaybackRef = useRef<() => void>(() => {});
 
@@ -1724,6 +1747,7 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
     if (!src) return;
     try {
       markConsumed();
+      markVoicePlayed(String(msg?._id || ''));
       stopOtherSounds();
       const player = ensurePlayer();
       if (!player) return;
@@ -1881,6 +1905,12 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
                 {transcriptHidden ? 'Hidden' : 'Visible'}
               </Text>
             </TouchableOpacity>
+          </>
+        ) : null}
+        {!isMine && !voicePlayed ? (
+          <>
+            <View style={{ flex: 1 }} />
+            <View style={styles.voiceUnplayedDot} testID={`voice-unplayed-${msg._id}`} />
           </>
         ) : null}
       </View>
@@ -2878,6 +2908,7 @@ const styles = StyleSheet.create({
   voiceDuration: { fontSize: 11, color: Colors.textSecondary, fontVariant: ['tabular-nums'], minWidth: 30 },
   voiceRateBtn: { marginLeft: 6, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 11, backgroundColor: Colors.primaryLight, alignItems: 'center', justifyContent: 'center', minWidth: 32 },
   voiceRateText: { fontSize: 11, fontWeight: '800', color: Colors.primary, fontVariant: ['tabular-nums'] },
+  voiceUnplayedDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: '#2f9bff' },
   pollBody: { paddingVertical: 2, minWidth: 220, gap: 6 },
   pollHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   pollLabel: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.primary, letterSpacing: 1 },
