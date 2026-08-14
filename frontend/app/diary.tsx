@@ -522,13 +522,7 @@ export default function DiaryScreen() {
   useEffect(() => {
     if (localFlushedRef.current) return;
     if (!cloudReady) return;
-    if (!appendEntryCloud) return;
-    // iter-223 guard: never queue a mutation to a backend function that
-    // doesn't exist — that triggers Convex's per-second retry storm.
-    if (!appendEntryAvailable) {
-      localFlushedRef.current = true;
-      return;
-    }
+    if (typeof diarySendCloud !== 'function') return;
     if (!myUserId) return;
     if (localEntries.length === 0) return;
 
@@ -544,19 +538,28 @@ export default function DiaryScreen() {
     localFlushedRef.current = true;
     (async () => {
       for (const entry of orphans) {
+        // Build the canonical api.diary.send payload. Local `kind` maps 1:1 to
+        // the contract `type` (text/image/video/audio/file). Media entries need
+        // a storageId to live on the shared backend — skip (keep local) any that
+        // only ever had an on-device uri so they aren't dropped.
+        const type = entry.kind || 'text';
+        const args: any = { type };
+        if (entry.text) args.text = entry.text;
+        if (entry.attachment?.storageId) {
+          args.storageId = entry.attachment.storageId;
+          if (entry.attachment.fileName) args.fileName = entry.attachment.fileName;
+          if (entry.attachment.fileSize != null) args.fileSize = entry.attachment.fileSize;
+          if (entry.attachment.mimeType) args.mimeType = entry.attachment.mimeType;
+          if (entry.attachment.audioDuration != null) args.duration = entry.attachment.audioDuration;
+        }
+        if (entry.forwardedFrom) args.isForwarded = true;
+        if (type !== 'text' && !args.storageId) continue; // can't upload from here
+        if (type === 'text' && !args.text) continue; // nothing to save
         try {
-          // eslint-disable-next-line no-await-in-loop
-          await (appendEntryCloud as any)({
-            kind: entry.kind,
-            text: entry.text,
-            attachment: entry.attachment,
-            forwardedFrom: entry.forwardedFrom,
-            clientCreationTime: entry._creationTime,
-          });
+          await (diarySendCloud as any)(args);
           // iter-397: mark (NOT delete) the local copy on success. Deleting it
           // caused permanent loss when the cloud append didn't durably persist.
           // The display layer de-dupes the kept copy against the cloud version.
-          // eslint-disable-next-line no-await-in-loop
           await markDiaryEntryFlushed(myUserId, entry._id);
         } catch {
           // Best-effort — leave the orphan unmarked; next session retries.
@@ -564,7 +567,7 @@ export default function DiaryScreen() {
       }
       setLocalEntries(await readDiaryEntries(myUserId));
     })();
-  }, [cloudReady, cloudEntries, localEntries, myUserId, appendEntryCloud]);
+  }, [cloudReady, cloudEntries, localEntries, myUserId, diarySendCloud]);
 
   // ─── Display entries: cloud + any local not yet on cloud ──────────
   const allEntries = useMemo<DiaryEntry[]>(() => {
@@ -624,23 +627,20 @@ export default function DiaryScreen() {
     const text = draft.trim();
     if (!text || !myUserId) return;
     setDraft('');
-    // Try cloud first; fall back to local. iter-223: existence guard
-    // — never enqueue a mutation to a non-existent backend function.
-    if (cloudReady && appendEntryAvailable && typeof appendEntryCloud === 'function') {
+    // Canonical shared-backend write: api.diary.send({ type:'text', text }).
+    // (Previously this called appendEntry with { kind, attachment, forwardedFrom }
+    // — fields the backend validator rejects, so every write silently fell back
+    // to local-only storage and never reached the shared diaryMessages table.)
+    if (typeof diarySendCloud === 'function') {
       try {
-        await (appendEntryCloud as any)({
-          kind: 'text',
-          text,
-          attachment: null,
-          forwardedFrom: null,
-        });
+        await (diarySendCloud as any)({ type: 'text', text });
         // Cloud query will refresh reactively.
         requestAnimationFrame(() => {
           try { listRef.current?.scrollToEnd({ animated: true }); } catch {}
         });
         return;
       } catch {
-        // Fall through to local.
+        // Fall through to local so the note is never lost; the flush retries.
       }
     }
     const entry = await appendDiaryEntry(myUserId, { kind: 'text', text });
@@ -648,7 +648,7 @@ export default function DiaryScreen() {
     requestAnimationFrame(() => {
       try { listRef.current?.scrollToEnd({ animated: true }); } catch {}
     });
-  }, [draft, myUserId, cloudReady, appendEntryCloud]);
+  }, [draft, myUserId, diarySendCloud]);
 
   // ─── Delete one entry ─────────────────────────────────────────
   const handleDelete = useCallback(async (entryId: string) => {
