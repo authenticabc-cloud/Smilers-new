@@ -100,6 +100,26 @@ function useMarkConsumedOnce(msg: any, isMine: boolean): () => void {
 let CURRENT_SOUND: AudioPlayer | null = null;
 let CURRENT_STOP: (() => void) | null = null;
 
+// Auto-advance registry — every mounted voice message registers its play()
+// function keyed by message id + creation time. When one finishes, we start
+// the next voice message (by chronological order) so they chain like WhatsApp.
+type VoiceReg = { id: string; creationTime: number; play: () => void };
+const VOICE_REGISTRY = new Map<string, VoiceReg>();
+function playNextVoiceAfter(creationTime: number, currentId: string): void {
+  let best: VoiceReg | null = null;
+  for (const reg of VOICE_REGISTRY.values()) {
+    if (reg.id === currentId) continue;
+    if (reg.creationTime > creationTime && (!best || reg.creationTime < best.creationTime)) {
+      best = reg;
+    }
+  }
+  if (best) {
+    try {
+      best.play();
+    } catch {}
+  }
+}
+
 function fmtDur(sec: number): string {
   const seconds = Math.max(0, Math.floor(sec));
   const minutes = Math.floor(seconds / 60);
@@ -1576,6 +1596,10 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
   const statusListenerRef = useRef<{ remove: () => void } | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [posSec, setPosSec] = useState(0);
+  // Playback speed: cycles 1x → 1.5x → 2x. Persisted only for this bubble.
+  const [rate, setRate] = useState(1);
+  // Stable handle the auto-advance registry calls to start THIS note.
+  const startPlaybackRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     return () => {
@@ -1619,6 +1643,8 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
     const newPlayer = createAudioPlayer({ uri: src } as AudioSource);
     try {
       newPlayer.volume = 1.0;
+      newPlayer.shouldCorrectPitch = true;
+      newPlayer.playbackRate = rate;
     } catch {}
     const listener = newPlayer.addListener('playbackStatusUpdate', (status: any) => {
       if (!status) return;
@@ -1650,6 +1676,8 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
           CURRENT_STOP = null;
         }
         stopPlaybackNotification();
+        // WhatsApp-style: chain to the next voice message once this one ends.
+        playNextVoiceAfter(msg?._creationTime || 0, String(msg?._id || ''));
       }
     });
     statusListenerRef.current = listener;
@@ -1657,51 +1685,96 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
     return newPlayer;
   };
 
-  const toggle = async () => {
+  // Start (or restart) playback of THIS note. Used by the play button and by
+  // the auto-advance chain when the previous note finishes.
+  const startPlayback = async () => {
     if (!src) return;
     try {
       markConsumed();
       stopOtherSounds();
       const player = ensurePlayer();
       if (!player) return;
-      if (player.playing) {
+      // Configure the iOS audio session for PLAYBACK *before* starting, and
+      // await it. A prior recording (chat composer, diary, calls, etc.) leaves
+      // the session in PlayAndRecord which routes to the earpiece at near-zero
+      // volume — the "taps but doesn't play" symptom. Reapplying first fixes it.
+      await ensureVoicePlaybackMode();
+      // If we reached the end, rewind before playing again.
+      try {
+        const dur = typeof player.duration === 'number' ? player.duration : 0;
+        const cur = typeof player.currentTime === 'number' ? player.currentTime : 0;
+        if (dur > 0 && cur >= dur - 0.05) {
+          if (typeof player.seekTo === 'function') {
+            await player.seekTo(0);
+          } else {
+            player.currentTime = 0;
+          }
+        }
+      } catch {}
+      try {
+        player.shouldCorrectPitch = true;
+        player.playbackRate = rate;
+      } catch {}
+      try {
+        player.play();
+      } catch {}
+      CURRENT_SOUND = player;
+      CURRENT_STOP = () => setIsPlaying(false);
+      startPlaybackNotification('Voice message');
+      setPlaybackStopHandler(() => {
         try {
           player.pause();
         } catch {}
-        stopPlaybackNotification();
-      } else {
-        // Configure the iOS audio session for PLAYBACK *before* starting, and
-        // await it. A prior recording (chat composer, diary, calls, etc.) leaves
-        // the session in PlayAndRecord which routes to the earpiece at near-zero
-        // volume — the "taps but doesn't play" symptom. Reapplying first fixes it.
-        await ensureVoicePlaybackMode();
-        // If we reached the end, rewind before playing again.
-        try {
-          const dur = typeof player.duration === 'number' ? player.duration : 0;
-          const cur = typeof player.currentTime === 'number' ? player.currentTime : 0;
-          if (dur > 0 && cur >= dur - 0.05) {
-            if (typeof player.seekTo === 'function') {
-              await player.seekTo(0);
-            } else {
-              player.currentTime = 0;
-            }
-          }
-        } catch {}
-        try {
-          player.play();
-        } catch {}
-        CURRENT_SOUND = player;
-        CURRENT_STOP = () => setIsPlaying(false);
-        startPlaybackNotification('Voice message');
-        setPlaybackStopHandler(() => {
-          try {
-            player.pause();
-          } catch {}
-          setIsPlaying(false);
-        });
-      }
+        setIsPlaying(false);
+      });
     } catch {}
   };
+  startPlaybackRef.current = () => {
+    void startPlayback();
+  };
+
+  // Register/unregister with the auto-advance chain.
+  useEffect(() => {
+    const id = String(msg?._id || '');
+    if (!id) return undefined;
+    VOICE_REGISTRY.set(id, {
+      id,
+      creationTime: typeof msg?._creationTime === 'number' ? msg._creationTime : 0,
+      play: () => startPlaybackRef.current?.(),
+    });
+    return () => {
+      VOICE_REGISTRY.delete(id);
+    };
+  }, [msg?._id, msg?._creationTime]);
+
+  const toggle = async () => {
+    if (!src) return;
+    const player = ensurePlayer();
+    if (player && player.playing) {
+      try {
+        player.pause();
+      } catch {}
+      stopPlaybackNotification();
+      return;
+    }
+    await startPlayback();
+  };
+
+  // Cycle playback speed 1x → 1.5x → 2x and apply live if a player exists.
+  const cycleRate = () => {
+    setRate((prev) => {
+      const next = prev >= 2 ? 1 : prev === 1 ? 1.5 : 2;
+      const player = playerRef.current;
+      if (player) {
+        try {
+          player.shouldCorrectPitch = true;
+          player.playbackRate = next;
+        } catch {}
+      }
+      return next;
+    });
+  };
+
 
   // Seek to an absolute position (seconds). Works before, during, or after
   // playback; creates the player lazily if needed and keeps the current
@@ -1786,6 +1859,14 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
           <SeekBar positionSec={posSec} durationSec={totalSec} onSeek={seekToSec} testIDPrefix="voice" />
         </View>
         <Text style={styles.voiceDuration}>{fmtDur(remaining)}</Text>
+        <TouchableOpacity
+          onPress={cycleRate}
+          style={styles.voiceRateBtn}
+          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+          testID="voice-rate"
+        >
+          <Text style={styles.voiceRateText}>{rate === 1 ? '1x' : rate === 1.5 ? '1.5x' : '2x'}</Text>
+        </TouchableOpacity>
       </View>
       <SkipButtons
         onRewind={() => seekToSec(posSec - 5)}
@@ -2762,6 +2843,8 @@ const styles = StyleSheet.create({
   voiceBar: { flex: 1, height: 4, borderRadius: 2, backgroundColor: 'rgba(0,0,0,0.12)', overflow: 'hidden' },
   voiceProgress: { height: '100%', backgroundColor: Colors.primary },
   voiceDuration: { fontSize: 11, color: Colors.textSecondary, fontVariant: ['tabular-nums'], minWidth: 30 },
+  voiceRateBtn: { marginLeft: 6, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 11, backgroundColor: Colors.primaryLight, alignItems: 'center', justifyContent: 'center', minWidth: 32 },
+  voiceRateText: { fontSize: 11, fontWeight: '800', color: Colors.primary, fontVariant: ['tabular-nums'] },
   pollBody: { paddingVertical: 2, minWidth: 220, gap: 6 },
   pollHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   pollLabel: { fontSize: 10, fontWeight: FontWeight.bold, color: Colors.primary, letterSpacing: 1 },
