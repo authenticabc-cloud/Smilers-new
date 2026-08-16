@@ -8,8 +8,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
+import { LinearGradient } from 'expo-linear-gradient';
 import { api } from '../../src/convexApi';
-import Header from '../../src/components/Header';
 import { Colors } from '../../src/theme';
 import AudiencePicker, { AudienceSelection } from '../../src/components/shareOnce/AudiencePicker';
 
@@ -70,7 +70,20 @@ export default function ShareOnceHome() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <Header title="Share Once" showBack onBack={() => router.back()} />
+      <LinearGradient
+        colors={['#7C3AED', '#C026D3']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.gradientHeader}
+      >
+        <TouchableOpacity onPress={() => router.back()} hitSlop={12} style={styles.gradientBack} testID="share-once-back">
+          <Ionicons name="arrow-back" size={24} color="#fff" />
+        </TouchableOpacity>
+        <View style={styles.gradientTitleWrap}>
+          <Text style={styles.gradientTitle}>Share Once</Text>
+          <Text style={styles.gradientSubtitle}>Post once, choose exactly who can view</Text>
+        </View>
+      </LinearGradient>
 
       {pending && pending.length > 0 ? (
         <TouchableOpacity style={styles.reqBanner} onPress={() => handleReq(pending[0])} testID="share-once-delreq">
@@ -177,6 +190,11 @@ const styles = StyleSheet.create({
   tabActive: { backgroundColor: Colors.primary },
   tabText: { fontSize: 14, fontWeight: '700', color: Colors.textPrimary },
   tabTextActive: { color: '#fff' },
+  gradientHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 14, paddingBottom: 18, gap: 12 },
+  gradientBack: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
+  gradientTitleWrap: { flex: 1 },
+  gradientTitle: { fontSize: 24, fontWeight: '800', color: '#fff' },
+  gradientSubtitle: { fontSize: 13, color: 'rgba(255,255,255,0.9)', marginTop: 2 },
   filterRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingBottom: 6 },
   filterChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 14, paddingVertical: 6, borderRadius: 16, backgroundColor: 'rgba(0,0,0,0.05)' },
   filterChipActive: { backgroundColor: '#b26a00' },

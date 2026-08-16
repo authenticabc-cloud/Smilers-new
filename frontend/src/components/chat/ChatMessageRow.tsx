@@ -1,9 +1,9 @@
 import React from 'react';
 import { Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { CallPill } from './CallPill';
 import { SwipeToReply } from './SwipeToReply';
-import ShareOnceInvitePreview from './ShareOnceInvitePreview';
 import MediaBubble from '../MediaBubble';
 import { startCall } from '../../lib/twilio/startCall';
 import { formatChatDayChip, isSameCalendarDay } from '../../lib/chatFormat';
@@ -174,8 +174,9 @@ function ChatMessageRowBase({
   // long-press context menu (copy/forward/react/…), multi-select, and reaction chips.
   if (item?.type === 'shareOnceInvite' && item?.shareOnceToken) {
     const ct = String(item.shareOnceContentType || 'text');
-    const icon =
-      ct === 'photo' ? 'image' : ct === 'video' ? 'videocam' : ct === 'audio' || ct === 'voice' ? 'musical-notes' : ct === 'file' ? 'document' : ct === 'contact' ? 'person' : 'share-social';
+    const emoji = ct === 'photo' ? '📷' : ct === 'video' ? '🎥' : ct === 'audio' || ct === 'voice' ? '🎙️' : ct === 'file' ? '📄' : ct === 'contact' ? '👤' : '💬';
+    const label = ct === 'photo' ? 'photo' : ct === 'video' ? 'video' : ct === 'audio' || ct === 'voice' ? 'voice' : ct === 'file' ? 'file' : ct === 'contact' ? 'contact' : '';
+    const inviteText = item.text || `This is a ${label ? `${label} ` : ''}message — tap to view`;
     const isSelected = multiSelectIds ? multiSelectIds.includes(String(item._id)) : false;
     // Aggregate reactions the same way MediaBubble does.
     const reactionMap = new Map<string, { emoji: string; count: number; mine: boolean }>();
@@ -220,17 +221,24 @@ function ChatMessageRowBase({
                     onLongPressMessage(item);
                   }
             }
-            style={[styles.shareOnceCard, isSelected ? { borderColor: '#E9B53B', backgroundColor: 'rgba(233,181,59,0.12)' } : null]}
+            style={styles.shareOnceCardWrap}
             testID={`share-once-invite-${item._id}`}
           >
-            <ShareOnceInvitePreview contentType={ct} shareToken={String(item.shareOnceToken)} icon={icon} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.shareOnceTitle} numberOfLines={2}>
-                {item.text || 'Shared a message with you — tap to view'}
-              </Text>
-              <Text style={styles.shareOnceHint}>Tap to view</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="#9aa0a6" />
+            <LinearGradient
+              colors={['#12A594', '#0C7C6F']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={[styles.shareOnceGradient, isSelected ? styles.shareOnceGradientSel : null]}
+            >
+              <View style={styles.shareOnceEyeCircle}>
+                <Ionicons name="eye" size={20} color="#fff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.shareOnceTitleWhite} numberOfLines={4}>
+                  {emoji} {inviteText}
+                </Text>
+              </View>
+            </LinearGradient>
           </TouchableOpacity>
           {reactionSummary.length > 0 ? (
             <View style={styles.shareOnceReactionsRow}>

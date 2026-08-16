@@ -19,11 +19,11 @@ import {
   View,
 } from 'react-native';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import Avatar from '../Avatar';
 import {
   findSavedContactDisplayName,
   getConversationDisplayName,
   getResolvedConversationDisplayName,
-  getDisplayInitials,
 } from '../../lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../lib/deviceContactIndex';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '../../theme';
@@ -163,6 +163,18 @@ export function ForwardPickerSheet({
                 preview = 'Open conversation';
               }
               const isSel = selected.has(item._id);
+              const photoUri =
+                item?.avatar ||
+                item?.avatarUrl ||
+                item?.photo ||
+                item?.icon ||
+                item?.groupIcon ||
+                item?.profilePicture ||
+                item?.otherUser?.avatar ||
+                item?.otherUser?.profilePicture ||
+                item?.otherParticipant?.avatar ||
+                item?.otherParticipant?.profilePicture ||
+                undefined;
               return (
                 <TouchableOpacity
                   style={[styles.forwardRow, isSel && styles.forwardRowSel]}
@@ -170,9 +182,7 @@ export function ForwardPickerSheet({
                   disabled={forwarding}
                   testID={`forward-target-${item._id}`}
                 >
-                  <View style={styles.forwardAvatar}>
-                    <Text style={styles.forwardAvatarText}>{getDisplayInitials(displayName, 1)}</Text>
-                  </View>
+                  <Avatar name={displayName} size={44} uri={photoUri} />
                   <View style={styles.flexOne}>
                     <Text style={styles.forwardName}>{displayName}</Text>
                     <Text style={styles.forwardSub} numberOfLines={1}>{preview}</Text>

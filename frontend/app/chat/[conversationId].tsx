@@ -1999,7 +1999,12 @@ export default function ChatScreen() {
     !canQueryConversation || (canQueryConversation && conversation === null);
   const isConversationAvailable = !!effectiveConversation;
   const composerTextColor = resolveDraftColor(draftColor) || Colors.textPrimary;
-  const showComposerFormatting = showComposerFormattingPinned || composerFocused || text.trim().length > 0 || showColorPicker;
+  // iter: the bold/list/colour formatting rows used to auto-expand on focus or
+  // as soon as any text was typed, which — with the keyboard up — pushed the
+  // input (and the text being typed) off-screen. They're now collapsed by
+  // default and revealed only via the "Aa" toggle (or when the colour picker is
+  // open). The GIF/mic/voice-typing action row stays always visible.
+  const showComposerFormatting = showComposerFormattingPinned || showColorPicker;
   const hasTextSelection = pendingImages.length === 0 && composerSelection.end > composerSelection.start;
   // Live preview of the formatted message (only when rich-text tags exist).
   const formattedPreviewSegments = useMemo(() => {
@@ -5179,6 +5184,14 @@ export default function ChatScreen() {
 
           {!isRecording ? (
             <View style={styles.webToolbarRow} testID="composer-web-toolbar-row">
+              <TouchableOpacity
+                style={[styles.webToolBtn, showComposerFormattingPinned ? styles.webToolBtnActive : null]}
+                onPress={() => setShowComposerFormattingPinned((v) => !v)}
+                disabled={!isConversationAvailable || uploading}
+                testID="composer-toolbar-format-toggle"
+              >
+                <Text style={[styles.webToolGifLabel, showComposerFormattingPinned ? styles.webToolFormatActive : null]}>Aa</Text>
+              </TouchableOpacity>
               <TouchableOpacity
                 style={styles.webToolBtn}
                 onPress={() => setShowAttachSheet(true)}

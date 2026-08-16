@@ -45,6 +45,7 @@ import FilterIndicator from '../../src/components/FilterIndicator';
 import GroupInCommonRow from '../../src/components/user-profile/GroupInCommonRow';
 import MediaGrid, { MediaTabBtn } from '../../src/components/user-profile/MediaGrid';
 import MediaGalleryModal, { type GalleryItem } from '../../src/components/chat/MediaGalleryModal';
+import AudioPreviewModal from '../../src/components/user-profile/AudioPreviewModal';
 import ZoomableImage from '../../src/components/ZoomableImage';
 import { useConversationE2EE } from '../../src/hooks/useConversationE2EE';
 import { shareMessage } from '../../src/lib/messageMedia';
@@ -256,6 +257,17 @@ export default function UserProfileScreen() {
   const handleMediaPreview = useCallback(
     (item: any) => {
       if (item?.type === 'file' || item?.type === 'document') {
+        // Audio files (m4a/mp3/…) should PLAY, not open as a document.
+        const mime = String(item?.mimeType || '').toLowerCase();
+        const name = String(item?.fileName || '').toLowerCase();
+        const isAudio =
+          mime.startsWith('audio/') ||
+          mime === 'application/mpeg' ||
+          /\.(m4a|mp3|aac|wav|ogg|opus|caf|flac|mpeg)$/.test(name);
+        if (isAudio) {
+          setAudioPreviewMsg(item);
+          return;
+        }
         shareMessage({ client: convex as any, message: item }).catch(() => {
           /* user cancelled or share unavailable */
         });
@@ -265,6 +277,8 @@ export default function UserProfileScreen() {
     },
     [convex],
   );
+  // Audio file being previewed (played) from the profile Files list.
+  const [audioPreviewMsg, setAudioPreviewMsg] = useState<any | null>(null);
   // iter-226: tap the profile photo → enlarge; save respects the owner's policy.
   const [avatarViewerOpen, setAvatarViewerOpen] = useState(false);
   const [savingPhoto, setSavingPhoto] = useState(false);
@@ -1204,6 +1218,12 @@ export default function UserProfileScreen() {
         e2eeStatus={e2eeStatus}
         openMsgId={galleryOpenId}
         onRequestClose={() => setGalleryOpenId(null)}
+      />
+      <AudioPreviewModal
+        visible={!!audioPreviewMsg}
+        message={audioPreviewMsg}
+        e2eeStatus={e2eeStatus}
+        onClose={() => setAudioPreviewMsg(null)}
       />
     </View>
   );

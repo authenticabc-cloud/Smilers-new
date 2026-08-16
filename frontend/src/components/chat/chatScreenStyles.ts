@@ -363,6 +363,26 @@ export const styles = StyleSheet.create({
   },
   shareOnceTitle: { fontSize: 14, fontWeight: '700', color: '#1c1c1e' },
   shareOnceHint: { fontSize: 12, color: '#E9B53B', fontWeight: '700', marginTop: 2 },
+  shareOnceCardWrap: { alignSelf: 'center', width: '86%', marginVertical: 6 },
+  shareOnceGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  shareOnceGradientSel: { borderColor: '#E9B53B' },
+  shareOnceEyeCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#C026D3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shareOnceTitleWhite: { fontSize: 15, fontWeight: '700', color: '#fff', lineHeight: 21 },
   shareOnceThumbWrap: { width: 44, height: 44, borderRadius: 10, overflow: 'hidden', backgroundColor: '#000' },
   shareOnceThumb: { width: 44, height: 44 },
   shareOnceThumbPlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.25)' },
@@ -808,6 +828,13 @@ export const styles = StyleSheet.create({
   },
   webToolBtnDisabled: {
     opacity: 0.45,
+  },
+  webToolBtnActive: {
+    backgroundColor: Colors.primaryLight,
+    borderColor: Colors.primary,
+  },
+  webToolFormatActive: {
+    color: Colors.primary,
   },
   webToolGifLabel: {
     fontSize: 11,
