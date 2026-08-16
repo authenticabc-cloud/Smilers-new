@@ -152,6 +152,12 @@ export default function ShareOnceCompose() {
         await recorder.stop();
         uri = recorder.uri;
       } catch {}
+      // Restore the iOS audio session to PLAYBACK after recording, otherwise it
+      // stays in PlayAndRecord and every later playback (including this screen's
+      // own play-back preview) is near-silent on device.
+      try {
+        await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+      } catch {}
       if (action === 'cancel' || !uri) return;
       // Copy out of the volatile cache into a stable path before upload.
       let playable = uri;

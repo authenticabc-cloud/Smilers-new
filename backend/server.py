@@ -4701,6 +4701,17 @@ async def health_readiness():
         # actually live on the relay the app talks to. Bump `build` on each fix.
         "push_pipeline": {
             "build": "iter-fork-call-dedupe-6s+ios-msg-noalert-v3",
+            # iOS delivery transport. iOS registers a RAW APNs token, which
+            # Firebase rejects ("not a valid FCM registration token"), so iOS
+            # pushes go straight to Apple once the .p8 key is configured.
+            # Until then apns_configured() is False and iOS silently falls back
+            # to the failing FCM path — which is exactly what this field makes
+            # visible, so nobody has to send a test message and read error logs
+            # to find out whether the credentials actually reached the app.
+            "ios_transport": "apns-direct" if apns_configured() else "fcm-fallback",
+            "apns_configured": apns_configured(),
+            "apns_env": "sandbox" if os.environ.get("APNS_USE_SANDBOX") == "1" else "production",
+            "apns_topic": APNS_TOPIC,
             "message_data_only": True,
             "message_skips_emergent_relay_for_native": True,
             "call_dedupe_window_seconds": 6,

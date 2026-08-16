@@ -17,6 +17,7 @@ import { api } from '../../src/convexApi';
 import Header from '../../src/components/Header';
 import { Colors } from '../../src/theme';
 import AudiencePicker, { AudienceSelection } from '../../src/components/shareOnce/AudiencePicker';
+import { ensureVoicePlaybackMode } from '../../src/lib/audio/voicePlaybackMode';
 import ZoomableImage from '../../src/components/ZoomableImage';
 
 export default function ShareOnceView() {
@@ -143,7 +144,7 @@ export default function ShareOnceView() {
             ) : post.type === 'video' && post.mediaUrl ? (
               <VideoView player={player} style={styles.media} nativeControls allowsFullscreen />
             ) : (post.type === 'audio' || post.type === 'voice') && post.mediaUrl ? (
-              <TouchableOpacity style={styles.audioBtn} onPress={() => (audioStatus.isPlaying ? audioPlayer.pause() : audioPlayer.play())}>
+              <TouchableOpacity style={styles.audioBtn} onPress={async () => { if (audioStatus.isPlaying) { audioPlayer.pause(); } else { await ensureVoicePlaybackMode(); audioPlayer.play(); } }}>
                 <Ionicons name={audioStatus.isPlaying ? 'pause-circle' : 'play-circle'} size={44} color={Colors.primary} />
                 <Text style={styles.audioText}>{post.fileName || 'Audio'}</Text>
               </TouchableOpacity>

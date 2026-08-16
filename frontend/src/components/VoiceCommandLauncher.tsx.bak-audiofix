@@ -18,7 +18,6 @@ import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter, usePathname } from 'expo-router';
 import { useConvex, useMutation, useQuery } from 'convex/react';
 import { useAudioRecorder, useAudioRecorderState, setAudioModeAsync } from 'expo-audio';
-import { ensureVoicePlaybackMode } from '../lib/audio/voicePlaybackMode';
 import { recordingActivity } from '../lib/recordingActivity';
 import { VOICE_RECORDING_OPTIONS } from '../lib/audioRecording';
 import { api } from '../convexApi';
@@ -65,35 +64,7 @@ interface VoiceCommandSheetProps {
   onClose: () => void;
 }
 
-function VoiceCommandSheetInner({ visible, onClose: onCloseProp }: VoiceCommandSheetProps) {
-  // ── AUDIO SESSION RESTORE (2026-08-16) ──────────────────────────────────
-  // Starting voice command puts the iOS audio session into PlayAndRecord:
-  // this component sets `allowsRecording: true` below, and
-  // expo-speech-recognition's ExpoSpeechRecognizer.swift additionally forces
-  //     setCategory(.playAndRecord, mode: .measurement, …); setActive(true)
-  // and never restores it — there is no setActive(false) anywhere in that file.
-  //
-  // `.measurement` mode disables all iOS audio processing and leaves output
-  // barely audible. Nothing ever put the session back, so after ONE voice
-  // command every later playback in the whole app went silent — voice notes,
-  // devotionals, everything — until the app was restarted. Measured on device:
-  // 7/7 session changes were PlayAndRecord+Measurement, `Playback` never once.
-  //
-  // Wrapping onClose restores playback mode on all six close paths without
-  // touching their call sites; the effect below covers being closed by the
-  // parent or unmounted mid-session.
-  const onClose = useCallback(() => {
-    void ensureVoicePlaybackMode();
-    onCloseProp();
-  }, [onCloseProp]);
-
-  useEffect(() => {
-    if (!visible) void ensureVoicePlaybackMode();
-    return () => {
-      void ensureVoicePlaybackMode();
-    };
-  }, [visible]);
-
+function VoiceCommandSheetInner({ visible, onClose }: VoiceCommandSheetProps) {
   const router = useRouter();
   const convex = useConvex();
   const deviceIndex = useDeviceContactIndex();
