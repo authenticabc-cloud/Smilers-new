@@ -187,7 +187,14 @@ export default function ShareOnceView() {
                 {viewers.length === 0 ? (
                   <Text style={styles.viewerMeta}>No one can view this yet.</Text>
                 ) : (
-                  viewers.map((v) => (
+                  [...viewers]
+                    .sort((a, b) => {
+                      // Viewed first (most recent at top), then not-yet-viewed.
+                      if (!!a.viewedAt !== !!b.viewedAt) return a.viewedAt ? -1 : 1;
+                      if (a.viewedAt && b.viewedAt) return new Date(b.viewedAt).getTime() - new Date(a.viewedAt).getTime();
+                      return nameForViewer(a).localeCompare(nameForViewer(b));
+                    })
+                    .map((v) => (
                     <View key={v.viewerId} style={styles.viewerRow}>
                       <Avatar name={nameForViewer(v)} size={36} uri={v.avatar || undefined} />
                       <View style={{ flex: 1 }}>
