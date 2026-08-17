@@ -51,6 +51,8 @@ export default function ShareOnceHome() {
   });
   // Quick filter within My posts: show everything or only unshared drafts.
   const [mineFilter, setMineFilter] = useState<'all' | 'drafts'>('all');
+  // Collapsed sender groups on the Received tab (keyed by authorId).
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
   const isDraft = (p: any) => (p?.viewerCount ?? 0) === 0 && !p?.isDeleted;
   const draftCount = (mine || []).filter(isDraft).length;
@@ -74,11 +76,11 @@ export default function ShareOnceHome() {
     const out: any[] = [];
     for (const [key, posts] of entries) {
       posts.sort((x, y) => (y._creationTime || 0) - (x._creationTime || 0));
-      out.push({ __header: true, _id: `hdr-${key}`, title: resolveAuthorName(posts[0]), count: posts.length });
-      out.push(...posts);
+      out.push({ __header: true, _id: `hdr-${key}`, authorKey: key, title: resolveAuthorName(posts[0]), count: posts.length });
+      if (!collapsed[key]) out.push(...posts);
     }
     return out;
-  }, [received, myContacts, deviceIndex]);
+  }, [received, myContacts, deviceIndex, collapsed]);
 
   const data =
     tab === 'mine'
@@ -171,10 +173,15 @@ export default function ShareOnceHome() {
         keyExtractor={(i) => i._id}
         renderItem={({ item }) => (
           item.__header ? (
-            <View style={styles.sectionHeader}>
+            <TouchableOpacity
+              style={styles.sectionHeader}
+              onPress={() => setCollapsed((prev) => ({ ...prev, [item.authorKey]: !prev[item.authorKey] }))}
+              testID={`share-once-sender-header-${item.authorKey}`}
+            >
+              <Ionicons name={collapsed[item.authorKey] ? 'chevron-forward' : 'chevron-down'} size={16} color={Colors.textSecondary} />
               <Text style={styles.sectionHeaderText} numberOfLines={1}>{item.title}</Text>
-              {item.count > 1 ? <Text style={styles.sectionHeaderCount}>{item.count}</Text> : null}
-            </View>
+              <Text style={styles.sectionHeaderCount}>{item.count}</Text>
+            </TouchableOpacity>
           ) : (
           <TouchableOpacity
             style={styles.row}
