@@ -1711,6 +1711,11 @@ export default function ChatScreen() {
     let attempts = 0;
     let timer: ReturnType<typeof setTimeout>;
     const tick = () => {
+      // Reveal path already landed us at the bottom and took ownership.
+      if (initialScrollDoneRef.current) {
+        setListReady(true);
+        return;
+      }
       // Stop fighting the user the moment they start scrolling themselves.
       if (isUserScrollingRef.current) {
         initialScrollDoneRef.current = true;
@@ -4810,12 +4815,17 @@ export default function ChatScreen() {
                 listRef.current?.scrollToEnd({ animated: false });
                 // Reveal once the content stops growing (debounced): the last
                 // scrollToEnd has landed on the newest message, so we can show
-                // the list without the user ever seeing it scroll.
+                // the list without the user ever seeing it scroll. We also mark
+                // the initial scroll DONE here so the near-bottom auto-snap
+                // (below) deterministically takes over and keeps the view
+                // pinned to the newest message as async media rows finish
+                // loading — instead of the timed retry loop racing the reveal.
                 if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
                 revealTimerRef.current = setTimeout(() => {
                   listRef.current?.scrollToEnd({ animated: false });
+                  initialScrollDoneRef.current = true;
                   setListReady(true);
-                }, 220);
+                }, 150);
                 return;
               }
               // iter-274: afterwards, only snap when the user is NEAR the

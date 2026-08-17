@@ -1,5 +1,17 @@
 # Smilers Mobile App — PRD
 
+## iter-498 (Jun 2026): Receive-once fileHash for shared audio files (native) + land-on-latest-message hardening
+
+Web team published two contracts (`native-receive-once-contract.json` v1.1, `native-open-chat-latest-message-spec.json` v1.0) — both are NATIVE fixes, no backend work.
+
+**1. Receive-once fileHash on shared audio files** — backend confirmed the duplicate `.opus/.ogg` copies arrived with `type='file'` and NO `fileHash`, so dedup had nothing to match. ROOT CAUSE: the OS **share-intent** send path (`src/lib/sendSharedPayload.ts` → `sendSharedPayloadToConversation`) uploaded + sent files WITHOUT a `fileHash` — the in-chat document picker (`app/chat/[conversationId].tsx`) already hashed, but files shared INTO Smilers from the device Files app went through this un-hashed path. FIX: compute `computeFileHashFromUri(file.uri)` on the PLAINTEXT bytes before upload and attach `...(fileHash ? { fileHash } : {})` to `api.messages.send` for every shared file/image/video (recordings never route through here, so audio FILES are covered while in-app voice notes stay unhashed as required). Forwards already preserve `msg.fileHash`.
+
+**2. Land instantly on the latest message** — `app/chat/[conversationId].tsx` (non-inverted FlatList, opacity-masked until ready). Made the reveal deterministic: `onContentSizeChange` now force-snaps to bottom until content settles, then (150ms debounce, was 220) does a final `scrollToEnd({animated:false})`, sets `initialScrollDoneRef=true`, and reveals — handing off to the near-bottom auto-snap (isNearBottomRef defaults true) so the view stays pinned to the newest message while async media rows finish loading. The timed fallback tick loop now bails as soon as the reveal takes ownership (no more race that could reveal mid-scroll / land in the middle). No animated initial scroll. 
+
+Lint: no new errors. App boots to Sign In. ⚠️ Both native — verify on a device build: (a) share the same audio 3× A→B, copies #2/#3 now carry the same fileHash and hide on B; (b) open chats repeatedly → newest message shows immediately, no flash/scroll.
+
+
+
 ## iter-497 (Jun 2026): Background media auto-download on arrival + silent "No chats yet" self-heal
 
 **A. Background/instant media auto-download (app closed or alive)**

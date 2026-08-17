@@ -32,6 +32,7 @@
 import type { ConvexReactClient } from 'convex/react';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { uploadFile } from './uploadFile';
+import { computeFileHashFromUri } from './fileHash';
 import { scanMessage as scanMessageDeep } from './messageSecurityScanner';
 import { MAX_UPLOAD_BYTES } from './dataFriendlyDefaults';
 
@@ -169,6 +170,13 @@ export async function sendSharedPayloadToConversation(
     }
 
     try {
+      // "Receive once" dedup fingerprint — SHA-256 of the file's PLAINTEXT
+      // bytes, computed BEFORE upload/encryption. Required so audio/documents
+      // shared from the device Files app (type='file') can be de-duplicated on
+      // the receiver, exactly like the in-chat picker already does. Recordings
+      // (voice notes) are never routed through here, so this is safe for all
+      // shared files including .opus/.ogg/.m4a audio.
+      const fileHash = await computeFileHashFromUri(file.uri);
       const storageId = await uploadFile(convex, file.uri, file.mimeType, undefined, {
         onProgress: opts?.onFileProgress
           ? (fraction) => opts.onFileProgress!(fileIndex, fileCount, fraction)
@@ -181,6 +189,7 @@ export async function sendSharedPayloadToConversation(
         type: sendType,
         storageId,
         mimeType: file.mimeType,
+        ...(fileHash ? { fileHash } : {}),
       };
       // image type doesn't need name/size; file type does for nice display.
       if (sendType === 'file') {
