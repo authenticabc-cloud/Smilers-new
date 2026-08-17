@@ -189,6 +189,9 @@ export default function ShareOnceHome() {
                 </TouchableOpacity>
               ) : null}
             </View>
+            {tab === 'received' && (item.type === 'image' || item.type === 'video') && item.mediaUrl && !item.isDeleted ? (
+              <ShareOncePostThumb type={item.type} mediaUrl={item.mediaUrl} icon={iconFor(item.type)} onPress={() => setPreview(item)} />
+            ) : null}
             {tab === 'received' && !item.viewed ? <View style={styles.dot} /> : null}
             {tab === 'mine' && (item.viewerCount ?? 0) > 0 && !item.isDeleted ? (
               <View style={styles.seenBadge} testID={`share-once-seen-${item._id}`}>
