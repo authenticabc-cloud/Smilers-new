@@ -53,6 +53,9 @@ export default function ShareOnceHome() {
   const [mineFilter, setMineFilter] = useState<'all' | 'drafts'>('all');
   // Collapsed sender groups on the Received tab (keyed by authorId).
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // Received filter: all posts, or only unopened ones.
+  const [receivedFilter, setReceivedFilter] = useState<'all' | 'unread'>('all');
+  const unreadReceivedCount = (received || []).filter((p) => !p.viewed).length;
 
   const isDraft = (p: any) => (p?.viewerCount ?? 0) === 0 && !p?.isDeleted;
   const draftCount = (mine || []).filter(isDraft).length;
@@ -62,8 +65,9 @@ export default function ShareOnceHome() {
   // person are easy to scan. A `__header` row is inserted before each group.
   const receivedGrouped = useMemo(() => {
     if (!received) return undefined;
+    const src = receivedFilter === 'unread' ? received.filter((p) => !p.viewed) : received;
     const groups = new Map<string, any[]>();
-    for (const p of received) {
+    for (const p of src) {
       const key = String(p.authorId || 'unknown');
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key)!.push(p);
@@ -84,7 +88,7 @@ export default function ShareOnceHome() {
       if (!collapsed[key]) out.push(...posts);
     }
     return out;
-  }, [received, myContacts, deviceIndex, collapsed]);
+  }, [received, myContacts, deviceIndex, collapsed, receivedFilter]);
 
   const data =
     tab === 'mine'
@@ -171,6 +175,27 @@ export default function ShareOnceHome() {
           </TouchableOpacity>
         </View>
       ) : null}
+      {tab === 'received' ? (
+        <View style={styles.filterRow}>
+          <TouchableOpacity
+            style={[styles.filterChip, receivedFilter === 'all' && styles.filterChipActive]}
+            onPress={() => setReceivedFilter('all')}
+            testID="share-once-received-filter-all"
+          >
+            <Text style={[styles.filterChipText, receivedFilter === 'all' && styles.filterChipTextActive]}>All</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.filterChip, receivedFilter === 'unread' && styles.filterChipActive]}
+            onPress={() => setReceivedFilter('unread')}
+            testID="share-once-received-filter-unread"
+          >
+            <Ionicons name="mail-unread-outline" size={13} color={receivedFilter === 'unread' ? '#fff' : '#b26a00'} />
+            <Text style={[styles.filterChipText, receivedFilter === 'unread' && styles.filterChipTextActive]}>
+              Unread{unreadReceivedCount > 0 ? ` (${unreadReceivedCount})` : ''}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       <FlatList
         data={data || []}
@@ -249,7 +274,7 @@ export default function ShareOnceHome() {
         ListEmptyComponent={
           <View style={styles.empty}>
             <Ionicons name="share-social-outline" size={40} color={Colors.textSecondary} />
-            <Text style={styles.emptyText}>{loading ? 'Loading…' : tab === 'mine' ? (mineFilter === 'drafts' ? 'No drafts — everything you\u2019ve posted is shared.' : 'You haven\u2019t shared anything yet.') : 'Nothing shared with you yet.'}</Text>
+            <Text style={styles.emptyText}>{loading ? 'Loading…' : tab === 'mine' ? (mineFilter === 'drafts' ? 'No drafts — everything you\u2019ve posted is shared.' : 'You haven\u2019t shared anything yet.') : receivedFilter === 'unread' ? 'No unopened posts — you\u2019re all caught up.' : 'Nothing shared with you yet.'}</Text>
           </View>
         }
         contentContainerStyle={data && data.length === 0 ? { flexGrow: 1, justifyContent: 'center' } : { paddingVertical: 8 }}
