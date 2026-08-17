@@ -23,6 +23,7 @@ import {
   subscribeGallery,
 } from '../../lib/chat/mediaGalleryStore';
 import ZoomableImage from '../ZoomableImage';
+import DocScanModal from './DocScanModal';
 import { Colors } from '../../theme';
 
 export type GalleryItem = { msgId: string; type: 'image' | 'video'; msg: any };
@@ -113,6 +114,7 @@ export default function MediaGalleryModal({
   const openId = controlled ? openMsgIdProp : openIdStore;
   const [activeIndex, setActiveIndex] = useState(0);
   const [busy, setBusy] = useState<null | 'download' | 'share'>(null);
+  const [scanOpen, setScanOpen] = useState(false);
   const listRef = useRef<FlatList<GalleryItem>>(null);
   // While any photo is pinch-zoomed we disable horizontal paging so the
   // single-finger drag pans the zoomed image instead of flipping pages.
@@ -164,6 +166,7 @@ export default function MediaGalleryModal({
   );
 
   const current = items[activeIndex];
+  const currentIsImage = current?.type === 'image';
 
   const handleDownload = useCallback(async () => {
     if (busy || !current) return;
@@ -262,8 +265,26 @@ export default function MediaGalleryModal({
             )}
             <Text style={styles.actionLabel}>Share</Text>
           </TouchableOpacity>
+          {currentIsImage ? (
+            <TouchableOpacity
+              style={styles.action}
+              onPress={() => setScanOpen(true)}
+              disabled={!!busy}
+              testID="media-gallery-scan"
+            >
+              <Feather name="file-text" size={22} color={Colors.white} />
+              <Text style={styles.actionLabel}>Scan</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       </View>
+
+      <DocScanModal
+        visible={scanOpen}
+        msg={scanOpen && currentIsImage ? current?.msg : null}
+        e2ee={e2eeStatus}
+        onClose={() => setScanOpen(false)}
+      />
     </Modal>
   );
 }

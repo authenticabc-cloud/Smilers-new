@@ -22,6 +22,7 @@ import { getResolvedDisplayName, getSavedContactRecord } from '../../src/lib/dis
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import Avatar from '../../src/components/Avatar';
 import ZoomableImage from '../../src/components/ZoomableImage';
+import DocScanModal from '../../src/components/chat/DocScanModal';
 
 export default function ShareOnceView() {
   const router = useRouter();
@@ -40,6 +41,7 @@ export default function ShareOnceView() {
   const [fwdOpen, setFwdOpen] = useState(false);
   const [repostOpen, setRepostOpen] = useState(false);
   const [zoomOpen, setZoomOpen] = useState(false);
+  const [scanOpen, setScanOpen] = useState(false);
   const [fwdSel, setFwdSel] = useState<Record<string, boolean>>({});
   const [fwdQ, setFwdQ] = useState('');
 
@@ -220,6 +222,9 @@ export default function ShareOnceView() {
       {!post.isDeleted ? (
         <View style={styles.actionBar}>
           {post.mediaUrl ? <Action icon="download-outline" label="Save" onPress={download} /> : null}
+          {post.type === 'image' && post.mediaUrl ? (
+            <Action icon="scan-outline" label="Scan" onPress={() => setScanOpen(true)} />
+          ) : null}
           <Action icon="arrow-redo-outline" label="Forward" onPress={() => setFwdOpen(true)} />
           <Action icon="share-social-outline" label="Re-post" onPress={() => setRepostOpen(true)} />
         </View>
@@ -252,6 +257,12 @@ export default function ShareOnceView() {
       ) : null}
 
       <AudiencePicker visible={repostOpen} onClose={() => setRepostOpen(false)} onConfirm={confirmRepost} confirmLabel="Re-post" />
+
+      <DocScanModal
+        visible={scanOpen}
+        imageUri={scanOpen ? post.mediaUrl : null}
+        onClose={() => setScanOpen(false)}
+      />
 
       {/* Full-screen pinch-to-zoom photo viewer */}
       <Modal visible={zoomOpen} transparent animationType="fade" onRequestClose={() => setZoomOpen(false)}>

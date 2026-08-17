@@ -4721,6 +4721,81 @@ async def health_readiness():
         "uptimeSeconds": uptime_seconds,
     }
 
+class DocEnhanceRequest(BaseModel):
+    imageBase64: str  # raw base64 (no data: prefix) of the document photo
+    mimeType: Optional[str] = "image/jpeg"
+
+
+@api_router.post("/documents/enhance")
+async def enhance_document(req: DocEnhanceRequest):
+    """Polish a document photo (straighten/contrast/de-shadow/sharpen) AND
+    transcribe its text in a single Gemini 3 Pro image call. Returns the
+    enhanced image (base64 PNG) and the transcribed text."""
+    from emergentintegrations.llm.chat import ImageContent
+
+    api_key = os.getenv("EMERGENT_LLM_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="AI key not configured")
+    raw = req.imageBase64 or ""
+    if "," in raw and raw.strip().startswith("data:"):
+        raw = raw.split(",", 1)[1]
+    if not raw:
+        raise HTTPException(status_code=400, detail="No image provided")
+    try:
+        # (1) Transcription — reliable text output from a vision text model.
+        transcription = ""
+        try:
+            t_chat = LlmChat(
+                api_key=api_key,
+                session_id=f"doc-ocr-{uuid.uuid4()}",
+                system_message="You are an OCR engine. Return only the document's text.",
+            ).with_model("gemini", "gemini-2.5-flash")
+            t_msg = UserMessage(
+                text=(
+                    "Transcribe ALL readable text from this photo of a document. "
+                    "Preserve the original layout, line breaks and language. "
+                    "Return ONLY the transcribed text, no commentary."
+                ),
+                file_contents=[ImageContent(raw)],
+            )
+            transcription = (await t_chat.send_message(t_msg)) or ""
+        except Exception:
+            logging.exception("document transcription failed (non-fatal)")
+
+        # (2) Polish — scanner-quality image via Gemini image model.
+        chat = LlmChat(
+            api_key=api_key,
+            session_id=f"doc-enhance-{uuid.uuid4()}",
+            system_message="You are a professional document-scanning assistant.",
+        ).with_model("gemini", "gemini-3-pro-image-preview").with_params(modalities=["image", "text"])
+        prompt = (
+            "This is a photo of a paper document taken with a phone. "
+            "Produce a cleaned, scanner-quality version of this SAME document: "
+            "correct the perspective so it is flat and rectangular, remove shadows and "
+            "background clutter, increase contrast, whiten the paper, and sharpen the text "
+            "so it is crisp and highly readable. Keep all original content, layout and language exactly."
+        )
+        msg = UserMessage(text=prompt, file_contents=[ImageContent(raw)])
+        _text, images = await chat.send_message_multimodal_response(msg)
+    except Exception as e:
+        logging.exception("document enhance failed")
+        raise HTTPException(status_code=502, detail=f"AI processing failed: {str(e)[:200]}")
+
+    if "TRANSCRIPTION:" in transcription:
+        transcription = transcription.split("TRANSCRIPTION:", 1)[1]
+    enhanced_b64 = None
+    enhanced_mime = "image/png"
+    if images:
+        enhanced_b64 = images[0].get("data")
+        enhanced_mime = images[0].get("mime_type", "image/png")
+    return {
+        "enhancedImageBase64": enhanced_b64,
+        "enhancedMimeType": enhanced_mime,
+        "transcription": transcription.strip(),
+    }
+
+
+
 
 # Include the router in the main app
 app.include_router(api_router)
