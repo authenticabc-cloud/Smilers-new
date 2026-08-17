@@ -20,7 +20,7 @@ export default function TabsLayout() {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { useSafeAreaInsets } = require('react-native-safe-area-context');
   const insets = useSafeAreaInsets();
-  const { isLoading, isAuthenticated, sessionExpired, signOut, trySilentReauth } = useAuth();
+  const { isLoading, isAuthenticated, sessionExpired, signOut } = useAuth();
   const updateCurrentUser = useMutation(api.users.updateCurrentUser);
   // Reactive subscription: changes from verifyOtp/savePhoneVerified propagate instantly.
   const meQuery = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip');
@@ -246,35 +246,21 @@ export default function TabsLayout() {
     }
   }, [isAuthenticated, hasVerifiedInstall, everReady]);
 
-  // WhatsApp-style session recovery: when the OIDC token can't be refreshed
-  // (`sessionExpired`), NEVER show a "Couldn't verify your session" wall.
-  // Instead keep the app on screen and silently re-run the Hercules session
-  // (prompt=none) in the BACKGROUND with a little backoff. Hercules keeps a
-  // session alive for 30 days of activity, so this almost always succeeds with
-  // zero user action; on success `sessionExpired` clears and Convex re-auths.
+  // Session recovery WITHOUT any automatic sign-in browser popups. Silent
+  // token refresh (no browser) still runs automatically elsewhere; when it
+  // can't recover the session we simply surface a MANUAL one-tap reconnect
+  // prompt. We deliberately do NOT auto-open the Hercules login browser here —
+  // that repeatedly re-launched the in-app browser and made the app "shake".
   useEffect(() => {
-    if (!sessionExpired || !isAuthenticated) return;
-    let cancelled = false;
-    setReauthFailed(false);
-    (async () => {
-      for (let attempt = 0; attempt < 4 && !cancelled; attempt++) {
-        try {
-          const ok = await trySilentReauth();
-          if (ok || cancelled) return;
-        } catch {
-          /* keep retrying */
-        }
-        await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
-      }
-      // Silent renewal definitively failed (e.g. Hercules 30-day session truly
-      // expired). This is the ONLY case that needs the user — surface a friendly
-      // one-tap reconnect rather than trapping them on an empty screen.
-      if (!cancelled) setReauthFailed(true);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionExpired, isAuthenticated, trySilentReauth]);
+    if (!sessionExpired || !isAuthenticated) {
+      setReauthFailed(false);
+      return;
+    }
+    // Give the silent token refresh a short grace window to recover on its own,
+    // then show the manual reconnect prompt if the session is still expired.
+    const t = setTimeout(() => setReauthFailed(true), 4000);
+    return () => clearTimeout(t);
+  }, [sessionExpired, isAuthenticated]);
 
   // Clear the reconnect prompt as soon as the session recovers.
   useEffect(() => {

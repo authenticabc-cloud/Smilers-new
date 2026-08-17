@@ -43,7 +43,7 @@ import BubbleErrorBoundary from './BubbleErrorBoundary';
 import { getMessageDurationSec } from '../hooks/useResolvedStorageUrl';
 import { useDecryptedMediaUrl } from '../hooks/useDecryptedMediaUrl';
 import type { E2EEStatus } from '../hooks/useConversationE2EE';
-import { getCachedTranscription, clearCachedTranscription, type CachedTranscription, type TranscriptionSegment } from '../lib/triggerTranscription';
+import { getCachedTranscription, clearCachedTranscription, triggerTranscription, type CachedTranscription, type TranscriptionSegment } from '../lib/triggerTranscription';
 import { SharedContactBubble } from './chat/SharedContactBubble';
 import { ForwardedTag } from './chat/ForwardedTag';
 import { getLanguageByCode, getEffectivePreferredLanguage } from '../lib/languages';
@@ -93,6 +93,20 @@ function useMarkConsumedOnce(msg: any, isMine: boolean): () => void {
     }
   }, [msg?._id, isMine, markConsumed]);
 }
+
+// Audio files shared from the device Files app (e.g. WhatsApp `.opus`/`.ogg`
+// exports) arrive as `type: 'file'`/`'document'` even though they are playable
+// audio. Detect them by mime/extension so we render an inline audio player
+// (with transcription/translation) instead of a plain document row.
+const AUDIO_FILE_EXTS = ['opus', 'ogg', 'oga', 'mp3', 'm4a', 'aac', 'wav', 'amr', 'flac', 'weba', 'caf', 'wma', 'aiff'];
+export function isAudioAttachment(msg: any): boolean {
+  const mime = typeof msg?.mimeType === 'string' ? msg.mimeType.toLowerCase() : '';
+  if (mime.startsWith('audio/')) return true;
+  const name = typeof msg?.fileName === 'string' ? msg.fileName.toLowerCase() : '';
+  const ext = name.includes('.') ? name.split('.').pop() || '' : '';
+  return AUDIO_FILE_EXTS.includes(ext);
+}
+
 
 
 // Module-level "currently playing" audio singleton — guarantees only one
@@ -665,6 +679,9 @@ function BubbleBodyInner({ msg, timeStr, textStyle, isMine, e2eeStatus, searchTe
       return <PollMessage msg={msg} />;
     case 'file':
     case 'document':
+      if (isAudioAttachment(msg)) {
+        return <VoiceMessage msg={msg} e2eeStatus={e2eeStatus} isMine={isMine} />;
+      }
       return <FileMessage msg={msg} isMine={isMine} e2eeStatus={e2eeStatus} />;
     case 'contact':
       // iter-203 Share Contacts (canonical spec: docs/SHARE_CONTACTS_NATIVE_CONTRACT.md).
@@ -1604,7 +1621,7 @@ function SkipButtons({
 function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EEStatus | null; isMine: boolean }) {
   const totalSec = getMessageDurationSec(msg);
   const { url: src, error: srcError } = useDecryptedMediaUrl(msg, e2eeStatus);
-  useAutoDownloadMedia({ msg, isMine, src, mediaType: msg?.type === 'audio' ? 'audio' : 'voice' });
+  useAutoDownloadMedia({ msg, isMine, src, mediaType: (msg?.type === 'audio' || isAudioAttachment(msg)) ? 'audio' : 'voice' });
   const markConsumed = useMarkConsumedOnce(msg, isMine);
 
   // sml-transcript-privacy: the SENDER can hide/show this voice note's
@@ -1632,6 +1649,39 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
       setTogglingTranscript(false);
     }
   };
+
+  // 5b: on-demand transcription + translation for AUDIO shared from device
+  // files (`.opus`/`.ogg` etc.), which arrive without a transcript. Reuses the
+  // existing Whisper pipeline; the TranscriptionPill/VoiceTranslationPill below
+  // then render the result + auto-translate into the receiver's language.
+  const convexClient = useConvex();
+  const audioStorageId: string | null =
+    (typeof msg?.storageId === 'string' && msg.storageId) ||
+    (typeof msg?.audioStorageId === 'string' && msg.audioStorageId) ||
+    null;
+  const [transcribeRequested, setTranscribeRequested] = useState(false);
+  const canOfferTranscribe =
+    Platform.OS !== 'web' && !isMine && !hasTranscript && !transcribeRequested && !!src;
+  const onTranscribe = useCallback(async () => {
+    if (!src || transcribeRequested) return;
+    setTranscribeRequested(true);
+    try {
+      const isLocal = /^file:\/\//i.test(src);
+      await triggerTranscription({
+        convex: convexClient as any,
+        messageId: String(msg?._id || ''),
+        storageId: audioStorageId,
+        conversationId: msg?.conversationId ? String(msg.conversationId) : null,
+        localFileUri: isLocal ? src : null,
+        mediaUrl: !isLocal ? src : null,
+        fileName: typeof msg?.fileName === 'string' ? msg.fileName : null,
+      });
+    } catch {
+      setTranscribeRequested(false);
+      Alert.alert('Could not transcribe', 'Please try again.');
+    }
+  }, [src, transcribeRequested, convexClient, msg, audioStorageId]);
+
 
   // expo-audio: AudioPlayer instance for THIS voice bubble's playback.
   const playerRef = useRef<AudioPlayer | null>(null);
@@ -1937,6 +1987,17 @@ function VoiceMessage({ msg, e2eeStatus, isMine }: { msg: any; e2eeStatus: E2EES
         testIDPrefix="voice"
       />
       <TranscriptionPill msg={msg} isMine={isMine} />
+      {canOfferTranscribe ? (
+        <TouchableOpacity
+          style={styles.transcribeBtn}
+          onPress={onTranscribe}
+          testID={`audio-transcribe-${msg?._id || ''}`}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+        >
+          <Feather name="type" size={13} color={Colors.primary} />
+          <Text style={styles.transcribeBtnText}>Transcribe &amp; translate</Text>
+        </TouchableOpacity>
+      ) : null}
       <VoiceTranslationPill msg={msg} />
     </View>
   );
@@ -2779,6 +2840,25 @@ const styles = StyleSheet.create({
     borderLeftWidth: 3,
     borderLeftColor: '#22c55e',
   },
+  transcribeBtn: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: Radius.md,
+    backgroundColor: 'rgba(34,197,94,0.10)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(34,197,94,0.35)',
+  },
+  transcribeBtnText: {
+    fontSize: 12,
+    fontWeight: FontWeight.semibold,
+    color: Colors.primary,
+  },
+
   transcriptLanguage: {
     fontSize: 10,
     color: '#16a34a',

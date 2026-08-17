@@ -1,5 +1,19 @@
 # Smilers Mobile App — PRD
 
+## iter-496 (Jun 2026): 5 user fixes — remove auto sign-in, remove What's New, audio files playable + transcribe/translate, receive-once spec
+
+1. **Removed the automatic sign-in ("app shaking")** — `app/(tabs)/_layout.tsx` previously auto-ran `trySilentReauth()` in a 4× retry loop when `sessionExpired`, and `trySilentReauth` calls `AuthSession.promptAsync({prompt:'none'})` which repeatedly re-launched the in-app OIDC browser (the "shaking until you swipe the app away"). Replaced the loop with a 4s grace timer that just surfaces the existing MANUAL `ReconnectPrompt` (→ signOut → user signs in). Removed `trySilentReauth` from the destructure. The manual "Reconnect" button in `chats.tsx` (user-tapped) is unchanged.
+2. **Removed "What's New" modal** — dropped `<WhatsNewModal />` + its import from `app/_layout.tsx` (it showed stale version-keyed release notes from `changelog.ts` that never matched published builds). Component/changelog files left in tree, now unused. (The small inline "New gestures" tip cards in chats/groups are a separate onboarding hint, left as-is.)
+3. **Auto-download "as soon as it arrives" (issue 3)** — NOT built: true on-receipt download while the app is closed needs a native background task that fetches the message from Convex, decrypts E2EE bytes with the conversation keys, and writes to MediaLibrary in the background — untestable in Expo Go/preview and E2EE keys aren't in the push payload (payload only has type/messageId/conversationId). Flagged as a build-required follow-up. Current behaviour (download when the chat is opened, per-bubble `useAutoDownloadMedia`) unchanged.
+4. **Receive-once duplicates not hidden (issue 4)** — root cause is server-side: the hide decision (`receiveOnceHidden`) is computed by the web team's Convex `messages.send`, the native app only renders it + already sends a plaintext `fileHash` for image/video/file/document and preserves it on forward (in-app voice notes are unique → no hash). Wrote `/app/CONVEX_BACKEND_SPEC_RECEIVE_ONCE_DEDUP.md` for the web team (per-recipient duplicate lookup by `fileHash` across conversations → set `receiveOnceHidden` on 2nd+ copies).
+5. **Audio shared from device Files now plays + can be transcribed/translated** — `src/components/MediaBubble.tsx`:
+   - NEW `isAudioAttachment(msg)` (mime `audio/*` or ext `.opus/.ogg/.mp3/.m4a/.aac/.wav/…`). `type:'file'/'document'` audio now routes to `<VoiceMessage>` (inline player) instead of the plain document row; auto-download bucket set to `audio`.
+   - NEW on-demand **"Transcribe & translate"** button on received audio with no transcript → calls the existing `triggerTranscription()` Whisper pipeline (`/api/transcribe/upload` for E2EE local file, else `/api/transcribe`); the existing `TranscriptionPill` + `VoiceTranslationPill` then render the transcript and auto-translate into the receiver's language (reusing `/api/translate` + `/api/tts`).
+
+Lint: no NEW issues (pre-existing MediaBubble rules-of-hooks at the reactionSummary useMemo + unused-import warnings confirmed present on HEAD; Metro tolerates). App boots to Sign In. ⚠️ #1 (session), #5 (E2EE audio decrypt + Whisper) are authenticated + native — verify on a signed-in device build. Backend `/api/documents/enhance`, `/api/transcribe*`, `/api/translate`, `/api/tts` all live.
+
+
+
 ## iter-494 (Aug 2026): Share Once invite renders as tap-to-view card in 1:1 chats
 
 Web team shipped v4 backend delivery (`shareOnceInvite` messages materialized into each viewer's 1:1 with fields `shareOnceToken`, `shareOnceContentType`, `shareOnceAuthorId`, all on `messages.list` + push + unread + tombstone). Wired the app render:

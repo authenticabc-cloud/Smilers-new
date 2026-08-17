@@ -24,7 +24,6 @@ import CallReturnBanner from '../src/components/call/CallReturnBanner';
 import ResumeLastRoute from '../src/components/ResumeLastRoute';
 import UpdateBanner from '../src/components/UpdateBanner';import { recordTouchActivity } from '../src/lib/touchActivity';
 import { runPermissionRequesterProbe } from '../src/lib/permissionRequesterProbe';
-import WhatsNewModal from '../src/components/WhatsNewModal';
 import InAppMessageBanner from '../src/components/InAppMessageBanner';
 import EmergencyCaptureService from '../src/components/EmergencyCaptureService';
 import EmergencyActiveBanner from '../src/components/EmergencyActiveBanner';
@@ -621,7 +620,6 @@ export default function RootLayout() {
             {/* Android uses Google Play native in-app updates (useInAppUpdates);
                 the store-check banner is kept for iOS only to avoid a double prompt. */}
             {Platform.OS === 'ios' && <UpdateBanner />}
-            <WhatsNewModal />
             <InAppMessageBanner />
             <EmergencyActiveBanner />
               </View>
