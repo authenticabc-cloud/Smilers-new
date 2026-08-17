@@ -175,6 +175,12 @@ export default function ShareOnceHome() {
               ) : null}
             </View>
             {tab === 'received' && !item.viewed ? <View style={styles.dot} /> : null}
+            {tab === 'mine' && (item.viewerCount ?? 0) > 0 && !item.isDeleted ? (
+              <View style={styles.seenBadge} testID={`share-once-seen-${item._id}`}>
+                <Ionicons name="eye" size={13} color={Colors.primary} />
+                <Text style={styles.seenBadgeText}>{item.viewedCount ?? 0}/{item.viewerCount ?? 0}</Text>
+              </View>
+            ) : null}
             <Ionicons name="chevron-forward" size={18} color={Colors.textSecondary} />
           </TouchableOpacity>
         )}
@@ -224,6 +230,8 @@ const styles = StyleSheet.create({
   rowIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(233,181,59,0.15)', alignItems: 'center', justifyContent: 'center' },
   avatarWrap: { width: 46, height: 46 },
   typeBadge: { position: 'absolute', right: -2, bottom: -2, width: 20, height: 20, borderRadius: 10, backgroundColor: 'rgba(233,181,59,0.25)', borderWidth: 2, borderColor: Colors.surface, alignItems: 'center', justifyContent: 'center' },
+  seenBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, backgroundColor: 'rgba(233,181,59,0.15)', marginRight: 4 },
+  seenBadgeText: { fontSize: 12, fontWeight: '700', color: Colors.primary, fontVariant: ['tabular-nums'] },
   rowTitle: { fontSize: 15, fontWeight: '700', color: Colors.textPrimary },
   rowSub: { fontSize: 13, color: Colors.textSecondary, marginTop: 2 },
   notSharedBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', marginTop: 6, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, backgroundColor: 'rgba(233,181,59,0.18)', borderWidth: 1, borderColor: 'rgba(233,181,59,0.5)' },
