@@ -20,6 +20,7 @@ import AudiencePicker, { AudienceSelection } from '../../src/components/shareOnc
 import { ensureVoicePlaybackMode } from '../../src/lib/audio/voicePlaybackMode';
 import { getResolvedDisplayName, getSavedContactRecord } from '../../src/lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
+import Avatar from '../../src/components/Avatar';
 import ZoomableImage from '../../src/components/ZoomableImage';
 
 export default function ShareOnceView() {
@@ -52,6 +53,16 @@ export default function ShareOnceView() {
     const rec = getSavedContactRecord(myContacts, { userId: (access as any)?.authorId }) || { _id: (access as any)?.authorId, name: access.authorName };
     return getResolvedDisplayName(rec, deviceIndex, lookupDeviceContactName, access.authorName || 'Smilers user');
   }, [access, myContacts, deviceIndex]);
+
+  // Author-only "Viewed by" list (device-saved names).
+  const viewers = useQuery(
+    api.shareOnce.listPostViewers,
+    access?.isAuthor && pid ? { postId: pid } : 'skip',
+  ) as { viewerId: string; name: string; avatar?: string; viewedAt: string | null; deleted: boolean }[] | undefined;
+  const nameForViewer = (v: { viewerId: string; name: string }) => {
+    const rec = getSavedContactRecord(myContacts, { userId: v.viewerId }) || { _id: v.viewerId, name: v.name };
+    return getResolvedDisplayName(rec, deviceIndex, lookupDeviceContactName, v.name || 'Smilers user');
+  };
 
   useEffect(() => {
     if (pid && access && !access.isAuthor && !access.viewed) markViewed({ postId: pid }).catch(() => {});
@@ -167,6 +178,34 @@ export default function ShareOnceView() {
 
             {post.text ? <Text style={styles.body}>{post.text}</Text> : null}
             {post.isForwarded ? <Text style={styles.fw}>Forwarded{post.forwardCount ? ` ${post.forwardCount}\u00d7` : ''}</Text> : null}
+
+            {access.isAuthor && Array.isArray(viewers) ? (
+              <View style={styles.viewersSection}>
+                <Text style={styles.viewersTitle}>
+                  Viewed by {viewers.filter((v) => v.viewedAt).length}/{viewers.length}
+                </Text>
+                {viewers.length === 0 ? (
+                  <Text style={styles.viewerMeta}>No one can view this yet.</Text>
+                ) : (
+                  viewers.map((v) => (
+                    <View key={v.viewerId} style={styles.viewerRow}>
+                      <Avatar name={nameForViewer(v)} size={36} uri={v.avatar || undefined} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.viewerName} numberOfLines={1}>{nameForViewer(v)}</Text>
+                        <Text style={styles.viewerMeta} numberOfLines={1}>
+                          {v.deleted ? 'Deleted for them' : v.viewedAt ? `Viewed ${new Date(v.viewedAt).toLocaleString()}` : 'Not viewed yet'}
+                        </Text>
+                      </View>
+                      <Ionicons
+                        name={v.viewedAt ? 'checkmark-done' : 'ellipse-outline'}
+                        size={v.viewedAt ? 18 : 14}
+                        color={v.viewedAt ? Colors.primary : Colors.textMuted}
+                      />
+                    </View>
+                  ))
+                )}
+              </View>
+            ) : null}
           </>
         )}
       </ScrollView>
@@ -240,6 +279,11 @@ const styles = StyleSheet.create({
   zoomClose: { position: 'absolute', top: 44, right: 20, width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
   body: { fontSize: 16, color: Colors.textPrimary, marginTop: 14, lineHeight: 22 },
   fw: { fontSize: 12, color: Colors.textSecondary, marginTop: 8, fontStyle: 'italic' },
+  viewersSection: { marginTop: 22, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: Colors.border || '#e5e7eb', paddingTop: 16 },
+  viewersTitle: { fontSize: 13, fontWeight: '800', color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12 },
+  viewerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 },
+  viewerName: { fontSize: 15, fontWeight: '600', color: Colors.textPrimary },
+  viewerMeta: { fontSize: 12, color: Colors.textSecondary, marginTop: 1 },
   tombstone: { fontSize: 15, color: Colors.textSecondary, fontStyle: 'italic', textAlign: 'center', padding: 30 },
   audioBtn: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 18, borderRadius: 12, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border || '#e5e7eb' },
   audioText: { flex: 1, fontSize: 15, color: Colors.textPrimary },
