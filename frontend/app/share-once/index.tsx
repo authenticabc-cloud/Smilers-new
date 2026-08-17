@@ -12,6 +12,9 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { api } from '../../src/convexApi';
 import { Colors } from '../../src/theme';
 import AudiencePicker, { AudienceSelection } from '../../src/components/shareOnce/AudiencePicker';
+import Avatar from '../../src/components/Avatar';
+import { getResolvedDisplayName, getSavedContactRecord } from '../../src/lib/displayName';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 
 function iconFor(type: string) {
   return type === 'image' ? 'image' : type === 'video' ? 'videocam' : type === 'audio' || type === 'voice' ? 'musical-notes' : type === 'file' ? 'document' : 'chatbubble-ellipses';
@@ -26,6 +29,14 @@ export default function ShareOnceHome() {
   const respond = useMutation(api.shareOnce.respondToDeletionRequest);
   const repost = useMutation(api.shareOnce.repostToShareOnce);
   const deletePost = useMutation(api.shareOnce.deletePost);
+  // Resolve author names to the viewer's DEVICE-saved contact name (not the
+  // account name), matching the rest of the app.
+  const myContacts = useQuery(api.contacts.getContacts, {}) as any[] | undefined;
+  const deviceIndex = useDeviceContactIndex();
+  const resolveAuthorName = (item: any) => {
+    const rec = getSavedContactRecord(myContacts, { userId: item?.authorId }) || { _id: item?.authorId, name: item?.authorName };
+    return getResolvedDisplayName(rec, deviceIndex, lookupDeviceContactName, item?.authorName || 'Smilers user');
+  };
 
   // A post that hasn't been shared with anyone yet (e.g. forwarded from chat) —
   // the author picks its audience via the picker below.
@@ -131,12 +142,21 @@ export default function ShareOnceHome() {
             onPress={() => router.push(`/share-once/view?postId=${item._id}` as any)}
             testID={`share-once-post-${item._id}`}
           >
-            <View style={styles.rowIcon}>
-              <Ionicons name={iconFor(item.type) as any} size={22} color={Colors.primary} />
-            </View>
+            {tab === 'received' ? (
+              <View style={styles.avatarWrap}>
+                <Avatar name={resolveAuthorName(item)} size={46} uri={item.authorAvatar || undefined} />
+                <View style={styles.typeBadge}>
+                  <Ionicons name={iconFor(item.type) as any} size={12} color={Colors.primary} />
+                </View>
+              </View>
+            ) : (
+              <View style={styles.rowIcon}>
+                <Ionicons name={iconFor(item.type) as any} size={22} color={Colors.primary} />
+              </View>
+            )}
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle} numberOfLines={1}>
-                {tab === 'received' ? item.authorName : item.preview}
+                {tab === 'received' ? resolveAuthorName(item) : item.preview}
               </Text>
               <Text style={styles.rowSub} numberOfLines={1}>
                 {tab === 'mine'
@@ -202,6 +222,8 @@ const styles = StyleSheet.create({
   filterChipTextActive: { color: '#fff' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 12 },
   rowIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(233,181,59,0.15)', alignItems: 'center', justifyContent: 'center' },
+  avatarWrap: { width: 46, height: 46 },
+  typeBadge: { position: 'absolute', right: -2, bottom: -2, width: 20, height: 20, borderRadius: 10, backgroundColor: 'rgba(233,181,59,0.25)', borderWidth: 2, borderColor: Colors.surface, alignItems: 'center', justifyContent: 'center' },
   rowTitle: { fontSize: 15, fontWeight: '700', color: Colors.textPrimary },
   rowSub: { fontSize: 13, color: Colors.textSecondary, marginTop: 2 },
   notSharedBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', marginTop: 6, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, backgroundColor: 'rgba(233,181,59,0.18)', borderWidth: 1, borderColor: 'rgba(233,181,59,0.5)' },

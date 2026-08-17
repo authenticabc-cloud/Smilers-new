@@ -18,6 +18,8 @@ import Header from '../../src/components/Header';
 import { Colors } from '../../src/theme';
 import AudiencePicker, { AudienceSelection } from '../../src/components/shareOnce/AudiencePicker';
 import { ensureVoicePlaybackMode } from '../../src/lib/audio/voicePlaybackMode';
+import { getResolvedDisplayName, getSavedContactRecord } from '../../src/lib/displayName';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 import ZoomableImage from '../../src/components/ZoomableImage';
 
 export default function ShareOnceView() {
@@ -42,6 +44,14 @@ export default function ShareOnceView() {
 
   const post = access?.post;
   const pid = post?._id;
+  // Resolve the author to the viewer's device-saved contact name.
+  const myContacts = useQuery(api.contacts.getContacts, {}) as any[] | undefined;
+  const deviceIndex = useDeviceContactIndex();
+  const resolvedAuthorName = React.useMemo(() => {
+    if (!access || access.isAuthor) return '';
+    const rec = getSavedContactRecord(myContacts, { userId: (access as any)?.authorId }) || { _id: (access as any)?.authorId, name: access.authorName };
+    return getResolvedDisplayName(rec, deviceIndex, lookupDeviceContactName, access.authorName || 'Smilers user');
+  }, [access, myContacts, deviceIndex]);
 
   useEffect(() => {
     if (pid && access && !access.isAuthor && !access.viewed) markViewed({ postId: pid }).catch(() => {});
@@ -122,7 +132,7 @@ export default function ShareOnceView() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <Header
-        title={access.isAuthor ? 'Your post' : access.authorName}
+        title={access.isAuthor ? 'Your post' : resolvedAuthorName}
         showBack
         onBack={() => router.back()}
         right={
