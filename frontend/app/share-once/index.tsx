@@ -13,6 +13,7 @@ import { api } from '../../src/convexApi';
 import { Colors } from '../../src/theme';
 import AudiencePicker, { AudienceSelection } from '../../src/components/shareOnce/AudiencePicker';
 import Avatar from '../../src/components/Avatar';
+import ShareOncePostThumb from '../../src/components/shareOnce/ShareOncePostThumb';
 import { getResolvedDisplayName, getSavedContactRecord } from '../../src/lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 
@@ -150,9 +151,7 @@ export default function ShareOnceHome() {
                 </View>
               </View>
             ) : (
-              <View style={styles.rowIcon}>
-                <Ionicons name={iconFor(item.type) as any} size={22} color={Colors.primary} />
-              </View>
+              <ShareOncePostThumb type={item.type} mediaUrl={item.mediaUrl} icon={iconFor(item.type)} />
             )}
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle} numberOfLines={1}>
