@@ -281,6 +281,55 @@ export function useAutoDownloadMedia(params: {
   }, [src, isMine, msg, mediaType]);
 }
 
+/**
+ * Imperative (hook-free) counterpart of `useAutoDownloadMedia` — used by the
+ * push background task so received media can be saved to the device the moment
+ * it arrives, even when no chat screen is mounted (or the app is killed).
+ *
+ * Respects the same per-type toggles + one-time dedup as the hook. `src` may be
+ * a `file://` (already-decrypted), `data:` or `http(s)` URI. Returns true when a
+ * file was actually saved. Best-effort: never throws.
+ */
+export async function saveReceivedMediaToDevice(params: {
+  msg: any;
+  src: string;
+  mediaType?: string | null;
+}): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
+  const { msg, src } = params;
+  const id = String(msg?._id || '');
+  if (!id || !src) return false;
+  const bucket = mediaTypeToBucket(params.mediaType ?? msg?.type);
+  if (!bucket) return false;
+  try {
+    const saved = await ensureSavedLoaded();
+    if (saved.has(id) || savingInFlight.has(id)) return false;
+    const prefs = await loadPrefs();
+    if (!prefs[bucket]) return false;
+    savingInFlight.add(id);
+    try {
+      const ok =
+        bucket === 'documents'
+          ? await saveDocument(src, msg)
+          : await saveToGallery(src, msg, bucket);
+      if (ok) await markSaved(id);
+      return ok;
+    } finally {
+      savingInFlight.delete(id);
+    }
+  } catch {
+    return false;
+  }
+}
+
+/** Best-effort file extension for a decrypted-in-memory media blob so the OS
+ *  gallery categorises it correctly. Mirrors `inferExt` for the background path. */
+export function inferMediaExtension(msg: any): string {
+  const bucket = mediaTypeToBucket(msg?.type) || 'documents';
+  return inferExt(msg, bucket);
+}
+
+
 /** Settings-screen hook: read + update the per-type toggles. */
 export function useAutoDownloadPrefs() {
   const [prefs, setPrefs] = useState<AutoDownloadPrefs>(cachedPrefs || AUTO_DOWNLOAD_DEFAULTS);

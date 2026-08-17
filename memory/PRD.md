@@ -1,5 +1,25 @@
 # Smilers Mobile App — PRD
 
+## iter-497 (Jun 2026): Background media auto-download on arrival + silent "No chats yet" self-heal
+
+**A. Background/instant media auto-download (app closed or alive)**
+Received chat media now auto-saves the moment its push arrives — not only when the chat is opened.
+- NEW `src/push/backgroundMediaDownload.ts` — hook-free `maybeBackgroundDownloadMedia(payload)`: reads `smilers_id_token` from SecureStore → `ConvexHttpClient` → `messages.list({conversationId, paginationOpts})` to locate the pushed message (by `messageId`, else newest media row) → maps type→bucket + checks the per-type auto-download toggle → resolves the signed media URL (`msg.mediaUrl` or `messages.getStorageUrl`/`storage.getUrl` by `storageId`) → for E2EE (`encrypted && iv`) downloads the ciphertext, fetches the conversation key via `e2ee.getE2EEStatus`, and decrypts on-device with `decryptBytes(deriveKey…)`, writing the plaintext to a temp file with the correct extension → saves via the new `saveReceivedMediaToDevice`. Fully try/catch-guarded (never breaks the notification path).
+- `src/lib/mediaAutoDownload.ts` — exported `saveReceivedMediaToDevice({msg,src,mediaType})` (imperative twin of `useAutoDownloadMedia`, same prefs + dedup + `saveDocument`/`saveToGallery`) and `inferMediaExtension(msg)`.
+- `src/push/backgroundTaskSetup.ts` — after the local notification is posted, the headless task calls `maybeBackgroundDownloadMedia` for `type==='message'` pushes (background/killed).
+- `src/push/usePushNotifications.ts` — the FOREGROUND `addNotificationReceivedListener` also fires it (app alive on any screen).
+- Respects the existing Settings → Auto-download toggles (Photos/Videos/Audio/Documents, all OFF by default). ⚠️ Android saves reliably while killed; iOS restricts Photos writes from a fully-killed app (Apple OS limit) → reliable when the app is alive, best-effort when killed. NATIVE + FCM — verify on a device build.
+
+**B. "No chats yet" silent self-heal (manual reconnect rarely needed)**
+Root cause: the id_token can silently expire (e.g. overnight) → Convex briefly unauthenticated → empty chats. `app/(tabs)/chats.tsx`:
+- The AUTOMATIC empty-with-cache recovery effect now `await getFreshIdToken(true)` (force-rotate via refresh_token, NO browser) BEFORE `requestConvexReauth` + `forceConvexReconnect`, so the common transient case recovers with zero user action.
+- The MANUAL "Reconnect" button now tries `getFreshIdToken(true)` SILENTLY first and only falls back to the browser `trySilentReauth` (SSO cookie) when the refresh token is truly dead (≈30-day session expiry — unavoidable one-time sign-in).
+Combined with iter-496's removal of the auto browser loop, there are no more auto browser popups; recovery is silent for all recoverable cases.
+
+Lint: no new errors (only pre-existing `require()`-style + duplicate-import warnings, matching each file's existing convention). App boots to Sign In.
+
+
+
 ## iter-496 (Jun 2026): 5 user fixes — remove auto sign-in, remove What's New, audio files playable + transcribe/translate, receive-once spec
 
 1. **Removed the automatic sign-in ("app shaking")** — `app/(tabs)/_layout.tsx` previously auto-ran `trySilentReauth()` in a 4× retry loop when `sessionExpired`, and `trySilentReauth` calls `AuthSession.promptAsync({prompt:'none'})` which repeatedly re-launched the in-app OIDC browser (the "shaking until you swipe the app away"). Replaced the loop with a 4s grace timer that just surfaces the existing MANUAL `ReconnectPrompt` (→ signOut → user signs in). Removed `trySilentReauth` from the destructure. The manual "Reconnect" button in `chats.tsx` (user-tapped) is unchanged.

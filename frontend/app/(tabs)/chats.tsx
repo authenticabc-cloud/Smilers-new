@@ -362,13 +362,27 @@ export default function ChatsScreen() {
   // state (signed in locally but Convex unauthenticated), so we do the full fix
   // a manual sign-out/sign-in does: a SILENT re-login (mints a fresh token off
   // the live SSO session, no wall) → push it to Convex → reconnect the socket.
-  const { trySilentReauth } = useAuth();
+  const { trySilentReauth, getFreshIdToken } = useAuth();
   const handleEmptyReconnect = useCallback(async () => {
     if (reconnecting || callHost.isActive()) return;
     setReconnecting(true);
     try {
       let restored = false;
-      if (typeof trySilentReauth === 'function') {
+      // 1) SILENT first: force-rotate the id_token via the refresh_token (no
+      //    browser, no "shaking"). This recovers the common transient case
+      //    (token expired overnight) without any user-visible auth flow.
+      if (typeof getFreshIdToken === 'function') {
+        try {
+          const fresh = await getFreshIdToken(true);
+          restored = !!fresh;
+        } catch {
+          restored = false;
+        }
+      }
+      // 2) Only if the silent refresh could NOT produce a token (refresh token
+      //    truly dead / 30-day session expiry) do we fall back to the browser
+      //    SSO re-auth — and only because the user explicitly tapped Reconnect.
+      if (!restored && typeof trySilentReauth === 'function') {
         try {
           restored = await trySilentReauth();
         } catch {
@@ -381,7 +395,7 @@ export default function ChatsScreen() {
       /* never let the recovery button crash the app */
     }
     setTimeout(() => setReconnecting(false), 1800);
-  }, [reconnecting, trySilentReauth]);
+  }, [reconnecting, trySilentReauth, getFreshIdToken]);
 
   // iter-221 D — auto pull-to-refresh on FOREGROUND (iter-380 HARDENED).
   //
@@ -490,13 +504,24 @@ export default function ChatsScreen() {
       if (!recoveredEmptyRef.current && now - lastEmptyRecoverAtRef.current > 30_000) {
         recoveredEmptyRef.current = true;
         lastEmptyRecoverAtRef.current = now;
-        requestConvexReauth('chats-empty-with-cache');
-        void forceConvexReconnect('chats-empty-with-cache');
+        // SILENT self-heal: force-rotate the id_token via the refresh_token
+        // (no browser) BEFORE reconnecting, so a token that silently expired
+        // (e.g. overnight) recovers automatically — the user should not need to
+        // tap the manual "Reconnect" button for the common transient case.
+        (async () => {
+          try {
+            if (typeof getFreshIdToken === 'function') await getFreshIdToken(true);
+          } catch {
+            /* ignore — reconnect below still runs */
+          }
+          requestConvexReauth('chats-empty-with-cache');
+          void forceConvexReconnect('chats-empty-with-cache');
+        })();
       }
     } else if (liveHasRows) {
       recoveredEmptyRef.current = false;
     }
-  }, [liveResolved, liveHasRows, cacheHasRows]);
+  }, [liveResolved, liveHasRows, cacheHasRows, getFreshIdToken]);
 
   // iter-213: archived chats — filter them out of the main list and keep
   // a count for the "Archived" pinned row (shown only when count > 0).

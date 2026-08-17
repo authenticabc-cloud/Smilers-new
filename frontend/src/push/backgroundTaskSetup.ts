@@ -609,6 +609,23 @@ if (Platform.OS !== 'web' && !runtimeScope.__smilersNotificationTaskDefined) {
     } catch (taskError: any) {
       console.warn('[push] Background notification scheduling failed:', taskError?.message || taskError);
     }
+
+    // Auto-download received media the moment it arrives (best-effort, headless).
+    // Runs AFTER the banner is posted so it never delays the notification.
+    try {
+      const mediaPayload = normalizeNotificationPayload(
+        (data as any)?.notification?.request?.content?.data ||
+          (data as any)?.data ||
+          data ||
+          {},
+      );
+      if (toNonEmptyString(mediaPayload.type) === 'message') {
+        const { maybeBackgroundDownloadMedia } = require('./backgroundMediaDownload');
+        await maybeBackgroundDownloadMedia(mediaPayload);
+      }
+    } catch (dlError: any) {
+      console.warn('[push] Background media download failed:', dlError?.message || dlError);
+    }
   });
 }
 

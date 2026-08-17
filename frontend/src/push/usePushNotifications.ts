@@ -1351,6 +1351,15 @@ export function usePushNotifications() {
         markDelivered({ conversationId }).catch((errorValue: any) => {
           console.warn('[push] markDelivered failed:', errorValue?.message || errorValue);
         });
+        // Auto-download received media the moment it arrives while the app is
+        // alive (any screen) — mirrors the background-task path. Best-effort.
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const { maybeBackgroundDownloadMedia } = require('./backgroundMediaDownload');
+          void maybeBackgroundDownloadMedia(payload);
+        } catch {
+          /* best-effort */
+        }
       }
       // call-declined arrives at the CALLER's device when the callee taps Decline
       // from the notification tray (background/killed state). Call declineCall so
