@@ -10,6 +10,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from 'convex/react';
 import { api } from '../../convexApi';
 import { Colors } from '../../theme';
+import { getResolvedDisplayName, getSavedContactRecord } from '../../lib/displayName';
+import { useDeviceContactIndex, lookupDeviceContactName } from '../../lib/deviceContactIndex';
 
 export type AudienceSelection = {
   audienceMode: 'all' | 'trustees' | 'voiceTask' | 'allExcept' | 'specific';
@@ -47,10 +49,20 @@ export default function AudiencePicker({
   const [q, setQ] = useState('');
 
   const connections = opts?.connections || [];
+  // Resolve each connection to the viewer's DEVICE-saved contact name, so the
+  // picker matches names shown elsewhere in the app (not raw account names).
+  const myContacts = useQuery(api.contacts.getContacts, {}) as any[] | undefined;
+  const deviceIndex = useDeviceContactIndex();
+  const nameFor = useMemo(() => {
+    return (c: { userId: string; name: string }) => {
+      const rec = getSavedContactRecord(myContacts, { userId: c.userId }) || { _id: c.userId, name: c.name };
+      return getResolvedDisplayName(rec, deviceIndex, lookupDeviceContactName, c.name || 'Smilers user');
+    };
+  }, [myContacts, deviceIndex]);
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
-    return s ? connections.filter((c) => c.name.toLowerCase().includes(s)) : connections;
-  }, [connections, q]);
+    return s ? connections.filter((c) => nameFor(c).toLowerCase().includes(s) || c.name.toLowerCase().includes(s)) : connections;
+  }, [connections, q, nameFor]);
 
   const needsList = mode === 'specific' || mode === 'allExcept';
 
@@ -148,7 +160,7 @@ export default function AudiencePicker({
             return (
               <TouchableOpacity style={styles.row} onPress={() => setTicked((p) => ({ ...p, [item.userId]: !p[item.userId] }))} testID={`audience-user-${item.userId}`}>
                 <Ionicons name={ticked[item.userId] ? 'checkbox' : 'square-outline'} size={22} color={ticked[item.userId] ? Colors.primary : Colors.textSecondary} />
-                <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
+                <Text style={styles.name} numberOfLines={1}>{nameFor(item)}</Text>
                 {isTrustee ? <Text style={styles.tag}>Trustee</Text> : null}
                 {isVoice ? <Text style={styles.tag}>Voice</Text> : null}
               </TouchableOpacity>
