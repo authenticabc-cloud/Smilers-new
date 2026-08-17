@@ -2,7 +2,7 @@
  * Share Once home — your posts + posts shared with you, a compose FAB, and a
  * banner for pending delete requests on your posts.
  */
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Alert, FlatList, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -55,12 +55,37 @@ export default function ShareOnceHome() {
   const isDraft = (p: any) => (p?.viewerCount ?? 0) === 0 && !p?.isDeleted;
   const draftCount = (mine || []).filter(isDraft).length;
 
+  // Received posts grouped by sender (device-saved name), most-recent sender
+  // first, newest post first within each sender — so multiple posts from one
+  // person are easy to scan. A `__header` row is inserted before each group.
+  const receivedGrouped = useMemo(() => {
+    if (!received) return undefined;
+    const groups = new Map<string, any[]>();
+    for (const p of received) {
+      const key = String(p.authorId || 'unknown');
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(p);
+    }
+    const entries = Array.from(groups.entries()).sort((a, b) => {
+      const am = Math.max(...a[1].map((x) => x._creationTime || 0));
+      const bm = Math.max(...b[1].map((x) => x._creationTime || 0));
+      return bm - am;
+    });
+    const out: any[] = [];
+    for (const [key, posts] of entries) {
+      posts.sort((x, y) => (y._creationTime || 0) - (x._creationTime || 0));
+      out.push({ __header: true, _id: `hdr-${key}`, title: resolveAuthorName(posts[0]), count: posts.length });
+      out.push(...posts);
+    }
+    return out;
+  }, [received, myContacts, deviceIndex]);
+
   const data =
     tab === 'mine'
       ? mineFilter === 'drafts'
         ? (mine || []).filter(isDraft)
         : mine
-      : received;
+      : receivedGrouped;
   const loading = data === undefined;
 
   const shareDraftAudience = async (sel: AudienceSelection) => {
@@ -145,6 +170,12 @@ export default function ShareOnceHome() {
         data={data || []}
         keyExtractor={(i) => i._id}
         renderItem={({ item }) => (
+          item.__header ? (
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionHeaderText} numberOfLines={1}>{item.title}</Text>
+              {item.count > 1 ? <Text style={styles.sectionHeaderCount}>{item.count}</Text> : null}
+            </View>
+          ) : (
           <TouchableOpacity
             style={styles.row}
             onPress={() => router.push(`/share-once/view?postId=${item._id}` as any)}
@@ -201,6 +232,7 @@ export default function ShareOnceHome() {
             ) : null}
             <Ionicons name="chevron-forward" size={18} color={Colors.textSecondary} />
           </TouchableOpacity>
+          )
         )}
         ListEmptyComponent={
           <View style={styles.empty}>
@@ -263,6 +295,9 @@ const styles = StyleSheet.create({
   typeBadge: { position: 'absolute', right: -2, bottom: -2, width: 20, height: 20, borderRadius: 10, backgroundColor: 'rgba(233,181,59,0.25)', borderWidth: 2, borderColor: Colors.surface, alignItems: 'center', justifyContent: 'center' },
   seenBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, backgroundColor: 'rgba(233,181,59,0.15)', marginRight: 4 },
   seenBadgeText: { fontSize: 12, fontWeight: '700', color: Colors.primary, fontVariant: ['tabular-nums'] },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 6 },
+  sectionHeaderText: { flex: 1, fontSize: 13, fontWeight: '800', color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.4 },
+  sectionHeaderCount: { fontSize: 12, fontWeight: '700', color: Colors.primary, backgroundColor: 'rgba(233,181,59,0.15)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, overflow: 'hidden' },
   previewRoot: { flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' },
   previewVideo: { width: '100%', height: '70%' },
   previewClose: { position: 'absolute', top: 48, right: 20, width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
