@@ -5,7 +5,7 @@
  * every other type falls back to the coloured type icon.
  */
 import React, { useEffect, useState } from 'react';
-import { Image, StyleSheet, View } from 'react-native';
+import { Image, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import { Colors } from '../../theme';
@@ -14,10 +14,12 @@ export default function ShareOncePostThumb({
   type,
   mediaUrl,
   icon,
+  onPress,
 }: {
   type: string;
   mediaUrl?: string | null;
   icon: string;
+  onPress?: () => void;
 }) {
   const isPhoto = type === 'image';
   const isVideo = type === 'video';
@@ -41,14 +43,14 @@ export default function ShareOncePostThumb({
 
   if (thumb) {
     return (
-      <View style={styles.wrap}>
+      <TouchableOpacity activeOpacity={onPress ? 0.8 : 1} disabled={!onPress} onPress={onPress} style={styles.wrap} testID="share-once-thumb">
         <Image source={{ uri: thumb }} style={styles.img} resizeMode="cover" />
         {isVideo ? (
           <View style={styles.play}>
             <Ionicons name="play" size={13} color="#fff" />
           </View>
         ) : null}
-      </View>
+      </TouchableOpacity>
     );
   }
 

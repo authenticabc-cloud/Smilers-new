@@ -3,10 +3,11 @@
  * banner for pending delete requests on your posts.
  */
 import React, { useState } from 'react';
-import { Alert, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, FlatList, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { VideoView, useVideoPlayer } from 'expo-video';
 import { useMutation, useQuery } from 'convex/react';
 import { LinearGradient } from 'expo-linear-gradient';
 import { api } from '../../src/convexApi';
@@ -14,6 +15,7 @@ import { Colors } from '../../src/theme';
 import AudiencePicker, { AudienceSelection } from '../../src/components/shareOnce/AudiencePicker';
 import Avatar from '../../src/components/Avatar';
 import ShareOncePostThumb from '../../src/components/shareOnce/ShareOncePostThumb';
+import ZoomableImage from '../../src/components/ZoomableImage';
 import { getResolvedDisplayName, getSavedContactRecord } from '../../src/lib/displayName';
 import { useDeviceContactIndex, lookupDeviceContactName } from '../../src/lib/deviceContactIndex';
 
@@ -42,6 +44,11 @@ export default function ShareOnceHome() {
   // A post that hasn't been shared with anyone yet (e.g. forwarded from chat) —
   // the author picks its audience via the picker below.
   const [shareDraft, setShareDraft] = useState<any | null>(null);
+  // Quick-peek at a photo/video from the list thumbnail (without opening the post).
+  const [preview, setPreview] = useState<any | null>(null);
+  const previewPlayer = useVideoPlayer(preview?.type === 'video' && preview?.mediaUrl ? preview.mediaUrl : '', (p) => {
+    p.loop = false;
+  });
   // Quick filter within My posts: show everything or only unshared drafts.
   const [mineFilter, setMineFilter] = useState<'all' | 'drafts'>('all');
 
@@ -151,7 +158,16 @@ export default function ShareOnceHome() {
                 </View>
               </View>
             ) : (
-              <ShareOncePostThumb type={item.type} mediaUrl={item.mediaUrl} icon={iconFor(item.type)} />
+              <ShareOncePostThumb
+                type={item.type}
+                mediaUrl={item.mediaUrl}
+                icon={iconFor(item.type)}
+                onPress={
+                  (item.type === 'image' || item.type === 'video') && item.mediaUrl && !item.isDeleted
+                    ? () => setPreview(item)
+                    : undefined
+                }
+              />
             )}
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle} numberOfLines={1}>
@@ -202,6 +218,19 @@ export default function ShareOnceHome() {
         onConfirm={shareDraftAudience}
         confirmLabel="Share"
       />
+
+      <Modal visible={!!preview} transparent animationType="fade" onRequestClose={() => setPreview(null)}>
+        <View style={styles.previewRoot}>
+          {preview?.type === 'image' && preview?.mediaUrl ? (
+            <ZoomableImage uri={preview.mediaUrl} onClose={() => setPreview(null)} />
+          ) : preview?.type === 'video' && preview?.mediaUrl ? (
+            <VideoView player={previewPlayer} style={styles.previewVideo} nativeControls allowsFullscreen />
+          ) : null}
+          <TouchableOpacity style={styles.previewClose} onPress={() => setPreview(null)} testID="share-once-preview-close">
+            <Ionicons name="close" size={28} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -231,6 +260,9 @@ const styles = StyleSheet.create({
   typeBadge: { position: 'absolute', right: -2, bottom: -2, width: 20, height: 20, borderRadius: 10, backgroundColor: 'rgba(233,181,59,0.25)', borderWidth: 2, borderColor: Colors.surface, alignItems: 'center', justifyContent: 'center' },
   seenBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, backgroundColor: 'rgba(233,181,59,0.15)', marginRight: 4 },
   seenBadgeText: { fontSize: 12, fontWeight: '700', color: Colors.primary, fontVariant: ['tabular-nums'] },
+  previewRoot: { flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' },
+  previewVideo: { width: '100%', height: '70%' },
+  previewClose: { position: 'absolute', top: 48, right: 20, width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
   rowTitle: { fontSize: 15, fontWeight: '700', color: Colors.textPrimary },
   rowSub: { fontSize: 13, color: Colors.textSecondary, marginTop: 2 },
   notSharedBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', marginTop: 6, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, backgroundColor: 'rgba(233,181,59,0.18)', borderWidth: 1, borderColor: 'rgba(233,181,59,0.5)' },
