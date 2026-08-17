@@ -69,6 +69,10 @@ export default function ShareOnceHome() {
       groups.get(key)!.push(p);
     }
     const entries = Array.from(groups.entries()).sort((a, b) => {
+      // Senders with any unopened post come first, then by most recent post.
+      const aUnread = a[1].some((x) => !x.viewed) ? 1 : 0;
+      const bUnread = b[1].some((x) => !x.viewed) ? 1 : 0;
+      if (aUnread !== bUnread) return bUnread - aUnread;
       const am = Math.max(...a[1].map((x) => x._creationTime || 0));
       const bm = Math.max(...b[1].map((x) => x._creationTime || 0));
       return bm - am;
@@ -76,7 +80,7 @@ export default function ShareOnceHome() {
     const out: any[] = [];
     for (const [key, posts] of entries) {
       posts.sort((x, y) => (y._creationTime || 0) - (x._creationTime || 0));
-      out.push({ __header: true, _id: `hdr-${key}`, authorKey: key, title: resolveAuthorName(posts[0]), count: posts.length });
+      out.push({ __header: true, _id: `hdr-${key}`, authorKey: key, title: resolveAuthorName(posts[0]), count: posts.length, hasUnread: posts.some((x) => !x.viewed) });
       if (!collapsed[key]) out.push(...posts);
     }
     return out;
@@ -180,6 +184,7 @@ export default function ShareOnceHome() {
             >
               <Ionicons name={collapsed[item.authorKey] ? 'chevron-forward' : 'chevron-down'} size={16} color={Colors.textSecondary} />
               <Text style={styles.sectionHeaderText} numberOfLines={1}>{item.title}</Text>
+              {item.hasUnread ? <View style={styles.dot} /> : null}
               <Text style={styles.sectionHeaderCount}>{item.count}</Text>
             </TouchableOpacity>
           ) : (
