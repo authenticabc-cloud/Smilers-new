@@ -1,5 +1,17 @@
 # Smilers Mobile App — PRD
 
+## iter-502 (Jun 2026): Batch document scan (multi-photo)
+
+`app/chat/[conversationId].tsx` — extended the scan-before-send flow to multi-photo albums:
+- Per-thumb Scan button already worked for every staged photo (polish/revert each). Kept.
+- Auto-detection now runs for EVERY freshly staged photo (was single-only): the effect loops all uncached/unscanned staged uris, downscales each (`expo-image-manipulator` w512 JPEG b64) and POSTs `/api/documents/detect`; document uris accumulate in `docSuggestUris: string[]` (cached per-uri via `docCheckedUrisRef`). Each detected+unscanned thumb's Scan button is highlighted (`pendingThumbScanSuggest`).
+- Refactored the enhance core into `enhanceImageAtIndex(index, uri)` (no toggle/guard); `scanPendingImage` (single, toggles polished↔original) and new `scanAllDocuments` (sequential batch over all detected+unscanned, `scanningAll` flag, per-item `scanningIndex` progress, failure summary) both use it.
+- The suggestion chip is now batch-aware: 1 doc → "Looks like a document — tap to clean it up" (scans that one); >1 → "N photos look like documents — tap to clean them all" (runs `scanAllDocuments`); shows a spinner + "Cleaning up documents…" while batch runs. Scan buttons disabled during batch.
+
+Lint clean. Backend `/api/documents/detect` already live (iter-501). App boots to Sign In. Auth-gated (in-chat) — verify on device build; deployed users redeploy.
+
+
+
 ## iter-501 (Jun 2026): Member avatars everywhere + Group description card + AI document auto-detect
 
 **1. Member avatars consistent across group screens** (`app/group/[id].tsx`)

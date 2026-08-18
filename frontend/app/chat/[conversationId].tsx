@@ -274,16 +274,40 @@ export default function ChatScreen() {
   const [activeImageIndex, setActiveImageIndex] = useState(0);
   const [editorIndex, setEditorIndex] = useState<number | null>(null);
   const [scanningIndex, setScanningIndex] = useState<number | null>(null);
-  // Auto-detect: when a single photo is staged, quietly ask the AI if it looks
-  // like a document and, if so, highlight the Scan button. Cached per-uri so it
-  // runs at most once per photo. Only for single stages (keeps cost minimal).
-  const [docSuggestUri, setDocSuggestUri] = useState<string | null>(null);
+  const [scanningAll, setScanningAll] = useState(false);
+  // Auto-detect: for EACH staged photo, quietly ask the AI if it looks like a
+  // document and, if so, highlight its Scan button + offer a batch "scan all".
+  // Cached per-uri so it runs at most once per photo (keeps cost minimal).
+  const [docSuggestUris, setDocSuggestUris] = useState<string[]>([]);
   const docCheckedUrisRef = useRef<Set<string>>(new Set());
+
+  // Core enhance for one staged image (no toggle / no guard). Returns true when
+  // it swapped in a polished version. Used by single-tap and batch scan.
+  const enhanceImageAtIndex = useCallback(async (index: number, uri: string): Promise<boolean> => {
+    const result = await enhanceDocumentToLocalFile(uri);
+    if (!result.imageUri) return false;
+    setPendingImages((prev) =>
+      prev.map((im, i) =>
+        i === index && im.uri === uri
+          ? {
+              ...im,
+              originalUri: im.originalUri || im.uri,
+              originalMime: im.originalMime || im.mimeType,
+              uri: result.imageUri!,
+              mimeType: result.mimeType,
+              scanned: true,
+            }
+          : im,
+      ),
+    );
+    return true;
+  }, []);
+
   // Scan/Polish a staged document photo before sending. Tapping toggles
   // between the cleaned-up "polished" version and the "original" so the sender
   // explicitly chooses which one to send (Send Polished vs Send Original).
   const scanPendingImage = useCallback(async (index: number) => {
-    if (scanningIndex !== null) return;
+    if (scanningIndex !== null || scanningAll) return;
     let target: { uri: string; scanned?: boolean; originalUri?: string; originalMime?: string; mimeType: string } | undefined;
     setPendingImages((prev) => {
       target = prev[index];
@@ -303,64 +327,89 @@ export default function ChatScreen() {
     }
     setScanningIndex(index);
     try {
-      const result = await enhanceDocumentToLocalFile(target.uri);
-      if (!result.imageUri) {
-        Alert.alert('Nothing to clean up', 'This photo does not look like a document.');
-        return;
-      }
-      setPendingImages((prev) =>
-        prev.map((im, i) =>
-          i === index
-            ? {
-                ...im,
-                originalUri: im.originalUri || im.uri,
-                originalMime: im.originalMime || im.mimeType,
-                uri: result.imageUri!,
-                mimeType: result.mimeType,
-                scanned: true,
-              }
-            : im,
-        ),
-      );
+      const ok = await enhanceImageAtIndex(index, target.uri);
+      if (!ok) Alert.alert('Nothing to clean up', 'This photo does not look like a document.');
     } catch (e: any) {
       Alert.alert('Scan failed', e?.message || 'Could not process the document. Please try again.');
     } finally {
       setScanningIndex(null);
     }
-  }, [scanningIndex]);
+  }, [scanningIndex, scanningAll, enhanceImageAtIndex]);
 
-  // Fire document auto-detection for a freshly staged single photo.
+  // Batch: polish every staged photo that was auto-detected as a document and
+  // is not already polished. Processes sequentially so the UI shows progress.
+  const scanAllDocuments = useCallback(async () => {
+    if (scanningIndex !== null || scanningAll) return;
+    let targets: { index: number; uri: string }[] = [];
+    setPendingImages((prev) => {
+      targets = prev
+        .map((im, i) => ({ im, i }))
+        .filter(({ im }) => !im.scanned && docSuggestUris.includes(im.uri))
+        .map(({ im, i }) => ({ index: i, uri: im.uri }));
+      return prev;
+    });
+    if (targets.length === 0) return;
+    setScanningAll(true);
+    let failures = 0;
+    for (const t of targets) {
+      setScanningIndex(t.index);
+      try {
+        const ok = await enhanceImageAtIndex(t.index, t.uri);
+        if (!ok) failures++;
+      } catch {
+        failures++;
+      }
+    }
+    setScanningIndex(null);
+    setScanningAll(false);
+    if (failures > 0) {
+      Alert.alert('Some scans failed', `${failures} photo${failures === 1 ? '' : 's'} could not be cleaned up. You can retry each with its own scan button.`);
+    }
+  }, [scanningIndex, scanningAll, docSuggestUris, enhanceImageAtIndex]);
+
+  // Fire document auto-detection for every freshly staged photo (batch-aware).
   useEffect(() => {
-    if (pendingImages.length !== 1) {
-      setDocSuggestUri(null);
+    if (pendingImages.length === 0) {
+      setDocSuggestUris([]);
       return;
     }
-    const im = pendingImages[0];
-    if (!im?.uri || im.scanned) return;
-    if (docCheckedUrisRef.current.has(im.uri)) return;
-    docCheckedUrisRef.current.add(im.uri);
     let cancelled = false;
+    const toCheck = pendingImages.filter(
+      (im) => im?.uri && !im.scanned && !docCheckedUrisRef.current.has(im.uri),
+    );
+    if (toCheck.length === 0) return;
+    toCheck.forEach((im) => docCheckedUrisRef.current.add(im.uri));
     (async () => {
+      const backend = process.env.EXPO_PUBLIC_BACKEND_URL;
+      if (!backend) return;
+      let IM: any;
       try {
-        const IM = await import('expo-image-manipulator');
-        const small = await IM.manipulateAsync(im.uri, [{ resize: { width: 512 } }], {
-          compress: 0.6,
-          format: IM.SaveFormat.JPEG,
-          base64: true,
-        });
-        if (cancelled || !small.base64) return;
-        const backend = process.env.EXPO_PUBLIC_BACKEND_URL;
-        if (!backend) return;
-        const res = await fetch(`${backend}/api/documents/detect`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ imageBase64: small.base64, mimeType: 'image/jpeg' }),
-        });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!cancelled && data?.isDocument) setDocSuggestUri(im.uri);
+        IM = await import('expo-image-manipulator');
       } catch {
-        /* best-effort — detection failure never blocks sending */
+        return;
+      }
+      for (const im of toCheck) {
+        if (cancelled) return;
+        try {
+          const small = await IM.manipulateAsync(im.uri, [{ resize: { width: 512 } }], {
+            compress: 0.6,
+            format: IM.SaveFormat.JPEG,
+            base64: true,
+          });
+          if (cancelled || !small.base64) continue;
+          const res = await fetch(`${backend}/api/documents/detect`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ imageBase64: small.base64, mimeType: 'image/jpeg' }),
+          });
+          if (!res.ok) continue;
+          const data = await res.json();
+          if (!cancelled && data?.isDocument) {
+            setDocSuggestUris((prev) => (prev.includes(im.uri) ? prev : [...prev, im.uri]));
+          }
+        } catch {
+          /* best-effort — detection failure never blocks sending */
+        }
       }
     })();
     return () => {
@@ -368,11 +417,10 @@ export default function ChatScreen() {
     };
   }, [pendingImages]);
 
-  const showDocSuggest =
-    pendingImages.length === 1 &&
-    !!docSuggestUri &&
-    pendingImages[0]?.uri === docSuggestUri &&
-    !pendingImages[0]?.scanned;
+  const pendingDocsToScan = pendingImages.filter(
+    (im) => !im.scanned && docSuggestUris.includes(im.uri),
+  ).length;
+  const showDocSuggest = pendingDocsToScan > 0;
   const setActiveCaption = useCallback(
     (caption: string) =>
       setPendingImages((prev) => prev.map((im, i) => (i === activeImageIndex ? { ...im, caption } : im))),
@@ -5085,8 +5133,8 @@ export default function ChatScreen() {
                     <TouchableOpacity
                       onPress={() => scanPendingImage(index)}
                       hitSlop={8}
-                      style={[styles.pendingThumbScan, showDocSuggest && index === 0 ? styles.pendingThumbScanSuggest : null]}
-                      disabled={scanningIndex !== null}
+                      style={[styles.pendingThumbScan, !im.scanned && docSuggestUris.includes(im.uri) ? styles.pendingThumbScanSuggest : null]}
+                      disabled={scanningIndex !== null || scanningAll}
                       testID={`pending-image-scan-${index}`}
                     >
                       {scanningIndex === index ? (
@@ -5117,12 +5165,22 @@ export default function ChatScreen() {
               {showDocSuggest ? (
                 <TouchableOpacity
                   style={styles.docSuggestChip}
-                  onPress={() => scanPendingImage(0)}
-                  disabled={scanningIndex !== null}
+                  onPress={() => (pendingDocsToScan > 1 ? scanAllDocuments() : scanPendingImage(pendingImages.findIndex((im) => !im.scanned && docSuggestUris.includes(im.uri))))}
+                  disabled={scanningIndex !== null || scanningAll}
                   testID="doc-suggest-chip"
                 >
-                  <Feather name="file-text" size={13} color={Colors.primary} />
-                  <Text style={styles.docSuggestText}>Looks like a document — tap to clean it up</Text>
+                  {scanningAll ? (
+                    <ActivityIndicator size="small" color={Colors.primary} />
+                  ) : (
+                    <Feather name="file-text" size={13} color={Colors.primary} />
+                  )}
+                  <Text style={styles.docSuggestText}>
+                    {scanningAll
+                      ? 'Cleaning up documents…'
+                      : pendingDocsToScan > 1
+                        ? `${pendingDocsToScan} photos look like documents — tap to clean them all`
+                        : 'Looks like a document — tap to clean it up'}
+                  </Text>
                 </TouchableOpacity>
               ) : (
                 <Text style={styles.pendingImageHint} numberOfLines={1}>
