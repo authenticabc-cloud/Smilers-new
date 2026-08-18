@@ -174,6 +174,19 @@ export async function presentBackgroundLocalNotification(taskData: unknown) {
   } catch {}
 
   const type = toNonEmptyString(payload.type);
+  // Emergency/SOS → present our LOUD + repeat-until-opened alert (data-only
+  // pushes only reach here; if the server also sends a display `notification`
+  // block the OS shows that one, so keep emergency pushes data-only to avoid a
+  // double banner).
+  if (type === 'emergency' || type === 'sos') {
+    try {
+      const { presentEmergencyAlert } = await import('./emergencyAlertNotify');
+      await presentEmergencyAlert(payload as any);
+    } catch {
+      /* best-effort */
+    }
+    return;
+  }
   if (type !== 'call' && type !== 'message' && type !== 'call-declined') return;
 
   // call-declined: callee tapped Decline while the CALLER's app is background/killed.

@@ -470,6 +470,12 @@ async function presentBackgroundLocalNotification(taskData: unknown) {
   // message-specific contact-name rewrite or per-conversation grouping. This
   // is what restores trustee emergency alerts on the native app.
   if (type && type !== 'message') {
+    // Emergency/SOS → dedicated LOUD + repeat-until-opened path.
+    if (type === 'emergency' || type === 'sos') {
+      const { presentEmergencyAlert } = await import('./emergencyAlertNotify');
+      await presentEmergencyAlert(payload as any);
+      return;
+    }
     const alertChannel = 'alerts-v1';
     if (Platform.OS === 'android') {
       try {
@@ -1334,6 +1340,8 @@ export function usePushNotifications() {
         toNonEmptyString((payload as any).emergencyId) ||
         toNonEmptyString((payload as any).emergency_alert_id);
       if (emAlertId) {
+        // Stop any remaining loud repeat notifications for this alert.
+        import('./emergencyAlertNotify').then((m) => m.cancelEmergencyRepeats(emAlertId)).catch(() => {});
         // Defer through the pending-ref so cold-start/auth-gate timing can't
         // swallow it (flushed immediately if already signed in, else by the
         // hasAuthSession effect below).

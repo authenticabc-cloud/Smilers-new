@@ -17,7 +17,7 @@
  *   - api.emergencyCaptures.getCapturesForAlert({ alertId })     (reactive)
  */
 
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { markAlertOpened } from '../../src/lib/emergencyRead';
 import {
   ActivityIndicator,
@@ -90,6 +90,27 @@ function formatClock(value?: string): string {
 // The marker is repositioned via injectJavaScript so the pin glides to the
 // alerter's new coordinates without a jarring full reload.
 // ────────────────────────────────────────────────────────────────────────
+
+/** Great-circle distance between two lat/lng points, in metres. */
+function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/** Human-friendly distance label ("120 m", "1.4 km", "23 km"). */
+function formatDistance(meters: number): string {
+  if (!Number.isFinite(meters)) return '';
+  if (meters < 1000) return `${Math.round(meters / 10) * 10} m`;
+  const km = meters / 1000;
+  return km < 10 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`;
+}
+
 function LiveMap({ latitude, longitude }: { latitude: number; longitude: number }) {
   const webRef = useRef<WebView>(null);
 
@@ -222,9 +243,14 @@ export default function EmergencyViewerScreen() {
   const params = useLocalSearchParams<{ alertId?: string }>();
   const alertId = typeof params.alertId === 'string' ? params.alertId : '';
 
-  // Mark this alert as opened so the Settings Emergency badge clears it.
+  // Mark this alert as opened so the Settings Emergency badge clears it, and
+  // stop any remaining loud repeat notifications for it.
   useEffect(() => {
-    if (alertId) void markAlertOpened(alertId);
+    if (!alertId) return;
+    void markAlertOpened(alertId);
+    import('../../src/push/emergencyAlertNotify')
+      .then((m) => m.cancelEmergencyRepeats(alertId))
+      .catch(() => {});
   }, [alertId]);
 
   const { data: alert, loading: alertLoading } = useSafeConvexQuery<AlertViewer | null>(
@@ -264,6 +290,39 @@ export default function EmergencyViewerScreen() {
   const hasLocation =
     !!alert && typeof alert.latitude === 'number' && typeof alert.longitude === 'number';
   const isResolved = alert?.status === 'resolved';
+
+  // How far the trustee is from the alerter. Recomputes as the alerter's live
+  // location updates. Location permission is requested contextually (the user
+  // opened an emergency to help); if denied we simply hide the distance.
+  const [distanceLabel, setDistanceLabel] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const lat = alert?.latitude;
+    const lng = alert?.longitude;
+    if (typeof lat !== 'number' || typeof lng !== 'number') {
+      setDistanceLabel(null);
+      return;
+    }
+    (async () => {
+      try {
+        const Location = await import('expo-location');
+        let perm = await Location.getForegroundPermissionsAsync();
+        if (!perm.granted && perm.canAskAgain) {
+          perm = await Location.requestForegroundPermissionsAsync();
+        }
+        if (!perm.granted || cancelled) return;
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        if (cancelled) return;
+        const meters = haversineMeters(pos.coords.latitude, pos.coords.longitude, lat, lng);
+        setDistanceLabel(formatDistance(meters));
+      } catch {
+        /* ignore — distance is best-effort */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [alert?.latitude, alert?.longitude]);
 
   const openInMaps = () => {
     if (!hasLocation) return;
@@ -366,6 +425,12 @@ export default function EmergencyViewerScreen() {
               </View>
             )}
           </View>
+          {hasLocation && distanceLabel ? (
+            <View style={styles.distanceRow} testID="emergency-distance">
+              <Feather name="navigation" size={13} color={Colors.primary} />
+              <Text style={styles.distanceText}>{distanceLabel} away from you</Text>
+            </View>
+          ) : null}
 
           {/* Audio recordings */}
           <Text style={styles.sectionTitle}>Audio recordings</Text>
@@ -445,6 +510,14 @@ const styles = StyleSheet.create({
   },
   linkText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.primaryDark },
   mapCard: { borderRadius: Radius.lg, overflow: 'hidden', backgroundColor: Colors.surface, ...Shadow.sm },
+  distanceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+    marginLeft: 2,
+  },
+  distanceText: { fontSize: 13, fontWeight: '600', color: Colors.primary },
   map: { width: '100%', height: 240, alignItems: 'center', justifyContent: 'center', gap: Spacing.sm },
   clipRow: {
     flexDirection: 'row',

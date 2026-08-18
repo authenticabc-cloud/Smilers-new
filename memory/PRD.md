@@ -1,5 +1,20 @@
 # Smilers Mobile App — PRD
 
+## iter-507 (Jun 2026): Loud+repeating emergency alerts + distance-to-alerter
+
+**1. Alert Sound/Repeat** — NEW `src/push/emergencyAlertNotify.ts`:
+- `ensureEmergencyChannel()` → dedicated Android channel `emergency-v1` at MAX importance, loud `smilers_never_cry` tone, strong vibration, `bypassDnd:true`, PUBLIC lockscreen.
+- `presentEmergencyAlert(payload)` → posts a sticky/non-dismissable loud banner (iOS `interruptionLevel:'timeSensitive'` — true Critical Alerts need Apple entitlement) AND schedules 4 timed repeats (every 30s) whose ids are persisted (AsyncStorage) so they can be cancelled after a cold start.
+- `cancelEmergencyRepeats(alertId)` → cancels remaining repeats.
+- Wired: `usePushNotifications` foreground presenter routes `type==='emergency'|'sos'` → `presentEmergencyAlert` (return early, skip generic alerts-v1); `backgroundTaskSetup` presenter adds an emergency branch BEFORE its call/message gate (was returning early for emergency). Repeats cancelled on open: emergency viewer mount + the tap-handler emergency branch both call `cancelEmergencyRepeats`. Caveat: if the server also sends a display `notification` block, the OS shows its own banner → keep emergency pushes data-only to avoid a double.
+
+**2. Distance To Alerter** — `app/emergency/[alertId].tsx`:
+- Module helpers `haversineMeters` + `formatDistance` ("120 m"/"1.4 km"/"23 km"). New effect requests foreground location contextually (user opened an alert to help; denial just hides distance, no dead-end), computes distance to the alert's live lat/lng, recomputes when the alerter moves. Renders a "<dist> away from you" row under the map (`distanceRow`/`distanceText`). iOS `NSLocationWhenInUseUsageDescription` + Android location perms already present.
+
+Lint clean (only pre-existing require-style warnings in backgroundTaskSetup; my additions use dynamic import). App boots to Sign In. NATIVE/auth-gated — verify on device build; deployed users redeploy.
+
+
+
 ## iter-506 (Jun 2026): Unread emergency badge + live-map confirmation
 
 **Unread Emergency Badge** — `app/settings.tsx`:
