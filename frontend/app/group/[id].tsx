@@ -40,7 +40,9 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useMutation } from 'convex/react';
+import { useMutation, useConvex } from 'convex/react';
+import * as ImagePicker from 'expo-image-picker';
+import { uploadFile } from '../../src/lib/uploadFile';
 import { startCall } from '../../src/lib/twilio/startCall';
 import { getDisplayNameFromUser } from '../../src/lib/displayName';
 import * as Clipboard from 'expo-clipboard';
@@ -526,6 +528,103 @@ function GroupInfoInner() {
       setApprSaving(false);
     }
   }, [conversationId, updateGroupM, apprEmoji, apprColor]);
+
+  // ---- Group photo (admin-set real image; shows everywhere, not just initials) ----
+  const convex = useConvex();
+  const groupPhotoUri: string | null =
+    (conversation as any)?.avatar ||
+    (conversation as any)?.groupIcon ||
+    (conversation as any)?.avatarUrl ||
+    (conversation as any)?.photo ||
+    null;
+  const [avatarUploading, setAvatarUploading] = useState(false);
+
+  const uploadAndSetGroupPhoto = useCallback(
+    async (uri: string, mimeType: string) => {
+      if (!conversationId || !updateGroupM) return;
+      setAvatarUploading(true);
+      try {
+        const storageId = await uploadFile(convex, uri, mimeType || 'image/jpeg');
+        // Backend contract: updateGroup accepts `avatarStorageId`, stores it and
+        // resolves it to a signed `avatar` URL in group/conversation queries.
+        await updateGroupM({ conversationId, avatarStorageId: storageId });
+        void refetchAdmin?.();
+      } catch (e: any) {
+        Alert.alert(
+          'Could not update photo',
+          extractConvexError(e) ||
+            'The group photo could not be saved. It will apply once the server update is live.',
+        );
+      } finally {
+        setAvatarUploading(false);
+      }
+    },
+    [conversationId, updateGroupM, convex, refetchAdmin],
+  );
+
+  const onChangeGroupPhoto = useCallback(() => {
+    if (!isAdmin || avatarUploading) return;
+    const options: { text: string; onPress?: () => void; style?: 'cancel' | 'destructive' }[] = [
+      {
+        text: 'Take Photo',
+        onPress: async () => {
+          const perm = await ImagePicker.requestCameraPermissionsAsync();
+          if (!perm.granted) {
+            Alert.alert('Permission needed', 'Allow camera access to take a group photo.');
+            return;
+          }
+          const res = await ImagePicker.launchCameraAsync({
+            mediaTypes: ['images'],
+            allowsEditing: true,
+            aspect: [1, 1],
+            quality: 0.7,
+          });
+          if (!res.canceled && res.assets?.[0]?.uri) {
+            await uploadAndSetGroupPhoto(res.assets[0].uri, res.assets[0].mimeType || 'image/jpeg');
+          }
+        },
+      },
+      {
+        text: 'Choose from Library',
+        onPress: async () => {
+          const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+          if (!perm.granted) {
+            Alert.alert('Permission needed', 'Allow photo access to choose a group photo.');
+            return;
+          }
+          const res = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['images'],
+            allowsEditing: true,
+            aspect: [1, 1],
+            quality: 0.7,
+          });
+          if (!res.canceled && res.assets?.[0]?.uri) {
+            await uploadAndSetGroupPhoto(res.assets[0].uri, res.assets[0].mimeType || 'image/jpeg');
+          }
+        },
+      },
+    ];
+    if (groupPhotoUri) {
+      options.push({
+        text: 'Remove Photo',
+        style: 'destructive',
+        onPress: async () => {
+          if (!conversationId || !updateGroupM) return;
+          setAvatarUploading(true);
+          try {
+            await updateGroupM({ conversationId, avatarStorageId: null });
+            void refetchAdmin?.();
+          } catch (e: any) {
+            Alert.alert('Could not remove photo', extractConvexError(e));
+          } finally {
+            setAvatarUploading(false);
+          }
+        },
+      });
+    }
+    options.push({ text: 'Cancel', style: 'cancel' });
+    Alert.alert('Group photo', undefined, options as any);
+  }, [isAdmin, avatarUploading, groupPhotoUri, conversationId, updateGroupM, uploadAndSetGroupPhoto, refetchAdmin]);
   const setPositionOrderM = useMutation(
     isSubGroup ? (api as any).subGroups?.setPositionOrder : (api as any).groupPositions?.setPositionOrder,
   );
@@ -845,9 +944,31 @@ function GroupInfoInner() {
       <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
         {/* Identity */}
         <View style={styles.identityWrap}>
-          <View style={styles.bigAvatar}>
-            <Feather name="users" size={42} color={Colors.primary} />
-          </View>
+          <TouchableOpacity
+            activeOpacity={isAdmin ? 0.7 : 1}
+            disabled={!isAdmin}
+            onPress={onChangeGroupPhoto}
+            style={styles.bigAvatar}
+            testID="group-photo-edit"
+          >
+            {groupPhotoUri ? (
+              <Image source={{ uri: groupPhotoUri }} style={styles.bigAvatarImg} />
+            ) : subAppearance.emoji ? (
+              <Text style={styles.bigAvatarEmoji}>{subAppearance.emoji}</Text>
+            ) : (
+              <Feather name="users" size={42} color={Colors.primary} />
+            )}
+            {avatarUploading ? (
+              <View style={styles.bigAvatarOverlay}>
+                <ActivityIndicator color={Colors.white} />
+              </View>
+            ) : null}
+            {isAdmin && !avatarUploading ? (
+              <View style={styles.bigAvatarCamera}>
+                <Feather name="camera" size={14} color={Colors.white} />
+              </View>
+            ) : null}
+          </TouchableOpacity>
           <TouchableOpacity
             style={styles.nameRow}
             disabled={!isAdmin}
@@ -1659,6 +1780,29 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  bigAvatarImg: { width: 100, height: 100, borderRadius: 50 },
+  bigAvatarEmoji: { fontSize: 46 },
+  bigAvatarOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 50,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bigAvatarCamera: {
+    position: 'absolute',
+    right: 2,
+    bottom: 2,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: Colors.white,
   },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: Spacing.md },
   groupName: { fontSize: 22, fontWeight: FontWeight.bold, color: Colors.textPrimary },

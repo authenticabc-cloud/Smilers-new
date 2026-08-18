@@ -1,5 +1,18 @@
 # Smilers Mobile App — PRD
 
+## iter-500 (Jun 2026): Group photo upload (admin) — native UI + backend contract
+
+`app/group/[id].tsx`: the Group Info header avatar (previously a static `users` icon) now:
+- Renders the group photo from `conversation.avatar` (fallbacks `groupIcon`/`avatarUrl`/`photo`), else the sub-group `appearance.emoji`, else the `users` icon.
+- Admins get a camera badge → tapping the avatar opens an action sheet (Take Photo / Choose from Library / Remove Photo). Picks are `allowsEditing` 1:1 quality-0.7, uploaded via `uploadFile(convex, uri, mime)` → `updateGroupM({ conversationId, avatarStorageId })` (or `avatarStorageId: null` to remove). `avatarUploading` shows a spinner overlay; errors handled gracefully with `extractConvexError`. Non-admins: no camera badge, disabled tap.
+- Added `useConvex`, `expo-image-picker`, `uploadFile` imports; styles `bigAvatarImg/bigAvatarEmoji/bigAvatarOverlay/bigAvatarCamera`.
+
+BACKEND DEPENDENCY (external Convex — web team): `conversations.updateGroup` must accept optional `avatarStorageId: v.union(v.id("_storage"), v.null())`, store it admin-only, resolve it to a signed `avatar` URL in all group/conversation reads, and emit a `groupIconChanged` system message. Until shipped, the mutation call fails (unknown arg) and the app shows a friendly "will apply once the server update is live" message. Spec written: `/app/CONVEX_BACKEND_SPEC_GROUP_PHOTO.md`. Display side is already wired app-wide (chats/groups list, Forward picker, OS share sheet [iter-499], group header).
+
+Lint clean. App boots to Sign In. ⚠️ Auth-gated (admin in a group) + needs the web-team backend change — verify on a device build after the web team ships `avatarStorageId`.
+
+
+
 ## iter-499 (Jun 2026): Scan-before-send (polished vs original) + OS share-sheet avatars
 
 **1. Send polished OR original when attaching a document photo** (`app/chat/[conversationId].tsx`)
