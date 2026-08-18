@@ -109,7 +109,7 @@ if (keystorePropertiesFile.exists()) {
         applicationId 'com.smilers.app'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 2295
+        versionCode 2680
         versionName "2.2.18"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""

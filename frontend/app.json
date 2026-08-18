@@ -43,7 +43,7 @@
     "android": {
       "package": "com.smilers.app",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 2295,
+      "versionCode": 2680,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#E4B53B"
