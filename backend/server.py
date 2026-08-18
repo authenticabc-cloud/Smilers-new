@@ -4795,6 +4795,44 @@ async def enhance_document(req: DocEnhanceRequest):
     }
 
 
+@api_router.post("/documents/detect")
+async def detect_document(req: DocEnhanceRequest):
+    """Cheap classifier: does this photo look like a document/paper/receipt/
+    screenshot of text? Uses a small/fast vision model on a client-downscaled
+    image and returns {"isDocument": bool}. Fail-open to false so a hiccup never
+    blocks sending a normal photo."""
+    from emergentintegrations.llm.chat import ImageContent
+
+    api_key = os.getenv("EMERGENT_LLM_KEY")
+    if not api_key:
+        return {"isDocument": False}
+    raw = req.imageBase64 or ""
+    if "," in raw and raw.strip().startswith("data:"):
+        raw = raw.split(",", 1)[1]
+    if not raw:
+        return {"isDocument": False}
+    try:
+        chat = LlmChat(
+            api_key=api_key,
+            session_id=f"doc-detect-{uuid.uuid4()}",
+            system_message="You classify photos. Answer with a single word only.",
+        ).with_model("gemini", "gemini-2.5-flash")
+        msg = UserMessage(
+            text=(
+                "Is this image primarily a DOCUMENT — e.g. a sheet of paper, a "
+                "printed/handwritten letter, a form, a receipt, an ID/card, or a "
+                "screenshot containing mostly text? Answer strictly 'yes' or 'no'."
+            ),
+            file_contents=[ImageContent(raw)],
+        )
+        answer = ((await chat.send_message(msg)) or "").strip().lower()
+        is_doc = answer.startswith("y")
+        return {"isDocument": is_doc}
+    except Exception:
+        logging.exception("document detect failed (non-fatal)")
+        return {"isDocument": False}
+
+
 
 
 # Include the router in the main app

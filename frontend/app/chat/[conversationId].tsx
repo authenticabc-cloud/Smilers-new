@@ -274,6 +274,11 @@ export default function ChatScreen() {
   const [activeImageIndex, setActiveImageIndex] = useState(0);
   const [editorIndex, setEditorIndex] = useState<number | null>(null);
   const [scanningIndex, setScanningIndex] = useState<number | null>(null);
+  // Auto-detect: when a single photo is staged, quietly ask the AI if it looks
+  // like a document and, if so, highlight the Scan button. Cached per-uri so it
+  // runs at most once per photo. Only for single stages (keeps cost minimal).
+  const [docSuggestUri, setDocSuggestUri] = useState<string | null>(null);
+  const docCheckedUrisRef = useRef<Set<string>>(new Set());
   // Scan/Polish a staged document photo before sending. Tapping toggles
   // between the cleaned-up "polished" version and the "original" so the sender
   // explicitly chooses which one to send (Send Polished vs Send Original).
@@ -323,6 +328,51 @@ export default function ChatScreen() {
       setScanningIndex(null);
     }
   }, [scanningIndex]);
+
+  // Fire document auto-detection for a freshly staged single photo.
+  useEffect(() => {
+    if (pendingImages.length !== 1) {
+      setDocSuggestUri(null);
+      return;
+    }
+    const im = pendingImages[0];
+    if (!im?.uri || im.scanned) return;
+    if (docCheckedUrisRef.current.has(im.uri)) return;
+    docCheckedUrisRef.current.add(im.uri);
+    let cancelled = false;
+    (async () => {
+      try {
+        const IM = await import('expo-image-manipulator');
+        const small = await IM.manipulateAsync(im.uri, [{ resize: { width: 512 } }], {
+          compress: 0.6,
+          format: IM.SaveFormat.JPEG,
+          base64: true,
+        });
+        if (cancelled || !small.base64) return;
+        const backend = process.env.EXPO_PUBLIC_BACKEND_URL;
+        if (!backend) return;
+        const res = await fetch(`${backend}/api/documents/detect`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imageBase64: small.base64, mimeType: 'image/jpeg' }),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled && data?.isDocument) setDocSuggestUri(im.uri);
+      } catch {
+        /* best-effort — detection failure never blocks sending */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingImages]);
+
+  const showDocSuggest =
+    pendingImages.length === 1 &&
+    !!docSuggestUri &&
+    pendingImages[0]?.uri === docSuggestUri &&
+    !pendingImages[0]?.scanned;
   const setActiveCaption = useCallback(
     (caption: string) =>
       setPendingImages((prev) => prev.map((im, i) => (i === activeImageIndex ? { ...im, caption } : im))),
@@ -5035,7 +5085,7 @@ export default function ChatScreen() {
                     <TouchableOpacity
                       onPress={() => scanPendingImage(index)}
                       hitSlop={8}
-                      style={styles.pendingThumbScan}
+                      style={[styles.pendingThumbScan, showDocSuggest && index === 0 ? styles.pendingThumbScanSuggest : null]}
                       disabled={scanningIndex !== null}
                       testID={`pending-image-scan-${index}`}
                     >
@@ -5064,11 +5114,23 @@ export default function ChatScreen() {
                   </TouchableOpacity>
                 ))}
               </ScrollView>
-              <Text style={styles.pendingImageHint} numberOfLines={1}>
-                {pendingImages.length === 1
-                  ? 'Tap ⤢ to scan a document · ✎ to edit · add a caption, then send'
-                  : `${pendingImages.length} photos · ⤢ scan document · ✎ edit · tap a photo to caption`}
-              </Text>
+              {showDocSuggest ? (
+                <TouchableOpacity
+                  style={styles.docSuggestChip}
+                  onPress={() => scanPendingImage(0)}
+                  disabled={scanningIndex !== null}
+                  testID="doc-suggest-chip"
+                >
+                  <Feather name="file-text" size={13} color={Colors.primary} />
+                  <Text style={styles.docSuggestText}>Looks like a document — tap to clean it up</Text>
+                </TouchableOpacity>
+              ) : (
+                <Text style={styles.pendingImageHint} numberOfLines={1}>
+                  {pendingImages.length === 1
+                    ? 'Tap ⤢ to scan a document · ✎ to edit · add a caption, then send'
+                    : `${pendingImages.length} photos · ⤢ scan document · ✎ edit · tap a photo to caption`}
+                </Text>
+              )}
             </View>
           ) : null}
 

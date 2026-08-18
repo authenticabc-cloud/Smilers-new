@@ -1,5 +1,21 @@
 # Smilers Mobile App — PRD
 
+## iter-501 (Jun 2026): Member avatars everywhere + Group description card + AI document auto-detect
+
+**1. Member avatars consistent across group screens** (`app/group/[id].tsx`)
+- New module-level `resolveMemberAvatar(item)` (broad chain: `avatar/avatarUrl/profilePicture/profilePictureUrl/photo` + nested `user.*`). Members list now uses it (was narrow `avatarUrl` only). Office bearers (previously initials-only) now show photos via a new `avatarById` map (built from `members`) fed into `officeBearers[].avatar` + `bearerAvatarImg` style. Add-member picker already broad.
+
+**2. Group description — prominent + inline edit** (`app/group/[id].tsx`)
+- New Description card below the identity block: shows `conversation.description`; admins see an "Edit" pencil (or an "Add a group description…" placeholder when empty) → opens a dedicated `editDescOpen` modal (multiline, 280 chars, char counter) → `onSaveDescription` → `updateGroup({conversationId, description})`. Styles `descriptionCard/descriptionHeader/descriptionEditBtn/descriptionEditText/descriptionText/descriptionPlaceholder/descCharCount`.
+
+**3. Auto-detect documents in compose** (`app/chat/[conversationId].tsx` + backend)
+- NEW cheap backend `POST /api/documents/detect` (`DocEnhanceRequest`) → `gemini-2.5-flash`, single-word yes/no on a client-downscaled image → `{isDocument: bool}`, fail-open to false. Verified via curl: invoice→true, random scene→false.
+- Frontend: when exactly ONE photo is staged (cost-minimal), a `useEffect` downscales it (`expo-image-manipulator` → width 512 JPEG base64) and POSTs to `/api/documents/detect`, cached per-uri via `docCheckedUrisRef`. If `isDocument`, sets `docSuggestUri` → shows a green **"Looks like a document — tap to clean it up"** chip (tap = runs `scanPendingImage(0)`) and highlights the Scan button (`pendingThumbScanSuggest`). Never blocks sending. `showDocSuggest` gates the chip vs the normal hint.
+
+Lint clean on all files. Backend + expo restarted; app boots to Sign In. Backend detect verified via curl; frontend features are auth-gated (in-chat / in-group) — verify on a device build. Deployed users must redeploy.
+
+
+
 ## iter-500 (Jun 2026): Group photo upload (admin) — native UI + backend contract
 
 `app/group/[id].tsx`: the Group Info header avatar (previously a static `users` icon) now:

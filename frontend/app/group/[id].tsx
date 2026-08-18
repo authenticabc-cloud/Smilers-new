@@ -76,6 +76,26 @@ function getContactUserId(item: any): string | null {
   return value ? String(value) : null;
 }
 
+/** First non-empty avatar URL for a member row (broad field chain used app-wide). */
+function resolveMemberAvatar(item: any): string | null {
+  const candidates = [
+    item?.avatar,
+    item?.avatarUrl,
+    item?.profilePicture,
+    item?.profilePictureUrl,
+    item?.photo,
+    item?.user?.avatar,
+    item?.user?.avatarUrl,
+    item?.user?.profilePicture,
+    item?.user?.profilePictureUrl,
+  ];
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.trim().length > 0) return c;
+  }
+  return null;
+}
+
+
 type SuspendDuration = '1h' | '6h' | '24h' | '7d' | '30d' | 'permanent';
 
 const DURATION_OPTIONS: { key: SuspendDuration; label: string }[] = [
@@ -489,15 +509,29 @@ function GroupInfoInner() {
     return map;
   }, [members, displayNameForMember]);
 
+  // Member photos, resolved consistently for every group screen (members list,
+  // office bearers, reorder sheet) using the same broad field chain the rest of
+  // the app uses — previously only the members list read `avatarUrl`, so bearers
+  // showed initials even when the person had a photo.
+  const avatarById = useMemo(() => {
+    const map = new Map<string, string>();
+    (Array.isArray(members) ? members : []).forEach((m: any) => {
+      const uid = getContactUserId(m);
+      const uri = resolveMemberAvatar(m);
+      if (uid && uri) map.set(uid, uri);
+    });
+    return map;
+  }, [members]);
+
   // Office bearers = sub-group members who hold a position, in the backend's
   // (Chief-Admin-controlled) order. subPositions is pre-sorted by `order`.
   const officeBearers = useMemo(() => {
-    const list: { userId: string; name: string; title: string; showInMother: boolean }[] = [];
+    const list: { userId: string; name: string; title: string; showInMother: boolean; avatar: string | null }[] = [];
     subPositionMap.forEach((val, uid) => {
-      list.push({ userId: uid, name: nameById.get(uid) || 'Member', title: val.title, showInMother: val.showInMother });
+      list.push({ userId: uid, name: nameById.get(uid) || 'Member', title: val.title, showInMother: val.showInMother, avatar: avatarById.get(uid) || null });
     });
     return list;
-  }, [subPositionMap, nameById]);
+  }, [subPositionMap, nameById, avatarById]);
 
   const [positionTarget, setPositionTarget] = useState<{ userId: string; name: string } | null>(null);
   const [bulkPositionsOpen, setBulkPositionsOpen] = useState(false);
@@ -684,6 +718,7 @@ function GroupInfoInner() {
 
   // -------- Modal state --------
   const [editNameOpen, setEditNameOpen] = useState(false);
+  const [editDescOpen, setEditDescOpen] = useState(false);
   const [draftName, setDraftName] = useState(groupName);
   const [draftDesc, setDraftDesc] = useState(conversation?.description || '');
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
@@ -725,6 +760,19 @@ function GroupInfoInner() {
       void refetchAdmin();
     }
   };
+
+  const onSaveDescription = async () => {
+    if (!conversationId) return;
+    const ok = await callMutation('updateGroup', updateGroupM, {
+      conversationId,
+      description: draftDesc.trim(),
+    });
+    if (ok) {
+      setEditDescOpen(false);
+      void refetchAdmin();
+    }
+  };
+
 
   const onToggleApproval = async (next: boolean) => {
     if (!conversationId) return;
@@ -998,8 +1046,43 @@ function GroupInfoInner() {
           ) : null}
         </View>
 
-        {/* Chief Admin election — appears only when this group/sub group has no
-            effective Chief Admin (safety-net; never clashes with auto-succession). */}
+        {/* Group description — prominent; admins tap to edit inline. */}
+        {conversation?.description?.trim() || isAdmin ? (
+          <View style={styles.descriptionCard}>
+            <View style={styles.descriptionHeader}>
+              <Text style={styles.sectionLabel}>DESCRIPTION</Text>
+              {isAdmin ? (
+                <TouchableOpacity
+                  onPress={() => {
+                    setDraftDesc(conversation?.description || '');
+                    setEditDescOpen(true);
+                  }}
+                  hitSlop={8}
+                  testID="group-description-edit"
+                  style={styles.descriptionEditBtn}
+                >
+                  <Feather name="edit-2" size={13} color={Colors.primary} />
+                  <Text style={styles.descriptionEditText}>Edit</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            {conversation?.description?.trim() ? (
+              <Text style={styles.descriptionText}>{conversation.description}</Text>
+            ) : (
+              <TouchableOpacity
+                onPress={() => {
+                  setDraftDesc('');
+                  setEditDescOpen(true);
+                }}
+                testID="group-description-add"
+              >
+                <Text style={styles.descriptionPlaceholder}>Add a group description…</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ) : null}
+
+
         <ChiefElectionCard
           conversationId={conversationId}
           isSubGroup={isSubGroup}
@@ -1137,7 +1220,11 @@ function GroupInfoInner() {
                   <Text style={styles.bearerRank}>{idx + 1}</Text>
                 ) : null}
                 <View style={styles.bearerAvatar}>
-                  <Text style={styles.memberAvatarText}>{getInitials(ob.name)}</Text>
+                  {ob.avatar ? (
+                    <Image source={{ uri: ob.avatar }} style={styles.bearerAvatarImg} />
+                  ) : (
+                    <Text style={styles.memberAvatarText}>{getInitials(ob.name)}</Text>
+                  )}
                 </View>
                 <Text style={styles.bearerName} numberOfLines={1}>
                   {ob.userId === myId ? 'You' : ob.name}
@@ -1175,8 +1262,8 @@ function GroupInfoInner() {
                   testID={`group-member-open-${mid}`}
                 >
                 <View style={styles.memberAvatar}>
-                  {m?.avatarUrl ? (
-                    <Image source={{ uri: m.avatarUrl }} style={styles.memberAvatarImg} />
+                  {resolveMemberAvatar(m) ? (
+                    <Image source={{ uri: resolveMemberAvatar(m)! }} style={styles.memberAvatarImg} />
                   ) : (
                     <Text style={styles.memberAvatarText}>{getInitials(resolvedName)}</Text>
                   )}
@@ -1337,6 +1424,36 @@ function GroupInfoInner() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* ----- Edit Description Modal (inline from the Description card) ----- */}
+      <Modal visible={editDescOpen} transparent animationType="slide" onRequestClose={() => setEditDescOpen(false)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setEditDescOpen(false)}>
+          <Pressable style={[styles.modalCard, { paddingBottom: Spacing.lg + insets.bottom }]} onPress={() => {}}>
+            <Text style={styles.modalTitle}>Group Description</Text>
+            <TextInput
+              value={draftDesc}
+              onChangeText={setDraftDesc}
+              style={[styles.modalInput, { minHeight: 96, textAlignVertical: 'top' }]}
+              multiline
+              maxLength={280}
+              autoFocus
+              placeholder="What is this group about?"
+              placeholderTextColor={Colors.textMuted}
+              testID="group-description-input"
+            />
+            <Text style={styles.descCharCount}>{(draftDesc || '').length}/280</Text>
+            <View style={styles.modalActions}>
+              <TouchableOpacity onPress={() => setEditDescOpen(false)} style={styles.modalCancel}>
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={onSaveDescription} style={styles.modalSave} testID="group-description-save">
+                <Text style={styles.modalSaveText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
 
       {/* ----- Invite Link Modal ----- */}
       <Modal visible={inviteModalOpen} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setInviteModalOpen(false)}>
@@ -1809,6 +1926,20 @@ const styles = StyleSheet.create({
   memberCountLine: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
   adminCapLine: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2 },
   metaLine: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2, textAlign: 'center' },
+  descriptionCard: {
+    marginTop: Spacing.lg,
+    marginHorizontal: Spacing.base,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.base,
+  },
+  descriptionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.xs },
+  descriptionEditBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  descriptionEditText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.primary },
+  descriptionText: { fontSize: FontSize.base, color: Colors.textPrimary, lineHeight: 21 },
+  descriptionPlaceholder: { fontSize: FontSize.base, color: Colors.textMuted, fontStyle: 'italic' },
+  descCharCount: { alignSelf: 'flex-end', fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 4 },
+
   section: { marginTop: Spacing.lg, backgroundColor: Colors.surface, paddingVertical: Spacing.sm },
   sectionLabel: {
     fontSize: FontSize.xs,
@@ -1939,7 +2070,9 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
+  bearerAvatarImg: { width: 34, height: 34, borderRadius: 17 },
   bearerName: { flex: 1, fontSize: FontSize.base, fontWeight: FontWeight.medium, color: Colors.textPrimary },
   memberBio: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
   memberActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
