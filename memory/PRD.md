@@ -1,5 +1,18 @@
 # Smilers Mobile App — PRD
 
+## iter-499 (Jun 2026): Scan-before-send (polished vs original) + OS share-sheet avatars
+
+**1. Send polished OR original when attaching a document photo** (`app/chat/[conversationId].tsx`)
+- The existing multi-photo staging strip (pick photo → preview thumbs → Send) now has a green **Scan** button (⤢) per staged photo. Tapping it calls the new `src/lib/enhanceDocument.ts` → `enhanceDocumentToLocalFile(uri)` (POST `/api/documents/enhance`, Gemini) which writes the polished image to a cache file; the staged photo's `uri`/`mimeType` are swapped to the polished version and a "Polished ✓" badge shows. Tapping again (rotate-ccw icon) reverts to the stored `originalUri`. Whatever is active when the user hits Send is what gets sent — so the sender explicitly chooses polished vs original. `pendingImages` items gained `originalUri`/`originalMime`/`scanned`; new `scanningIndex` state + `scanPendingImage(index)`. Styles `pendingThumbScan`/`pendingThumbScannedBadge`/`pendingThumbScannedText` in `chatScreenStyles.ts`. Hint text updated.
+- Reused for the gallery DocScanModal path indirectly (same backend endpoint, already live/verified end-to-end).
+
+**2. Profile photos + group icons on the OS "Share to Smilers" sheet** (`app/share-receiver.tsx`)
+- Bug: the share-intent recipient picker read only `avatarUrl`/`profilePictureUrl`, so device profile photos (stored under `avatar`) and group icons never rendered — chats showed initials, groups showed a generic people icon (user screenshots confirmed). FIX: new module-level `pickAvatarUrl(...vals)` first-non-empty resolver, applied to all three build sites (direct chats, contacts, groups) mirroring the in-app `ForwardPickerSheet` fallback chain: direct → `peer.avatar/avatarUrl/profilePicture/profilePictureUrl/photo`, nested `otherUser.*`, `conv.avatar/avatarUrl`; groups → `groupIcon/icon/groupAvatarUrl/avatar/avatarUrl/photo`; contacts → `avatar/avatarUrl/profilePicture/profilePictureUrl/photo`.
+
+Lint: clean on all changed files. App boots to Sign In. ⚠️ Both are auth/native (compose flow needs login; share sheet is a native share-intent screen) — verify on a device build. Deployed users must redeploy to get these.
+
+
+
 ## iter-498 (Jun 2026): Receive-once fileHash for shared audio files (native) + land-on-latest-message hardening
 
 Web team published two contracts (`native-receive-once-contract.json` v1.1, `native-open-chat-latest-message-spec.json` v1.0) — both are NATIVE fixes, no backend work.

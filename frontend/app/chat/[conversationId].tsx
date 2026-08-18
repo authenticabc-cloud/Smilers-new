@@ -116,6 +116,7 @@ import { rememberChatRoute } from '../../src/lib/lastRoute';
 import { translateIncomingMessageText } from '../../src/lib/translation';
 import { uploadFile } from '../../src/lib/uploadFile';
 import { computeFileHashFromUri } from '../../src/lib/fileHash';
+import { enhanceDocumentToLocalFile } from '../../src/lib/enhanceDocument';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { useConversationOtherUser } from '../../src/hooks/useConversationOtherUser';
 import { formatCityLocalTime } from '../../src/lib/localTime';
@@ -269,9 +270,59 @@ export default function ChatScreen() {
   // picks stage here; each image carries its own caption, and the
   // composer input edits the ACTIVE image's caption while any image is
   // staged. (Single-photo behaviour is unchanged — it's just length 1.)
-  const [pendingImages, setPendingImages] = useState<{ uri: string; mimeType: string; caption: string }[]>([]);
+  const [pendingImages, setPendingImages] = useState<{ uri: string; mimeType: string; caption: string; originalUri?: string; originalMime?: string; scanned?: boolean }[]>([]);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
   const [editorIndex, setEditorIndex] = useState<number | null>(null);
+  const [scanningIndex, setScanningIndex] = useState<number | null>(null);
+  // Scan/Polish a staged document photo before sending. Tapping toggles
+  // between the cleaned-up "polished" version and the "original" so the sender
+  // explicitly chooses which one to send (Send Polished vs Send Original).
+  const scanPendingImage = useCallback(async (index: number) => {
+    if (scanningIndex !== null) return;
+    let target: { uri: string; scanned?: boolean; originalUri?: string; originalMime?: string; mimeType: string } | undefined;
+    setPendingImages((prev) => {
+      target = prev[index];
+      return prev;
+    });
+    if (!target) return;
+    // Already polished → revert to the original (no network call).
+    if (target.scanned && target.originalUri) {
+      setPendingImages((prev) =>
+        prev.map((im, i) =>
+          i === index
+            ? { ...im, uri: im.originalUri!, mimeType: im.originalMime || 'image/jpeg', scanned: false }
+            : im,
+        ),
+      );
+      return;
+    }
+    setScanningIndex(index);
+    try {
+      const result = await enhanceDocumentToLocalFile(target.uri);
+      if (!result.imageUri) {
+        Alert.alert('Nothing to clean up', 'This photo does not look like a document.');
+        return;
+      }
+      setPendingImages((prev) =>
+        prev.map((im, i) =>
+          i === index
+            ? {
+                ...im,
+                originalUri: im.originalUri || im.uri,
+                originalMime: im.originalMime || im.mimeType,
+                uri: result.imageUri!,
+                mimeType: result.mimeType,
+                scanned: true,
+              }
+            : im,
+        ),
+      );
+    } catch (e: any) {
+      Alert.alert('Scan failed', e?.message || 'Could not process the document. Please try again.');
+    } finally {
+      setScanningIndex(null);
+    }
+  }, [scanningIndex]);
   const setActiveCaption = useCallback(
     (caption: string) =>
       setPendingImages((prev) => prev.map((im, i) => (i === activeImageIndex ? { ...im, caption } : im))),
@@ -4975,6 +5026,25 @@ export default function ChatScreen() {
                   >
                     <Image source={{ uri: im.uri }} style={styles.pendingImageThumb} />
                     {im.caption?.trim() ? <View style={styles.pendingThumbCaptionDot} /> : null}
+                    {im.scanned ? (
+                      <View style={styles.pendingThumbScannedBadge}>
+                        <Feather name="check" size={9} color={Colors.white} />
+                        <Text style={styles.pendingThumbScannedText}>Polished</Text>
+                      </View>
+                    ) : null}
+                    <TouchableOpacity
+                      onPress={() => scanPendingImage(index)}
+                      hitSlop={8}
+                      style={styles.pendingThumbScan}
+                      disabled={scanningIndex !== null}
+                      testID={`pending-image-scan-${index}`}
+                    >
+                      {scanningIndex === index ? (
+                        <ActivityIndicator size="small" color={Colors.white} />
+                      ) : (
+                        <Feather name={im.scanned ? 'rotate-ccw' : 'maximize'} size={11} color={Colors.white} />
+                      )}
+                    </TouchableOpacity>
                     <TouchableOpacity
                       onPress={() => setEditorIndex(index)}
                       hitSlop={8}
@@ -4996,8 +5066,8 @@ export default function ChatScreen() {
               </ScrollView>
               <Text style={styles.pendingImageHint} numberOfLines={1}>
                 {pendingImages.length === 1
-                  ? 'Tap ✎ to edit · add a caption, then send'
-                  : `${pendingImages.length} photos · tap ✎ to edit, tap a photo to caption it`}
+                  ? 'Tap ⤢ to scan a document · ✎ to edit · add a caption, then send'
+                  : `${pendingImages.length} photos · ⤢ scan document · ✎ edit · tap a photo to caption`}
               </Text>
             </View>
           ) : null}

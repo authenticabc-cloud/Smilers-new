@@ -93,6 +93,15 @@ const initialsOf = (name: string) => getDisplayInitials(name, 1);
 const stableIdOf = (r: { userId?: string; conversationId?: string }): string | null =>
   r.userId ? `u:${r.userId}` : r.conversationId ? `c:${r.conversationId}` : null;
 
+/** First non-empty string among the candidates (broad avatar-field resolver). */
+function pickAvatarUrl(...vals: any[]): string | null {
+  for (const v of vals) {
+    if (typeof v === 'string' && v.trim().length > 0) return v;
+  }
+  return null;
+}
+
+
 interface Recipient {
   /** Either conversationId (preferred when known) or `user:<userId>`. */
   key: string;
@@ -390,6 +399,7 @@ function ShareReceiverNative() {
   const recipients: Recipient[] = useMemo(() => {
     const map = new Map<string, Recipient>();
 
+
     // 1) Recent DMs (groups live in the dedicated Groups tab)
     if (Array.isArray(conversations)) {
       for (const conv of conversations) {
@@ -419,8 +429,18 @@ function ShareReceiverNative() {
             : (Array.isArray(conv.members) ? conv.members.length : undefined),
           name,
           avatarUrl: isGroup
-            ? (conv.groupAvatarUrl || conv.avatarUrl || null)
-            : (peer?.avatarUrl || peer?.profilePictureUrl || null),
+            ? pickAvatarUrl(conv.groupIcon, conv.icon, conv.groupAvatarUrl, conv.avatar, conv.avatarUrl, conv.photo)
+            : pickAvatarUrl(
+                peer?.avatar,
+                peer?.avatarUrl,
+                peer?.profilePicture,
+                peer?.profilePictureUrl,
+                peer?.photo,
+                conv.otherUser?.avatar,
+                conv.otherUser?.profilePicture,
+                conv.avatar,
+                conv.avatarUrl,
+              ),
           lastActivity:
             typeof conv.lastMessageAt === 'number'
               ? conv.lastMessageAt
@@ -454,7 +474,13 @@ function ShareReceiverNative() {
           name: getResolvedDisplayName(contact, deviceIndex, lookupDeviceContactName, '')
             || resolveContactName(contact)
             || 'Contact',
-          avatarUrl: contact.avatarUrl || contact.profilePictureUrl || null,
+          avatarUrl: pickAvatarUrl(
+            contact.avatar,
+            contact.avatarUrl,
+            contact.profilePicture,
+            contact.profilePictureUrl,
+            contact.photo,
+          ),
           lastActivity: 0,
         });
       }
@@ -538,7 +564,14 @@ function ShareReceiverNative() {
             ? conv.members.length
             : undefined,
         name,
-        avatarUrl: conv.groupAvatarUrl || conv.avatarUrl || null,
+        avatarUrl: pickAvatarUrl(
+          conv.groupIcon,
+          conv.icon,
+          conv.groupAvatarUrl,
+          conv.avatar,
+          conv.avatarUrl,
+          conv.photo,
+        ),
         lastActivity,
       });
     };
