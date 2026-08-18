@@ -1,13 +1,15 @@
-import React from 'react';
+import React, { useCallback, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useQuery } from 'convex/react';
 import Header from '../src/components/Header';
 import { api } from '../src/convexApi';
 import { useAuth } from '../src/providers/AuthProvider';
 import { useServerStatus } from '../src/hooks/useServerStatus';
+import { useSafeConvexQuery } from '../src/hooks/useSafeConvexQuery';
+import { getOpenedAlertIds } from '../src/lib/emergencyRead';
 import { getCurrentAppVersion } from '../src/lib/appVersion';
 import { Colors, FontSize, FontWeight, Spacing } from '../src/theme';
 
@@ -81,6 +83,30 @@ export default function SettingsScreen() {
   const { status: serverStatus } = useServerStatus();
   const isDegraded = serverStatus?.status === 'degraded';
 
+  // Unread emergency alerts = ACTIVE alerts received from people who trust me
+  // that I haven't opened yet. Drives the red badge on the Emergency row.
+  const { data: receivedAlerts } = useSafeConvexQuery<any[]>(
+    (api as any).emergencyAlerts.getReceivedAlerts,
+    {},
+    [],
+    isAuthenticated,
+  );
+  const [openedIds, setOpenedIds] = useState<Set<string>>(new Set());
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      getOpenedAlertIds().then((s) => {
+        if (active) setOpenedIds(s);
+      });
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
+  const emergencyUnread = (Array.isArray(receivedAlerts) ? receivedAlerts : []).filter(
+    (a: any) => a && a.status !== 'resolved' && !openedIds.has(String(a._id)),
+  ).length;
+
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="settings-screen">
       <Header title="Settings" showBack onBack={() => router.back()} variant="dark" />
@@ -127,6 +153,13 @@ export default function SettingsScreen() {
                   <View style={styles.premiumBadge} testID={`settings-premium-${item.key}`}>
                     <MaterialCommunityIcons name="crown-outline" size={11} color={Colors.primaryDark} />
                     <Text style={styles.premiumBadgeText}>Premium</Text>
+                  </View>
+                ) : null}
+                {item.key === 'emergency' && emergencyUnread > 0 ? (
+                  <View style={styles.alertBadge} testID="settings-emergency-badge">
+                    <Text style={styles.alertBadgeText}>
+                      {emergencyUnread > 9 ? '9+' : emergencyUnread} active
+                    </Text>
                   </View>
                 ) : null}
               </View>
@@ -211,6 +244,18 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: FontWeight.bold,
     color: Colors.primaryDark,
+    letterSpacing: 0.2,
+  },
+  alertBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: '#DC2626',
+  },
+  alertBadgeText: {
+    fontSize: 11,
+    fontWeight: FontWeight.bold,
+    color: '#fff',
     letterSpacing: 0.2,
   },
   rowSub: {

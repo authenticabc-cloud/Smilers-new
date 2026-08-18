@@ -18,6 +18,7 @@
  */
 
 import React, { useEffect, useMemo, useRef } from 'react';
+import { markAlertOpened } from '../../src/lib/emergencyRead';
 import {
   ActivityIndicator,
   Image,
@@ -220,6 +221,11 @@ export default function EmergencyViewerScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ alertId?: string }>();
   const alertId = typeof params.alertId === 'string' ? params.alertId : '';
+
+  // Mark this alert as opened so the Settings Emergency badge clears it.
+  useEffect(() => {
+    if (alertId) void markAlertOpened(alertId);
+  }, [alertId]);
 
   const { data: alert, loading: alertLoading } = useSafeConvexQuery<AlertViewer | null>(
     api.emergencyAlerts.getAlertForViewer,

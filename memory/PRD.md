@@ -1,5 +1,18 @@
 # Smilers Mobile App — PRD
 
+## iter-506 (Jun 2026): Unread emergency badge + live-map confirmation
+
+**Unread Emergency Badge** — `app/settings.tsx`:
+- New `src/lib/emergencyRead.ts` (AsyncStorage): `getOpenedAlertIds()` / `markAlertOpened(id)` (capped 200).
+- Settings safe-subscribes to `emergencyAlerts.getReceivedAlerts` (auth-gated), loads opened ids via `useFocusEffect`, and computes `emergencyUnread` = active alerts (`status !== 'resolved'`) not yet opened. Renders a red **"N active"** badge (`alertBadge`/`alertBadgeText`, 9+ cap) on the Emergency row.
+- `app/emergency/[alertId].tsx`: on mount `markAlertOpened(alertId)` → clears that alert from the badge (badge recomputes on next Settings focus).
+
+**Live Map Refresh** — verified already correct (no change): the viewer's Leaflet WebView defines `window.updateMarker(lat,lng)` (moves marker + radius circle, `panTo` recenters) driven by a reactive `useEffect([latitude, longitude])` off the reactive `getAlertForViewer`. As the alerter's live location updates, the pin tracks it.
+
+Lint clean; app boots to Sign In. NATIVE/auth-gated — verify on device build; deployed users redeploy.
+
+
+
 ## iter-505 (Jun 2026): Emergency tap routing — cold-start/auth-gate fix (per web-team contract)
 
 Web team confirmed (native-emergency-viewer-contract.json) the backend + push are unchanged/correct: emergency push sends `data.type='emergency'`, `data.alertId`, `action_url='/emergency/<alertId>'`, and all viewer queries work. Regression is purely native tap→route, most likely cold-start / auth-gate swallow.
