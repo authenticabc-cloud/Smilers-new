@@ -1,5 +1,15 @@
 # Smilers Mobile App — PRD
 
+## iter-505 (Jun 2026): Emergency tap routing — cold-start/auth-gate fix (per web-team contract)
+
+Web team confirmed (native-emergency-viewer-contract.json) the backend + push are unchanged/correct: emergency push sends `data.type='emergency'`, `data.alertId`, `action_url='/emergency/<alertId>'`, and all viewer queries work. Regression is purely native tap→route, most likely cold-start / auth-gate swallow.
+- Verified route file `app/emergency/[alertId].tsx` exists and reads `params.alertId` (path resolves).
+- `src/push/usePushNotifications.ts`: emergency navigation is now DEFERRED through `pendingEmergencyAlertRef` + `flushPendingEmergency()`: `handleResponse` stashes `emAlertId` and flushes immediately if `hasAuthSession`, else a new `useEffect([hasAuthSession])` flushes once the session is ready. Flush pushes `/emergency/<id>` after a 400ms delay so the root navigator's auth redirect settles first. This covers all launch states — foreground, background, and killed/cold start (getLastNotificationResponseAsync → handleResponse) — so a tap on splash/Sign-In is no longer lost. Idempotent (`alertId` branch runs before the generic action_url fallback).
+
+Lint: no new errors (pre-existing require/deps warnings only). App boots to Sign In. NATIVE (push tap) — verify on device build: send a trustee alert, tap it from a killed app → lands on the emergency viewer (map + recordings). Deployed users redeploy.
+
+
+
 ## iter-504 (Jun 2026): Emergency inbox — reopen received alerts without a notification
 
 `app/emergency.tsx`: added an "ALERTS FROM PEOPLE WHO TRUST YOU" section (above Past Alerts) listing emergency alerts the current user RECEIVED as a trustee. Safe-subscribed to `api.emergencyAlerts.getReceivedAlerts` (fallback `[]` → section hidden until backend ships). Each row: red alert-triangle (active) / green check (resolved) badge, sender name (`senderName`/`userName`/`ownerName`/"Someone"), "Active · <ago>" or "Resolved <ago>", chevron; tap → `router.push('/emergency/<_id>')` (existing viewer with live location + recordings). Styles `receivedRow/receivedDot(+Active/Resolved)/receivedBody/receivedName/receivedMeta`.

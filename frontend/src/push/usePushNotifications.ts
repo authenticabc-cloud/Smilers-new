@@ -772,6 +772,26 @@ export function usePushNotifications() {
   // button resolves silently without opening the app.
   const denyLoginApproval = useMutation((api as any).loginApprovals.deny);
   const lastResponse = useRef<string | null>(null);
+  // Emergency-alert deep link that arrived before we could navigate (e.g. a
+  // COLD START from tapping the alert, where the push handler runs while the
+  // app is still on splash/Sign-In and any router.push is swallowed by the auth
+  // gate). We stash the alertId and flush it once the session is ready.
+  const pendingEmergencyAlertRef = useRef<string | null>(null);
+  const flushPendingEmergency = useCallback(() => {
+    const id = pendingEmergencyAlertRef.current;
+    if (!id || !hasAuthSession) return;
+    pendingEmergencyAlertRef.current = null;
+    // Let the root navigator's auth redirect settle first, THEN push the viewer
+    // on top so tapping an emergency alert reliably lands on the map/recordings
+    // in all launch states (foreground, background, killed/cold start).
+    setTimeout(() => {
+      try {
+        router.push(`/emergency/${id}` as any);
+      } catch {
+        /* navigator not ready yet — the auth effect will retry */
+      }
+    }, 400);
+  }, [hasAuthSession, router]);
   const lastKnownPushToken = useRef<string | null>(null);
   const registrationRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -1314,7 +1334,11 @@ export function usePushNotifications() {
         toNonEmptyString((payload as any).emergencyId) ||
         toNonEmptyString((payload as any).emergency_alert_id);
       if (emAlertId) {
-        router.push(`/emergency/${emAlertId}` as any);
+        // Defer through the pending-ref so cold-start/auth-gate timing can't
+        // swallow it (flushed immediately if already signed in, else by the
+        // hasAuthSession effect below).
+        pendingEmergencyAlertRef.current = emAlertId;
+        flushPendingEmergency();
         return;
       }
 
@@ -1337,8 +1361,14 @@ export function usePushNotifications() {
         }
       }
     },
-    [router, declineCall, denyLoginApproval]
+    [router, declineCall, denyLoginApproval, flushPendingEmergency]
   );
+
+  // Flush any emergency deep link that arrived before the session was ready
+  // (cold start from tapping the alert) as soon as we're authenticated.
+  useEffect(() => {
+    if (hasAuthSession && pendingEmergencyAlertRef.current) flushPendingEmergency();
+  }, [hasAuthSession, flushPendingEmergency]);
 
   useEffect(() => {
     if (Platform.OS === 'web') {
