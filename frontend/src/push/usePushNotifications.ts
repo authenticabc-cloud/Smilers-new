@@ -1305,6 +1305,19 @@ export function usePushNotifications() {
         return;
       }
 
+      // Emergency alerts: route to the alert VIEWER whenever the push carries
+      // an alertId (only emergency pushes do). This is more robust than relying
+      // solely on `action_url` below — if the backend ever drops action_url the
+      // tap still lands on /emergency/<alertId> instead of doing nothing.
+      const emAlertId =
+        toNonEmptyString(payload.alertId) ||
+        toNonEmptyString((payload as any).emergencyId) ||
+        toNonEmptyString((payload as any).emergency_alert_id);
+      if (emAlertId) {
+        router.push(`/emergency/${emAlertId}` as any);
+        return;
+      }
+
       // iter-197: action_url deeplink fallback (EMERGENT_PUSH_BACKEND_CONTRACT §3).
       // Backend pushes carry `action_url` (e.g. /user/<id>, /notifications,
       // /chat/<id>?focus=<msg>); when none of the typed branches above

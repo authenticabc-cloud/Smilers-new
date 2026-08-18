@@ -136,6 +136,10 @@ type CallUIProps = {
    * the instant the callee actually joins (not merely when the ring record
    * changes). */
   onConnectedChange?: (connected: boolean) => void;
+  /** Fired the instant this side detects the call is ending (remote left or
+   *  Convex flipped to ended) — used to play the "Ciao" end-tone immediately,
+   *  while the audio session is still active, on the side that did NOT tap End. */
+  onEnding?: () => void;
   /** True when THIS device joined an already-live call via the add-participant
    * deep-link (carries a streamRoom param). Late joiners can hit a publish race
    * where the pre-join mic.enable() never lands the audio track on the SFU, so
@@ -268,7 +272,7 @@ function ParticipantGridPager({ participants, width }: { participants: any[]; wi
 }
 
 /** In-call UI (inside StreamCall context). */
-function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acceptedAt, room, myId, myName, myPhone, conversationId, isGroupCall, isGroupAdmin, adminIdentities, conversationName, onConnectedChange, isAddedParticipant }: CallUIProps) {
+function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acceptedAt, room, myId, myName, myPhone, conversationId, isGroupCall, isGroupAdmin, adminIdentities, conversationName, onConnectedChange, onEnding, isAddedParticipant }: CallUIProps) {
   const call = useCall();
   const { mode } = useCallHost();
   const isMini = mode === 'mini';
@@ -592,9 +596,15 @@ function CallUI({ isVideo, isCaller, peerName, convStatus, callId, onHangup, acc
       convStatus === 'declined' ||
       convStatus === 'cancelled' ||
       convStatus === 'missed';
+    // Play the "Ciao" end-tone NOW (not after the teardown delay below): once
+    // the remote has left, the Stream audio session is about to be torn down,
+    // and a tone played inside the delayed hangup often gets cut off on THIS
+    // (non-End-tapping) side. Firing it here — while audio is still active —
+    // is what makes Ciao play reliably on BOTH sides. onEnding is idempotent.
+    if (remoteHungUp) onEnding?.();
     const t = setTimeout(() => onHangup(), remoteHungUp ? 400 : 3000);
     return () => clearTimeout(t);
-  }, [remoteParticipants.length, convStatus, onHangup]);
+  }, [remoteParticipants.length, convStatus, onHangup, onEnding]);
 
   const toggleMic = useCallback(async () => {
     if (!call) return;
@@ -2178,6 +2188,16 @@ export default function StreamCallInner() {
   // auto-end hangup() runs, which previously suppressed their Ciao. An
   // unanswered/declined call never connects, so this stays false → still silent.
   const everConnectedRef = useRef(false);
+  const ciaoPlayedRef = useRef(false);
+  // Play the warm "Ciao" call-end tone exactly ONCE per call, and only if the
+  // call actually connected (unanswered/declined rings stay silent). Callable
+  // from both the local End tap (hangup) and the remote-left detector in CallUI
+  // (onEnding) — whichever fires first wins, the other is a no-op.
+  const playCiaoOnce = useCallback(() => {
+    if (ciaoPlayedRef.current || !everConnectedRef.current) return;
+    ciaoPlayedRef.current = true;
+    InCallAudio.playCallEndTone?.();
+  }, []);
   const handleConnectedChange = useCallback((v: boolean) => {
     if (v) everConnectedRef.current = true;
     setRemoteConnected(v);
@@ -2448,7 +2468,7 @@ export default function StreamCallInner() {
     // Gated on everConnectedRef (sticky) so an unanswered/cancelled ring stays
     // silent, while the side that didn't tap End still plays it even though the
     // remote (and thus live remoteConnected) has already gone.
-    if (everConnectedRef.current) InCallAudio.playCallEndTone?.();
+    if (everConnectedRef.current) playCiaoOnce();
     // Group call: tell everyone I've LEFT (so my roster tag flips Joined→Left
     // and a Dial-again affordance appears per the number-visibility rules).
     // Only when I actually connected — an unanswered/cancelled ring is handled
@@ -2472,7 +2492,7 @@ export default function StreamCallInner() {
       call?.leave();
     } catch {}
     callHost.end();
-  }, [callId, call, endCall, isGroupCall, streamRoomParam, streamCallId, me]);
+  }, [callId, call, endCall, isGroupCall, streamRoomParam, streamCallId, me, playCiaoOnce]);
 
   // ── Call-waiting: surface a SECOND ringing call during an active call ──────
   const connectedNow = !!client && !!call;
@@ -2683,6 +2703,7 @@ export default function StreamCallInner() {
             adminIdentities={adminIdentities}
             conversationName={conversationName}
             onConnectedChange={handleConnectedChange}
+            onEnding={playCiaoOnce}
             isAddedParticipant={!!streamRoomParam}
           />
           {waitingBanner}

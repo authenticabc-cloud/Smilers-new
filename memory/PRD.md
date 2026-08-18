@@ -1,5 +1,18 @@
 # Smilers Mobile App — PRD
 
+## iter-503 (Jun 2026): Emergency-alert tap routing + reliable "Ciao" end-tone on both sides
+
+**1. Emergency alert notification → dead tap fixed** (`src/push/usePushNotifications.ts`)
+- The tap handler routed emergency alerts ONLY via the generic `action_url` fallback. Added a robust typed branch (before the action_url fallback): if the push carries `alertId` (or `emergencyId`/`emergency_alert_id`) → `router.push('/emergency/<alertId>')`. Emergency pushes are the only ones carrying `alertId`, so tapping now reliably opens the alert VIEWER (location + recordings + captures) even if the backend ever drops `action_url`. (If the production push no longer includes `alertId` at all, that's a web-team payload regression — but per the viewer contract it carries `data.alertId`.)
+
+**2. "Ciao" call-end tone now plays on BOTH sides** (`src/components/stream/StreamCallInner.tsx`)
+- Root cause: the "Connected" tone is played in-CallUI on connect (both sides fine), but "Ciao" was played only inside the delayed `hangup()`. On the side that did NOT tap End, hangup runs after a 400ms teardown delay — by then the remote has left and Stream is tearing down the WebRTC audio session, so the tone got cut/muted on that side.
+- Fix: added an idempotent `playCiaoOnce()` (guarded by `ciaoPlayedRef` + `everConnectedRef`, so unanswered/declined rings stay silent and it never double-plays). It's now fired the INSTANT the end is detected — new `onEnding` prop called from CallUI's remote-left/convStatus-ended effect (while the audio session is still active) — as well as from the local End tap in `hangup()`. Whichever fires first wins.
+
+Lint: no new errors (only pre-existing require-style/exhaustive-deps warnings). App boots to Sign In. Both are NATIVE (push tap + in-call audio) — verify on a device build; deployed users redeploy.
+
+
+
 ## iter-502 (Jun 2026): Batch document scan (multi-photo)
 
 `app/chat/[conversationId].tsx` — extended the scan-before-send flow to multi-photo albums:
