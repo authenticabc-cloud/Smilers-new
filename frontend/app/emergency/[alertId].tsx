@@ -336,6 +336,21 @@ export default function EmergencyViewerScreen() {
     );
   };
 
+  const navigateToAlerter = () => {
+    if (!hasLocation) return;
+    const { latitude, longitude } = alert!;
+    // Open turn-by-turn DIRECTIONS to the alerter's location.
+    const url = Platform.select({
+      ios: `maps://?daddr=${latitude},${longitude}&dirflg=d`,
+      default: `google.navigation:q=${latitude},${longitude}`,
+    });
+    Linking.openURL(url as string).catch(() =>
+      Linking.openURL(
+        `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}&travelmode=driving`,
+      ),
+    );
+  };
+
   const callAlerter = () => {
     if (alert?.alerterPhone) Linking.openURL(`tel:${alert.alerterPhone}`);
   };
@@ -431,6 +446,12 @@ export default function EmergencyViewerScreen() {
               <Text style={styles.distanceText}>{distanceLabel} away from you</Text>
             </View>
           ) : null}
+          {hasLocation ? (
+            <TouchableOpacity style={styles.navigateBtn} onPress={navigateToAlerter} testID="emergency-navigate">
+              <Feather name="navigation-2" size={16} color={Colors.white} />
+              <Text style={styles.navigateBtnText}>Navigate to them</Text>
+            </TouchableOpacity>
+          ) : null}
 
           {/* Audio recordings */}
           <Text style={styles.sectionTitle}>Audio recordings</Text>
@@ -518,6 +539,17 @@ const styles = StyleSheet.create({
     marginLeft: 2,
   },
   distanceText: { fontSize: 13, fontWeight: '600', color: Colors.primary },
+  navigateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 10,
+    paddingVertical: 12,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.primary,
+  },
+  navigateBtnText: { fontSize: 15, fontWeight: '700', color: Colors.white },
   map: { width: '100%', height: 240, alignItems: 'center', justifyContent: 'center', gap: Spacing.sm },
   clipRow: {
     flexDirection: 'row',

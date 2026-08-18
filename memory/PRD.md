@@ -1,5 +1,13 @@
 # Smilers Mobile App — PRD
 
+## iter-508 (Jun 2026): "Navigate to them" (turn-by-turn) in emergency viewer
+
+`app/emergency/[alertId].tsx`: added `navigateToAlerter()` + a prominent **"Navigate to them"** button (primary, under the distance row, shown only when the alert has a location). Opens turn-by-turn DIRECTIONS to the alerter: iOS `maps://?daddr=<lat>,<lng>&dirflg=d`, Android `google.navigation:q=<lat>,<lng>`, web fallback `https://www.google.com/maps/dir/?api=1&destination=<lat>,<lng>&travelmode=driving`. Distinct from the existing "Open in Maps" (which just shows the pin). Styles `navigateBtn`/`navigateBtnText`.
+
+Lint clean. App boots to Sign In. NATIVE — verify on device build; deployed users redeploy.
+
+
+
 ## iter-507 (Jun 2026): Loud+repeating emergency alerts + distance-to-alerter
 
 **1. Alert Sound/Repeat** — NEW `src/push/emergencyAlertNotify.ts`:
