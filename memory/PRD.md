@@ -1,5 +1,15 @@
 # Smilers Mobile App — PRD
 
+## iter-504 (Jun 2026): Emergency inbox — reopen received alerts without a notification
+
+`app/emergency.tsx`: added an "ALERTS FROM PEOPLE WHO TRUST YOU" section (above Past Alerts) listing emergency alerts the current user RECEIVED as a trustee. Safe-subscribed to `api.emergencyAlerts.getReceivedAlerts` (fallback `[]` → section hidden until backend ships). Each row: red alert-triangle (active) / green check (resolved) badge, sender name (`senderName`/`userName`/`ownerName`/"Someone"), "Active · <ago>" or "Resolved <ago>", chevron; tap → `router.push('/emergency/<_id>')` (existing viewer with live location + recordings). Styles `receivedRow/receivedDot(+Active/Resolved)/receivedBody/receivedName/receivedMeta`.
+
+BACKEND DEPENDENCY (external Convex — web team): add `emergencyAlerts.getReceivedAlerts` query (auth-scoped to the caller's trustee relationships; newest first; returns `_id/_creationTime/triggeredAt/status/resolvedAt/senderName`). Spec: `/app/CONVEX_BACKEND_SPEC_RECEIVED_EMERGENCY_ALERTS.md`. Until shipped, the section stays empty (no error).
+
+Lint clean. App boots to Sign In. Auth-gated (Emergency screen) + needs web-team query — verify on device build after backend ships; deployed users redeploy.
+
+
+
 ## iter-503 (Jun 2026): Emergency-alert tap routing + reliable "Ciao" end-tone on both sides
 
 **1. Emergency alert notification → dead tap fixed** (`src/push/usePushNotifications.ts`)

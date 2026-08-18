@@ -125,6 +125,14 @@ function EmergencyScreenInner() {
     [],
   );
   const { data: trustees } = useSafeConvexQuery<any[]>((api as any).trustees.getMyTrustees, {}, []);
+  // Inbox of emergency alerts THIS user received as a trustee (recent, any
+  // status) so they can reopen a past alert without needing the notification.
+  // Safe-subscribed → empty until the backend ships `getReceivedAlerts`.
+  const { data: receivedAlerts } = useSafeConvexQuery<any[]>(
+    (api as any).emergencyAlerts.getReceivedAlerts,
+    {},
+    [],
+  );
   const { data: panicRemote } = useSafeConvexQuery<PanicSettings | null>(
     (api as any).panicMode.getSettings,
     {},
@@ -616,6 +624,39 @@ function EmergencyScreenInner() {
           ) : null}
         </View>
 
+        {/* Received alerts inbox — alerts from people who trust you. Tap to
+            reopen the live viewer (location + recordings) without a push. */}
+        {Array.isArray(receivedAlerts) && receivedAlerts.length > 0 ? (
+          <View style={styles.pastWrap} testID="emergency-received-list">
+            <Text style={styles.pastTitle}>ALERTS FROM PEOPLE WHO TRUST YOU</Text>
+            {receivedAlerts.map((a: any) => {
+              const active = a?.status !== 'resolved';
+              const who = a?.senderName || a?.userName || a?.ownerName || 'Someone';
+              const when = active
+                ? `Active · ${timeAgo(a._creationTime || a.triggeredAt)}`
+                : `Resolved ${timeAgo(a.resolvedAt || a._creationTime)}`;
+              return (
+                <TouchableOpacity
+                  key={a._id}
+                  style={styles.receivedRow}
+                  activeOpacity={0.7}
+                  onPress={() => router.push(`/emergency/${a._id}` as any)}
+                  testID={`emergency-received-${a._id}`}
+                >
+                  <View style={[styles.receivedDot, active ? styles.receivedDotActive : styles.receivedDotResolved]}>
+                    <Feather name={active ? 'alert-triangle' : 'check'} size={14} color={Colors.white} />
+                  </View>
+                  <View style={styles.receivedBody}>
+                    <Text style={styles.receivedName} numberOfLines={1}>{who}</Text>
+                    <Text style={styles.receivedMeta} numberOfLines={1}>{when}</Text>
+                  </View>
+                  <Feather name="chevron-right" size={20} color={Colors.textMuted} />
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        ) : null}
+
         {/* Past alerts */}
         {pastAlerts.length > 0 ? (
           <View style={styles.pastWrap} testID="emergency-past-list">
@@ -955,6 +996,29 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   pastText: { flex: 1, fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: FontWeight.medium },
+  receivedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 12,
+    backgroundColor: Colors.white,
+    borderRadius: Radius.md,
+    marginBottom: 8,
+    ...Shadow.sm,
+  },
+  receivedDot: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  receivedDotActive: { backgroundColor: '#DC2626' },
+  receivedDotResolved: { backgroundColor: Colors.success },
+  receivedBody: { flex: 1 },
+  receivedName: { fontSize: FontSize.base, color: Colors.textPrimary, fontWeight: FontWeight.semibold },
+  receivedMeta: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 1 },
 });
 
 const sliderStyles = StyleSheet.create({
