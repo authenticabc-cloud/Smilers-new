@@ -1,5 +1,14 @@
 # Smilers Mobile App — PRD
 
+## iter-510 (Jun 2026): Resolve-from-Viewer (trustee marks emergency resolved)
+
+`app/emergency/[alertId].tsx`: added a green **"I've got this — mark resolved"** button in the alerter card (shown only while `status !== 'resolved'`). Tapping confirms, then calls NEW mutation `api.emergencyAlerts.resolveAlertByTrustee({ alertId })`. Per user scope: it ONLY flips the record to resolved + notifies the ALERTER (backend does NOT stop the alerter's device recording/broadcast). Reactive `getAlertForViewer` flips status live; when resolved, shows **"Resolved by <resolvedByName>"** (new fields `resolvedByName`/`resolvedByUserId`/`resolvedAt` on `AlertViewer`). `resolving` state shows a spinner. `app/emergency.tsx` inbox row now renders "Resolved by <name> · <time>" using `a.resolvedByName`.
+
+Backend is external Convex (`anyApi` proxy → wiring a not-yet-shipped mutation is safe; degrades gracefully). Contract for web team: `/app/CONVEX_BACKEND_SPEC_TRUSTEE_RESOLVE.md` — new `resolveAlertByTrustee` (trustee-authorized, idempotent, notifies alerter only) + extend `getAlertForViewer` and `getReceivedAlerts` with `resolvedByName`/`resolvedByUserId`/`resolvedAt`. Existing owner-only `resolveAlert` unchanged.
+
+Lint clean (both files). App boots to Sign In.
+
+
 ## iter-509 (Jun 2026): Android versionCode pin, doc-scan Save/Share, expo-share-intent removed for iOS build
 
 **1. Android versionCode → 2680** — `app.json` `android.versionCode: 2680`, `android/app/build.gradle` `versionCode 2680`, and `eas.json` `autoIncrement: false` on `production` + `app-bundle` so the next build is EXACTLY 2680 (previous auto-increment was out-of-sync producing 2301 vs 2679). Plan "option b": re-enable autoIncrement AFTER the 2680 build ships.

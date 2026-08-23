@@ -634,7 +634,9 @@ function EmergencyScreenInner() {
               const who = a?.senderName || a?.userName || a?.ownerName || 'Someone';
               const when = active
                 ? `Active · ${timeAgo(a._creationTime || a.triggeredAt)}`
-                : `Resolved ${timeAgo(a.resolvedAt || a._creationTime)}`;
+                : a?.resolvedByName
+                  ? `Resolved by ${a.resolvedByName} · ${timeAgo(a.resolvedAt || a._creationTime)}`
+                  : `Resolved ${timeAgo(a.resolvedAt || a._creationTime)}`;
               return (
                 <TouchableOpacity
                   key={a._id}

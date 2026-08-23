@@ -21,6 +21,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { markAlertOpened } from '../../src/lib/emergencyRead';
 import {
   ActivityIndicator,
+  Alert,
   Image,
   Linking,
   Platform,
@@ -36,6 +37,7 @@ import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
+import { useMutation } from 'convex/react';
 
 import { api } from '../../src/convexApi';
 import { useSafeConvexQuery } from '../../src/hooks/useSafeConvexQuery';
@@ -53,6 +55,9 @@ interface AlertViewer {
   alerterName?: string;
   alerterAvatar?: string | null;
   alerterPhone?: string | null;
+  resolvedByName?: string | null;
+  resolvedByUserId?: string | null;
+  resolvedAt?: string | null;
 }
 
 interface Recording {
@@ -355,6 +360,40 @@ export default function EmergencyViewerScreen() {
     if (alert?.alerterPhone) Linking.openURL(`tel:${alert.alerterPhone}`);
   };
 
+  // "I've got this" — a trustee marks the alert resolved from the viewer. This
+  // only flips the RECORD to resolved and notifies the alerter (backend does
+  // NOT stop the alerter's device recording/broadcast — they end that
+  // themselves). Backend contract: emergencyAlerts.resolveAlertByTrustee.
+  const resolveByTrustee = useMutation((api as any).emergencyAlerts.resolveAlertByTrustee);
+  const [resolving, setResolving] = useState(false);
+  const doResolve = async () => {
+    if (resolving || !alertId) return;
+    setResolving(true);
+    try {
+      await resolveByTrustee({ alertId });
+      // The reactive getAlertForViewer query flips status → resolved on its own.
+    } catch {
+      Alert.alert(
+        'Could not update',
+        'We couldn’t mark this as resolved right now. Please try again.',
+      );
+    } finally {
+      setResolving(false);
+    }
+  };
+  const confirmResolve = () => {
+    Alert.alert(
+      'Mark as resolved?',
+      'This tells ' +
+        (alert?.alerterName || 'them') +
+        ' that you’ve got this. Their phone keeps sharing until they stop it themselves.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: "I've got this", style: 'default', onPress: () => void doResolve() },
+      ],
+    );
+  };
+
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <View style={styles.header}>
@@ -419,6 +458,32 @@ export default function EmergencyViewerScreen() {
                 </TouchableOpacity>
               ) : null}
             </View>
+
+            {isResolved && alert.resolvedByName ? (
+              <View style={styles.resolvedByRow} testID="emergency-resolved-by">
+                <Feather name="check-circle" size={14} color={Colors.success} />
+                <Text style={styles.resolvedByText}>Resolved by {alert.resolvedByName}</Text>
+              </View>
+            ) : null}
+
+            {!isResolved ? (
+              <TouchableOpacity
+                style={styles.resolveBtn}
+                onPress={confirmResolve}
+                disabled={resolving}
+                activeOpacity={0.85}
+                testID="emergency-resolve"
+              >
+                {resolving ? (
+                  <ActivityIndicator size="small" color={Colors.white} />
+                ) : (
+                  <Feather name="check-circle" size={16} color={Colors.white} />
+                )}
+                <Text style={styles.resolveBtnText}>
+                  {resolving ? 'Marking resolved…' : "I've got this — mark resolved"}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
 
           {/* Live location */}
@@ -522,6 +587,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  resolvedByRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: Spacing.md,
+  },
+  resolvedByText: { fontSize: FontSize.sm, fontWeight: FontWeight.medium, color: Colors.success },
+  resolveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: Spacing.md,
+    paddingVertical: 12,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.success,
+  },
+  resolveBtnText: { fontSize: 15, fontWeight: '700', color: Colors.white },
   sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   sectionTitle: {
     fontSize: FontSize.base,
