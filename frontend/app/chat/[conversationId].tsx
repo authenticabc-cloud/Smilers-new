@@ -117,6 +117,7 @@ import { translateIncomingMessageText } from '../../src/lib/translation';
 import { uploadFile } from '../../src/lib/uploadFile';
 import { computeFileHashFromUri } from '../../src/lib/fileHash';
 import { enhanceDocumentToLocalFile } from '../../src/lib/enhanceDocument';
+import { savePhotoToGallery } from '../../src/lib/savePhotoToGallery';
 import { useAuth } from '../../src/providers/AuthProvider';
 import { useConversationOtherUser } from '../../src/hooks/useConversationOtherUser';
 import { formatCityLocalTime } from '../../src/lib/localTime';
@@ -275,6 +276,27 @@ export default function ChatScreen() {
   const [editorIndex, setEditorIndex] = useState<number | null>(null);
   const [scanningIndex, setScanningIndex] = useState<number | null>(null);
   const [scanningAll, setScanningAll] = useState(false);
+  const [savingScanned, setSavingScanned] = useState(false);
+
+  // Save a polished/scanned staged photo to the device gallery before sending.
+  const saveScannedImage = useCallback(async (index: number) => {
+    if (savingScanned) return;
+    let target: { uri: string; scanned?: boolean } | undefined;
+    setPendingImages((prev) => {
+      target = prev[index];
+      return prev;
+    });
+    if (!target?.scanned || !target.uri) return;
+    setSavingScanned(true);
+    try {
+      const ok = await savePhotoToGallery(target.uri);
+      if (ok) Alert.alert('Saved', 'Scanned document saved to your gallery.');
+    } catch {
+      Alert.alert('Could not save', 'Something went wrong saving the scanned document.');
+    } finally {
+      setSavingScanned(false);
+    }
+  }, [savingScanned]);
   // Auto-detect: for EACH staged photo, quietly ask the AI if it looks like a
   // document and, if so, highlight its Scan button + offer a batch "scan all".
   // Cached per-uri so it runs at most once per photo (keeps cost minimal).
@@ -5162,7 +5184,23 @@ export default function ChatScreen() {
                   </TouchableOpacity>
                 ))}
               </ScrollView>
-              {showDocSuggest ? (
+              {pendingImages[activeImageIndex]?.scanned ? (
+                <TouchableOpacity
+                  style={styles.docSuggestChip}
+                  onPress={() => saveScannedImage(activeImageIndex)}
+                  disabled={savingScanned}
+                  testID="save-scanned-chip"
+                >
+                  {savingScanned ? (
+                    <ActivityIndicator size="small" color={Colors.primary} />
+                  ) : (
+                    <Feather name="download" size={13} color={Colors.primary} />
+                  )}
+                  <Text style={styles.docSuggestText}>
+                    {savingScanned ? 'Saving scanned copy…' : 'Save scanned copy to gallery'}
+                  </Text>
+                </TouchableOpacity>
+              ) : showDocSuggest ? (
                 <TouchableOpacity
                   style={styles.docSuggestChip}
                   onPress={() => (pendingDocsToScan > 1 ? scanAllDocuments() : scanPendingImage(pendingImages.findIndex((im) => !im.scanned && docSuggestUris.includes(im.uri))))}

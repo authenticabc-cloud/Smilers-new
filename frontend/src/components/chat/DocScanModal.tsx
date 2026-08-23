@@ -10,12 +10,25 @@
  * so the hook never fetches in the background.
  */
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import { useDecryptedMediaUrl } from '../../hooks/useDecryptedMediaUrl';
+import { savePhotoToGallery } from '../../lib/savePhotoToGallery';
 import { Colors } from '../../theme';
+
+/** Write an enhanced `data:...;base64,...` image to a temp file:// for sharing. */
+async function enhancedDataUriToFile(dataUri: string): Promise<string> {
+  const comma = dataUri.indexOf(',');
+  const header = dataUri.slice(5, comma); // e.g. "image/png;base64"
+  const mime = header.split(';')[0] || 'image/png';
+  const ext = mime.includes('png') ? 'png' : 'jpg';
+  const out = `${LegacyFileSystem.cacheDirectory}scanned_${Date.now()}.${ext}`;
+  await LegacyFileSystem.writeAsStringAsync(out, dataUri.slice(comma + 1), { encoding: 'base64' as any });
+  return out;
+}
 
 const BACKEND = process.env.EXPO_PUBLIC_BACKEND_URL;
 
@@ -63,6 +76,38 @@ export default function DocScanModal({
   const [error, setError] = useState<string | null>(null);
   const [enhanced, setEnhanced] = useState<string | null>(null);
   const [transcription, setTranscription] = useState<string>('');
+  const [action, setAction] = useState<null | 'save' | 'share'>(null);
+
+  const handleSave = async () => {
+    if (!enhanced || action) return;
+    setAction('save');
+    try {
+      const ok = await savePhotoToGallery(enhanced);
+      if (ok) Alert.alert('Saved', 'Scanned document saved to your gallery.');
+    } catch {
+      Alert.alert('Could not save', 'Something went wrong saving the scanned document.');
+    } finally {
+      setAction(null);
+    }
+  };
+
+  const handleShare = async () => {
+    if (!enhanced || action) return;
+    setAction('share');
+    try {
+      const canShare = await Sharing.isAvailableAsync();
+      if (!canShare) {
+        Alert.alert('Sharing unavailable', 'Sharing is not available on this device.');
+        return;
+      }
+      const fileUri = await enhancedDataUriToFile(enhanced);
+      await Sharing.shareAsync(fileUri, { dialogTitle: 'Share scanned document' });
+    } catch {
+      Alert.alert('Could not share', 'Something went wrong sharing the scanned document.');
+    } finally {
+      setAction(null);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -128,6 +173,34 @@ export default function DocScanModal({
               <View>
                 <Text style={styles.sectionLbl}>ENHANCED</Text>
                 <Image source={{ uri: enhanced }} style={styles.enhImg} resizeMode="contain" />
+                <View style={styles.actionRow}>
+                  <TouchableOpacity
+                    style={styles.actionBtn}
+                    onPress={handleSave}
+                    disabled={!!action}
+                    testID="doc-scan-save"
+                  >
+                    {action === 'save' ? (
+                      <ActivityIndicator size="small" color={Colors.primary} />
+                    ) : (
+                      <Ionicons name="download-outline" size={20} color={Colors.primary} />
+                    )}
+                    <Text style={styles.actionLabel}>Save</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.actionBtn}
+                    onPress={handleShare}
+                    disabled={!!action}
+                    testID="doc-scan-share"
+                  >
+                    {action === 'share' ? (
+                      <ActivityIndicator size="small" color={Colors.primary} />
+                    ) : (
+                      <Ionicons name="share-outline" size={20} color={Colors.primary} />
+                    )}
+                    <Text style={styles.actionLabel}>Share</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             ) : null}
             {transcription ? (
@@ -157,6 +230,20 @@ const styles = StyleSheet.create({
   retryText: { fontSize: 14, fontWeight: '700', color: Colors.textPrimary },
   sectionLbl: { fontSize: 12, fontWeight: '800', color: Colors.textSecondary, letterSpacing: 0.5, marginBottom: 8 },
   enhImg: { width: '100%', height: 360, borderRadius: 12, backgroundColor: '#000' },
+  actionRow: { flexDirection: 'row', gap: 12, marginTop: 12 },
+  actionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border || '#e5e7eb',
+  },
+  actionLabel: { fontSize: 15, fontWeight: '700', color: Colors.primary },
   textBox: { backgroundColor: Colors.surface, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: Colors.border || '#e5e7eb' },
   transcript: { fontSize: 15, color: Colors.textPrimary, lineHeight: 22 },
 });

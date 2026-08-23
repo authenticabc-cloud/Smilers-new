@@ -1,5 +1,20 @@
 # Smilers Mobile App — PRD
 
+## iter-509 (Jun 2026): Android versionCode pin, doc-scan Save/Share, expo-share-intent removed for iOS build
+
+**1. Android versionCode → 2680** — `app.json` `android.versionCode: 2680`, `android/app/build.gradle` `versionCode 2680`, and `eas.json` `autoIncrement: false` on `production` + `app-bundle` so the next build is EXACTLY 2680 (previous auto-increment was out-of-sync producing 2301 vs 2679). Plan "option b": re-enable autoIncrement AFTER the 2680 build ships.
+
+**2. Document scan — Save / Send / Share (both sides)**:
+- Sender (compose): "send scanned instead of original" already existed (scan toggles polished/original `uri`). ADDED a **"Save scanned copy to gallery"** chip in the pending-images bar (`app/chat/[conversationId].tsx`), shown when the active staged image is `scanned`; uses `savePhotoToGallery(im.uri)`. New state `savingScanned` + `saveScannedImage()`.
+- Receiver (`src/components/chat/DocScanModal.tsx`, used by MediaGalleryModal + share-once/view): ADDED **Save** + **Share** action buttons under the ENHANCED image. Save → `savePhotoToGallery(dataUri)`; Share → writes enhanced base64 to a temp file then `expo-sharing` `shareAsync`. New `action` state + `enhancedDataUriToFile()` helper.
+
+**3. expo-share-intent removed to unblock iOS EAS build** (per Emergent Support, steps 1&2 only — ios/ NOT deleted to preserve committed native SmilersCallModule etc.): removed the `expo-share-intent` plugin block from `app.json` plugins and the `patch-expo-share-intent.js` step from package.json `postinstall`/`prepare`. npm package left installed (Android share keeps working). Restore steps documented in `/app/frontend/SHARE_INTENT_RESTORE.md`.
+
+**4. Translation regression (PRODUCTION-only, "incoming messages never translate")** — INVESTIGATED, NOT a code bug: `/api/translate` verified working on BOTH preview and prod (`https://app-migration-75.emergent.host/api/translate` → correct French). Frontend pipeline (`src/lib/translation.ts` → `fetchWithRetryAfter`; `app/chat/[conversationId].tsx` auto-translate effect → `translatedMessageMap` → `displayMessages`) is structurally correct; decrypted text populates `msg.text` (candidates valid); July-30 `getEffectivePreferredLanguage` change is additive. Conclusion: deployed build is stale OR its `EXPO_PUBLIC_BACKEND_URL`/env is stale (production env/domain config). Action: republish current code + re-verify; if it persists → Emergent Support (production env issue). NOT reproducible in-container (Google-OAuth barrier).
+
+Lint clean (DocScanModal + chat). App boots to Sign In. Doc-scan Save/Share are NATIVE (MediaLibrary/expo-sharing) — verify on device build.
+
+
 ## iter-508 (Jun 2026): "Navigate to them" (turn-by-turn) in emergency viewer
 
 `app/emergency/[alertId].tsx`: added `navigateToAlerter()` + a prominent **"Navigate to them"** button (primary, under the distance row, shown only when the alert has a location). Opens turn-by-turn DIRECTIONS to the alerter: iOS `maps://?daddr=<lat>,<lng>&dirflg=d`, Android `google.navigation:q=<lat>,<lng>`, web fallback `https://www.google.com/maps/dir/?api=1&destination=<lat>,<lng>&travelmode=driving`. Distinct from the existing "Open in Maps" (which just shows the pin). Styles `navigateBtn`/`navigateBtnText`.

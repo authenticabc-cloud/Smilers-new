@@ -272,32 +272,6 @@
       "expo-video",
       "react-native-ble-plx",
       [
-        "expo-share-intent",
-        {
-          "iosActivationRules": {
-            "NSExtensionActivationSupportsText": true,
-            "NSExtensionActivationSupportsWebURLWithMaxCount": 1,
-            "NSExtensionActivationSupportsWebPageWithMaxCount": 1,
-            "NSExtensionActivationSupportsImageWithMaxCount": 10,
-            "NSExtensionActivationSupportsMovieWithMaxCount": 5,
-            "NSExtensionActivationSupportsFileWithMaxCount": 10
-          },
-          "androidIntentFilters": [
-            "text/*",
-            "image/*",
-            "video/*",
-            "application/*",
-            "audio/*"
-          ],
-          "androidMultiIntentFilters": [
-            "image/*",
-            "video/*",
-            "application/*"
-          ],
-          "disableExperimental": true
-        }
-      ],
-      [
         "@twilio/video-react-native-sdk",
         {
           "cameraPermission": "Smilers needs your camera for video calls",
