@@ -19,6 +19,9 @@
     },
     "production": {
       "autoIncrement": false,
+      "ios": {
+        "autoIncrement": true
+      },
       "cache": {
         "disabled": true
       }
